@@ -8,16 +8,26 @@ class GeneralManagerMeta(type):
     def __new__(mcs, name, bases, attrs):
         if "Interface" in attrs:
             interface = attrs.pop("Interface")
-            # collect fields from interface
+            # Felder aus der Interface-Klasse sammeln
             model_fields = {}
+            meta_class = None
             for attr_name, attr_value in interface.__dict__.items():
                 if not attr_name.startswith("__"):
-                    model_fields[attr_name] = attr_value
+                    if attr_name == "Meta" and isinstance(attr_value, type):
+                        # Meta-Klasse speichern
+                        meta_class = attr_value
+                    else:
+                        model_fields[attr_name] = attr_value
             model_fields["__module__"] = attrs.get("__module__")
             model_fields["history"] = HistoricalRecords()
-            # create model
+            # Meta-Klasse hinzufügen oder erstellen
+            if meta_class:
+                model_fields["Meta"] = meta_class
+
+            # Modell erstellen
             model = type(name, (models.Model,), model_fields)
             attrs["_model"] = model
+            # Interface-Typ bestimmen
             if issubclass(interface, DatabaseInterface) or issubclass(
                 interface, ReadOnlyInterface
             ):
