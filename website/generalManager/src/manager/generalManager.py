@@ -1,6 +1,6 @@
 from typing import Type, ClassVar
 from django.db import models
-from manager.meta import GeneralManagerMeta
+from generalManager.src.manager.meta import GeneralManagerMeta
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
