@@ -3,6 +3,7 @@ from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
 from generalManager.src.manager.interface import DatabaseInterface
 from generalManager.src.measurement.measurementField import MeasurementField
+from django.db.models.constraints import UniqueConstraint
 
 
 class Project(GeneralManager):
@@ -13,3 +14,8 @@ class Project(GeneralManager):
         start_date = DateField()
         end_date = DateField()
         total_capex = MeasurementField(base_unit="EUR", null=True)
+
+        class Meta:
+            constraints = [
+                UniqueConstraint(fields=["name", "number"], name="unique_booking")
+            ]
