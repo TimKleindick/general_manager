@@ -3,7 +3,7 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 from decimal import Decimal
-from units import Measurement, ureg, currency_units
+from generalManager.src.measurement.units import Measurement, ureg, currency_units
 import pint
 
 
@@ -11,14 +11,15 @@ class MeasurementField(models.Field):
     description = "A field that stores a measurement value, both in base unit and original unit"
 
     def __init__(self, base_unit, *args, **kwargs):
+        null = kwargs.get('null', False)
         self.base_unit = base_unit  # E.g., 'meter' for length units
         # Determine the dimensionality of the base unit
         self.base_dimension = ureg.parse_expression(
             self.base_unit).dimensionality
         # Internal fields
         self.value_field = models.DecimalField(
-            max_digits=30, decimal_places=10, db_index=True)
-        self.unit_field = models.CharField(max_length=30)
+            max_digits=30, decimal_places=10, db_index=True, null=null)
+        self.unit_field = models.CharField(max_length=30, null=null)
         super().__init__(*args, **kwargs)
 
     def contribute_to_class(self, cls, name, **kwargs):
