@@ -36,8 +36,9 @@ class MeasurementField(models.Field):
         self.value_field.model = cls
         self.unit_field.model = cls
 
-        cls._meta.add_field(self.value_field)
-        cls._meta.add_field(self.unit_field)
+        self.value_field.contribute_to_class(cls, self.value_attr)
+        self.unit_field.contribute_to_class(cls, self.unit_attr)
+
         setattr(cls, self.name, self)
 
     def __get__(self, instance, owner):
