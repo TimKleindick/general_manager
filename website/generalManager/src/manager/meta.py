@@ -1,9 +1,19 @@
 from django.db import models
 from generalManager.src.manager.interface import DatabaseInterface, ReadOnlyInterface
 from simple_history.models import HistoricalRecords
+from typing import Type
+
+
+class GeneralManagerModel(models.Model):
+    active = models.BooleanField(default=True)
+    history = HistoricalRecords(inherit=True)
+
+    class Meta:
+        abstract = True
 
 
 class GeneralManagerMeta(type):
+    read_only_classes: list[Type] = []
 
     def __new__(mcs, name, bases, attrs):
         if "Interface" in attrs:
@@ -19,14 +29,12 @@ class GeneralManagerMeta(type):
                     else:
                         model_fields[attr_name] = attr_value
             model_fields["__module__"] = attrs.get("__module__")
-            model_fields["history"] = HistoricalRecords()
             # Meta-Klasse hinzufügen oder erstellen
             if meta_class:
                 model_fields["Meta"] = meta_class
 
             # Modell erstellen
-            model = type(name, (models.Model,), model_fields)
-            attrs["_model"] = model
+            model = type(name, (GeneralManagerModel,), model_fields)
             # Interface-Typ bestimmen
             if issubclass(interface, DatabaseInterface) or issubclass(
                 interface, ReadOnlyInterface
@@ -39,6 +47,8 @@ class GeneralManagerMeta(type):
                 raise TypeError("Interface must be a subclass of InterfaceBase")
             new_class = super().__new__(mcs, name, bases, attrs)
             interface_cls._parent_class = new_class
+            if issubclass(interface, ReadOnlyInterface):
+                mcs.read_only_classes.append(interface_cls)
             return new_class
         else:
             return super().__new__(mcs, name, bases, attrs)

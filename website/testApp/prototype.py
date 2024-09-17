@@ -1,4 +1,4 @@
-from django.db.models import Model, CharField, TextField, DateField, ForeignKey
+from django.db.models import CharField, TextField, DateField
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
 from generalManager.src.manager.interface import DatabaseInterface
