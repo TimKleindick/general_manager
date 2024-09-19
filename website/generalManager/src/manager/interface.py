@@ -9,8 +9,17 @@ from simple_history.models import HistoricalRecords
 
 
 class GeneralManagerModel(models.Model):
-    active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    changed_by = models.ForeignKey(get_user_model(), on_delete=models.PROTECT)
     history = HistoricalRecords(inherit=True)
+
+    @property
+    def _history_user(self):
+        return self.changed_by
+
+    @_history_user.setter
+    def _history_user(self, value):
+        self.changed_by = value
 
     class Meta:
         abstract = True
@@ -218,7 +227,7 @@ class DatabaseInterface(DBBasedInterface):
 
     def deactivate(self, creator_id: int, history_comment: str | None = None) -> int:
         instance = self._model.objects.get(pk=self.pk)
-        instance.active = False
+        instance.is_active = False
         if history_comment:
             history_comment = f"{history_comment} (deactivated)"
         else:
@@ -241,14 +250,10 @@ class DatabaseInterface(DBBasedInterface):
     @classmethod
     @transaction.atomic
     def __save_with_history(
-        cls, instance: models.Model, creator_id: int, history_comment: str | None
+        cls, instance: GeneralManagerModel, creator_id: int, history_comment: str | None
     ) -> int:
-        user_model = get_user_model()
-        if not user_model.objects.filter(pk=creator_id).exists():
-            raise ValueError("User does not exist")
+        instance.changed_by_id = creator_id  # type: ignore
         instance.full_clean()
-        instance.save()
-        instance.history_user = user_model.objects.get(pk=creator_id)  # type: ignore
         if history_comment:
             update_change_reason(instance, history_comment)
         instance.save()
