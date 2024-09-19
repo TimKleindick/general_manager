@@ -13,7 +13,7 @@ class Project(GeneralManager):
         description = TextField()
         start_date = DateField()
         end_date = DateField()
-        total_capex = MeasurementField(base_unit="EUR", null=True)
+        total_capex = MeasurementField(base_unit="EUR", null=True, blank=True)
 
         class Meta:
             constraints = [

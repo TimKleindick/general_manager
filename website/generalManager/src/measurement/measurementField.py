@@ -12,14 +12,15 @@ class MeasurementField(models.Field):
 
     def __init__(self, base_unit, *args, **kwargs):
         null = kwargs.get('null', False)
+        blank = kwargs.get('blank', False)
         self.base_unit = base_unit  # E.g., 'meter' for length units
         # Determine the dimensionality of the base unit
         self.base_dimension = ureg.parse_expression(
             self.base_unit).dimensionality
         # Internal fields
         self.value_field = models.DecimalField(
-            max_digits=30, decimal_places=10, db_index=True, null=null)
-        self.unit_field = models.CharField(max_length=30, null=null)
+            max_digits=30, decimal_places=10, db_index=True, null=null, blank=blank)
+        self.unit_field = models.CharField(max_length=30, null=null, blank=blank)
         super().__init__(*args, **kwargs)
 
     def contribute_to_class(self, cls, name, **kwargs):
