@@ -1,11 +1,19 @@
 import json
-from typing import Type, ClassVar, Any
+from typing import Type, ClassVar, Any, TYPE_CHECKING
 from django.db import models, transaction
 from abc import ABC, abstractmethod
-from generalManager.src.manager.meta import GeneralManagerModel
 from django.contrib.auth import get_user_model
 from simple_history.utils import update_change_reason
 from datetime import datetime, timedelta
+from simple_history.models import HistoricalRecords
+
+
+class GeneralManagerModel(models.Model):
+    active = models.BooleanField(default=True)
+    history = HistoricalRecords(inherit=True)
+
+    class Meta:
+        abstract = True
 
 
 class InterfaceBase(ABC):
@@ -15,8 +23,8 @@ class InterfaceBase(ABC):
     def __init__(self, pk: Any, *args, **kwargs):
         self.pk = pk
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def create(cls, **kwargs):
         raise NotImplementedError
 
@@ -42,7 +50,7 @@ class DBBasedInterface(InterfaceBase):
 
     def __init__(self, pk: Any, search_date: datetime | None = None):
         super().__init__(pk)
-        self._instance = self.getData()
+        self._instance = self.getData(search_date)
 
     def getData(self, search_date: datetime | None = None) -> GeneralManagerModel:
         model = self._model
@@ -59,14 +67,27 @@ class DBBasedInterface(InterfaceBase):
 
     def getAttributes(self):
         field_values = {}
+        to_ignore_list = []
+        for field in self.__getCustomFields():
+            field_values[field] = getattr(self._instance, field)
+            to_ignore_list.append(f"{field}_value")
+            to_ignore_list.append(f"{field}_unit")
 
         for field in [*self.__getModelFields(), *self.__getForeignKeyFields()]:
-            field_values[field] = getattr(self._instance, field)
+            if field not in to_ignore_list:
+                field_values[field] = getattr(self._instance, field)
 
         for field in [*self.__getManyToManyFields(), *self.__getReverseRelations()]:
             field_values[field] = lambda: getattr(self._instance, field).all()
 
         return field_values
+
+    def __getCustomFields(self):
+        return [
+            field.name
+            for field in self._model.__dict__.values()
+            if isinstance(field, models.Field)
+        ]
 
     def __getModelFields(self):
         return [

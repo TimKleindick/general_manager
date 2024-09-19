@@ -1,15 +1,10 @@
 from django.db import models
-from generalManager.src.manager.interface import DatabaseInterface, ReadOnlyInterface
-from simple_history.models import HistoricalRecords
+from generalManager.src.manager.interface import (
+    DatabaseInterface,
+    ReadOnlyInterface,
+    GeneralManagerModel,
+)
 from typing import Type
-
-
-class GeneralManagerModel(models.Model):
-    active = models.BooleanField(default=True)
-    history = HistoricalRecords(inherit=True)
-
-    class Meta:
-        abstract = True
 
 
 class GeneralManagerMeta(type):

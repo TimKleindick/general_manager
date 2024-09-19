@@ -3,7 +3,7 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 from decimal import Decimal
-from generalManager.src.measurement.units import Measurement, ureg, currency_units
+from generalManager.src.measurement.measurement import Measurement, ureg, currency_units
 import pint
 
 
