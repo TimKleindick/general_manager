@@ -77,8 +77,7 @@ class MeasurementField(models.Field):
                         f"The unit must be compatible with '{self.base_unit}'.")
             # Store the value in the base unit
             try:
-                value_in_base_unit = value.quantity.to(
-                    self.base_unit).magnitude
+                value_in_base_unit = value.quantity.to(self.base_unit).magnitude
             except pint.errors.DimensionalityError:
                 raise ValidationError(
                     f"The unit must be compatible with '{self.base_unit}'.")
