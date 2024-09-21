@@ -13,6 +13,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         self.__attributes = self.__interface.getAttributes()
         self.__createAtPropertiesForAttributes()
 
+    def __str__(self):
+        return f"{self.__class__.__name__}({self.__id})"
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.__id})"
+
+    @property
+    def id(self):
+        return self.__id
+
     def __createAtPropertiesForAttributes(self):
 
         def propertyMethod(attr_name):
@@ -53,3 +63,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             creator_id=creator_id, history_comment=history_comment
         )
         return self.__class__(self.__id)
+
+    @classmethod
+    def filter(cls, **kwargs):
+        return cls.Interface.filter(**kwargs)
+
+    @classmethod
+    def exclude(cls, **kwargs):
+        return cls.Interface.exclude(**kwargs)
+
+    @classmethod
+    def all(cls):
+        return cls.Interface.filter()

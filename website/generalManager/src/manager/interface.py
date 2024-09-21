@@ -1,11 +1,12 @@
 import json
-from typing import Type, ClassVar, Any, TYPE_CHECKING
+from typing import Type, ClassVar, Any
 from django.db import models, transaction
 from abc import ABC, abstractmethod
 from django.contrib.auth import get_user_model
 from simple_history.utils import update_change_reason
 from datetime import datetime, timedelta
 from simple_history.models import HistoricalRecords
+from generalManager.src.manager.bucket import DatabaseBucket
 
 
 class GeneralManagerModel(models.Model):
@@ -53,6 +54,16 @@ class InterfaceBase(ABC):
     def getAttributes(self):
         raise NotImplementedError
 
+    @classmethod
+    @abstractmethod
+    def filter(cls, **kwargs):
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def exclude(cls, **kwargs):
+        raise NotImplementedError
+
 
 class DBBasedInterface(InterfaceBase):
     _model: ClassVar[Type[GeneralManagerModel]]
@@ -67,6 +78,14 @@ class DBBasedInterface(InterfaceBase):
         if search_date and not search_date > datetime.now() - timedelta(seconds=5):
             instance = self.getHistoricalRecord(instance, search_date)
         return instance
+
+    @classmethod
+    def filter(cls, **kwargs):
+        return DatabaseBucket(cls._model.objects.filter(**kwargs), cls._parent_class)
+
+    @classmethod
+    def exclude(cls, **kwargs):
+        return DatabaseBucket(cls._model.objects.exclude(**kwargs), cls._parent_class)
 
     @classmethod
     def getHistoricalRecord(
