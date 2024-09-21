@@ -81,11 +81,26 @@ class DBBasedInterface(InterfaceBase):
 
     @classmethod
     def filter(cls, **kwargs):
-        return DatabaseBucket(cls._model.objects.filter(**kwargs), cls._parent_class)
+        return DatabaseBucket(
+            cls._model.objects.filter(**kwargs),
+            cls._parent_class,
+            cls.__createFilterDefinitions(**kwargs),
+        )
 
     @classmethod
     def exclude(cls, **kwargs):
-        return DatabaseBucket(cls._model.objects.exclude(**kwargs), cls._parent_class)
+        return DatabaseBucket(
+            cls._model.objects.exclude(**kwargs),
+            cls._parent_class,
+            cls.__createFilterDefinitions(**kwargs),
+        )
+
+    @staticmethod
+    def __createFilterDefinitions(**kwargs):
+        filter_definitions = {}
+        for key, value in kwargs.items():
+            filter_definitions[key] = [value]
+        return filter_definitions
 
     @classmethod
     def getHistoricalRecord(

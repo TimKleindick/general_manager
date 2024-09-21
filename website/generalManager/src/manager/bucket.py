@@ -1,7 +1,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from django.db import models
-from typing import Type, Generator, TYPE_CHECKING
+from typing import Type, Generator, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
@@ -59,19 +59,42 @@ class Bucket(ABC):
 
 class DatabaseBucket(Bucket):
 
-    def __init__(self, data: models.QuerySet, manager_class: Type[GeneralManager]):
+    def __init__(
+        self,
+        data: models.QuerySet,
+        manager_class: Type[GeneralManager],
+        filter_definitions: dict[str, list[Any]] = {},
+    ):
         self._data = data
         self._manager_class = manager_class
+        self._filter_definitions = {**filter_definitions}
 
     def __iter__(self) -> Generator[GeneralManager]:
         for item in self._data:
             yield self._manager_class(item.pk)
 
+    def __mergeFilterDefinitions(self, **kwargs):
+        kwarg_filter = {}
+        for key, value in self._filter_definitions.items():
+            kwarg_filter[key] = value
+        for key, value in kwargs.items():
+            if key in kwarg_filter:
+                kwarg_filter[key].append(value)
+            else:
+                kwarg_filter[key] = [value]
+        return kwarg_filter
+
     def filter(self, **kwargs) -> DatabaseBucket:
-        return self.__class__(self._data.filter(**kwargs), self._manager_class)
+        merged_filter = self.__mergeFilterDefinitions(**kwargs)
+        return self.__class__(
+            self._data.filter(**kwargs), self._manager_class, merged_filter
+        )
 
     def exclude(self, **kwargs) -> DatabaseBucket:
-        return self.__class__(self._data.exclude(**kwargs), self._manager_class)
+        merged_filter = self.__mergeFilterDefinitions(**kwargs)
+        return self.__class__(
+            self._data.exclude(**kwargs), self._manager_class, merged_filter
+        )
 
     def first(self) -> GeneralManager | None:
         first_element = self._data.first()
