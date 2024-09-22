@@ -243,7 +243,9 @@ class DatabaseInterface(DBBasedInterface):
         cls, creator_id: int, history_comment: str | None = None, **kwargs
     ) -> int:
         kwargs, many_to_many_kwargs = cls.__sortKwargs(cls._model, kwargs)
-        instance = cls._model(**kwargs)
+        instance = cls._model()
+        for key, value in kwargs.items():
+            setattr(instance, key, value)
         for key, value in many_to_many_kwargs.items():
             getattr(instance, key).set(value)
         return cls.__save_with_history(instance, creator_id, history_comment)
