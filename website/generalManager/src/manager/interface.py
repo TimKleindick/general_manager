@@ -111,18 +111,49 @@ class DBBasedInterface(InterfaceBase):
     def getAttributes(self):
         field_values = {}
         to_ignore_list = []
-        for field in self.__getCustomFields():
-            field_values[field] = getattr(self._instance, field)
-            to_ignore_list.append(f"{field}_value")
-            to_ignore_list.append(f"{field}_unit")
+        for field_name in self.__getCustomFields():
+            field_values[field_name] = getattr(self._instance, field_name)
+            to_ignore_list.append(f"{field_name}_value")
+            to_ignore_list.append(f"{field_name}_unit")
 
-        for field in [*self.__getModelFields(), *self.__getForeignKeyFields()]:
-            if field not in to_ignore_list:
-                field_values[field] = getattr(self._instance, field)
+        for field_name in self.__getModelFields():
+            if field_name not in to_ignore_list:
+                field_values[field_name] = getattr(self._instance, field_name)
 
-        for field in [*self.__getManyToManyFields(), *self.__getReverseRelations()]:
-            field_values[field] = lambda: getattr(self._instance, field).all()
+        for field_name in self.__getForeignKeyFields():
+            if hasattr(
+                self._instance._meta.get_field(field_name).related_model,
+                "_general_manager_class",
+            ):
+                generalManagerClass = self._instance._meta.get_field(
+                    field_name
+                ).related_model._general_manager_class  # type: ignore
+                field_values[f"{field_name}"] = lambda: generalManagerClass(
+                    getattr(self._instance, field_name).pk
+                )
+            else:
+                field_values[f"{field_name}"] = lambda: getattr(
+                    self._instance, field_name
+                )
 
+        for field_name, field_call in [
+            *self.__getManyToManyFields(),
+            *self.__getReverseRelations(),
+        ]:
+            if hasattr(
+                self._instance._meta.get_field(field_name).related_model,
+                "_general_manager_class",
+            ):
+                field_values[f"{field_name}_list"] = lambda: DatabaseBucket(
+                    getattr(self._instance, field_call).all(),
+                    self._instance._meta.get_field(
+                        field_name
+                    ).related_model._general_manager_class,  # type: ignore
+                )
+            else:
+                field_values[f"{field_name}_list"] = lambda: getattr(
+                    self._instance, field_call
+                ).all()
         return field_values
 
     def __getCustomFields(self):
@@ -148,14 +179,14 @@ class DBBasedInterface(InterfaceBase):
 
     def __getManyToManyFields(self):
         return [
-            field.name
+            (field.name, field.name)
             for field in self._model._meta.get_fields()
             if field.is_relation and field.many_to_many
         ]
 
     def __getReverseRelations(self):
         return [
-            field.name
+            (field.name, f"{field.name}_set")
             for field in self._model._meta.get_fields()
             if field.is_relation and field.one_to_many
         ]

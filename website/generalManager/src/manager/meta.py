@@ -42,6 +42,7 @@ class GeneralManagerMeta(type):
                 raise TypeError("Interface must be a subclass of InterfaceBase")
             new_class = super().__new__(mcs, name, bases, attrs)
             interface_cls._parent_class = new_class
+            model._general_manager_class = new_class
             if issubclass(interface, ReadOnlyInterface):
                 mcs.read_only_classes.append(interface_cls)
             return new_class
