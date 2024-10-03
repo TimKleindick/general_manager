@@ -8,18 +8,20 @@ import pint
 
 
 class MeasurementField(models.Field):
-    description = "A field that stores a measurement value, both in base unit and original unit"
+    description = (
+        "A field that stores a measurement value, both in base unit and original unit"
+    )
 
     def __init__(self, base_unit, *args, **kwargs):
-        null = kwargs.get('null', False)
-        blank = kwargs.get('blank', False)
+        null = kwargs.get("null", False)
+        blank = kwargs.get("blank", False)
         self.base_unit = base_unit  # E.g., 'meter' for length units
         # Determine the dimensionality of the base unit
-        self.base_dimension = ureg.parse_expression(
-            self.base_unit).dimensionality
+        self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
         # Internal fields
         self.value_field = models.DecimalField(
-            max_digits=30, decimal_places=10, db_index=True, null=null, blank=blank)
+            max_digits=30, decimal_places=10, db_index=True, null=null, blank=blank
+        )
         self.unit_field = models.CharField(max_length=30, null=null, blank=blank)
         super().__init__(*args, **kwargs)
 
@@ -57,7 +59,9 @@ class MeasurementField(models.Field):
         except pint.errors.DimensionalityError:
             # If the unit is not compatible, return the value in base unit
             quantity_in_original_unit = quantity_in_base_unit
-        return Measurement(quantity_in_original_unit.magnitude, str(quantity_in_original_unit.units))
+        return Measurement(
+            quantity_in_original_unit.magnitude, str(quantity_in_original_unit.units)
+        )
 
     def __set__(self, instance, value):
         if value is None:
@@ -68,32 +72,52 @@ class MeasurementField(models.Field):
             try:
                 value = Measurement.from_string(value)
             except ValueError:
-                raise ValidationError("Value must be a Measurement instance or None.")
+                raise ValidationError(
+                    {self.name: ["Value must be a Measurement instance or None."]}
+                )
         if isinstance(value, Measurement):
             if str(self.base_unit) in currency_units:
                 # Base unit is a currency
                 if not value.is_currency():
-                    raise ValidationError(f"The unit must be a currency ({
-                                          ', '.join(currency_units)}).")
+                    raise ValidationError(
+                        {
+                            self.name: [
+                                f"The unit must be a currency ({', '.join(currency_units)})."
+                            ]
+                        }
+                    )
             else:
                 # Physical unit
                 if value.is_currency():
-                    raise ValidationError("The unit cannot be a currency.")
+                    raise ValidationError(
+                        {self.name: ["The unit cannot be a currency."]}
+                    )
                 elif value.quantity.dimensionality != self.base_dimension:
                     raise ValidationError(
-                        f"The unit must be compatible with '{self.base_unit}'.")
+                        {
+                            self.name: [
+                                f"The unit must be compatible with '{self.base_unit}'."
+                            ]
+                        }
+                    )
             # Store the value in the base unit
             try:
                 value_in_base_unit = value.quantity.to(self.base_unit).magnitude
             except pint.errors.DimensionalityError:
                 raise ValidationError(
-                    f"The unit must be compatible with '{self.base_unit}'.")
-            setattr(instance, self.value_attr,
-                    Decimal(str(value_in_base_unit)))
+                    {
+                        self.name: [
+                            f"The unit must be compatible with '{self.base_unit}'."
+                        ]
+                    }
+                )
+            setattr(instance, self.value_attr, Decimal(str(value_in_base_unit)))
             # Store the original unit
             setattr(instance, self.unit_attr, str(value.quantity.units))
         else:
-            raise ValidationError("Value must be a Measurement instance or None.")
+            raise ValidationError(
+                {self.name: ["Value must be a Measurement instance or None."]}
+            )
 
     def get_prep_value(self, value):
         # Not needed since we use internal fields
@@ -101,5 +125,5 @@ class MeasurementField(models.Field):
 
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
-        kwargs['base_unit'] = self.base_unit
+        kwargs["base_unit"] = self.base_unit
         return name, path, args, kwargs
