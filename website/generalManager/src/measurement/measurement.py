@@ -31,6 +31,13 @@ class Measurement:
     def quantity(self):
         return self.__quantity
 
+    @classmethod
+    def from_string(cls, value):
+        if not isinstance(value, str):
+            raise TypeError("Value must be a string.")
+        value, unit = value.split(" ")
+        return cls(value, unit)
+
     @staticmethod
     def formatDecimal(value):
         value = value.normalize()

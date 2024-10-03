@@ -63,7 +63,13 @@ class MeasurementField(models.Field):
         if value is None:
             setattr(instance, self.value_attr, None)
             setattr(instance, self.unit_attr, None)
-        elif isinstance(value, Measurement):
+            return
+        elif isinstance(value, str):
+            try:
+                value = Measurement.from_string(value)
+            except ValueError:
+                raise ValidationError("Value must be a Measurement instance or None.")
+        if isinstance(value, Measurement):
             if str(self.base_unit) in currency_units:
                 # Base unit is a currency
                 if not value.is_currency():
@@ -87,7 +93,7 @@ class MeasurementField(models.Field):
             # Store the original unit
             setattr(instance, self.unit_attr, str(value.quantity.units))
         else:
-            raise ValueError("Value must be a Measurement instance or None.")
+            raise ValidationError("Value must be a Measurement instance or None.")
 
     def get_prep_value(self, value):
         # Not needed since we use internal fields
