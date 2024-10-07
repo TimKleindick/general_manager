@@ -133,8 +133,8 @@ class RuleTests(TestCase):
         self.assertFalse(result)
         error_message = rule.getErrorMessage()
         expected_error = {
-            "age": "[has_permission], [age] combination is not valid",
-            "has_permission": "[has_permission], [age] combination is not valid",
+            "age": "[age], [has_permission] combination is not valid",
+            "has_permission": "[age], [has_permission] combination is not valid",
         }
         self.assertEqual(error_message, expected_error)
 
