@@ -33,7 +33,7 @@ class Project(GeneralManager):
 
             rules = [
                 Rule(lambda x: x.start_date < x.end_date),
-                Rule(lambda x: x.total_capex >= Measurement(0, "EUR")),
+                Rule(lambda x: x.total_capex >= "0 EUR"),
             ]
 
 

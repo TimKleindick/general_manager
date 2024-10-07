@@ -180,6 +180,10 @@ class Measurement:
         return f"Measurement({self.quantity.magnitude}, '{self.quantity.units}')"
 
     def _compare(self, other, operation):
+        if isinstance(other, str):
+            other = Measurement.from_string(other)
+
+        # Überprüfen, ob `other` ein Measurement-Objekt ist
         if not isinstance(other, Measurement):
             return NotImplemented
         try:
