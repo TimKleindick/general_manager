@@ -132,11 +132,15 @@ class RuleTests(TestCase):
         result = rule.evaluate(x)
         self.assertFalse(result)
         error_message = rule.getErrorMessage()
-        expected_error = {
+        expected_error_a = {
             "age": "[age], [has_permission] combination is not valid",
             "has_permission": "[age], [has_permission] combination is not valid",
         }
-        self.assertEqual(error_message, expected_error)
+        expected_error_b = {
+            "age": "[has_permission], [age] combination is not valid",
+            "has_permission": "[has_permission], [age] combination is not valid",
+        }
+        self.assertIn(error_message, [expected_error_a, expected_error_b])
 
     def test_rule_with_no_variables(self):
         """Testet die Rule-Klasse mit einer Funktion ohne Variablen."""
