@@ -2,6 +2,8 @@
 
 import pint
 from decimal import Decimal, getcontext
+from operator import eq, ne, lt, le, gt, ge
+
 
 # Set precision for Decimal
 getcontext().prec = 28
@@ -176,3 +178,33 @@ class Measurement:
 
     def __repr__(self):
         return f"Measurement({self.quantity.magnitude}, '{self.quantity.units}')"
+
+    def _compare(self, other, operation):
+        if not isinstance(other, Measurement):
+            return NotImplemented
+        try:
+            # Convert `other` to the same units as `self`
+            other_converted = other.quantity.to(self.quantity.units)
+            # Apply the comparison operation
+            return operation(self.quantity.magnitude, other_converted.magnitude)
+        except pint.DimensionalityError:
+            raise ValueError("Cannot compare measurements with different dimensions.")
+
+    # Comparison Operators
+    def __eq__(self, other):
+        return self._compare(other, eq)
+
+    def __ne__(self, other):
+        return self._compare(other, ne)
+
+    def __lt__(self, other):
+        return self._compare(other, lt)
+
+    def __le__(self, other):
+        return self._compare(other, le)
+
+    def __gt__(self, other):
+        return self._compare(other, gt)
+
+    def __ge__(self, other):
+        return self._compare(other, ge)
