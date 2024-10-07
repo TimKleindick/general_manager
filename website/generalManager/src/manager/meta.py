@@ -5,6 +5,26 @@ from generalManager.src.manager.interface import (
     GeneralManagerModel,
 )
 from typing import Type
+from django.core.exceptions import ValidationError
+
+
+def getFullCleanMethode(model):
+    def full_clean(self, *args, **kwargs):
+        errors = {}
+
+        try:
+            super(model, self).full_clean(*args, **kwargs)
+        except ValidationError as e:
+            errors.update(e.message_dict)
+
+        for rule in self._meta.rules:
+            if not rule.evaluate(self):
+                errors.update(rule.getErrorMessage())
+
+        if errors:
+            raise ValidationError(errors)
+
+    return full_clean
 
 
 class GeneralManagerMeta(type):
@@ -26,10 +46,19 @@ class GeneralManagerMeta(type):
             model_fields["__module__"] = attrs.get("__module__")
             # Meta-Klasse hinzufügen oder erstellen
             if meta_class:
+                rules = None
                 model_fields["Meta"] = meta_class
+
+                if hasattr(meta_class, "rules"):
+                    rules = meta_class.rules
+                    delattr(meta_class, "rules")
 
             # Modell erstellen
             model = type(name, (GeneralManagerModel,), model_fields)
+            if meta_class and rules:
+                model._meta.rules = rules
+                # full_clean Methode hinzufügen
+                model.full_clean = getFullCleanMethode(model)
             # Interface-Typ bestimmen
             if issubclass(interface, DatabaseInterface) or issubclass(
                 interface, ReadOnlyInterface

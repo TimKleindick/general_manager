@@ -9,7 +9,11 @@ from django.db.models import (
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
 from generalManager.src.manager.interface import DatabaseInterface
-from generalManager.src.measurement.measurementField import MeasurementField
+from generalManager.src.measurement.measurementField import (
+    MeasurementField,
+    Measurement,
+)
+from generalManager.src.rule.rule import Rule
 from django.db.models.constraints import UniqueConstraint
 
 
@@ -25,6 +29,11 @@ class Project(GeneralManager):
         class Meta:
             constraints = [
                 UniqueConstraint(fields=["name", "number"], name="unique_booking")
+            ]
+
+            rules = [
+                Rule(lambda x: x.start_date < x.end_date),
+                Rule(lambda x: x.total_capex >= Measurement(0, "EUR")),
             ]
 
 
