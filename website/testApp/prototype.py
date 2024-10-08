@@ -11,7 +11,6 @@ from generalManager.src.manager.generalManager import GeneralManager
 from generalManager.src.manager.interface import DatabaseInterface
 from generalManager.src.measurement.measurementField import (
     MeasurementField,
-    Measurement,
 )
 from generalManager.src.rule.rule import Rule
 from django.db.models.constraints import UniqueConstraint

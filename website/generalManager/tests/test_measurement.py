@@ -55,13 +55,13 @@ class MeasurementTestCase(TestCase):
         m1 = Measurement(1, "meter")
         m2 = Measurement(1, "second")
         with self.assertRaises(ValueError):
-            m1 + m2
+            _ = m1 + m2
 
     def test_subtraction_different_units_different_dimensions(self):
         m1 = Measurement(2, "meter")
         m2 = Measurement(1, "second")
         with self.assertRaises(ValueError):
-            m1 - m2
+            _ = m1 - m2
 
     def test_multiplication_same_units(self):
         m1 = Measurement(2, "meter")
