@@ -110,11 +110,10 @@ class DBBasedInterface(InterfaceBase):
 
     def getAttributes(self):
         field_values = {}
-        to_ignore_list = []
-        for field_name in self.__getCustomFields():
+
+        field_name_list, to_ignore_list = self._handleCustomFields(self._model)
+        for field_name in field_name_list:
             field_values[field_name] = getattr(self._instance, field_name)
-            to_ignore_list.append(f"{field_name}_value")
-            to_ignore_list.append(f"{field_name}_unit")
 
         for field_name in self.__getModelFields():
             if field_name not in to_ignore_list:
@@ -156,10 +155,24 @@ class DBBasedInterface(InterfaceBase):
                 ).all()
         return field_values
 
-    def __getCustomFields(self):
+    @staticmethod
+    def _handleCustomFields(
+        model: Type[models.Model] | models.Model,
+    ) -> tuple[list, list]:
+        field_name_list: list[str] = []
+        to_ignore_list: list[str] = []
+        for field_name in DBBasedInterface._getCustomFields(model):
+            to_ignore_list.append(f"{field_name}_value")
+            to_ignore_list.append(f"{field_name}_unit")
+            field_name_list.append(field_name)
+
+        return field_name_list, to_ignore_list
+
+    @staticmethod
+    def _getCustomFields(model):
         return [
             field.name
-            for field in self._model.__dict__.values()
+            for field in model.__dict__.values()
             if isinstance(field, models.Field)
         ]
 
