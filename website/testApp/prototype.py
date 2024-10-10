@@ -12,8 +12,17 @@ from generalManager.src.manager.interface import DatabaseInterface
 from generalManager.src.measurement.measurementField import (
     MeasurementField,
 )
+from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.rule.rule import Rule
 from django.db.models.constraints import UniqueConstraint
+import factory
+import random
+from datetime import timedelta
+from django.utils.timezone import now
+from faker import Faker
+from generalManager.src.factory.factories import AutoFactory
+
+fake = Faker()
 
 
 class Project(GeneralManager):
@@ -31,9 +40,33 @@ class Project(GeneralManager):
             ]
 
             rules = [
-                Rule(lambda x: x.start_date < x.end_date),
+                Rule(
+                    lambda x: not (x.start_date and x.end_date)
+                    or x.start_date < x.end_date
+                ),
                 Rule(lambda x: x.total_capex >= "0 EUR"),
             ]
+
+        class Factory:
+            name = factory.LazyAttribute(
+                lambda _: (
+                    f"{fake.word().capitalize()} "
+                    f"{fake.word().capitalize()} "
+                    f"{fake.random_element(elements=('X', 'Z', 'G'))}"
+                    f"-{fake.random_int(min=1, max=1000)}"
+                )
+            )
+            start_date = factory.LazyFunction(
+                lambda: now().date() - timedelta(days=random.randint(1, 365))
+            )
+            end_date = factory.LazyAttribute(
+                lambda obj: obj.start_date + timedelta(days=random.randint(1, 365))
+            )
+            total_capex = factory.LazyAttribute(
+                lambda _: Measurement(
+                    str(random.uniform(0, 1_000_000))[:10], unit="EUR"
+                )
+            )
 
 
 class Derivative(GeneralManager):
