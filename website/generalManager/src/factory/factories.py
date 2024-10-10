@@ -99,7 +99,7 @@ def get_field_value(field: models.Field) -> object:
 
     if isinstance(field, MeasurementField):
         base_unit = field.base_unit
-        value = Decimal(str(random.uniform(-10_000, 10_000))[:10])
+        value = Decimal(str(random.uniform(0, 10_000))[:10])
         return factory.LazyAttribute(lambda _: Measurement(value, base_unit))
     elif isinstance(field, models.CharField):
         max_length = field.max_length or 100
@@ -140,8 +140,8 @@ def get_field_value(field: models.Field) -> object:
         return factory.Faker("pybool")
     elif isinstance(field, models.ForeignKey):
         # Create or get an instance of the related model
-        related_factory = globals().get(f"{field.related_model.__name__}Factory")
-        if related_factory:
+        if hasattr(field.related_model, "_general_manager_class"):
+            related_factory = field.related_model._general_manager_class.Factory
             return related_factory()
         else:
             # If no factory exists, pick a random existing instance
@@ -154,8 +154,8 @@ def get_field_value(field: models.Field) -> object:
                 )
     elif isinstance(field, models.OneToOneField):
         # Similar to ForeignKey
-        related_factory = globals().get(f"{field.related_model.__name__}Factory")
-        if related_factory:
+        if hasattr(field.related_model, "_general_manager_class"):
+            related_factory = field.related_model._general_manager_class.Factory
             return related_factory()
         else:
             # If no factory exists, pick a random existing instance
