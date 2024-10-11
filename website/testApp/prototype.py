@@ -17,10 +17,8 @@ from generalManager.src.rule.rule import Rule
 from django.db.models.constraints import UniqueConstraint
 import factory
 import random
-from datetime import timedelta
-from django.utils.timezone import now
+from datetime import timedelta, date
 from faker import Faker
-from generalManager.src.factory.factories import AutoFactory
 
 fake = Faker()
 
@@ -40,10 +38,7 @@ class Project(GeneralManager):
             ]
 
             rules = [
-                Rule(
-                    lambda x: not (x.start_date and x.end_date)
-                    or x.start_date < x.end_date
-                ),
+                Rule(lambda x: x.start_date < x.end_date),
                 Rule(lambda x: x.total_capex >= "0 EUR"),
             ]
 
@@ -56,11 +51,9 @@ class Project(GeneralManager):
                     f"-{fake.random_int(min=1, max=1000)}"
                 )
             )
-            start_date = factory.LazyFunction(
-                lambda: now().date() - timedelta(days=random.randint(1, 365))
-            )
             end_date = factory.LazyAttribute(
-                lambda obj: obj.start_date + timedelta(days=random.randint(1, 365))
+                lambda obj: (obj.start_date or date.today())
+                + timedelta(days=random.randint(1, 365))
             )
             total_capex = factory.LazyAttribute(
                 lambda _: Measurement(
