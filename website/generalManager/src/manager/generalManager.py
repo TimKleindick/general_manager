@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Type
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.manager.interface import InterfaceBase
+from typing import Callable
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
@@ -22,6 +23,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     @property
     def id(self):
         return self.__id
+
+    def __iter__(self):
+        for key, value in self.__attributes.items():
+            if callable(value):
+                yield key, value()
+                continue
+            yield key, value
 
     def __createAtPropertiesForAttributes(self):
 
