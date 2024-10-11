@@ -4,12 +4,13 @@ import re
 
 
 class Rule:
-    def __init__(self, func, custom_error_message=None):
+    def __init__(self, func, custom_error_message=None, ignore_if_none=True):
         self.__func = func
         self.__customErrorMessage = custom_error_message
         self.__variables = self.__extractVariables()
         self.__lastEvaluationResult = None
         self.__lastEvaluationInput = None
+        self.__ignoreIfNone = ignore_if_none
 
         # Dispatch table for special function handlers
         self.__function_handlers = {
@@ -39,9 +40,18 @@ class Rule:
     def lastEvaluationInput(self):
         return self.__lastEvaluationInput
 
+    @property
+    def ignoreIfNone(self):
+        return self.__ignoreIfNone
+
     def evaluate(self, x):
         """Executes the rule function with the given input x."""
         self.__lastEvaluationInput = x
+        var_values = self.__extractVariableValues(x)
+        if self.__ignoreIfNone:
+            if any(value is None for value in var_values.values()):
+                self.__lastEvaluationResult = None
+                return True
         self.__lastEvaluationResult = self.__func(x)
         return self.__lastEvaluationResult
 
