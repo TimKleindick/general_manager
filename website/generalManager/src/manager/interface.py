@@ -127,11 +127,13 @@ class DBBasedInterface(InterfaceBase):
                 generalManagerClass = self._instance._meta.get_field(
                     field_name
                 ).related_model._general_manager_class  # type: ignore
-                field_values[f"{field_name}"] = lambda: generalManagerClass(
-                    getattr(self._instance, field_name).pk
+                field_values[f"{field_name}"] = (
+                    lambda field_name=field_name: generalManagerClass(
+                        getattr(self._instance, field_name).pk
+                    )
                 )
             else:
-                field_values[f"{field_name}"] = lambda: getattr(
+                field_values[f"{field_name}"] = lambda field_name=field_name: getattr(
                     self._instance, field_name
                 )
 
@@ -139,20 +141,29 @@ class DBBasedInterface(InterfaceBase):
             *self.__getManyToManyFields(),
             *self.__getReverseRelations(),
         ]:
+            if field_name in field_values.keys():
+                if field_call not in field_values.keys():
+                    field_name = field_call
+                else:
+                    raise ValueError("Field name already exists.")
             if hasattr(
                 self._instance._meta.get_field(field_name).related_model,
                 "_general_manager_class",
             ):
-                field_values[f"{field_name}_list"] = lambda: DatabaseBucket(
-                    getattr(self._instance, field_call).all(),
-                    self._instance._meta.get_field(
-                        field_name
-                    ).related_model._general_manager_class,  # type: ignore
+                field_values[f"{field_name}_list"] = (
+                    lambda field_name=field_name, field_call=field_call: DatabaseBucket(
+                        getattr(self._instance, field_call).all(),
+                        self._instance._meta.get_field(
+                            field_name
+                        ).related_model._general_manager_class,  # type: ignore
+                    )
                 )
             else:
-                field_values[f"{field_name}_list"] = lambda: getattr(
-                    self._instance, field_call
-                ).all()
+                field_values[f"{field_name}_list"] = (
+                    lambda field_call=field_call: getattr(
+                        self._instance, field_call
+                    ).all()
+                )
         return field_values
 
     @staticmethod
@@ -286,6 +297,7 @@ class DatabaseInterface(DBBasedInterface):
     def create(
         cls, creator_id: int, history_comment: str | None = None, **kwargs
     ) -> int:
+        cls.__checkForInvalidKwargs(cls._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls.__sortKwargs(cls._model, kwargs)
         instance = cls._model()
         for key, value in kwargs.items():
@@ -297,6 +309,7 @@ class DatabaseInterface(DBBasedInterface):
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs
     ) -> int:
+        self.__checkForInvalidKwargs(self._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self.__sortKwargs(self._model, kwargs)
         instance = self._model.objects.get(pk=self.pk)
         for key, value in kwargs.items():
@@ -313,6 +326,14 @@ class DatabaseInterface(DBBasedInterface):
         else:
             history_comment = "Deactivated"
         return self.__save_with_history(instance, creator_id, history_comment)
+
+    @staticmethod
+    def __checkForInvalidKwargs(model: Type[models.Model], kwargs: dict):
+        attributes = vars(model)
+        fields = model._meta.get_fields()
+        for key in kwargs:
+            if key not in attributes and key not in fields:
+                raise ValueError(f"{key} does not exsist in {model.__name__}")
 
     @staticmethod
     def __sortKwargs(
