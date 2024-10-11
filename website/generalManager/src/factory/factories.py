@@ -40,13 +40,13 @@ class AutoFactory(DjangoModelFactory):
         )
 
         for field in [*fields, *special_fields]:
+            if field.name in attrs:
+                continue
             if field.name in declared_fields:
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
-            value = get_field_value(field)
-            if value is not None:
-                attrs[field.name] = value
+            attrs[field.name] = get_field_value(field)
 
         obj = super()._generate(create, attrs)
 
