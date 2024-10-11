@@ -40,9 +40,7 @@ class AutoFactory(DjangoModelFactory):
         )
 
         for field in [*fields, *special_fields]:
-            if field.name in attrs:
-                continue
-            if field.name in declared_fields:
+            if field.name in [*attrs, *declared_fields]:
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
