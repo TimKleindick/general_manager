@@ -12,15 +12,13 @@ from generalManager.src.manager.interface import DatabaseInterface
 from generalManager.src.measurement.measurementField import (
     MeasurementField,
 )
-from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.rule.rule import Rule
 from django.db.models.constraints import UniqueConstraint
-import factory
-import random
-from datetime import timedelta, date
-from faker import Faker
-
-fake = Faker()
+from generalManager.src.factory.lazy_methods import (
+    LazyMeasurement,
+    LazyDeltaDate,
+    LazyProjectName,
+)
 
 
 class Project(GeneralManager):
@@ -43,23 +41,9 @@ class Project(GeneralManager):
             ]
 
         class Factory:
-            name = factory.LazyAttribute(
-                lambda _: (
-                    f"{fake.word().capitalize()} "
-                    f"{fake.word().capitalize()} "
-                    f"{fake.random_element(elements=('X', 'Z', 'G'))}"
-                    f"-{fake.random_int(min=1, max=1000)}"
-                )
-            )
-            end_date = factory.LazyAttribute(
-                lambda obj: (obj.start_date or date.today())
-                + timedelta(days=random.randint(1, 365))
-            )
-            total_capex = factory.LazyAttribute(
-                lambda _: Measurement(
-                    str(random.uniform(0, 1_000_000))[:10], unit="EUR"
-                )
-            )
+            name = LazyProjectName()
+            end_date = LazyDeltaDate(365 * 6, "start_date")
+            total_capex = LazyMeasurement(75_000, 1_000_000, "EUR")
 
 
 class Derivative(GeneralManager):
