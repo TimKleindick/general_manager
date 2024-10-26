@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import Type
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.manager.interface import InterfaceBase
-from typing import Callable
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
