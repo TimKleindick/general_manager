@@ -15,10 +15,10 @@ def LazyMeasurement(
     )
 
 
-def LazyDeltaDate(avg_days: int, base_attribute: str) -> LazyAttribute:
+def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
     return LazyAttribute(
         lambda obj: (getattr(obj, base_attribute) or date.today())
-        + timedelta(days=random.randint(avg_days // 2, avg_days * 3 // 2))
+        + timedelta(days=random.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
     )
 
 
