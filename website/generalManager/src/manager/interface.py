@@ -7,6 +7,9 @@ from simple_history.utils import update_change_reason
 from datetime import datetime, timedelta
 from simple_history.models import HistoricalRecords
 from generalManager.src.manager.bucket import DatabaseBucket
+from generalManager.src.measurement.measurement import Measurement
+from generalManager.src.measurement.measurementField import MeasurementField
+from decimal import Decimal
 
 
 class GeneralManagerModel(models.Model):
@@ -114,6 +117,17 @@ class DBBasedInterface(InterfaceBase):
 
     @classmethod
     def getAttributeTypes(cls) -> dict[str, type]:
+        translation = {
+            models.CharField: str,
+            models.TextField: str,
+            models.BooleanField: bool,
+            models.IntegerField: int,
+            models.FloatField: float,
+            models.DateField: datetime,
+            models.DateTimeField: datetime,
+            MeasurementField: Measurement,
+            models.DecimalField: Decimal,
+        }
         fields = {}
         field_name_list, to_ignore_list = cls._handleCustomFields(cls._model)
         for field_name in field_name_list:
@@ -121,7 +135,7 @@ class DBBasedInterface(InterfaceBase):
 
         for field_name in cls.__getModelFields():
             if field_name not in to_ignore_list:
-                fields[field_name] = type(getattr(cls._model, field_name))
+                fields[field_name] = type(getattr(cls._model, field_name).field)
 
         for field_name in cls.__getForeignKeyFields():
             if hasattr(
@@ -149,7 +163,10 @@ class DBBasedInterface(InterfaceBase):
                     field_name
                 ).related_model._general_manager_class  # type: ignore
 
-        return fields
+        return {
+            field_name: translation.get(field, field)
+            for field_name, field in fields.items()
+        }
 
     def getAttributes(self):
         field_values = {}
