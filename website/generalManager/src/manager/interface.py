@@ -51,6 +51,10 @@ class InterfaceBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def getAttributeTypes(self) -> dict[str, type]:
+        raise NotImplementedError
+
+    @abstractmethod
     def getAttributes(self):
         raise NotImplementedError
 
@@ -107,6 +111,45 @@ class DBBasedInterface(InterfaceBase):
         cls, instance: GeneralManagerModel, search_date: datetime | None = None
     ) -> GeneralManagerModel:
         return instance.history.filter(history_date__lte=search_date).last()  # type: ignore
+
+    @classmethod
+    def getAttributeTypes(cls) -> dict[str, type]:
+        fields = {}
+        field_name_list, to_ignore_list = cls._handleCustomFields(cls._model)
+        for field_name in field_name_list:
+            fields[field_name] = type(getattr(cls, field_name))
+
+        for field_name in cls.__getModelFields():
+            if field_name not in to_ignore_list:
+                fields[field_name] = type(getattr(cls._model, field_name))
+
+        for field_name in cls.__getForeignKeyFields():
+            if hasattr(
+                cls._model._meta.get_field(field_name).related_model,
+                "_general_manager_class",
+            ):
+                fields[field_name] = cls._model._meta.get_field(
+                    field_name
+                ).related_model._general_manager_class  # type: ignore
+
+        for field_name, field_call in [
+            *cls.__getManyToManyFields(),
+            *cls.__getReverseRelations(),
+        ]:
+            if field_name in fields.keys():
+                if field_call not in fields.keys():
+                    field_name = field_call
+                else:
+                    raise ValueError("Field name already exists.")
+            if hasattr(
+                cls._model._meta.get_field(field_name).related_model,
+                "_general_manager_class",
+            ):
+                fields[f"{field_name}_list"] = cls._model._meta.get_field(
+                    field_name
+                ).related_model._general_manager_class  # type: ignore
+
+        return fields
 
     def getAttributes(self):
         field_values = {}
@@ -187,31 +230,35 @@ class DBBasedInterface(InterfaceBase):
             if isinstance(field, models.Field)
         ]
 
-    def __getModelFields(self):
+    @classmethod
+    def __getModelFields(cls):
         return [
             field.name
-            for field in self._model._meta.get_fields()
+            for field in cls._model._meta.get_fields()
             if not field.many_to_many and not field.related_model
         ]
 
-    def __getForeignKeyFields(self):
+    @classmethod
+    def __getForeignKeyFields(cls):
         return [
             field.name
-            for field in self._model._meta.get_fields()
+            for field in cls._model._meta.get_fields()
             if field.is_relation and (field.many_to_one or field.one_to_one)
         ]
 
-    def __getManyToManyFields(self):
+    @classmethod
+    def __getManyToManyFields(cls):
         return [
             (field.name, field.name)
-            for field in self._model._meta.get_fields()
+            for field in cls._model._meta.get_fields()
             if field.is_relation and field.many_to_many
         ]
 
-    def __getReverseRelations(self):
+    @classmethod
+    def __getReverseRelations(cls):
         return [
             (field.name, f"{field.name}_set")
-            for field in self._model._meta.get_fields()
+            for field in cls._model._meta.get_fields()
             if field.is_relation and field.one_to_many
         ]
 
