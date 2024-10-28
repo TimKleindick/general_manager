@@ -13,6 +13,7 @@ from decimal import Decimal
 from datetime import date, datetime
 import graphene
 import json
+from generalManager.src.measurement.measurement import Measurement
 
 
 def getFullCleanMethode(model):
@@ -32,6 +33,11 @@ def getFullCleanMethode(model):
             raise ValidationError(errors)
 
     return full_clean
+
+
+class MeasurementType(graphene.ObjectType):
+    value = graphene.Float()
+    unit = graphene.String()
 
 
 class GeneralManagerMeta(type):
@@ -172,6 +178,8 @@ class GeneralManagerMeta(type):
             return graphene.Boolean()
         elif issubclass(field_type, (date, datetime)):
             return graphene.Date()
+        elif issubclass(field_type, Measurement):
+            return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
                 print(field_name)
@@ -212,9 +220,25 @@ class GeneralManagerMeta(type):
                 return queryset
 
             return list_resolver
+
+        if issubclass(field_type, Measurement):
+
+            def measurement_resolver(self, info, target_unit=None):
+                result = getattr(self, field_name)
+                if not isinstance(result, Measurement):
+                    return None
+                if target_unit:
+                    result = result.to(target_unit)
+                return {
+                    "value": result.quantity.magnitude,
+                    "unit": result.quantity.units,
+                }
+
+            return measurement_resolver
         else:
 
             def normal_resolver(self, info):
+
                 return getattr(self, field_name)
 
             return normal_resolver
