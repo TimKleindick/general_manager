@@ -16,6 +16,9 @@ class Bucket(ABC):
     def __eq__(self, other: Bucket) -> bool:
         return self._data == other._data and self._manager_class == other._manager_class
 
+    def __iter__(self) -> Generator[GeneralManager]:
+        raise NotImplementedError
+
     @abstractmethod
     def filter(self, **kwargs):
         raise NotImplementedError
