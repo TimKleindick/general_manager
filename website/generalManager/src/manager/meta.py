@@ -134,7 +134,7 @@ class GeneralManagerMeta(type):
                 field_type, field_name
             )
             resolver_name = f"resolve_{field_name}"
-            resolver = GeneralManagerMeta.__create_resolver(field_name)
+            resolver = GeneralManagerMeta.__create_resolver(field_name, field_type)
             fields[resolver_name] = resolver
 
         graphene_type = type(graphene_type_name, (graphene.ObjectType,), fields)
@@ -177,7 +177,9 @@ class GeneralManagerMeta(type):
                 return graphene.List(
                     lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
                         field_type.__name__
-                    ]
+                    ],
+                    filter=graphene.JSONString(),
+                    exclude=graphene.JSONString(),
                 )
             return graphene.Field(
                 lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
@@ -189,11 +191,33 @@ class GeneralManagerMeta(type):
             return graphene.String()
 
     @staticmethod
-    def __create_resolver(field_name: str) -> Callable:
-        def resolver(self, info, field_name=field_name):
-            return getattr(self, field_name)
+    def __create_resolver(field_name: str, field_type: Type) -> Callable:
+        from generalManager.src.manager.generalManager import GeneralManager
 
-        return resolver
+        if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
+
+            def list_resolver(self, info, filter=None, exclude=None):
+                # Get related objects
+                queryset = getattr(self, field_name).all()
+                if filter:
+                    filter_dict = (
+                        json.loads(filter) if isinstance(filter, str) else filter
+                    )
+                    queryset = queryset.filter(**filter_dict)
+                if exclude:
+                    exclude_dict = (
+                        json.loads(exclude) if isinstance(exclude, str) else exclude
+                    )
+                    queryset = queryset.exclude(**exclude_dict)
+                return queryset
+
+            return list_resolver
+        else:
+
+            def normal_resolver(self, info):
+                return getattr(self, field_name)
+
+            return normal_resolver
 
     @staticmethod
     def __add_queries_to_schema(graphene_type, generalManagerClass):
@@ -203,13 +227,20 @@ class GeneralManagerMeta(type):
 
         # Abfrage für die Liste
         list_field_name = f"{generalManagerClass.__name__.lower()}_list"
-        list_field = graphene.List(graphene_type, filter=graphene.JSONString())
+        list_field = graphene.List(
+            graphene_type, filter=graphene.JSONString(), exclude=graphene.JSONString()
+        )
 
-        def resolve_list(self, info, filter=None):
+        def resolve_list(self, info, filter=None, exclude=None):
             queryset = generalManagerClass.all()
             if filter:
                 filter_dict = json.loads(filter) if isinstance(filter, str) else filter
                 queryset = queryset.filter(**filter_dict)
+            if exclude:
+                exclude_dict = (
+                    json.loads(exclude) if isinstance(exclude, str) else exclude
+                )
+                queryset = queryset.exclude(**exclude_dict)
             return queryset
 
         GeneralManagerMeta._query_fields[list_field_name] = list_field
