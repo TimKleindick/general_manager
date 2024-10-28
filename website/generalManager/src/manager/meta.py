@@ -12,6 +12,7 @@ from website.settings import AUTOCREATE_GRAPHQL
 from django.db import models
 import graphene
 import json
+from generalManager.src.manager.bucket import Bucket
 
 
 def getFullCleanMethode(model):
@@ -129,7 +130,9 @@ class GeneralManagerMeta(type):
         fields = {}
 
         for field_name, field_type in interface_cls.getAttributeTypes().items():
-            fields[field_name] = GeneralManagerMeta.__map_field_to_graphene(field_type)
+            fields[field_name] = GeneralManagerMeta.__map_field_to_graphene(
+                field_type, field_name
+            )
             resolver_name = f"resolve_{field_name}"
             resolver = GeneralManagerMeta.__create_resolver(field_name)
             fields[resolver_name] = resolver
@@ -147,6 +150,7 @@ class GeneralManagerMeta(type):
     @staticmethod
     def __map_field_to_graphene(
         field_type: Type,
+        field_name: str,
     ) -> (
         graphene.Field
         | graphene.String
@@ -154,6 +158,7 @@ class GeneralManagerMeta(type):
         | graphene.Float
         | graphene.Boolean
         | graphene.Date
+        | graphene.List
     ):
         from generalManager.src.manager.generalManager import GeneralManager
 
@@ -168,6 +173,12 @@ class GeneralManagerMeta(type):
         elif field_type == models.DateField or field_type == models.DateTimeField:
             return graphene.Date()
         elif issubclass(field_type, GeneralManager):
+            if field_name.endswith("_list"):
+                return graphene.List(
+                    lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
+                        field_type.__name__
+                    ]
+                )
             return graphene.Field(
                 lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
                     field_type.__name__
