@@ -9,10 +9,10 @@ from typing import Type, Callable
 from django.core.exceptions import ValidationError
 from generalManager.src.factory.factories import AutoFactory
 from website.settings import AUTOCREATE_GRAPHQL
-from django.db import models
+from decimal import Decimal
+from datetime import date, datetime
 import graphene
 import json
-from generalManager.src.manager.bucket import Bucket
 
 
 def getFullCleanMethode(model):
@@ -128,7 +128,7 @@ class GeneralManagerMeta(type):
 
         # Felder zum Graphene-Objekt hinzufügen
         fields = {}
-
+        print(interface_cls.getAttributeTypes())
         for field_name, field_type in interface_cls.getAttributeTypes().items():
             fields[field_name] = GeneralManagerMeta.__map_field_to_graphene(
                 field_type, field_name
@@ -162,18 +162,19 @@ class GeneralManagerMeta(type):
     ):
         from generalManager.src.manager.generalManager import GeneralManager
 
-        if field_type == models.CharField or field_type == models.TextField:
+        if issubclass(field_type, str):
             return graphene.String()
-        elif field_type == models.IntegerField:
+        elif issubclass(field_type, int):
             return graphene.Int()
-        elif field_type == models.FloatField or field_type == models.DecimalField:
+        elif issubclass(field_type, (float, Decimal)):
             return graphene.Float()
-        elif field_type == models.BooleanField:
+        elif issubclass(field_type, bool):
             return graphene.Boolean()
-        elif field_type == models.DateField or field_type == models.DateTimeField:
+        elif issubclass(field_type, (date, datetime)):
             return graphene.Date()
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
+                print(field_name)
                 return graphene.List(
                     lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
                         field_type.__name__
@@ -187,7 +188,6 @@ class GeneralManagerMeta(type):
                 ]
             )
         else:
-            # Fallback für andere Feldtypen
             return graphene.String()
 
     @staticmethod
