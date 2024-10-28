@@ -134,7 +134,6 @@ class GeneralManagerMeta(type):
 
         # Felder zum Graphene-Objekt hinzufügen
         fields = {}
-        print(interface_cls.getAttributeTypes())
         for field_name, field_type in interface_cls.getAttributeTypes().items():
             fields[field_name] = GeneralManagerMeta.__map_field_to_graphene(
                 field_type, field_name
@@ -182,7 +181,6 @@ class GeneralManagerMeta(type):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
-                print(field_name)
                 return graphene.List(
                     lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
                         field_type.__name__
