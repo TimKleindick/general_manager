@@ -9,9 +9,11 @@ from django.db.models import (
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
 from generalManager.src.manager.interface import DatabaseInterface
-from generalManager.src.measurement.measurementField import (
+from generalManager.src.measurement import (
     MeasurementField,
+    Measurement,
 )
+from typing import Optional
 from generalManager.src.rule.rule import Rule
 from django.db.models.constraints import UniqueConstraint
 from generalManager.src.factory.lazy_methods import (
@@ -47,8 +49,19 @@ class Project(GeneralManager):
 
 
 class Derivative(GeneralManager):
+    name: str
+    estimated_weight: Optional[Measurement]
+    estimated_volume: Optional[int]
+    project: Project
+
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
         estimated_weight = MeasurementField(base_unit="kg", null=True, blank=True)
         estimated_volume = IntegerField(null=True, blank=True)
         project = ForeignKey("Project", on_delete=CASCADE)
+
+    @property
+    def estimated_shipment(self):
+        if self.estimated_weight is None or self.estimated_volume is None:
+            return None
+        return self.estimated_weight * self.estimated_volume

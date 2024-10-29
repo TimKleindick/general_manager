@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Type
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.manager.interface import InterfaceBase
+from generalManager.src.manager.bucket import Bucket
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
@@ -72,13 +73,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return self.__class__(self.__id)
 
     @classmethod
-    def filter(cls, **kwargs):
+    def filter(cls, **kwargs) -> Bucket:
         return cls.Interface.filter(**kwargs)
 
     @classmethod
-    def exclude(cls, **kwargs):
+    def exclude(cls, **kwargs) -> Bucket:
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
-    def all(cls):
+    def all(cls) -> Bucket:
         return cls.Interface.filter()
