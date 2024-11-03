@@ -1,8 +1,5 @@
 from __future__ import annotations
 from generalManager.src.manager.interface import (
-    DBBasedInterface,
-    ReadOnlyInterface,
-    GeneralManagerModel,
     InterfaceBase,
 )
 from website.settings import AUTOCREATE_GRAPHQL
@@ -14,10 +11,12 @@ class GeneralManagerMeta(type):
     pending_graphql_interfaces: list[Type] = []
 
     def __new__(mcs, name, bases, attrs):
-        from generalManager.src.api.graphql import GraphQL
-
         if "Interface" in attrs:
-            interface: InterfaceBase = attrs.pop("Interface")
+            interface: Type[InterfaceBase] = attrs.pop("Interface")
+            if not issubclass(interface, InterfaceBase):
+                raise TypeError(
+                    f"Interface must be a subclass of {InterfaceBase.__name__}"
+                )
             preCreation, postCreation = interface.handleInterface()
             attrs, interface_cls, model = preCreation(name, attrs, interface)
             new_class = super().__new__(mcs, name, bases, attrs)
