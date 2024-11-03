@@ -12,7 +12,7 @@ from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.measurement.measurementField import MeasurementField
 
 if TYPE_CHECKING:
-    from generalManager.src.manager.interface import DBBasedInterface
+    from generalManager.src.interface.databaseInterface import DBBasedInterface
 
 
 class AutoFactory(DjangoModelFactory):
