@@ -175,7 +175,7 @@ class Rule:
             parts = var.split(".")
             value = x
             for part in parts:
-                value = getattr(value, part, None)
+                value = getattr(value, part)
                 if value is None:
                     break
             var_values[var] = value
