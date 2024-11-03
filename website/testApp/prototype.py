@@ -8,7 +8,7 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
-from generalManager.src.manager.interface import DatabaseInterface
+from generalManager.src.interface import DatabaseInterface
 from generalManager.src.measurement import (
     MeasurementField,
     Measurement,

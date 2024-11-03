@@ -1,5 +1,5 @@
 from __future__ import annotations
-from generalManager.src.manager.interface import (
+from generalManager.src.interface import (
     InterfaceBase,
 )
 from website.settings import AUTOCREATE_GRAPHQL
