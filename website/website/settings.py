@@ -125,3 +125,4 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTOCREATE_GRAPHQL = True
+GRAPHQL_URL = "graphql/"
