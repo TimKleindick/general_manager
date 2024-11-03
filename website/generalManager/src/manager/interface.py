@@ -1,18 +1,45 @@
+from __future__ import annotations
 import json
-from typing import Type, ClassVar, Any
+from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING
 from django.db import models, transaction
 from abc import ABC, abstractmethod
 from django.contrib.auth import get_user_model
 from simple_history.utils import update_change_reason
 from datetime import datetime, timedelta
 from simple_history.models import HistoricalRecords
-from generalManager.src.manager.bucket import DatabaseBucket
+from generalManager.src.manager.bucket import DatabaseBucket, Bucket
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.measurement.measurementField import MeasurementField
 from decimal import Decimal
+from generalManager.src.factory.factories import AutoFactory
+from django.core.exceptions import ValidationError
+
+if TYPE_CHECKING:
+    from generalManager.src.manager.generalManager import GeneralManager
+    from generalManager.src.manager.meta import GeneralManagerMeta
+
+
+def getFullCleanMethode(model):
+    def full_clean(self, *args, **kwargs):
+        errors = {}
+
+        try:
+            super(model, self).full_clean(*args, **kwargs)
+        except ValidationError as e:
+            errors.update(e.message_dict)
+
+        for rule in self._meta.rules:
+            if not rule.evaluate(self):
+                errors.update(rule.getErrorMessage())
+
+        if errors:
+            raise ValidationError(errors)
+
+    return full_clean
 
 
 class GeneralManagerModel(models.Model):
+    _general_manager_class: ClassVar[Type[GeneralManager]]
     is_active = models.BooleanField(default=True)
     changed_by = models.ForeignKey(get_user_model(), on_delete=models.PROTECT)
     history = HistoricalRecords(inherit=True)
@@ -58,17 +85,31 @@ class InterfaceBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def getAttributes(self):
+    def getAttributes(self) -> dict[str, Any]:
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def filter(cls, **kwargs):
+    def filter(cls, **kwargs) -> Bucket:
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def exclude(cls, **kwargs):
+    def exclude(cls, **kwargs) -> Bucket:
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def handleInterface(cls) -> tuple[Callable, Callable]:
+        """
+        This method returns a pre and a post GeneralManager creation method
+        and is called inside the GeneralManagerMeta class to initialize the
+        Interface.
+        The pre creation method is called before the GeneralManager instance
+        is created to modify the kwargs.
+        The post creation method is called after the GeneralManager instance
+        is created to modify the instance and add additional data.
+        """
         raise NotImplementedError
 
 
@@ -279,6 +320,85 @@ class DBBasedInterface(InterfaceBase):
             if field.is_relation and field.one_to_many
         ]
 
+    @staticmethod
+    def __preCreate(
+        name: str, attrs: dict[str, Any], interface: Type[DBBasedInterface]
+    ) -> tuple[dict, Type, Type]:
+        # Felder aus der Interface-Klasse sammeln
+        model_fields = {}
+        meta_class = None
+        for attr_name, attr_value in interface.__dict__.items():
+            if not attr_name.startswith("__"):
+                if attr_name == "Meta" and isinstance(attr_value, type):
+                    # Meta-Klasse speichern
+                    meta_class = attr_value
+                elif attr_name == "Factory":
+                    # Factory nicht in model_fields speichern
+                    pass
+                else:
+                    model_fields[attr_name] = attr_value
+        model_fields["__module__"] = attrs.get("__module__")
+        # Meta-Klasse hinzufügen oder erstellen
+        if meta_class:
+            rules = None
+            model_fields["Meta"] = meta_class
+
+            if hasattr(meta_class, "rules"):
+                rules = meta_class.rules
+                delattr(meta_class, "rules")
+
+        # Modell erstellen
+        model = type(name, (GeneralManagerModel,), model_fields)
+        if meta_class and rules:
+            model._meta.rules = rules  # type: ignore
+            # full_clean Methode hinzufügen
+            model.full_clean = getFullCleanMethode(model)
+        # Interface-Typ bestimmen
+        if issubclass(interface, DBBasedInterface):
+            attrs["_interface_type"] = interface._interface_type
+            interface_cls = type(interface.__name__, (interface,), {})
+            interface_cls._model = model
+            attrs["Interface"] = interface_cls
+        else:
+            raise TypeError("Interface must be a subclass of DBBasedInterface")
+        # add factory class
+        factory_definition = getattr(interface, "Factory", None)
+        factory_attributes = {}
+        if factory_definition:
+            for attr_name, attr_value in factory_definition.__dict__.items():
+                if not attr_name.startswith("__"):
+                    factory_attributes[attr_name] = attr_value
+        factory_attributes["interface"] = interface_cls
+        factory_attributes["Meta"] = type("Meta", (), {"model": model})
+        factory_class = type(f"{name}Factory", (AutoFactory,), factory_attributes)
+        factory_class._meta.model = model
+        attrs["Factory"] = factory_class
+
+        return attrs, interface_cls, model
+
+    @staticmethod
+    def __postCreate(
+        mcs: Type[GeneralManagerMeta],
+        new_class: Type[GeneralManager],
+        interface_class: Type[DBBasedInterface],
+        model: Type[GeneralManagerModel],
+    ) -> None:
+        interface_class._parent_class = new_class
+        model._general_manager_class = new_class
+
+    @classmethod
+    def handleInterface(cls) -> tuple[Callable, Callable]:
+        """
+        This method returns a pre and a post GeneralManager creation method
+        and is called inside the GeneralManagerMeta class to initialize the
+        Interface.
+        The pre creation method is called before the GeneralManager instance
+        is created to modify the kwargs.
+        The post creation method is called after the GeneralManager instance
+        is created to modify the instance and add additional data.
+        """
+        return cls.__preCreate, cls.__postCreate
+
 
 class ReadOnlyInterface(DBBasedInterface):
     _interface_type = "readonly"
@@ -352,6 +472,32 @@ class ReadOnlyInterface(DBBasedInterface):
                 unique_identifier = tuple(lookup[field] for field in unique_fields)
                 if unique_identifier not in json_unique_values:
                     instance.delete()
+
+    @staticmethod
+    def readOnlyPostCreate(func):
+        def wrapper(
+            mcs: Type[GeneralManagerMeta],
+            new_class: Type[GeneralManager],
+            interface_cls: Type[ReadOnlyInterface],
+            model: Type[GeneralManagerModel],
+        ):
+            func(mcs, new_class, interface_cls, model)
+            mcs.read_only_classes.append(interface_cls)
+
+        return wrapper
+
+    @classmethod
+    def handleInterface(cls) -> tuple[Callable, Callable]:
+        """
+        This method returns a pre and a post GeneralManager creation method
+        and is called inside the GeneralManagerMeta class to initialize the
+        Interface.
+        The pre creation method is called before the GeneralManager instance
+        is created to modify the kwargs.
+        The post creation method is called after the GeneralManager instance
+        is created to modify the instance and add additional data.
+        """
+        return cls.__preCreate, cls.readOnlyPostCreate(cls.__postCreate)
 
 
 class DatabaseInterface(DBBasedInterface):
