@@ -1,7 +1,7 @@
 # units.py
-
+from __future__ import annotations
 import pint
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, InvalidOperation
 from operator import eq, ne, lt, le, gt, ge
 
 
@@ -19,7 +19,7 @@ for currency in currency_units:
 
 
 class Measurement:
-    def __init__(self, value, unit):
+    def __init__(self, value: Decimal | float | int | str, unit: str):
         if not isinstance(value, (Decimal, float, int)):
             try:
                 value = Decimal(str(value))
@@ -30,21 +30,24 @@ class Measurement:
         self.__quantity = self.formatDecimal(value) * ureg.Quantity(1, unit)
 
     @property
-    def quantity(self):
+    def quantity(self) -> pint.Quantity:
         return self.__quantity
 
     @classmethod
-    def from_string(cls, value):
+    def from_string(cls, value: str) -> Measurement:
         if not isinstance(value, str):
             raise TypeError("Value must be a string.")
         value, unit = value.split(" ")
         return cls(value, unit)
 
     @staticmethod
-    def formatDecimal(value):
+    def formatDecimal(value: Decimal) -> Decimal:
         value = value.normalize()
-        if value == value.to_integral():
-            return value.quantize(Decimal("1"))
+        if value == value.to_integral_value():
+            try:
+                return value.quantize(Decimal("1"))
+            except InvalidOperation:
+                return value
         else:
             return value
 

@@ -97,12 +97,12 @@ class GraphQL:
 
         if issubclass(field_type, str):
             return graphene.String()
+        elif issubclass(field_type, bool):
+            return graphene.Boolean()
         elif issubclass(field_type, int):
             return graphene.Int()
         elif issubclass(field_type, (float, Decimal)):
             return graphene.Float()
-        elif issubclass(field_type, bool):
-            return graphene.Boolean()
         elif issubclass(field_type, (date, datetime)):
             return graphene.Date()
         elif issubclass(field_type, Measurement):
