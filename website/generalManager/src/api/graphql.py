@@ -1,14 +1,17 @@
 from __future__ import annotations
-from generalManager.src.manager.interface import (
-    InterfaceBase,
-)
+
 import graphene
-from typing import Type, Callable, get_type_hints, get_args
+from typing import Type, Callable, get_type_hints, get_args, TYPE_CHECKING
 from decimal import Decimal
 from datetime import date, datetime
 import json
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.manager.generalManager import GeneralManagerMeta
+
+if TYPE_CHECKING:
+    from generalManager.src.interface import (
+        InterfaceBase,
+    )
 
 
 class GraphQLProperty(property):

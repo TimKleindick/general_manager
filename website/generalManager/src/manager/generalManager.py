@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Type
 from generalManager.src.manager.meta import GeneralManagerMeta
-from generalManager.src.manager.interface import InterfaceBase
+from generalManager.src.interface import InterfaceBase
 from generalManager.src.manager.bucket import Bucket
 
 
