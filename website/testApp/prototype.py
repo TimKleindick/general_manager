@@ -21,6 +21,7 @@ from generalManager.src.factory.lazy_methods import (
     LazyDeltaDate,
     LazyProjectName,
 )
+from generalManager.src.api.graphql import graphQlProperty
 
 
 class Project(GeneralManager):
@@ -60,8 +61,8 @@ class Derivative(GeneralManager):
         estimated_volume = IntegerField(null=True, blank=True)
         project = ForeignKey("Project", on_delete=CASCADE)
 
-    @property
-    def estimated_shipment(self):
+    @graphQlProperty
+    def estimated_shipment(self) -> Optional[Measurement]:
         if self.estimated_weight is None or self.estimated_volume is None:
             return None
         return self.estimated_weight * self.estimated_volume

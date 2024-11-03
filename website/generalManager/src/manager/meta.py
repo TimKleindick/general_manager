@@ -3,17 +3,11 @@ from generalManager.src.manager.interface import (
     DBBasedInterface,
     ReadOnlyInterface,
     GeneralManagerModel,
-    InterfaceBase,
 )
-from typing import Type, Callable
 from django.core.exceptions import ValidationError
 from generalManager.src.factory.factories import AutoFactory
 from website.settings import AUTOCREATE_GRAPHQL
-from decimal import Decimal
-from datetime import date, datetime
-import graphene
-import json
-from generalManager.src.measurement.measurement import Measurement
+from typing import Type
 
 
 def getFullCleanMethode(model):
@@ -35,18 +29,13 @@ def getFullCleanMethode(model):
     return full_clean
 
 
-class MeasurementType(graphene.ObjectType):
-    value = graphene.Float()
-    unit = graphene.String()
-
-
 class GeneralManagerMeta(type):
     read_only_classes: list[Type] = []
-    graphql_type_registry: dict = {}
-    _query_class: Type
     pending_graphql_interfaces: list[Type] = []
 
     def __new__(mcs, name, bases, attrs):
+        from generalManager.src.api.graphql import GraphQL
+
         if "Interface" in attrs:
             interface = attrs.pop("Interface")
             if issubclass(interface, DBBasedInterface):
@@ -121,159 +110,3 @@ class GeneralManagerMeta(type):
         attrs["Factory"] = factory_class
 
         return attrs, interface_cls, model
-
-    @staticmethod
-    def _createGraphQlInterface(generalManagerClass: Type[GeneralManagerMeta]):
-        interface_cls: InterfaceBase | None = getattr(
-            generalManagerClass, "Interface", None
-        )
-        if not interface_cls:
-            return
-
-        graphene_type_name = f"{generalManagerClass.__name__}Type"
-
-        # Felder zum Graphene-Objekt hinzufügen
-        fields = {}
-        for field_name, field_type in interface_cls.getAttributeTypes().items():
-            fields[field_name] = GeneralManagerMeta.__map_field_to_graphene(
-                field_type, field_name
-            )
-            resolver_name = f"resolve_{field_name}"
-            resolver = GeneralManagerMeta.__create_resolver(field_name, field_type)
-            fields[resolver_name] = resolver
-
-        graphene_type = type(graphene_type_name, (graphene.ObjectType,), fields)
-
-        # Hinzufügen des Typs zum Registry
-        GeneralManagerMeta.graphql_type_registry[generalManagerClass.__name__] = (
-            graphene_type
-        )
-
-        # Hinzufügen der Abfragen zum Schema
-        GeneralManagerMeta.__add_queries_to_schema(graphene_type, generalManagerClass)
-
-    @staticmethod
-    def __map_field_to_graphene(
-        field_type: Type,
-        field_name: str,
-    ) -> (
-        graphene.Field
-        | graphene.String
-        | graphene.Int
-        | graphene.Float
-        | graphene.Boolean
-        | graphene.Date
-        | graphene.List
-    ):
-        from generalManager.src.manager.generalManager import GeneralManager
-
-        if issubclass(field_type, str):
-            return graphene.String()
-        elif issubclass(field_type, int):
-            return graphene.Int()
-        elif issubclass(field_type, (float, Decimal)):
-            return graphene.Float()
-        elif issubclass(field_type, bool):
-            return graphene.Boolean()
-        elif issubclass(field_type, (date, datetime)):
-            return graphene.Date()
-        elif issubclass(field_type, Measurement):
-            return graphene.Field(MeasurementType, target_unit=graphene.String())
-        elif issubclass(field_type, GeneralManager):
-            if field_name.endswith("_list"):
-                return graphene.List(
-                    lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
-                        field_type.__name__
-                    ],
-                    filter=graphene.JSONString(),
-                    exclude=graphene.JSONString(),
-                )
-            return graphene.Field(
-                lambda field_type=field_type: GeneralManagerMeta.graphql_type_registry[
-                    field_type.__name__
-                ]
-            )
-        else:
-            return graphene.String()
-
-    @staticmethod
-    def __create_resolver(field_name: str, field_type: Type) -> Callable:
-        from generalManager.src.manager.generalManager import GeneralManager
-
-        if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
-
-            def list_resolver(self, info, filter=None, exclude=None):
-                # Get related objects
-                queryset = getattr(self, field_name).all()
-                if filter:
-                    filter_dict = (
-                        json.loads(filter) if isinstance(filter, str) else filter
-                    )
-                    queryset = queryset.filter(**filter_dict)
-                if exclude:
-                    exclude_dict = (
-                        json.loads(exclude) if isinstance(exclude, str) else exclude
-                    )
-                    queryset = queryset.exclude(**exclude_dict)
-                return queryset
-
-            return list_resolver
-
-        if issubclass(field_type, Measurement):
-
-            def measurement_resolver(self, info, target_unit=None):
-                result = getattr(self, field_name)
-                if not isinstance(result, Measurement):
-                    return None
-                if target_unit:
-                    result = result.to(target_unit)
-                return {
-                    "value": result.quantity.magnitude,
-                    "unit": result.quantity.units,
-                }
-
-            return measurement_resolver
-        else:
-
-            def normal_resolver(self, info):
-
-                return getattr(self, field_name)
-
-            return normal_resolver
-
-    @staticmethod
-    def __add_queries_to_schema(graphene_type, generalManagerClass):
-        # Sammeln der Felder
-        if not hasattr(GeneralManagerMeta, "_query_fields"):
-            GeneralManagerMeta._query_fields = {}
-
-        # Abfrage für die Liste
-        list_field_name = f"{generalManagerClass.__name__.lower()}_list"
-        list_field = graphene.List(
-            graphene_type, filter=graphene.JSONString(), exclude=graphene.JSONString()
-        )
-
-        def resolve_list(self, info, filter=None, exclude=None):
-            queryset = generalManagerClass.all()
-            if filter:
-                filter_dict = json.loads(filter) if isinstance(filter, str) else filter
-                queryset = queryset.filter(**filter_dict)
-            if exclude:
-                exclude_dict = (
-                    json.loads(exclude) if isinstance(exclude, str) else exclude
-                )
-                queryset = queryset.exclude(**exclude_dict)
-            return queryset
-
-        GeneralManagerMeta._query_fields[list_field_name] = list_field
-        GeneralManagerMeta._query_fields[f"resolve_{list_field_name}"] = resolve_list
-
-        # Abfrage für ein einzelnes Objekt
-        item_field_name = generalManagerClass.__name__.lower()
-        item_field = graphene.Field(graphene_type, id=graphene.Int(required=True))
-
-        def resolve_item(self, info, id):
-            return generalManagerClass(id)
-
-        GeneralManagerMeta._query_fields[item_field_name] = item_field
-        GeneralManagerMeta._query_fields[f"resolve_{item_field_name}"] = resolve_item
