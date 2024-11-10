@@ -5,6 +5,7 @@ from django.db.models import (
     IntegerField,
     ForeignKey,
     CASCADE,
+    constraints,
 )
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
@@ -13,15 +14,17 @@ from generalManager.src.measurement import (
     MeasurementField,
     Measurement,
 )
-from typing import Optional
+from typing import Optional, Any
 from generalManager.src.rule.rule import Rule
-from django.db.models.constraints import UniqueConstraint
 from generalManager.src.factory.lazy_methods import (
     LazyMeasurement,
     LazyDeltaDate,
     LazyProjectName,
 )
 from generalManager.src.api.graphql import graphQlProperty
+import random
+import numpy as np
+from datetime import date
 
 
 class Project(GeneralManager):
@@ -35,7 +38,9 @@ class Project(GeneralManager):
 
         class Meta:
             constraints = [
-                UniqueConstraint(fields=["name", "number"], name="unique_booking")
+                constraints.UniqueConstraint(
+                    fields=["name", "number"], name="unique_booking"
+                )
             ]
 
             rules = [
@@ -66,3 +71,65 @@ class Derivative(GeneralManager):
         if self.estimated_weight is None or self.estimated_volume is None:
             return None
         return self.estimated_weight * self.estimated_volume
+
+
+def generate_volume_distribution(years, total_volume):
+    peak_year = random.randint(1, years // 3)
+    volumes = np.zeros(years)
+    for year in range(peak_year):
+        volumes[year] = (year / peak_year) ** 2 + random.uniform(0, 0.05)
+
+    for year in range(peak_year, years):
+        volumes[year] = max(0, (years - year) / (years - peak_year)) + random.uniform(
+            0, 0.05
+        )
+
+    volumes = volumes / np.sum(volumes) * total_volume
+    return volumes.tolist()
+
+
+def generateVolume(**kwargs) -> list[dict[str, Any]]:
+
+    derivative = kwargs["derivative"]
+    total_volume = derivative.estimated_volume
+    if (
+        total_volume is None
+        or derivative.project.start_date is None
+        or derivative.project.end_date is None
+    ):
+        return []
+    total_years = derivative.project.end_date.year - derivative.project.start_date.year
+    volumes = generate_volume_distribution(total_years, total_volume)
+    records = []
+    for year, volume in enumerate(volumes, start=derivative.project.start_date.year):
+        records.append(
+            {
+                **kwargs,
+                "date": date.fromisoformat(f"{year}-01-01"),
+                "volume": volume,
+            }
+        )
+    return records
+
+
+class DerivativeVolume(GeneralManager):
+    derivative: Derivative
+    date: DateField
+    volume: Measurement
+
+    class Interface(DatabaseInterface):
+        derivative = ForeignKey("Derivative", on_delete=CASCADE)
+        date = DateField()
+        volume = IntegerField()
+
+        class Meta:
+            constraints = [
+                constraints.UniqueConstraint(
+                    fields=["derivative", "date"], name="unique_volume"
+                )
+            ]
+
+            Rule(lambda x: x.volume >= 0)
+
+        class Factory:
+            _adjustmentMethod = generateVolume
