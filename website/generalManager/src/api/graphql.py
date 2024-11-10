@@ -133,16 +133,19 @@ class GraphQL:
             def list_resolver(self, info, filter=None, exclude=None):
                 # Get related objects
                 queryset = getattr(self, field_name).all()
-                if filter:
-                    filter_dict = (
-                        json.loads(filter) if isinstance(filter, str) else filter
-                    )
-                    queryset = queryset.filter(**filter_dict)
-                if exclude:
-                    exclude_dict = (
-                        json.loads(exclude) if isinstance(exclude, str) else exclude
-                    )
-                    queryset = queryset.exclude(**exclude_dict)
+                try:
+                    if filter:
+                        filter_dict = (
+                            json.loads(filter) if isinstance(filter, str) else filter
+                        )
+                        queryset = queryset.filter(**filter_dict)
+                    if exclude:
+                        exclude_dict = (
+                            json.loads(exclude) if isinstance(exclude, str) else exclude
+                        )
+                        queryset = queryset.exclude(**exclude_dict)
+                except Exception:
+                    pass
                 return queryset
 
             return list_resolver
@@ -161,13 +164,11 @@ class GraphQL:
                 }
 
             return measurement_resolver
-        else:
 
-            def normal_resolver(self, info):
+        def normal_resolver(self, info):
+            return getattr(self, field_name)
 
-                return getattr(self, field_name)
-
-            return normal_resolver
+        return normal_resolver
 
     @classmethod
     def __add_queries_to_schema(cls, graphene_type, generalManagerClass):

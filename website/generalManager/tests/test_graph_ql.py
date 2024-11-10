@@ -148,3 +148,69 @@ class GraphQLTests(TestCase):
         self.assertIn("resolve_testgeneralmanager_list", GraphQL._query_fields)
         self.assertIn("testgeneralmanager", GraphQL._query_fields)
         self.assertIn("resolve_testgeneralmanager", GraphQL._query_fields)
+
+
+class GraphQLAdditionalTests(TestCase):
+    def setUp(self):
+        # Setup mock general manager class
+        self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
+        self.general_manager_class.__name__ = "TestManager"
+
+    @patch("generalManager.src.interface.InterfaceBase")
+    def test_create_graphql_interface_graphql_property(self, mock_interface):
+        # Test with a class having GraphQLProperty attributes
+        mock_interface.getAttributeTypes.return_value = {
+            "test_field": str,
+        }
+        self.general_manager_class.Interface = mock_interface
+
+        def graphql_property_func() -> int:
+            return 42
+
+        setattr(
+            self.general_manager_class,
+            "test_prop",
+            GraphQLProperty(graphql_property_func),
+        )
+        GraphQL._createGraphQlInterface(self.general_manager_class)
+
+        self.assertIn("TestManager", GraphQL.graphql_type_registry)
+
+    def test_map_field_to_graphene_general_manager(self):
+        # Test field mapping for a GeneralManager type with list suffix
+        self.assertIsInstance(
+            GraphQL._GraphQL__map_field_to_graphene(GeneralManager, "test_list"),  # type: ignore
+            graphene.List,
+        )
+
+    def test_list_resolver_with_invalid_filter_exclude(self):
+        # Test handling of invalid JSON in filter/exclude parameters
+        mock_instance = MagicMock()
+        mock_queryset = MagicMock()
+        mock_instance.abc_list.all.return_value = mock_queryset
+
+        resolver = GraphQL._GraphQL__create_resolver("abc_list", GeneralManager)  # type: ignore
+
+        # Modify resolver to handle ValueError
+        with patch("json.loads", side_effect=ValueError):
+            try:
+                result = resolver(
+                    mock_instance, None, filter="invalid", exclude="invalid"
+                )
+                self.assertEqual(result, mock_queryset)
+            except ValueError:
+                self.fail("Resolver should handle invalid JSON gracefully.")
+
+    def test_resolve_list_with_no_filter_exclude(self):
+        # Test list resolver without filter/exclude
+        class TestGeneralManager:
+            @classmethod
+            def all(cls):
+                return ["item1", "item2"]
+
+        graphene_type = MagicMock()
+        GraphQL._GraphQL__add_queries_to_schema(graphene_type, TestGeneralManager)  # type: ignore
+
+        resolve_list_func = GraphQL._query_fields["resolve_testgeneralmanager_list"]
+        result = resolve_list_func(self, None)
+        self.assertEqual(result, ["item1", "item2"])
