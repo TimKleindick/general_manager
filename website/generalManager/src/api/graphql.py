@@ -1,7 +1,6 @@
 from __future__ import annotations
-
 import graphene
-from typing import Type, Callable, get_type_hints, get_args, TYPE_CHECKING
+from typing import Any, Callable, get_type_hints, get_args, TYPE_CHECKING
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -12,16 +11,17 @@ if TYPE_CHECKING:
     from generalManager.src.interface import (
         InterfaceBase,
     )
+    from generalManager.src.manager.generalManager import GeneralManager
 
 
 class GraphQLProperty(property):
-    def __init__(self, fget, doc=None):
+    def __init__(self, fget: Callable[..., Any], doc: str | None = None):
         super().__init__(fget, doc=doc)
         self.is_graphql_resolver = True
         self.graphql_type_hint = get_type_hints(fget).get("return", None)
 
 
-def graphQlProperty(func):
+def graphQlProperty(func: Callable[..., Any]):
     """
     Dekorator für GraphQL-Feld-Resolver, der automatisch:
     - die Methode als benutzerdefiniertes Property registriert,
@@ -31,14 +31,14 @@ def graphQlProperty(func):
     return GraphQLProperty(func)
 
 
-class MeasurementType(graphene.ObjectType):
+class MeasurementType(graphene.ObjectType[Measurement]):
     value = graphene.Float()
     unit = graphene.String()
 
 
 class GraphQL:
-    _query_class: Type
-    graphql_type_registry: dict = {}
+    _query_class: type
+    graphql_type_registry: dict[str, type] = {}
 
     @classmethod
     def _createGraphQlInterface(cls, generalManagerClass: GeneralManagerMeta):
@@ -51,7 +51,7 @@ class GraphQL:
         graphene_type_name = f"{generalManagerClass.__name__}Type"
 
         # Felder zum Graphene-Objekt hinzufügen
-        fields = {}
+        fields: dict[str, Any] = {}
         for field_name, field_type in interface_cls.getAttributeTypes().items():
             fields[field_name] = cls.__map_field_to_graphene(field_type, field_name)
             resolver_name = f"resolve_{field_name}"
@@ -62,7 +62,7 @@ class GraphQL:
             if isinstance(attr_value, GraphQLProperty):
                 type_hint = get_args(attr_value.graphql_type_hint)
                 if type_hint:
-                    field_type: Type = type_hint[0] or type_hint[1]
+                    field_type: type = type_hint[0] or type_hint[1]
                 else:
                     field_type = attr_value.graphql_type_hint
 
@@ -82,16 +82,17 @@ class GraphQL:
 
     @staticmethod
     def __map_field_to_graphene(
-        field_type: Type,
+        field_type: type,
         field_name: str,
     ) -> (
         graphene.Field
-        | graphene.String
         | graphene.Int
         | graphene.Float
         | graphene.Boolean
         | graphene.Date
         | graphene.List
+        | graphene.String
+        | str
     ):
         from generalManager.src.manager.generalManager import GeneralManager
 
@@ -125,12 +126,17 @@ class GraphQL:
             return graphene.String()
 
     @staticmethod
-    def __create_resolver(field_name: str, field_type: Type) -> Callable:
+    def __create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
         from generalManager.src.manager.generalManager import GeneralManager
 
         if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
 
-            def list_resolver(self, info, filter=None, exclude=None):
+            def list_resolver(
+                self: GeneralManager,
+                info: str,
+                filter: dict[str, Any] | str | None = None,
+                exclude: dict[str, Any] | str | None = None,
+            ):
                 # Get related objects
                 queryset = getattr(self, field_name).all()
                 try:
@@ -152,7 +158,9 @@ class GraphQL:
 
         if issubclass(field_type, Measurement):
 
-            def measurement_resolver(self, info, target_unit=None):
+            def measurement_resolver(
+                self: GeneralManager, info: str, target_unit: str | None = None
+            ) -> dict[str, Any] | None:
                 result = getattr(self, field_name)
                 if not isinstance(result, Measurement):
                     return None
@@ -165,16 +173,18 @@ class GraphQL:
 
             return measurement_resolver
 
-        def normal_resolver(self, info):
+        def normal_resolver(self: GeneralManager, info: str) -> Any:
             return getattr(self, field_name)
 
         return normal_resolver
 
     @classmethod
-    def __add_queries_to_schema(cls, graphene_type, generalManagerClass):
+    def __add_queries_to_schema(
+        cls, graphene_type: type, generalManagerClass: type[GeneralManager]
+    ):
         # Sammeln der Felder
         if not hasattr(GeneralManagerMeta, "_query_fields"):
-            cls._query_fields = {}
+            cls._query_fields: dict[str, Any] = {}
 
         # Abfrage für die Liste
         list_field_name = f"{generalManagerClass.__name__.lower()}_list"
@@ -182,7 +192,12 @@ class GraphQL:
             graphene_type, filter=graphene.JSONString(), exclude=graphene.JSONString()
         )
 
-        def resolve_list(self, info, filter=None, exclude=None):
+        def resolve_list(
+            self: GeneralManager,
+            info: str,
+            filter: dict[str, Any] | str | None = None,
+            exclude: dict[str, Any] | str | None = None,
+        ):
             queryset = generalManagerClass.all()
             if filter:
                 filter_dict = json.loads(filter) if isinstance(filter, str) else filter
@@ -201,7 +216,7 @@ class GraphQL:
         item_field_name = generalManagerClass.__name__.lower()
         item_field = graphene.Field(graphene_type, id=graphene.Int(required=True))
 
-        def resolve_item(self, info, id):
+        def resolve_item(self: GeneralManager, info: str, id: int) -> GeneralManager:
             return generalManagerClass(id)
 
         cls._query_fields[item_field_name] = item_field

@@ -1,7 +1,7 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Type, Callable, Union, Any
+from typing import TYPE_CHECKING, Type, Callable, Union, Any, TypeVar, Literal, cast
 import factory
-import exrex
+import exrex  # type: ignore
 from django.db import models
 from django.core.validators import RegexValidator
 from factory.django import DjangoModelFactory
@@ -10,12 +10,16 @@ import random
 from decimal import Decimal
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.measurement.measurementField import MeasurementField
+from datetime import date, datetime, time
 
 if TYPE_CHECKING:
     from generalManager.src.interface.databaseInterface import DBBasedInterface
 
 
-class AutoFactory(DjangoModelFactory):
+T = TypeVar("T", bound=models.Model)
+
+
+class AutoFactory(DjangoModelFactory[T]):
     """
     A factory class that automatically generates values for model fields,
     including handling of unique fields and constraints.
@@ -27,39 +31,52 @@ class AutoFactory(DjangoModelFactory):
     ) = None
 
     @classmethod
-    def _generate(cls, create: bool, attrs: dict) -> models.Model | list[models.Model]:
-        cls._original_params = attrs
-        model: models.Model = cls._meta.model
-        field_name_list, to_ignore_list = cls.interface._handleCustomFields(model)
+    def _generate(  # type: ignore
+        cls, strategy: Literal["build", "create"], params: dict[str, Any]
+    ) -> models.Model | list[models.Model]:
+        cls._original_params = params
+        model = getattr(cls._meta, "model")
+        if not isinstance(model, models.Model):
+            raise ValueError("Model must be a type")
+        field_name_list, to_ignore_list = cls.interface.handleCustomFields(model)
 
         fields = [
             field
             for field in model._meta.get_fields()
             if field.name not in to_ignore_list
         ]
-        special_fields = [getattr(model, field_name) for field_name in field_name_list]
-        declared_fields = set(cls._meta.pre_declarations) | set(
-            cls._meta.post_declarations
-        )
+        special_fields: list[models.Field[Any, Any]] = [
+            getattr(model, field_name) for field_name in field_name_list
+        ]
+        pre_declations = getattr(cls._meta, "pre_declarations", [])
+        post_declarations = getattr(cls._meta, "post_declarations", [])
+        declared_fields: set[str] = set(pre_declations) | set(post_declarations)
 
-        for field in [*fields, *special_fields]:
-            if field.name in [*attrs, *declared_fields]:
+        field_list: list[models.Field[Any, Any] | models.ForeignObjectRel] = [
+            *fields,
+            *special_fields,
+        ]
+
+        for field in field_list:
+            if field.name in [*params, *declared_fields]:
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
-            attrs[field.name] = get_field_value(field)
+            params[field.name] = get_field_value(field)
 
-        obj = super()._generate(create, attrs)
+        obj: list[models.Model] | models.Model = super()._generate(strategy, params)
         if isinstance(obj, list):
-            for item in obj:
-                cls._handleManyToManyFieldsAfterCreation(item, attrs)
+            for item in obj:  # type: ignore
+                if not isinstance(item, models.Model):
+                    raise ValueError("Model must be a type")
+                cls._handleManyToManyFieldsAfterCreation(item, params)
         else:
-            cls._handleManyToManyFieldsAfterCreation(obj, attrs)
+            cls._handleManyToManyFieldsAfterCreation(obj, params)
         return obj
 
     @classmethod
     def _handleManyToManyFieldsAfterCreation(
-        cls, obj: models.Model, attrs: dict
+        cls, obj: models.Model, attrs: dict[str, Any]
     ) -> None:
         for field in obj._meta.many_to_many:
             if field.name in attrs:
@@ -70,34 +87,36 @@ class AutoFactory(DjangoModelFactory):
                 getattr(obj, field.name).set(m2m_values)
 
     @classmethod
-    def _adjust_kwargs(cls, **kwargs) -> dict:
+    def _adjust_kwargs(cls, **kwargs: dict[str, Any]) -> dict[str, Any]:
         # Remove ManyToMany fields from kwargs before object creation
-        model: Type[models.Model] = cls._meta.model
+        model: Type[models.Model] = getattr(cls._meta, "model")
         m2m_fields = {field.name for field in model._meta.many_to_many}
         for field_name in m2m_fields:
             kwargs.pop(field_name, None)
         return kwargs
 
     @classmethod
-    def _create(
-        cls, model_class: Type[models.Model], *args, **kwargs
+    def _create(  # type: ignore
+        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         kwargs = cls._adjust_kwargs(**kwargs)
         if cls._adjustmentMethod is not None:
-            return cls.__createWithGenerateFunc(create=True, attrs=kwargs)
+            return cls.__createWithGenerateFunc(strategy=True, params=kwargs)
         return cls._modelCreation(model_class, **kwargs)
 
     @classmethod
-    def _build(
-        cls, model_class: Type[models.Model], *args, **kwargs
+    def _build(  # type: ignore
+        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         kwargs = cls._adjust_kwargs(**kwargs)
         if cls._adjustmentMethod is not None:
-            return cls.__createWithGenerateFunc(create=True, attrs=kwargs)
+            return cls.__createWithGenerateFunc(strategy=False, params=kwargs)
         return cls._modelBuilding(model_class, **kwargs)
 
     @classmethod
-    def _modelCreation(cls, model_class: Type[models.Model], **kwargs) -> models.Model:
+    def _modelCreation(
+        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
+    ) -> models.Model:
         obj = model_class()
         for field, value in kwargs.items():
             setattr(obj, field, value)
@@ -106,7 +125,9 @@ class AutoFactory(DjangoModelFactory):
         return obj
 
     @classmethod
-    def _modelBuilding(cls, model_class: Type[models.Model], **kwargs) -> models.Model:
+    def _modelBuilding(
+        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
+    ) -> models.Model:
         obj = model_class()
         for field, value in kwargs.items():
             setattr(obj, field, value)
@@ -114,26 +135,27 @@ class AutoFactory(DjangoModelFactory):
 
     @classmethod
     def __createWithGenerateFunc(
-        cls, create: bool, attrs: dict
+        cls, strategy: bool, params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
+        model_cls = getattr(cls._meta, "model")
         if cls._adjustmentMethod is None:
             raise ValueError("generate_func is not defined")
-        records = cls._adjustmentMethod(**attrs)
+        records = cls._adjustmentMethod(**params)
         if isinstance(records, dict):
-            if create:
-                return cls._modelCreation(cls._meta.model, **records)
-            return cls._modelBuilding(cls._meta.model, **records)
+            if strategy:
+                return cls._modelCreation(model_cls, **records)
+            return cls._modelBuilding(model_cls, **records)
 
-        created_objects = []
+        created_objects: list[models.Model] = []
         for record in records:
-            if create:
-                created_objects.append(cls._modelCreation(cls._meta.model, **record))
+            if strategy:
+                created_objects.append(cls._modelCreation(model_cls, **record))
             else:
-                created_objects.append(cls._modelBuilding(cls._meta.model, **record))
+                created_objects.append(cls._modelBuilding(model_cls, **record))
         return created_objects
 
 
-def get_field_value(field: models.Field) -> object:
+def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> object:
     """
     Returns a suitable value for a given Django model field.
     """
@@ -144,7 +166,7 @@ def get_field_value(field: models.Field) -> object:
     if isinstance(field, MeasurementField):
         base_unit = field.base_unit
         value = Decimal(str(random.uniform(0, 10_000))[:10])
-        return factory.LazyAttribute(lambda _: Measurement(value, base_unit))
+        return factory.LazyFunction(lambda: Measurement(value, base_unit))
     elif isinstance(field, models.CharField):
         max_length = field.max_length or 100
         # Check for RegexValidator
@@ -155,33 +177,44 @@ def get_field_value(field: models.Field) -> object:
                 break
         if regex:
             # Use exrex to generate a string matching the regex
-            return factory.LazyAttribute(lambda _: exrex.getone(regex))
+            return factory.LazyFunction(lambda: exrex.getone(regex))  # type: ignore
         else:
-            return factory.Faker("text", max_nb_chars=max_length)
+            return cast(str, factory.Faker("text", max_nb_chars=max_length))
     elif isinstance(field, models.TextField):
-        return factory.Faker("paragraph")
+        return cast(str, factory.Faker("paragraph"))
     elif isinstance(field, models.IntegerField):
-        return factory.Faker("random_int")
+        return cast(int, factory.Faker("random_int"))
     elif isinstance(field, models.DecimalField):
         max_digits = field.max_digits
         decimal_places = field.decimal_places
         left_digits = max_digits - decimal_places
-        return factory.Faker(
-            "pydecimal",
-            left_digits=left_digits,
-            right_digits=decimal_places,
-            positive=True,
+        return cast(
+            Decimal,
+            factory.Faker(
+                "pydecimal",
+                left_digits=left_digits,
+                right_digits=decimal_places,
+                positive=True,
+            ),
         )
     elif isinstance(field, models.FloatField):
-        return factory.Faker("pyfloat", positive=True)
+        return cast(float, factory.Faker("pyfloat", positive=True))
     elif isinstance(field, models.DateField):
-        return factory.Faker("date_between", start_date="-1y", end_date="today")
+        return cast(
+            date, factory.Faker("date_between", start_date="-1y", end_date="today")
+        )
     elif isinstance(field, models.DateTimeField):
-        return factory.Faker(
-            "date_time_between", start_date="-1y", end_date="now", tzinfo=timezone.utc
+        return cast(
+            datetime,
+            factory.Faker(
+                "date_time_between",
+                start_date="-1y",
+                end_date="now",
+                tzinfo=timezone.utc,
+            ),
         )
     elif isinstance(field, models.BooleanField):
-        return factory.Faker("pybool")
+        return cast(bool, factory.Faker("pybool"))
     elif isinstance(field, models.ForeignKey):
         # Create or get an instance of the related model
         if hasattr(field.related_model, "_general_manager_class"):
@@ -191,7 +224,7 @@ def get_field_value(field: models.Field) -> object:
             # If no factory exists, pick a random existing instance
             related_instances = list(field.related_model.objects.all())
             if related_instances:
-                return factory.LazyAttribute(lambda _: random.choice(related_instances))
+                return factory.LazyFunction(lambda: random.choice(related_instances))
             else:
                 raise ValueError(
                     f"No factory found for {field.related_model.__name__} and no instances found"
@@ -205,26 +238,26 @@ def get_field_value(field: models.Field) -> object:
             # If no factory exists, pick a random existing instance
             related_instances = list(field.related_model.objects.all())
             if related_instances:
-                return factory.LazyAttribute(lambda _: random.choice(related_instances))
+                return factory.LazyFunction(lambda: random.choice(related_instances))
             else:
                 raise ValueError(
                     f"No factory found for {field.related_model.__name__} and no instances found"
                 )
     elif isinstance(field, models.EmailField):
-        return factory.Faker("email")
+        return cast(str, factory.Faker("email"))
     elif isinstance(field, models.URLField):
-        return factory.Faker("url")
+        return cast(str, factory.Faker("url"))
     elif isinstance(field, models.GenericIPAddressField):
-        return factory.Faker("ipv4")
+        return cast(str, factory.Faker("ipv4"))
     elif isinstance(field, models.UUIDField):
-        return factory.Faker("uuid4")
+        return cast(str, factory.Faker("uuid4"))
     elif isinstance(field, models.DurationField):
-        return factory.Faker("time_delta")
+        return cast(time, factory.Faker("time_delta"))
     else:
         return None  # For unsupported field types
 
 
-def get_m2m_field_value(field):
+def get_m2m_field_value(field: models.ManyToManyField[Any, Any]) -> list[models.Model]:
     """
     Returns a list of instances for a ManyToMany field.
     """

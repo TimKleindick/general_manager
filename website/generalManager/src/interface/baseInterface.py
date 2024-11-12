@@ -1,54 +1,76 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, Type, ClassVar, Callable
+from typing import Any, Type, ClassVar, Callable, TYPE_CHECKING
 from datetime import datetime
 from generalManager.src.manager.bucket import Bucket
 
+if TYPE_CHECKING:
+    from generalManager.src.manager.generalManager import GeneralManager
+    from generalManager.src.manager.meta import GeneralManagerMeta
+
 
 class InterfaceBase(ABC):
-    _parent_class: ClassVar[Type]
+    _parent_class: ClassVar[Type[Any]]
     _interface_type: ClassVar[str]
 
-    def __init__(self, pk: Any, *args, **kwargs):
+    def __init__(self, pk: Any, *args: Any, **kwargs: Any):
         self.pk = pk
 
     @classmethod
     @abstractmethod
-    def create(cls, **kwargs):
+    def create(cls, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
     @abstractmethod
-    def update(self, **kwargs):
+    def update(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
     @abstractmethod
-    def deactivate(self, **kwargs):
+    def deactivate(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
     @abstractmethod
-    def getData(self, search_date: datetime | None = None):
-        raise NotImplementedError
-
-    @abstractmethod
-    def getAttributeTypes(self) -> dict[str, type]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def getAttributes(self) -> dict[str, Any]:
+    def getData(self, search_date: datetime | None = None) -> Any:
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def filter(cls, **kwargs) -> Bucket:
+    def getAttributeTypes(cls) -> dict[str, type]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def getAttributes(cls) -> dict[str, Any]:
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def exclude(cls, **kwargs) -> Bucket:
+    def filter(cls, **kwargs: Any) -> Bucket[Any]:
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def handleInterface(cls) -> tuple[Callable, Callable]:
+    def exclude(cls, **kwargs: Any) -> Bucket[Any]:
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def handleInterface(
+        cls,
+    ) -> tuple[
+        Callable[
+            [str, dict[str, Any], Type[InterfaceBase]],
+            tuple[dict[str, Any], Type[InterfaceBase], Type[Any]],
+        ],
+        Callable[
+            [
+                Type[GeneralManagerMeta],
+                Type[GeneralManager],
+                Type[InterfaceBase],
+                Type[Any],
+            ],
+            None,
+        ],
+    ]:
         """
         This method returns a pre and a post GeneralManager creation method
         and is called inside the GeneralManagerMeta class to initialize the

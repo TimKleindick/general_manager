@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Type
+from typing import Type, Any
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.interface import InterfaceBase
 from generalManager.src.manager.bucket import Bucket
@@ -8,7 +8,7 @@ from generalManager.src.manager.bucket import Bucket
 class GeneralManager(metaclass=GeneralManagerMeta):
     Interface: Type[InterfaceBase]
 
-    def __init__(self, id, *args, **kwargs):
+    def __init__(self, id: Any, *args: Any, **kwargs: Any):
         self.__interface = self.Interface(pk=id)
         self.__id = id
         self.__attributes = self.__interface.getAttributes()
@@ -33,8 +33,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     def __createAtPropertiesForAttributes(self):
 
-        def propertyMethod(attr_name):
-            def getter(self):
+        def propertyMethod(attr_name: str) -> property:
+            def getter(self: GeneralManager):
                 attribute = self.__attributes[attr_name]
                 if callable(attribute):
                     return attribute()
@@ -47,7 +47,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     @classmethod
     def create(
-        cls, creator_id: int, history_comment: str | None = None, **kwargs
+        cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> GeneralManager:
         pk = cls.Interface.create(
             creator_id=creator_id, history_comment=history_comment, **kwargs
@@ -55,7 +55,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return cls(pk)
 
     def update(
-        self, creator_id: int, history_comment: str | None = None, **kwargs
+        self, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> GeneralManager:
         self.__interface.update(
             creator_id=creator_id,
@@ -73,13 +73,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return self.__class__(self.__id)
 
     @classmethod
-    def filter(cls, **kwargs) -> Bucket:
+    def filter(cls, **kwargs: Any) -> Bucket[GeneralManager]:
         return cls.Interface.filter(**kwargs)
 
     @classmethod
-    def exclude(cls, **kwargs) -> Bucket:
+    def exclude(cls, **kwargs: Any) -> Bucket[GeneralManager]:
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
-    def all(cls) -> Bucket:
+    def all(cls) -> Bucket[GeneralManager]:
         return cls.Interface.filter()

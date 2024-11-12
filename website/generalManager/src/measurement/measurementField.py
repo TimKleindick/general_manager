@@ -5,27 +5,42 @@ from django.core.exceptions import ValidationError
 from decimal import Decimal
 from generalManager.src.measurement.measurement import Measurement, ureg, currency_units
 import pint
+from typing import Any
 
 
-class MeasurementField(models.Field):
+class MeasurementField(models.Field[Decimal, str]):
     description = (
         "A field that stores a measurement value, both in base unit and original unit"
     )
 
-    def __init__(self, base_unit, *args, **kwargs):
-        null = kwargs.get("null", False)
-        blank = kwargs.get("blank", False)
+    def __init__(
+        self,
+        base_unit: str,
+        null: bool = False,
+        blank: bool = False,
+        *args: list[Any],
+        **kwargs: dict[str, Any],
+    ):
         self.base_unit = base_unit  # E.g., 'meter' for length units
         # Determine the dimensionality of the base unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
         # Internal fields
-        self.value_field = models.DecimalField(
-            max_digits=30, decimal_places=10, db_index=True, null=null, blank=blank
+        null_blank_kwargs = {}
+        if null is True:
+            null_blank_kwargs["null"] = True
+        if blank is True:
+            null_blank_kwargs["blank"] = True
+        self.value_field: models.DecimalField[Decimal] = models.DecimalField(
+            max_digits=30, decimal_places=10, db_index=True, **null_blank_kwargs
         )
-        self.unit_field = models.CharField(max_length=30, null=null, blank=blank)
+        self.unit_field: models.CharField[str] = models.CharField(
+            max_length=30, **null_blank_kwargs
+        )
         super().__init__(*args, **kwargs)
 
-    def contribute_to_class(self, cls, name, **kwargs):
+    def contribute_to_class(
+        self, cls: type, name: str, private_only: bool = False, **kwargs: dict[str, Any]
+    ) -> None:
         self.name = name
         self.value_attr = f"{name}_value"
         self.unit_attr = f"{name}_unit"
@@ -44,7 +59,7 @@ class MeasurementField(models.Field):
 
         setattr(cls, self.name, self)
 
-    def __get__(self, instance, owner):
+    def __get__(self, instance: Any, owner: Any) -> Any:
         if instance is None:
             return self
         value = getattr(instance, self.value_attr)
@@ -55,7 +70,7 @@ class MeasurementField(models.Field):
         quantity_in_base_unit = Decimal(value) * ureg(self.base_unit)
         # Convert back to the original unit
         try:
-            quantity_in_original_unit = quantity_in_base_unit.to(unit)
+            quantity_in_original_unit: pint.Quantity = quantity_in_base_unit.to(unit)  # type: ignore
         except pint.errors.DimensionalityError:
             # If the unit is not compatible, return the value in base unit
             quantity_in_original_unit = quantity_in_base_unit
@@ -63,7 +78,7 @@ class MeasurementField(models.Field):
             quantity_in_original_unit.magnitude, str(quantity_in_original_unit.units)
         )
 
-    def __set__(self, instance, value):
+    def __set__(self, instance: Any, value: Any) -> None:
         if value is None:
             setattr(instance, self.value_attr, None)
             setattr(instance, self.unit_attr, None)
@@ -102,7 +117,7 @@ class MeasurementField(models.Field):
                     )
             # Store the value in the base unit
             try:
-                value_in_base_unit = value.quantity.to(self.base_unit).magnitude
+                value_in_base_unit: Any = value.quantity.to(self.base_unit).magnitude  # type: ignore
             except pint.errors.DimensionalityError:
                 raise ValidationError(
                     {
@@ -119,7 +134,7 @@ class MeasurementField(models.Field):
                 {self.name: ["Value must be a Measurement instance or None."]}
             )
 
-    def get_prep_value(self, value):
+    def get_prep_value(self, value: Any) -> Any:
         # Not needed since we use internal fields
         pass
 

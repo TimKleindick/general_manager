@@ -1,5 +1,6 @@
 # units.py
 from __future__ import annotations
+from typing import Any, Callable
 import pint
 from decimal import Decimal, getcontext, InvalidOperation
 from operator import eq, ne, lt, le, gt, ge
@@ -35,8 +36,6 @@ class Measurement:
 
     @classmethod
     def from_string(cls, value: str) -> Measurement:
-        if not isinstance(value, str):
-            raise TypeError("Value must be a string.")
         value, unit = value.split(" ")
         return cls(value, unit)
 
@@ -51,7 +50,7 @@ class Measurement:
         else:
             return value
 
-    def to(self, target_unit, exchange_rate=None):
+    def to(self, target_unit: str, exchange_rate: float | None = None):
         if self.is_currency():
             if self.quantity.units == ureg(target_unit):
                 return self  # Same currency, no conversion needed
@@ -65,7 +64,7 @@ class Measurement:
                 )
         else:
             # Standard conversion for physical units
-            converted_quantity = self.quantity.to(target_unit)
+            converted_quantity: pint.Quantity = self.quantity.to(target_unit)  # type: ignore
             value = Decimal(str(converted_quantity.magnitude))
             unit = str(converted_quantity.units)
             return Measurement(value, unit)
@@ -74,7 +73,7 @@ class Measurement:
         # Check if the unit is a defined currency
         return str(self.quantity.units) in currency_units
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> Measurement:
         if not isinstance(other, Measurement):
             raise TypeError("Addition is only allowed between Measurement instances.")
         if self.is_currency() and other.is_currency():
@@ -104,7 +103,7 @@ class Measurement:
                 "Addition between currency and physical unit is not allowed."
             )
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> Measurement:
         if not isinstance(other, Measurement):
             raise TypeError(
                 "Subtraction is only allowed between Measurement instances."
@@ -132,7 +131,7 @@ class Measurement:
                 "Subtraction between currency and physical unit is not allowed."
             )
 
-    def __mul__(self, other):
+    def __mul__(self, other: Any) -> Measurement:
         if isinstance(other, Measurement):
             if self.is_currency() or other.is_currency():
                 raise TypeError(
@@ -154,7 +153,7 @@ class Measurement:
                 "Multiplication is only allowed with Measurement or numeric values."
             )
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Any) -> Measurement:
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():
                 raise TypeError("Division between two currency amounts is not allowed.")
@@ -182,7 +181,7 @@ class Measurement:
     def __repr__(self):
         return f"Measurement({self.quantity.magnitude}, '{self.quantity.units}')"
 
-    def _compare(self, other, operation):
+    def _compare(self, other: Any, operation: Callable[..., bool]) -> bool:
         if isinstance(other, str):
             other = Measurement.from_string(other)
 
@@ -191,27 +190,27 @@ class Measurement:
             return NotImplemented
         try:
             # Convert `other` to the same units as `self`
-            other_converted = other.quantity.to(self.quantity.units)
+            other_converted: pint.Quantity = other.quantity.to(self.quantity.units)  # type: ignore
             # Apply the comparison operation
             return operation(self.quantity.magnitude, other_converted.magnitude)
         except pint.DimensionalityError:
             raise ValueError("Cannot compare measurements with different dimensions.")
 
     # Comparison Operators
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return self._compare(other, eq)
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any) -> bool:
         return self._compare(other, ne)
 
-    def __lt__(self, other):
+    def __lt__(self, other: Any) -> bool:
         return self._compare(other, lt)
 
-    def __le__(self, other):
+    def __le__(self, other: Any) -> bool:
         return self._compare(other, le)
 
-    def __gt__(self, other):
+    def __gt__(self, other: Any) -> bool:
         return self._compare(other, gt)
 
-    def __ge__(self, other):
+    def __ge__(self, other: Any) -> bool:
         return self._compare(other, ge)

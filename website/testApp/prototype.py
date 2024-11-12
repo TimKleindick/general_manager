@@ -1,3 +1,4 @@
+from __future__ import annotations
 from django.db.models import (
     CharField,
     TextField,
@@ -9,6 +10,7 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
+from generalManager.src.manager.bucket import Bucket
 from generalManager.src.interface import DatabaseInterface
 from generalManager.src.measurement import (
     MeasurementField,
@@ -26,8 +28,16 @@ import random
 import numpy as np
 from datetime import date
 
+# from generalManager.src.intermediate.generalIntermediate import Intermediate, Input
+
 
 class Project(GeneralManager):
+    name: str
+    start_date: Optional[date]
+    end_date: Optional[date]
+    total_capex: Optional[Measurement]
+    derivative_list: list[Derivative]
+
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
         number = CharField(max_length=7, validators=[RegexValidator(r"^AP\d{4,5}$")])
@@ -59,12 +69,15 @@ class Derivative(GeneralManager):
     estimated_weight: Optional[Measurement]
     estimated_volume: Optional[int]
     project: Project
+    price: Optional[Measurement]
+    derivative_volume_list: Bucket[DerivativeVolume]
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
         estimated_weight = MeasurementField(base_unit="kg", null=True, blank=True)
         estimated_volume = IntegerField(null=True, blank=True)
-        project = ForeignKey("Project", on_delete=CASCADE)
+        project = ForeignKey("Project", on_delete=CASCADE)  # type: ignore
+        price = MeasurementField(base_unit="EUR", null=True, blank=True)
 
     @graphQlProperty
     def estimated_shipment(self) -> Optional[Measurement]:
@@ -73,7 +86,7 @@ class Derivative(GeneralManager):
         return self.estimated_weight * self.estimated_volume
 
 
-def generate_volume_distribution(years, total_volume):
+def generate_volume_distribution(years: int, total_volume: float) -> list[float]:
     peak_year = random.randint(1, years // 3)
     volumes = np.zeros(years)
     for year in range(peak_year):
@@ -88,20 +101,18 @@ def generate_volume_distribution(years, total_volume):
     return volumes.tolist()
 
 
-def generateVolume(**kwargs) -> list[dict[str, Any]]:
+def generateVolume(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
 
     derivative = kwargs["derivative"]
-    total_volume = derivative.estimated_volume
-    if (
-        total_volume is None
-        or derivative.project.start_date is None
-        or derivative.project.end_date is None
-    ):
+    total_volume = derivative.get("estimated_volume")
+    start_date: date | None = derivative.get("project", {}).get("start_date")
+    end_date: date | None = derivative.get("project", {}).get("end_date")
+    if total_volume is None or start_date is None or end_date is None:
         return []
-    total_years = derivative.project.end_date.year - derivative.project.start_date.year
+    total_years = start_date.year - end_date.year
     volumes = generate_volume_distribution(total_years, total_volume)
-    records = []
-    for year, volume in enumerate(volumes, start=derivative.project.start_date.year):
+    records: list[dict[str, Any]] = []
+    for year, volume in enumerate(volumes, start=start_date.year):
         records.append(
             {
                 **kwargs,
@@ -114,11 +125,11 @@ def generateVolume(**kwargs) -> list[dict[str, Any]]:
 
 class DerivativeVolume(GeneralManager):
     derivative: Derivative
-    date: DateField
+    date: date
     volume: Measurement
 
     class Interface(DatabaseInterface):
-        derivative = ForeignKey("Derivative", on_delete=CASCADE)
+        derivative = ForeignKey("Derivative", on_delete=CASCADE)  # type: ignore
         date = DateField()
         volume = IntegerField()
 
