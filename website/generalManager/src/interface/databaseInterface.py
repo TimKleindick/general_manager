@@ -3,9 +3,9 @@ import json
 from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING
 from django.db import models, transaction
 from django.contrib.auth import get_user_model
-from simple_history.utils import update_change_reason
+from simple_history.utils import update_change_reason  # type: ignore
 from datetime import datetime, timedelta
-from simple_history.models import HistoricalRecords
+from simple_history.models import HistoricalRecords  # type: ignore
 from generalManager.src.manager.bucket import DatabaseBucket
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.measurement.measurementField import MeasurementField
@@ -17,20 +17,25 @@ from generalManager.src.interface.baseInterface import InterfaceBase
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
     from generalManager.src.manager.meta import GeneralManagerMeta
+    from django.contrib.auth.models import AbstractUser
+    from generalManager.src.rule.rule import Rule
 
 
-def getFullCleanMethode(model):
-    def full_clean(self, *args, **kwargs):
-        errors = {}
+def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
+    def full_clean(self: models.Model, *args: Any, **kwargs: Any):
+        errors: dict[str, Any] = {}
 
         try:
-            super(model, self).full_clean(*args, **kwargs)
+            model.full_clean(self, *args, **kwargs)
         except ValidationError as e:
             errors.update(e.message_dict)
 
-        for rule in self._meta.rules:
+        rules: list[Rule] = getattr(self._meta, "rules")
+        for rule in rules:
             if not rule.evaluate(self):
-                errors.update(rule.getErrorMessage())
+                error_message = rule.getErrorMessage()
+                if error_message:
+                    errors.update(error_message)
 
         if errors:
             raise ValidationError(errors)
@@ -42,14 +47,15 @@ class GeneralManagerModel(models.Model):
     _general_manager_class: ClassVar[Type[GeneralManager]]
     is_active = models.BooleanField(default=True)
     changed_by = models.ForeignKey(get_user_model(), on_delete=models.PROTECT)
+    changed_by_id: int
     history = HistoricalRecords(inherit=True)
 
     @property
-    def _history_user(self):
+    def _history_user(self) -> AbstractUser:
         return self.changed_by
 
     @_history_user.setter
-    def _history_user(self, value):
+    def _history_user(self, value: AbstractUser) -> None:
         self.changed_by = value
 
     class Meta:
@@ -71,7 +77,7 @@ class DBBasedInterface(InterfaceBase):
         return instance
 
     @classmethod
-    def filter(cls, **kwargs):
+    def filter(cls, **kwargs: Any) -> DatabaseBucket:
         return DatabaseBucket(
             cls._model.objects.filter(**kwargs),
             cls._parent_class,
@@ -79,7 +85,7 @@ class DBBasedInterface(InterfaceBase):
         )
 
     @classmethod
-    def exclude(cls, **kwargs):
+    def exclude(cls, **kwargs: Any) -> DatabaseBucket:
         return DatabaseBucket(
             cls._model.objects.exclude(**kwargs),
             cls._parent_class,
@@ -87,8 +93,8 @@ class DBBasedInterface(InterfaceBase):
         )
 
     @staticmethod
-    def __createFilterDefinitions(**kwargs):
-        filter_definitions = {}
+    def __createFilterDefinitions(**kwargs: Any) -> dict[str, Any]:
+        filter_definitions: dict[str, Any] = {}
         for key, value in kwargs.items():
             filter_definitions[key] = [value]
         return filter_definitions
@@ -101,7 +107,7 @@ class DBBasedInterface(InterfaceBase):
 
     @classmethod
     def getAttributeTypes(cls) -> dict[str, type]:
-        translation = {
+        TRANSLATION: dict[Type[models.Field[Any, Any]], type] = {
             models.CharField: str,
             models.TextField: str,
             models.BooleanField: bool,
@@ -112,8 +118,8 @@ class DBBasedInterface(InterfaceBase):
             MeasurementField: Measurement,
             models.DecimalField: Decimal,
         }
-        fields = {}
-        field_name_list, to_ignore_list = cls._handleCustomFields(cls._model)
+        fields: dict[str, Type[models.Field[Any, Any]]] = {}
+        field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
         for field_name in field_name_list:
             fields[field_name] = type(getattr(cls, field_name))
 
@@ -122,13 +128,12 @@ class DBBasedInterface(InterfaceBase):
                 fields[field_name] = type(getattr(cls._model, field_name).field)
 
         for field_name in cls.__getForeignKeyFields():
-            if hasattr(
-                cls._model._meta.get_field(field_name).related_model,
+            related_model = cls._model._meta.get_field(field_name).related_model
+            if related_model and hasattr(
+                related_model,
                 "_general_manager_class",
             ):
-                fields[field_name] = cls._model._meta.get_field(
-                    field_name
-                ).related_model._general_manager_class  # type: ignore
+                fields[field_name] = related_model._general_manager_class
 
         for field_name, field_call in [
             *cls.__getManyToManyFields(),
@@ -139,23 +144,22 @@ class DBBasedInterface(InterfaceBase):
                     field_name = field_call
                 else:
                     raise ValueError("Field name already exists.")
-            if hasattr(
-                cls._model._meta.get_field(field_name).related_model,
+            related_model = cls._model._meta.get_field(field_name).related_model
+            if related_model and hasattr(
+                related_model,
                 "_general_manager_class",
             ):
-                fields[f"{field_name}_list"] = cls._model._meta.get_field(
-                    field_name
-                ).related_model._general_manager_class  # type: ignore
+                fields[f"{field_name}_list"] = related_model._general_manager_class
 
         return {
-            field_name: translation.get(field, field)
+            field_name: TRANSLATION.get(field, field)
             for field_name, field in fields.items()
         }
 
-    def getAttributes(self):
-        field_values = {}
+    def getAttributes(self) -> dict[str, Any]:
+        field_values: dict[str, Any] = {}
 
-        field_name_list, to_ignore_list = self._handleCustomFields(self._model)
+        field_name_list, to_ignore_list = self.handleCustomFields(self._model)
         for field_name in field_name_list:
             field_values[field_name] = getattr(self._instance, field_name)
 
@@ -164,13 +168,12 @@ class DBBasedInterface(InterfaceBase):
                 field_values[field_name] = getattr(self._instance, field_name)
 
         for field_name in self.__getForeignKeyFields():
-            if hasattr(
-                self._instance._meta.get_field(field_name).related_model,
+            related_model = self._instance._meta.get_field(field_name).related_model
+            if related_model and hasattr(
+                related_model,
                 "_general_manager_class",
             ):
-                generalManagerClass = self._instance._meta.get_field(
-                    field_name
-                ).related_model._general_manager_class  # type: ignore
+                generalManagerClass = related_model._general_manager_class
                 field_values[f"{field_name}"] = (
                     lambda field_name=field_name: generalManagerClass(
                         getattr(self._instance, field_name).pk
@@ -211,9 +214,9 @@ class DBBasedInterface(InterfaceBase):
         return field_values
 
     @staticmethod
-    def _handleCustomFields(
+    def handleCustomFields(
         model: Type[models.Model] | models.Model,
-    ) -> tuple[list, list]:
+    ) -> tuple[list[str], list[str]]:
         field_name_list: list[str] = []
         to_ignore_list: list[str] = []
         for field_name in DBBasedInterface._getCustomFields(model):
@@ -224,7 +227,7 @@ class DBBasedInterface(InterfaceBase):
         return field_name_list, to_ignore_list
 
     @staticmethod
-    def _getCustomFields(model):
+    def _getCustomFields(model: Type[models.Model] | models.Model) -> list[str]:
         return [
             field.name
             for field in model.__dict__.values()
@@ -264,11 +267,11 @@ class DBBasedInterface(InterfaceBase):
         ]
 
     @staticmethod
-    def __preCreate(
+    def _preCreate(
         name: str, attrs: dict[str, Any], interface: Type[DBBasedInterface]
-    ) -> tuple[dict, Type, Type]:
+    ) -> tuple[dict[str, Any], Type[DBBasedInterface], Type[models.Model]]:
         # Felder aus der Interface-Klasse sammeln
-        model_fields = {}
+        model_fields: dict[str, Any] = {}
         meta_class = None
         for attr_name, attr_value in interface.__dict__.items():
             if not attr_name.startswith("__"):
@@ -282,31 +285,29 @@ class DBBasedInterface(InterfaceBase):
                     model_fields[attr_name] = attr_value
         model_fields["__module__"] = attrs.get("__module__")
         # Meta-Klasse hinzufügen oder erstellen
+        rules: list[Rule] | None = None
         if meta_class:
-            rules = None
             model_fields["Meta"] = meta_class
 
             if hasattr(meta_class, "rules"):
-                rules = meta_class.rules
+                rules = getattr(meta_class, "rules")
                 delattr(meta_class, "rules")
 
         # Modell erstellen
         model = type(name, (GeneralManagerModel,), model_fields)
         if meta_class and rules:
-            model._meta.rules = rules  # type: ignore
+            setattr(model._meta, "rules", rules)
             # full_clean Methode hinzufügen
             model.full_clean = getFullCleanMethode(model)
         # Interface-Typ bestimmen
-        if issubclass(interface, DBBasedInterface):
-            attrs["_interface_type"] = interface._interface_type
-            interface_cls = type(interface.__name__, (interface,), {})
-            interface_cls._model = model
-            attrs["Interface"] = interface_cls
-        else:
-            raise TypeError("Interface must be a subclass of DBBasedInterface")
+        attrs["_interface_type"] = interface._interface_type
+        interface_cls = type(interface.__name__, (interface,), {})
+        interface_cls._model = model
+        attrs["Interface"] = interface_cls
+
         # add factory class
         factory_definition = getattr(interface, "Factory", None)
-        factory_attributes = {}
+        factory_attributes: dict[str, Any] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
                 if not attr_name.startswith("__"):
@@ -314,23 +315,37 @@ class DBBasedInterface(InterfaceBase):
         factory_attributes["interface"] = interface_cls
         factory_attributes["Meta"] = type("Meta", (), {"model": model})
         factory_class = type(f"{name}Factory", (AutoFactory,), factory_attributes)
-        factory_class._meta.model = model
+        # factory_class._meta.model = model
         attrs["Factory"] = factory_class
 
         return attrs, interface_cls, model
 
     @staticmethod
-    def __postCreate(
+    def _postCreate(
         mcs: Type[GeneralManagerMeta],
         new_class: Type[GeneralManager],
         interface_class: Type[DBBasedInterface],
         model: Type[GeneralManagerModel],
     ) -> None:
         interface_class._parent_class = new_class
-        model._general_manager_class = new_class
+        setattr(model, "_general_manager_class", new_class)
 
     @classmethod
-    def handleInterface(cls) -> tuple[Callable, Callable]:
+    def handleInterface(cls) -> tuple[  # type: ignore
+        Callable[
+            [str, dict[str, Any], Type[DBBasedInterface]],
+            tuple[dict[str, Any], Type[DBBasedInterface], Type[models.Model]],
+        ],
+        Callable[
+            [
+                Type[GeneralManagerMeta],
+                Type[GeneralManager],
+                Type[DBBasedInterface],
+                Type[GeneralManagerModel],
+            ],
+            None,
+        ],
+    ]:
         """
         This method returns a pre and a post GeneralManager creation method
         and is called inside the GeneralManagerMeta class to initialize the
@@ -340,24 +355,24 @@ class DBBasedInterface(InterfaceBase):
         The post creation method is called after the GeneralManager instance
         is created to modify the instance and add additional data.
         """
-        return cls.__preCreate, cls.__postCreate
+        return cls._preCreate, cls._postCreate
 
 
 class ReadOnlyInterface(DBBasedInterface):
     _interface_type = "readonly"
 
     @classmethod
-    def create(cls, **kwargs):
+    def create(cls, **kwargs: Any) -> None:
         raise NotImplementedError(
             "Create operation is not allowed in ReadOnlyInterface."
         )
 
-    def update(self, **kwargs):
+    def update(self, **kwargs: Any) -> None:
         raise NotImplementedError(
             "Update operation is not allowed in ReadOnlyInterface."
         )
 
-    def deactivate(self, **kwargs):
+    def deactivate(self, **kwargs: Any) -> None:
         raise NotImplementedError(
             "Deactivate operation is not allowed in ReadOnlyInterface."
         )
@@ -377,8 +392,8 @@ class ReadOnlyInterface(DBBasedInterface):
         # JSON-Daten parsen
         if isinstance(json_data, str):
             data_list = json.loads(json_data)
-        elif isinstance(json_data, list):
-            data_list = json_data
+        if isinstance(json_data, list):
+            data_list: list[Any] = json_data
         else:
             raise ValueError(
                 "_json_data must be a JSON string or a list of dictionaries"
@@ -391,7 +406,7 @@ class ReadOnlyInterface(DBBasedInterface):
             )
 
         with transaction.atomic():
-            json_unique_values = set()
+            json_unique_values: set[Any] = set()
 
             # Daten synchronisieren
             for data in data_list:
@@ -399,7 +414,7 @@ class ReadOnlyInterface(DBBasedInterface):
                 unique_identifier = tuple(lookup[field] for field in unique_fields)
                 json_unique_values.add(unique_identifier)
 
-                instance, created = model.objects.get_or_create(**lookup)
+                instance, _ = model.objects.get_or_create(**lookup)
                 updated = False
                 for field_name, value in data.items():
                     if getattr(instance, field_name, None) != value:
@@ -417,7 +432,7 @@ class ReadOnlyInterface(DBBasedInterface):
                     instance.delete()
 
     @staticmethod
-    def readOnlyPostCreate(func):
+    def readOnlyPostCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         def wrapper(
             mcs: Type[GeneralManagerMeta],
             new_class: Type[GeneralManager],
@@ -430,7 +445,21 @@ class ReadOnlyInterface(DBBasedInterface):
         return wrapper
 
     @classmethod
-    def handleInterface(cls) -> tuple[Callable, Callable]:
+    def handleInterface(cls) -> tuple[  # type: ignore
+        Callable[
+            [str, dict[str, Any], Type[DBBasedInterface]],
+            tuple[dict[str, Any], Type[DBBasedInterface], Type[models.Model]],
+        ],
+        Callable[
+            [
+                Type[GeneralManagerMeta],
+                Type[GeneralManager],
+                Type[DBBasedInterface],
+                Type[GeneralManagerModel],
+            ],
+            None,
+        ],
+    ]:
         """
         This method returns a pre and a post GeneralManager creation method
         and is called inside the GeneralManagerMeta class to initialize the
@@ -440,7 +469,7 @@ class ReadOnlyInterface(DBBasedInterface):
         The post creation method is called after the GeneralManager instance
         is created to modify the instance and add additional data.
         """
-        return cls.__preCreate, cls.readOnlyPostCreate(cls.__postCreate)
+        return cls._preCreate, cls.readOnlyPostCreate(cls._postCreate)
 
 
 class DatabaseInterface(DBBasedInterface):
@@ -448,7 +477,7 @@ class DatabaseInterface(DBBasedInterface):
 
     @classmethod
     def create(
-        cls, creator_id: int, history_comment: str | None = None, **kwargs
+        cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> int:
         cls.__checkForInvalidKwargs(cls._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls.__sortKwargs(cls._model, kwargs)
@@ -460,7 +489,7 @@ class DatabaseInterface(DBBasedInterface):
         return cls.__save_with_history(instance, creator_id, history_comment)
 
     def update(
-        self, creator_id: int, history_comment: str | None = None, **kwargs
+        self, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> int:
         self.__checkForInvalidKwargs(self._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self.__sortKwargs(self._model, kwargs)
@@ -481,7 +510,7 @@ class DatabaseInterface(DBBasedInterface):
         return self.__save_with_history(instance, creator_id, history_comment)
 
     @staticmethod
-    def __checkForInvalidKwargs(model: Type[models.Model], kwargs: dict):
+    def __checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[Any, Any]):
         attributes = vars(model)
         fields = model._meta.get_fields()
         for key in kwargs:
@@ -490,10 +519,10 @@ class DatabaseInterface(DBBasedInterface):
 
     @staticmethod
     def __sortKwargs(
-        model: Type[models.Model], kwargs: dict
-    ) -> tuple[dict, dict[str, list]]:
+        model: Type[models.Model], kwargs: dict[Any, Any]
+    ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
         many_to_many_fields = model._meta.many_to_many
-        many_to_many_kwargs = {}
+        many_to_many_kwargs: dict[Any, Any] = {}
         for key, value in kwargs.items():
             many_to_many_key = key.split("_id_list")[0]
             if many_to_many_key in many_to_many_fields:
@@ -506,7 +535,7 @@ class DatabaseInterface(DBBasedInterface):
     def __save_with_history(
         cls, instance: GeneralManagerModel, creator_id: int, history_comment: str | None
     ) -> int:
-        instance.changed_by_id = creator_id  # type: ignore
+        instance.changed_by_id = creator_id
         instance.full_clean()
         if history_comment:
             update_change_reason(instance, history_comment)

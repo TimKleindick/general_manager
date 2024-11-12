@@ -3,16 +3,20 @@ from generalManager.src.interface import (
     InterfaceBase,
 )
 from website.settings import AUTOCREATE_GRAPHQL
-from typing import Type
+from typing import Any, Type, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from generalManager.src.interface import ReadOnlyInterface
+    from generalManager.src.manager.generalManager import GeneralManager
 
 
 class GeneralManagerMeta(type):
-    read_only_classes: list[Type] = []
-    pending_graphql_interfaces: list[Type] = []
+    read_only_classes: list[Type[ReadOnlyInterface]] = []
+    pending_graphql_interfaces: list[Type[GeneralManager]] = []
 
-    def __new__(mcs, name, bases, attrs):
+    def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         if "Interface" in attrs:
-            interface: Type[InterfaceBase] = attrs.pop("Interface")
+            interface = attrs.pop("Interface")
             if not issubclass(interface, InterfaceBase):
                 raise TypeError(
                     f"Interface must be a subclass of {InterfaceBase.__name__}"
