@@ -10,20 +10,20 @@ fake = Faker()
 
 def LazyMeasurement(
     min_value: int | float, max_value: int | float, unit: str
-) -> LazyFunction[Measurement]:
+) -> LazyFunction:
     return LazyFunction(
         lambda: Measurement(str(random.uniform(min_value, max_value))[:10], unit)
     )
 
 
-def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute[Any, date]:
+def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
     return LazyAttribute(
         lambda obj: (getattr(obj, base_attribute) or date.today())
         + timedelta(days=random.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
     )
 
 
-def LazyProjectName() -> LazyFunction[str]:
+def LazyProjectName() -> LazyFunction:
     return LazyFunction(
         lambda: (
             f"{fake.word().capitalize()} "
@@ -34,5 +34,5 @@ def LazyProjectName() -> LazyFunction[str]:
     )
 
 
-def LazySapNumber() -> LazyAttributeSequence[int, str]:
+def LazySapNumber() -> LazyAttributeSequence:
     return LazyAttributeSequence(lambda obj, n: f"60{n:04d}")
