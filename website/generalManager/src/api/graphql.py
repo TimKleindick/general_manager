@@ -31,7 +31,7 @@ def graphQlProperty(func: Callable[..., Any]):
     return GraphQLProperty(func)
 
 
-class MeasurementType(graphene.ObjectType[Measurement]):
+class MeasurementType(graphene.ObjectType):  # type: ignore
     value = graphene.Float()
     unit = graphene.String()
 

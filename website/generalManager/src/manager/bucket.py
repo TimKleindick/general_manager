@@ -67,7 +67,7 @@ class Bucket(ABC, Generic[T]):
 T1 = TypeVar("T1", bound=models.Model)
 
 
-class DatabaseBucket(Bucket[GeneralManager]):
+class DatabaseBucket(Bucket["GeneralManager"]):
 
     def __init__(
         self,

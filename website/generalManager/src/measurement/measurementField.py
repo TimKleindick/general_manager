@@ -1,5 +1,5 @@
 # fields.py
-
+from __future__ import annotations
 from django.db import models
 from django.core.exceptions import ValidationError
 from decimal import Decimal
@@ -8,7 +8,7 @@ import pint
 from typing import Any
 
 
-class MeasurementField(models.Field[Decimal, str]):
+class MeasurementField(models.Field):  # type: ignore
     description = (
         "A field that stores a measurement value, both in base unit and original unit"
     )
