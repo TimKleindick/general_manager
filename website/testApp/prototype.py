@@ -161,21 +161,32 @@ class ProjectCommercial(Calculation):
     date: date
 
     class Input:
-        project = Input(Project, possible_values=lambda: Project.all())
-        date = Input(date, possible_values=getPossibleDates, depends_on=["project"])
+        project = Input(
+            Project,
+            possible_values=lambda: Project.exclude(
+                derivative__derivativevolume__isnull=True
+            ),
+        )
+        date = Input(date, possible_values=getPossibleDates)
 
     @graphQlProperty
     def total_volume(self) -> int:
         return sum(
-            volume.volume  # type: ignore
+            self.noneToZero(volume.volume)  # type: ignore
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
 
+    @staticmethod
+    def noneToZero(
+        value: Optional[Measurement | int | float],
+    ) -> Measurement | int | float:
+        return value if value is not None else 0
+
     @graphQlProperty
     def total_shipment(self) -> Measurement:
         return sum(  # type: ignore
-            derivative.estimated_weight * volume.volume  # type: ignore
+            self.noneToZero(derivative.estimated_weight) * self.noneToZero(volume.volume)  # type: ignore
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
@@ -183,7 +194,7 @@ class ProjectCommercial(Calculation):
     @graphQlProperty
     def total_revenue(self) -> Measurement:
         return sum(
-            derivative.price * volume.volume  # type: ignore
+            self.noneToZero(derivative.price) * self.noneToZero(volume.volume)  # type: ignore
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
