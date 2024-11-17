@@ -27,8 +27,8 @@ from generalManager.src.api.graphql import graphQlProperty
 import random
 import numpy as np
 from datetime import date
-
-# from generalManager.src.intermediate.generalIntermediate import Intermediate, Input
+from generalManager.src.calculation.calculation import Calculation
+from generalManager.src.calculation.input import Input
 
 
 class Project(GeneralManager):
@@ -70,7 +70,7 @@ class Derivative(GeneralManager):
     estimated_volume: Optional[int]
     project: Project
     price: Optional[Measurement]
-    derivative_volume_list: Bucket[DerivativeVolume]
+    derivativevolume_list: Bucket[DerivativeVolume]
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
@@ -144,3 +144,46 @@ class DerivativeVolume(GeneralManager):
 
         class Factory:
             _adjustmentMethod = generateVolume
+
+
+def getPossibleDates(project: Project):
+    dates = []
+    for derivative in project.derivative_list:
+        for volume in derivative.derivativevolume_list:  # type: ignore
+            volume: DerivativeVolume
+            dates.append(volume.date)
+
+    return sorted(dates)
+
+
+class ProjectCommercial(Calculation):
+    project: Project
+    date: date
+
+    class Input:
+        project = Input(Project, possible_values=lambda: Project.all())
+        date = Input(date, possible_values=getPossibleDates, depends_on=["project"])
+
+    @graphQlProperty
+    def total_volume(self) -> int:
+        return sum(
+            volume.volume  # type: ignore
+            for derivative in self.project.derivative_list
+            for volume in derivative.derivativevolume_list.filter(date=self.date)
+        )
+
+    @graphQlProperty
+    def total_shipment(self) -> Measurement:
+        return sum(  # type: ignore
+            derivative.estimated_weight * volume.volume  # type: ignore
+            for derivative in self.project.derivative_list
+            for volume in derivative.derivativevolume_list.filter(date=self.date)
+        )
+
+    @graphQlProperty
+    def total_revenue(self) -> Measurement:
+        return sum(
+            derivative.price * volume.volume  # type: ignore
+            for derivative in self.project.derivative_list
+            for volume in derivative.derivativevolume_list.filter(date=self.date)
+        )
