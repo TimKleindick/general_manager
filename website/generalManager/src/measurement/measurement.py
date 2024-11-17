@@ -196,6 +196,11 @@ class Measurement:
         except pint.DimensionalityError:
             raise ValueError("Cannot compare measurements with different dimensions.")
 
+    def __radd__(self, other: Any) -> Measurement:
+        if other == 0:
+            return self
+        return self.__add__(other)
+
     # Comparison Operators
     def __eq__(self, other: Any) -> bool:
         return self._compare(other, eq)
