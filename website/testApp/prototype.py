@@ -27,8 +27,8 @@ from generalManager.src.api.graphql import graphQlProperty
 import random
 import numpy as np
 from datetime import date
-from generalManager.src.calculation.calculation import Calculation
 from generalManager.src.calculation.input import Input
+from generalManager.src.interface.calculationInterface import CalculationInterface
 
 
 class Project(GeneralManager):
@@ -156,11 +156,11 @@ def getPossibleDates(project: Project):
     return sorted(dates)
 
 
-class ProjectCommercial(Calculation):
+class ProjectCommercial(GeneralManager):
     project: Project
     date: date
 
-    class Input:
+    class Interface(CalculationInterface):
         project = Input(
             Project,
             possible_values=lambda: Project.exclude(

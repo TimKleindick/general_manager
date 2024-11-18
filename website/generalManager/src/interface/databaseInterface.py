@@ -65,9 +65,23 @@ class GeneralManagerModel(models.Model):
 class DBBasedInterface(InterfaceBase):
     _model: ClassVar[Type[GeneralManagerModel]]
 
-    def __init__(self, pk: Any, search_date: datetime | None = None):
-        super().__init__(pk)
+    def __init__(
+        self,
+        *args: list[Any],
+        search_date: datetime | None = None,
+        **kwargs: dict[str, Any],
+    ):
+        super().__init__(*args, **kwargs)
         self._instance = self.getData(search_date)
+
+    def parseInputFieldsToIdentification(
+        self, *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        if len(args) == 1:
+            self.pk = args[0]
+        else:
+            self.pk = kwargs.get("id")
+        return {"id": self.pk}
 
     def getData(self, search_date: datetime | None = None) -> GeneralManagerModel:
         model = self._model
