@@ -8,9 +8,9 @@ from generalManager.src.manager.bucket import Bucket
 class GeneralManager(metaclass=GeneralManagerMeta):
     Interface: Type[InterfaceBase]
 
-    def __init__(self, id: Any, *args: Any, **kwargs: Any):
-        self.__interface = self.Interface(pk=id)
-        self.__id = id
+    def __init__(self, *args: Any, **kwargs: Any):
+        self.__interface = self.Interface(*args, **kwargs)
+        self.__id: dict[str, Any] = self.__interface.identification
         self.__attributes = self.__interface.getAttributes()
         self.__createAtPropertiesForAttributes()
 
@@ -49,10 +49,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     def create(
         cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> GeneralManager:
-        pk = cls.Interface.create(
+        identification = cls.Interface.create(
             creator_id=creator_id, history_comment=history_comment, **kwargs
         )
-        return cls(pk)
+        return cls(identification)
 
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any

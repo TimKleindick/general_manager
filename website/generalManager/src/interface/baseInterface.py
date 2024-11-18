@@ -13,8 +13,14 @@ class InterfaceBase(ABC):
     _parent_class: ClassVar[Type[Any]]
     _interface_type: ClassVar[str]
 
-    def __init__(self, pk: Any, *args: Any, **kwargs: Any):
-        self.pk = pk
+    def __init__(self, *args: Any, **kwargs: Any):
+        self.identification = self.parseInputFieldsToIdentification(*args, **kwargs)
+
+    @abstractmethod
+    def parseInputFieldsToIdentification(
+        self, *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
     @classmethod
     @abstractmethod
