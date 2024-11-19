@@ -15,7 +15,6 @@ from typing import (
     Union,
 )
 
-
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
     from generalManager.src.calculation.input import Input
@@ -182,6 +181,18 @@ class CalculationBucket(Bucket["GeneralManager"]):
         self.input_fields = interface_class.input_fields
         self.filters = {} if filter_definitions is None else filter_definitions
         self.excludes = {} if exclude_definitions is None else exclude_definitions
+        self.__current_combinations = None
+
+    def __str__(self) -> str:
+        PRINT_MAX = 5
+        combinations = self.generate_combinations()
+        prefix = f"CalculationBucket ({len(combinations)})["
+        main = ""
+        sufix = f"]"
+        if len(combinations) > PRINT_MAX:
+            sufix = f", ...]"
+
+        return f"{prefix}{",".join([f"{self._manager_class.__name__}(**{comb})" for comb in combinations[:PRINT_MAX] ]) }{sufix} "
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         filters = self.filters.copy()
@@ -204,14 +215,17 @@ class CalculationBucket(Bucket["GeneralManager"]):
             yield self._manager_class(**combo)
 
     def generate_combinations(self) -> List[dict[str, Any]]:
-        # Implementierung ähnlich wie im InputManager
-        sorted_inputs = self.topological_sort_inputs()
-        combinations = self._generate_combinations(
-            sorted_inputs, self.filters, self.excludes
-        )
-        return combinations
+        if self.__current_combinations is None:
+            # Implementierung ähnlich wie im InputManager
+            sorted_inputs = self.topological_sort_inputs()
+            self.__current_combinations = self._generate_combinations(
+                sorted_inputs, self.filters, self.excludes
+            )
+        return self.__current_combinations
 
     def parse_filters(self, filter_kwargs: dict[str, Any]) -> dict[str, dict]:
+        from generalManager.src.manager.generalManager import GeneralManager
+
         filters = {}
         for kwarg, value in filter_kwargs.items():
             parts = kwarg.split("__")
@@ -222,8 +236,11 @@ class CalculationBucket(Bucket["GeneralManager"]):
 
             lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
 
-            if isinstance(input_field.possible_values, Bucket):
+            if issubclass(input_field.type, GeneralManager):
                 # Sammle die Filter-Keyword-Argumente für das InputField
+                if lookup == "":
+                    lookup = "id"
+                    value = value.id
                 filters.setdefault(field_name, {}).setdefault("filter_kwargs", {})[
                     lookup
                 ] = value
@@ -375,10 +392,6 @@ class CalculationBucket(Bucket["GeneralManager"]):
                         lambda x: not exclude_func(x), possible_values
                     )
 
-            # Konvertiere mögliche Werte in eine Liste
-            if isinstance(possible_values, Bucket):
-                possible_values = list(possible_values)
-            else:
                 possible_values = list(possible_values)
 
             for value in possible_values:
@@ -403,20 +416,20 @@ class CalculationBucket(Bucket["GeneralManager"]):
         return None
 
     def count(self) -> int:
-        return len(list(self))
+        return sum(1 for _ in self)
 
     def __len__(self) -> int:
         return self.count()
 
     def __getitem__(self, item: int | slice) -> GeneralManager | CalculationBucket:
-        items = list(self)
+        items = self.generate_combinations()
         result = items[item]
         if isinstance(result, list):
             new_bucket = CalculationBucket(self._manager_class)
             new_bucket.filters = self.filters.copy()
             new_bucket.excludes = self.excludes.copy()
             return new_bucket
-        return result
+        return self._manager_class(**result)
 
     def __contains__(self, item: GeneralManager) -> bool:
         return item in list(self)
