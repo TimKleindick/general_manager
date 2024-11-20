@@ -26,9 +26,9 @@ class GeneralManager(Generic[T], metaclass=GeneralManagerMeta):
         return self.__id
 
     def __iter__(self):
-        for key, value in self.__attributes.items():
+        for key, value in self._attributes.items():
             if callable(value):
-                yield key, value(self.__interface)
+                yield key, value(self._interface)
                 continue
             yield key, value
 
@@ -44,7 +44,7 @@ class GeneralManager(Generic[T], metaclass=GeneralManagerMeta):
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> GeneralManager:
-        self.__interface.update(
+        self._interface.update(
             creator_id=creator_id,
             history_comment=history_comment,
             **kwargs,
@@ -54,7 +54,7 @@ class GeneralManager(Generic[T], metaclass=GeneralManagerMeta):
     def deactivate(
         self, creator_id: int, history_comment: str | None = None
     ) -> GeneralManager:
-        self.__interface.deactivate(
+        self._interface.deactivate(
             creator_id=creator_id, history_comment=history_comment
         )
         return self.__class__(self.__id)
