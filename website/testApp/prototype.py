@@ -184,17 +184,23 @@ class ProjectCommercial(GeneralManager):
         return value if value is not None else 0
 
     @graphQlProperty
-    def total_shipment(self) -> Measurement:
-        return sum(  # type: ignore
+    def total_shipment(self) -> Optional[Measurement]:
+        total = sum(
             self.noneToZero(derivative.estimated_weight) * self.noneToZero(volume.volume)  # type: ignore
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
+        if total != 0:
+            return total
+        return None
 
     @graphQlProperty
-    def total_revenue(self) -> Measurement:
-        return sum(
+    def total_revenue(self) -> Optional[Measurement]:
+        total = sum(
             self.noneToZero(derivative.price) * self.noneToZero(volume.volume)  # type: ignore
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
+        if total != 0:
+            return total
+        return None
