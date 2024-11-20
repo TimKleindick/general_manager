@@ -3,6 +3,7 @@ from typing import Generic, Type, Any, TypeVar
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.interface import InterfaceBase
 from generalManager.src.manager.bucket import Bucket
+from generalManager.src.api.graphql import GraphQLProperty
 
 T = TypeVar("T", bound="GeneralManager")
 
@@ -31,6 +32,9 @@ class GeneralManager(Generic[T], metaclass=GeneralManagerMeta):
                 yield key, value(self._interface)
                 continue
             yield key, value
+        for name, value in self.__class__.__dict__.items():
+            if isinstance(value, (GraphQLProperty, property)):
+                yield name, getattr(self, name)
 
     @classmethod
     def create(
