@@ -1,18 +1,18 @@
 from __future__ import annotations
 import json
-from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING
+from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, Generator, TypeVar
 from django.db import models, transaction
 from django.contrib.auth import get_user_model
 from simple_history.utils import update_change_reason  # type: ignore
 from datetime import datetime, timedelta
 from simple_history.models import HistoricalRecords  # type: ignore
-from generalManager.src.manager.bucket import DatabaseBucket
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.measurement.measurementField import MeasurementField
 from decimal import Decimal
 from generalManager.src.factory.factories import AutoFactory
 from django.core.exceptions import ValidationError
 from generalManager.src.interface.baseInterface import InterfaceBase
+from generalManager.src.manager.bucket import Bucket
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
@@ -170,37 +170,44 @@ class DBBasedInterface(InterfaceBase):
             for field_name, field in fields.items()
         }
 
-    def getAttributes(self) -> dict[str, Any]:
+    @classmethod
+    def getAttributes(cls) -> dict[str, Any]:
         field_values: dict[str, Any] = {}
 
-        field_name_list, to_ignore_list = self.handleCustomFields(self._model)
+        field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
         for field_name in field_name_list:
-            field_values[field_name] = getattr(self._instance, field_name)
+            field_values[field_name] = lambda self, field_name=field_name: getattr(
+                self._instance, field_name
+            )
 
-        for field_name in self.__getModelFields():
+        for field_name in cls.__getModelFields():
             if field_name not in to_ignore_list:
-                field_values[field_name] = getattr(self._instance, field_name)
+                field_values[field_name] = lambda self, field_name=field_name: getattr(
+                    self._instance, field_name
+                )
 
-        for field_name in self.__getForeignKeyFields():
-            related_model = self._instance._meta.get_field(field_name).related_model
+        for field_name in cls.__getForeignKeyFields():
+            related_model = cls._model._meta.get_field(field_name).related_model
             if related_model and hasattr(
                 related_model,
                 "_general_manager_class",
             ):
                 generalManagerClass = related_model._general_manager_class
                 field_values[f"{field_name}"] = (
-                    lambda field_name=field_name: generalManagerClass(
+                    lambda self, field_name=field_name: generalManagerClass(
                         getattr(self._instance, field_name).pk
                     )
                 )
             else:
-                field_values[f"{field_name}"] = lambda field_name=field_name: getattr(
-                    self._instance, field_name
+                field_values[f"{field_name}"] = (
+                    lambda self, field_name=field_name: getattr(
+                        self._instance, field_name
+                    )
                 )
 
         for field_name, field_call in [
-            *self.__getManyToManyFields(),
-            *self.__getReverseRelations(),
+            *cls.__getManyToManyFields(),
+            *cls.__getReverseRelations(),
         ]:
             if field_name in field_values.keys():
                 if field_call not in field_values.keys():
@@ -208,11 +215,11 @@ class DBBasedInterface(InterfaceBase):
                 else:
                     raise ValueError("Field name already exists.")
             if hasattr(
-                self._instance._meta.get_field(field_name).related_model,
+                cls._model._meta.get_field(field_name).related_model,
                 "_general_manager_class",
             ):
                 field_values[f"{field_name}_list"] = (
-                    lambda field_name=field_name, field_call=field_call: DatabaseBucket(
+                    lambda self, field_name=field_name, field_call=field_call: DatabaseBucket(
                         getattr(self._instance, field_call).all(),
                         self._instance._meta.get_field(
                             field_name
@@ -221,7 +228,7 @@ class DBBasedInterface(InterfaceBase):
                 )
             else:
                 field_values[f"{field_name}_list"] = (
-                    lambda field_call=field_call: getattr(
+                    lambda self, field_call=field_call: getattr(
                         self._instance, field_call
                     ).all()
                 )
@@ -556,3 +563,85 @@ class DatabaseInterface(DBBasedInterface):
         instance.save()
 
         return instance.pk
+
+
+T1 = TypeVar("T1", bound=models.Model)
+
+
+class DatabaseBucket(Bucket["GeneralManager"]):
+
+    def __init__(
+        self,
+        data: models.QuerySet[T1],
+        manager_class: Type[GeneralManager],
+        filter_definitions: dict[str, list[Any]] = {},
+    ):
+        self._data = data
+        self._manager_class = manager_class
+        self._filter_definitions = {**filter_definitions}
+
+    def __iter__(self) -> Generator[GeneralManager]:
+        for item in self._data:
+            yield self._manager_class(item.pk)
+
+    def __mergeFilterDefinitions(self, **kwargs: Any) -> dict[str, list[Any]]:
+        kwarg_filter: dict[str, list[Any]] = {}
+        for key, value in self._filter_definitions.items():
+            kwarg_filter[key] = value
+        for key, value in kwargs.items():
+            if key not in kwarg_filter:
+                kwarg_filter[key] = []
+            kwarg_filter[key].append(value)
+        return kwarg_filter
+
+    def filter(self, **kwargs: Any) -> DatabaseBucket:
+        merged_filter = self.__mergeFilterDefinitions(**kwargs)
+        return self.__class__(
+            self._data.filter(**kwargs), self._manager_class, merged_filter
+        )
+
+    def exclude(self, **kwargs: Any) -> DatabaseBucket:
+        merged_filter = self.__mergeFilterDefinitions(**kwargs)
+        return self.__class__(
+            self._data.exclude(**kwargs), self._manager_class, merged_filter
+        )
+
+    def first(self) -> GeneralManager | None:
+        first_element = self._data.first()
+        if first_element is None:
+            return None
+        return self._manager_class(first_element.pk)
+
+    def last(self) -> GeneralManager | None:
+        first_element = self._data.last()
+        if first_element is None:
+            return None
+        return self._manager_class(first_element.pk)
+
+    def count(self) -> int:
+        return self._data.count()
+
+    def all(self) -> DatabaseBucket:
+        return self.__class__(self._data.all(), self._manager_class)
+
+    def get(self, **kwargs: Any) -> GeneralManager:
+        element = self._data.get(**kwargs)
+        return self._manager_class(element.pk)
+
+    def __getitem__(self, item: int | slice) -> GeneralManager | DatabaseBucket:
+        if isinstance(item, slice):
+            return self.__class__(self._data[item], self._manager_class)
+        return self._manager_class(self._data[item].pk)
+
+    def __len__(self) -> int:
+        return self._data.count()
+
+    def __repr__(self) -> str:
+        return f"{self._manager_class.__name__}Bucket ({self._data})"
+
+    def __contains__(self, item: GeneralManager | models.Model) -> bool:
+        from generalManager.src.manager.generalManager import GeneralManager
+
+        if isinstance(item, GeneralManager):
+            return item.id in self._data.values_list("pk", flat=True)
+        return item in self._data
