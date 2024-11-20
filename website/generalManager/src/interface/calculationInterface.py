@@ -14,6 +14,7 @@ from typing import (
 from generalManager.src.interface.baseInterface import InterfaceBase
 from generalManager.src.manager.bucket import Bucket
 from generalManager.src.calculation.input import Input
+from django.conf import settings
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
@@ -85,25 +86,30 @@ class CalculationInterface(InterfaceBase):
         self, name: str, value: Any, identification: dict[str, Any]
     ) -> None:
         input_field = self.input_fields[name]
+        if not isinstance(value, input_field.type):
+            raise TypeError(
+                f"Invalid type for {name}: {type(value)}, expected: {input_field.type}"
+            )
+        if settings.DEBUG:
+            # Prüfe mögliche Werte
+            possible_values = input_field.possible_values
+            if possible_values is not None:
+                if callable(possible_values):
+                    depends_on = input_field.depends_on
+                    dep_values = {
+                        dep_name: identification.get(dep_name)
+                        for dep_name in depends_on
+                    }
+                    allowed_values = possible_values(**dep_values)
+                elif isinstance(possible_values, Iterable):
+                    allowed_values = possible_values
+                else:
+                    raise TypeError(f"Invalid type for possible_values of input {name}")
 
-        # Prüfe mögliche Werte
-        possible_values = input_field.possible_values
-        if possible_values is not None:
-            if callable(possible_values):
-                depends_on = input_field.depends_on
-                dep_values = {
-                    dep_name: identification.get(dep_name) for dep_name in depends_on
-                }
-                allowed_values = possible_values(**dep_values)
-            elif isinstance(possible_values, Iterable):
-                allowed_values = possible_values
-            else:
-                raise TypeError(f"Invalid type for possible_values of input {name}")
-
-            if value not in allowed_values:
-                raise ValueError(
-                    f"Invalid value for {name}: {value}, allowed: {allowed_values}"
-                )
+                if value not in allowed_values:
+                    raise ValueError(
+                        f"Invalid value for {name}: {value}, allowed: {allowed_values}"
+                    )
 
     @classmethod
     def create(cls, *args: Any, **kwargs: Any) -> Any:
@@ -125,7 +131,7 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def getAttributes(cls) -> dict[str, Any]:
         return {
-            name: lambda self, name=name: self.__attributes[name]
+            name: lambda self, name=name: self.identification.get(name)
             for name in cls.input_fields.keys()
         }
 
