@@ -44,6 +44,7 @@ class InterfaceBase(ABC):
     def getAttributeTypes(cls) -> dict[str, type]:
         raise NotImplementedError
 
+    @classmethod
     @abstractmethod
     def getAttributes(cls) -> dict[str, Any]:
         raise NotImplementedError

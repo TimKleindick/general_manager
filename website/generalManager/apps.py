@@ -11,8 +11,18 @@ class GeneralmanagerConfig(AppConfig):
     name = "generalManager"
 
     def ready(self):
+        from generalManager.src.manager.meta import GeneralManagerMeta
+
+        for (
+            general_manager_class
+        ) in GeneralManagerMeta.pending_attribute_initialization:
+            attributes = general_manager_class.Interface.getAttributes()
+            setattr(general_manager_class, "_attributes", attributes)
+            GeneralManagerMeta.createAtPropertiesForAttributes(
+                attributes, general_manager_class
+            )
+
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
-            from generalManager.src.manager.meta import GeneralManagerMeta
             from generalManager.src.api.graphql import GraphQL
 
             for general_manager_class in GeneralManagerMeta.pending_graphql_interfaces:
