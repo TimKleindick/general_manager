@@ -1,8 +1,13 @@
 from __future__ import annotations
-from typing import Iterable, Optional, Callable, List, TypeVar, Generic
+from typing import Iterable, Optional, Callable, List, TypeVar, Generic, Any
 import inspect
 
-T = TypeVar("T")
+from generalManager.src.manager.generalManager import GeneralManager
+from datetime import date, datetime
+from generalManager.src.measurement import Measurement
+
+
+T = TypeVar("T", bound=type)
 
 
 class Input(Generic[T]):
@@ -25,3 +30,18 @@ class Input(Generic[T]):
         else:
             # Keine Abhängigkeiten
             self.depends_on = []
+
+    def cast(self, value: Any) -> Any:
+        if isinstance(value, self.type):
+            return value
+        if issubclass(self.type, GeneralManager):
+            if isinstance(value, dict):
+                return self.type(**value)  # type: ignore
+            return self.type(id=value)  # type: ignore
+        if self.type == date:
+            return date.fromisoformat(value)
+        if self.type == datetime:
+            return datetime.fromisoformat(value)
+        if self.type == Measurement and isinstance(value, str):
+            return Measurement.from_string(value)
+        return self.type(value)
