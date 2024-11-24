@@ -27,7 +27,7 @@ from generalManager.src.manager.property import graphQlProperty
 import random
 import numpy as np
 from datetime import date
-from generalManager.src.calculation.input import Input
+from generalManager.src.manager.input import Input
 from generalManager.src.interface.calculationInterface import CalculationInterface
 
 

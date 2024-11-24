@@ -12,7 +12,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
-    from generalManager.src.calculation.input import Input
+    from generalManager.src.manager.input import Input
 
 
 T = TypeVar("T")

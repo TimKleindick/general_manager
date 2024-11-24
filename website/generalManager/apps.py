@@ -13,7 +13,7 @@ class GeneralmanagerConfig(AppConfig):
     def ready(self):
         from generalManager.src.manager.meta import GeneralManagerMeta
         from generalManager.src.manager.generalManager import GeneralManager
-        from generalManager.src.calculation.input import Input
+        from generalManager.src.manager.input import Input
         from generalManager.src.manager.property import graphQlProperty
 
         for general_manager_class in GeneralManagerMeta.all_classes:

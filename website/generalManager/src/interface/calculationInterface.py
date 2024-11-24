@@ -13,7 +13,7 @@ from typing import (
 )
 from generalManager.src.interface.baseInterface import InterfaceBase
 from generalManager.src.manager.bucket import Bucket
-from generalManager.src.calculation.input import Input
+from generalManager.src.manager.input import Input
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
