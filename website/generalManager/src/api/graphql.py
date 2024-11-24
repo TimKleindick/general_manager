@@ -1,34 +1,18 @@
 from __future__ import annotations
 import graphene
-from typing import Any, Callable, get_type_hints, get_args, TYPE_CHECKING
+from typing import Any, Callable, get_args, TYPE_CHECKING
 from decimal import Decimal
 from datetime import date, datetime
 import json
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.manager.generalManager import GeneralManagerMeta
+from generalManager.src.manager.generalManager import GeneralManager
+from generalManager.src.manager.property import GraphQLProperty
 
 if TYPE_CHECKING:
-    from generalManager.src.interface import (
+    from generalManager.src.interface.baseInterface import (
         InterfaceBase,
     )
-    from generalManager.src.manager.generalManager import GeneralManager
-
-
-class GraphQLProperty(property):
-    def __init__(self, fget: Callable[..., Any], doc: str | None = None):
-        super().__init__(fget, doc=doc)
-        self.is_graphql_resolver = True
-        self.graphql_type_hint = get_type_hints(fget).get("return", None)
-
-
-def graphQlProperty(func: Callable[..., Any]):
-    """
-    Dekorator für GraphQL-Feld-Resolver, der automatisch:
-    - die Methode als benutzerdefiniertes Property registriert,
-    - die Resolver-Informationen speichert,
-    - den Field-Typ aus dem Type-Hint ableitet.
-    """
-    return GraphQLProperty(func)
 
 
 class MeasurementType(graphene.ObjectType):  # type: ignore
@@ -94,7 +78,6 @@ class GraphQL:
         | graphene.String
         | str
     ):
-        from generalManager.src.manager.generalManager import GeneralManager
 
         if issubclass(field_type, str):
             return graphene.String()
@@ -183,7 +166,7 @@ class GraphQL:
         cls, graphene_type: type, generalManagerClass: type[GeneralManager]
     ):
         # Sammeln der Felder
-        if not hasattr(GeneralManagerMeta, "_query_fields"):
+        if not hasattr(cls, "_query_fields"):
             cls._query_fields: dict[str, Any] = {}
 
         # Abfrage für die Liste
@@ -214,10 +197,31 @@ class GraphQL:
 
         # Abfrage für ein einzelnes Objekt
         item_field_name = generalManagerClass.__name__.lower()
-        item_field = graphene.Field(graphene_type, id=graphene.Int(required=True))
 
-        def resolve_item(self: GeneralManager, info: str, id: int) -> GeneralManager:
-            return generalManagerClass(id)
+        generalManagerClass.Interface.input_fields
+        identification_dict = {}
+        for (
+            input_field_name,
+            input_field,
+        ) in generalManagerClass.Interface.input_fields.items():
+            if issubclass(input_field.type, GeneralManager):
+                input_field_name = f"{input_field_name}_id"
+                input_type = graphene.Int()
+            elif input_field_name == "id":
+                input_type = graphene.ID()
+            else:
+                input_type = cls.__map_field_to_graphene(
+                    input_field.type, input_field_name
+                )
+
+            identification_dict[input_field_name] = input_type
+            identification_dict[input_field_name].required = True
+        item_field = graphene.Field(graphene_type, **identification_dict)
+
+        def resolve_item(
+            self: GeneralManager, info: str, **identification: dict
+        ) -> GeneralManager:
+            return generalManagerClass(**identification)
 
         cls._query_fields[item_field_name] = item_field
         cls._query_fields[f"resolve_{item_field_name}"] = resolve_item
