@@ -12,6 +12,27 @@ class GeneralmanagerConfig(AppConfig):
 
     def ready(self):
         from generalManager.src.manager.meta import GeneralManagerMeta
+        from generalManager.src.manager.generalManager import GeneralManager
+        from generalManager.src.calculation.input import Input
+        from generalManager.src.manager.property import graphQlProperty
+
+        for general_manager_class in GeneralManagerMeta.all_classes:
+            attributes = getattr(general_manager_class.Interface, "input_fields", {})
+            for attribute_name, attribute in attributes.items():
+                if isinstance(attribute, Input) and issubclass(
+                    attribute.type, GeneralManager
+                ):
+                    connected_manager = attribute.type
+                    func = lambda x, attribute_name=attribute_name: general_manager_class.filter(
+                        **{attribute_name: x}
+                    )
+
+                    func.__annotations__ = {"return": general_manager_class}
+                    setattr(
+                        connected_manager,
+                        f"{general_manager_class.__name__.lower()}_list",
+                        graphQlProperty(func),
+                    )
 
         for (
             general_manager_class

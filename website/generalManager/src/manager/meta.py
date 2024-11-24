@@ -1,16 +1,17 @@
 from __future__ import annotations
-from generalManager.src.interface import (
+from generalManager.src.interface.baseInterface import (
     InterfaceBase,
 )
 from website.settings import AUTOCREATE_GRAPHQL
 from typing import Any, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from generalManager.src.interface import ReadOnlyInterface
+    from generalManager.src.interface.databaseInterface import ReadOnlyInterface
     from generalManager.src.manager.generalManager import GeneralManager
 
 
 class GeneralManagerMeta(type):
+    all_classes: list[Type[GeneralManager]] = []
     read_only_classes: list[Type[ReadOnlyInterface]] = []
     pending_graphql_interfaces: list[Type[GeneralManager]] = []
     pending_attribute_initialization: list[Type[GeneralManager]] = []
@@ -27,6 +28,7 @@ class GeneralManagerMeta(type):
             new_class = super().__new__(mcs, name, bases, attrs)
             postCreation(mcs, new_class, interface_cls, model)
             mcs.pending_attribute_initialization.append(new_class)
+            mcs.all_classes.append(new_class)
 
         else:
             new_class = super().__new__(mcs, name, bases, attrs)
