@@ -13,6 +13,7 @@ from generalManager.src.factory.factories import AutoFactory
 from django.core.exceptions import ValidationError
 from generalManager.src.interface.baseInterface import InterfaceBase
 from generalManager.src.manager.bucket import Bucket
+from generalManager.src.calculation.input import Input
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
@@ -64,6 +65,7 @@ class GeneralManagerModel(models.Model):
 
 class DBBasedInterface(InterfaceBase):
     _model: ClassVar[Type[GeneralManagerModel]]
+    input_fields: dict[str, Input] = {"id": Input(int)}
 
     def __init__(
         self,
@@ -72,16 +74,8 @@ class DBBasedInterface(InterfaceBase):
         **kwargs: dict[str, Any],
     ):
         super().__init__(*args, **kwargs)
+        self.pk = self.identification["id"]
         self._instance = self.getData(search_date)
-
-    def parseInputFieldsToIdentification(
-        self, *args: Any, **kwargs: Any
-    ) -> dict[str, Any]:
-        if len(args) == 1:
-            self.pk = args[0]
-        else:
-            self.pk = kwargs.get("id")
-        return {"id": self.pk}
 
     def getData(self, search_date: datetime | None = None) -> GeneralManagerModel:
         model = self._model
