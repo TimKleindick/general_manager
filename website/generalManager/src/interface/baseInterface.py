@@ -8,7 +8,7 @@ from django.conf import settings
 
 
 if TYPE_CHECKING:
-    from generalManager.src.calculation.input import Input
+    from generalManager.src.manager.input import Input
     from generalManager.src.manager.generalManager import GeneralManager
     from generalManager.src.manager.meta import GeneralManagerMeta
 
