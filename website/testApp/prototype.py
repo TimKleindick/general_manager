@@ -10,8 +10,9 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 from generalManager.src.manager.generalManager import GeneralManager
-from generalManager.src.manager.bucket import Bucket
-from generalManager.src.interface.databaseInterface import DatabaseInterface
+from generalManager.src.interface.databaseInterface import (
+    DatabaseInterface,
+)
 from generalManager.src.measurement import (
     MeasurementField,
     Measurement,
@@ -29,6 +30,7 @@ import numpy as np
 from datetime import date
 from generalManager.src.manager.input import Input
 from generalManager.src.interface.calculationInterface import CalculationInterface
+from generalManager.src.interface.baseInterface import Bucket
 
 
 class Project(GeneralManager):

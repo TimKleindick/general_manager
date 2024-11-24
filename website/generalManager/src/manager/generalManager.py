@@ -1,8 +1,7 @@
 from __future__ import annotations
 from typing import Generic, Type, Any, TypeVar
 from generalManager.src.manager.meta import GeneralManagerMeta
-from generalManager.src.interface.baseInterface import InterfaceBase
-from generalManager.src.manager.bucket import Bucket
+from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
 from generalManager.src.manager.property import GraphQLProperty
 
 T = TypeVar("T", bound="GeneralManager")

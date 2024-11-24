@@ -11,8 +11,7 @@ from typing import (
     Generator,
     List,
 )
-from generalManager.src.interface.baseInterface import InterfaceBase
-from generalManager.src.manager.bucket import Bucket
+from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
 from generalManager.src.manager.input import Input
 
 if TYPE_CHECKING:
