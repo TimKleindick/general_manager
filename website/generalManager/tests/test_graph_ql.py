@@ -8,12 +8,12 @@ from generalManager.src.manager.generalManager import GeneralManager, GeneralMan
 from generalManager.src.measurement.measurement import Measurement, ureg
 
 from generalManager.src.api.graphql import (
-    GraphQLProperty,
-    graphQlProperty,
     MeasurementType,
     GraphQL,
     Measurement,
 )
+
+from generalManager.src.manager.property import GraphQLProperty
 
 
 class GraphQLPropertyTests(TestCase):
@@ -46,14 +46,14 @@ class GraphQLTests(TestCase):
         self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
         self.general_manager_class.__name__ = "TestManager"
 
-    @patch("generalManager.src.interface.InterfaceBase")
+    @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_no_interface(self, mock_interface):
         # Test case where no Interface is present
         self.general_manager_class.Interface = None
         result = GraphQL._createGraphQlInterface(self.general_manager_class)
         self.assertIsNone(result)
 
-    @patch("generalManager.src.interface.InterfaceBase")
+    @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_with_interface(self, mock_interface):
         # Test with an interface and checking registry population
         mock_interface.getAttributeTypes.return_value = {
@@ -137,6 +137,9 @@ class GraphQLTests(TestCase):
     def test_add_queries_to_schema(self):
         # Test if queries are added to the schema properly
         class TestGeneralManager:
+            class Interface:
+                input_fields = {}
+
             @classmethod
             def all(cls):
                 return []
@@ -156,7 +159,7 @@ class GraphQLAdditionalTests(TestCase):
         self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
         self.general_manager_class.__name__ = "TestManager"
 
-    @patch("generalManager.src.interface.InterfaceBase")
+    @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):
         # Test with a class having GraphQLProperty attributes
         mock_interface.getAttributeTypes.return_value = {
@@ -204,6 +207,9 @@ class GraphQLAdditionalTests(TestCase):
     def test_resolve_list_with_no_filter_exclude(self):
         # Test list resolver without filter/exclude
         class TestGeneralManager:
+            class Interface:
+                input_fields = {}
+
             @classmethod
             def all(cls):
                 return ["item1", "item2"]
