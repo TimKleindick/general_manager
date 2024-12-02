@@ -36,7 +36,7 @@ class AutoFactory(DjangoModelFactory[T]):
     ) -> models.Model | list[models.Model]:
         cls._original_params = params
         model = getattr(cls._meta, "model")
-        if not isinstance(model, models.Model):
+        if not issubclass(model, models.Model):
             raise ValueError("Model must be a type")
         field_name_list, to_ignore_list = cls.interface.handleCustomFields(model)
 

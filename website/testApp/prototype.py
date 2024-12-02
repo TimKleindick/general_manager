@@ -106,12 +106,15 @@ def generate_volume_distribution(years: int, total_volume: float) -> list[float]
 def generateVolume(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
 
     derivative = kwargs["derivative"]
-    total_volume = derivative.get("estimated_volume")
-    start_date: date | None = derivative.get("project", {}).get("start_date")
-    end_date: date | None = derivative.get("project", {}).get("end_date")
+    total_volume = getattr(derivative, "estimated_volume")
+    project = getattr(derivative, "project")
+    if project is None:
+        return []
+    start_date: date | None = project.start_date
+    end_date: date | None = project.end_date
     if total_volume is None or start_date is None or end_date is None:
         return []
-    total_years = start_date.year - end_date.year
+    total_years = end_date.year - start_date.year
     volumes = generate_volume_distribution(total_years, total_volume)
     records: list[dict[str, Any]] = []
     for year, volume in enumerate(volumes, start=start_date.year):
