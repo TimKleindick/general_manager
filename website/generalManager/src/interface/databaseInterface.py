@@ -24,9 +24,8 @@ if TYPE_CHECKING:
 def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
     def full_clean(self: models.Model, *args: Any, **kwargs: Any):
         errors: dict[str, Any] = {}
-
         try:
-            model.full_clean(self, *args, **kwargs)
+            super(model, self).full_clean(*args, **kwargs)  # type: ignore
         except ValidationError as e:
             errors.update(e.message_dict)
 
