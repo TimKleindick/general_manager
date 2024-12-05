@@ -144,12 +144,17 @@ class CalculationBucket(Bucket["GeneralManager"]):
         PRINT_MAX = 5
         combinations = self.generate_combinations()
         prefix = f"CalculationBucket ({len(combinations)})["
-        main = ""
+        main = ",".join(
+            [
+                f"{self._manager_class.__name__}(**{comb})"
+                for comb in combinations[:PRINT_MAX]
+            ]
+        )
         sufix = f"]"
         if len(combinations) > PRINT_MAX:
             sufix = f", ...]"
 
-        return f"{prefix}{",".join([f"{self._manager_class.__name__}(**{comb})" for comb in combinations[:PRINT_MAX] ]) }{sufix} "
+        return f"{prefix}{main}{sufix} "
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         filters = self.filters.copy()
@@ -203,7 +208,13 @@ class CalculationBucket(Bucket["GeneralManager"]):
                 ] = value
             else:
                 # Erstelle Filterfunktionen für Nicht-Bucket-Typen
-                filter_func = self.create_filter_function(lookup, value)
+                if isinstance(value, (list, tuple)) and not isinstance(
+                    value, input_field.type
+                ):
+                    casted_value = [input_field.cast(v) for v in value]
+                else:
+                    casted_value = input_field.cast(value)
+                filter_func = self.create_filter_function(lookup, casted_value)
                 filters.setdefault(field_name, {}).setdefault(
                     "filter_funcs", []
                 ).append(filter_func)
@@ -222,6 +233,7 @@ class CalculationBucket(Bucket["GeneralManager"]):
             "contains",
             "startswith",
             "endswith",
+            "in",
         ]:
             lookup = parts[-1]
             attr_path = parts[:-1]
@@ -257,9 +269,12 @@ class CalculationBucket(Bucket["GeneralManager"]):
                 return x.startswith(value)
             elif lookup == "endswith" and isinstance(x, str):
                 return x.endswith(value)
+            elif lookup == "in":
+                return x in value
             else:
                 return False
-        except TypeError:
+        except TypeError as e:
+            print(e)
             return False
 
     def topological_sort_inputs(self) -> List[str]:
@@ -343,6 +358,7 @@ class CalculationBucket(Bucket["GeneralManager"]):
                 filter_funcs = field_filters.get("filter_funcs", [])
                 for filter_func in filter_funcs:
                     possible_values = filter(filter_func, possible_values)
+
                 exclude_funcs = field_excludes.get("filter_funcs", [])
                 for exclude_func in exclude_funcs:
                     possible_values = filter(
