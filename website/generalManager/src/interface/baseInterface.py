@@ -201,7 +201,7 @@ class Bucket(ABC, Generic[T]):
             return False
         return self._data == other._data and self._manager_class == other._manager_class
 
-    def __iter__(self) -> Generator[GeneralManager]:
+    def __iter__(self) -> Generator[T]:
         raise NotImplementedError
 
     @abstractmethod
