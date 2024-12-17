@@ -14,7 +14,7 @@ from typing import (
 
 from datetime import datetime
 from django.conf import settings
-
+from generalManager.src.auxiliary import args_to_kwargs
 
 if TYPE_CHECKING:
     from generalManager.src.manager.input import Input
@@ -22,25 +22,6 @@ if TYPE_CHECKING:
     from generalManager.src.manager.meta import GeneralManagerMeta
 
 T = TypeVar("T")
-
-
-def args_to_kwargs(args, keys, existing_kwargs=None):
-    """
-    Wandelt *args in **kwargs um und kombiniert sie mit bestehenden **kwargs.
-
-    :param args: Tuple der positional arguments (z. B. *args).
-    :param keys: Liste der Schlüssel, die den Argumenten zugeordnet werden.
-    :param existing_kwargs: Optionales Dictionary mit bereits existierenden Schlüssel-Wert-Zuordnungen.
-    :return: Dictionary mit kombinierten **kwargs.
-    """
-    if len(args) > len(keys):
-        raise ValueError("Mehr args als keys vorhanden.")
-
-    kwargs = {key: value for key, value in zip(keys, args)}
-    if existing_kwargs:
-        kwargs.update(existing_kwargs)
-
-    return kwargs
 
 
 class InterfaceBase(ABC):
@@ -53,7 +34,7 @@ class InterfaceBase(ABC):
 
     def parseInputFieldsToIdentification(
         self,
-        *args: list[Any],
+        *args: Any,
         **kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         identification = {}
