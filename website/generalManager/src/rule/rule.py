@@ -1,17 +1,19 @@
-from typing import Callable, Optional, Union, Any, Dict, List
+from typing import Callable, Optional, Union, Any, Dict, List, TypeVar, Generic
 import ast
 import inspect
 import re
 
+T = TypeVar("T")
 
-class Rule:
+
+class Rule(Generic[T]):
     def __init__(
         self,
-        func: Callable[[Any], Union[bool, None]],
+        func: Callable[[T], Union[bool, None]],
         custom_error_message: Optional[str] = None,
         ignore_if_none: bool = True,
     ) -> None:
-        self.__func: Callable[[Any], Union[bool, None]] = func
+        self.__func: Callable[[T], Union[bool, None]] = func
         self.__customErrorMessage: Optional[str] = custom_error_message
         self.__variables: List[str] = self.__extractVariables()
         self.__lastEvaluationResult: Optional[bool] = None
@@ -24,7 +26,7 @@ class Rule:
         }
 
     @property
-    def func(self) -> Callable[[Any], Union[bool, None]]:
+    def func(self) -> Callable[[T], Union[bool, None]]:
         return self.__func
 
     @property
@@ -47,7 +49,7 @@ class Rule:
     def ignoreIfNone(self) -> bool:
         return self.__ignoreIfNone
 
-    def evaluate(self, x: Any) -> bool | None:
+    def evaluate(self, x: T) -> bool | None:
         self.__lastEvaluationInput = x
         var_values = self.__extractVariableValues(x)
         if self.__ignoreIfNone:
