@@ -1,4 +1,8 @@
 from __future__ import annotations
+import random
+import numpy as np
+from datetime import date
+from typing import Optional, Any
 from django.db.models import (
     CharField,
     TextField,
@@ -9,28 +13,23 @@ from django.db.models import (
     constraints,
 )
 from django.core.validators import RegexValidator
-from generalManager.src.manager.generalManager import GeneralManager
-from generalManager.src.interface.databaseInterface import (
+from generalManager.src.interface import (
+    Bucket,
     DatabaseInterface,
+    CalculationInterface,
 )
+from generalManager.src.manager import GeneralManager, graphQlProperty, Input
 from generalManager.src.measurement import (
     MeasurementField,
     Measurement,
 )
-from typing import Optional, Any
-from generalManager.src.rule.rule import Rule
-from generalManager.src.factory.lazy_methods import (
+from generalManager.src.rule import Rule
+from generalManager.src.factory import (
     LazyMeasurement,
     LazyDeltaDate,
     LazyProjectName,
 )
-from generalManager.src.manager.property import graphQlProperty
-import random
-import numpy as np
-from datetime import date
-from generalManager.src.manager.input import Input
-from generalManager.src.interface.calculationInterface import CalculationInterface
-from generalManager.src.interface.baseInterface import Bucket
+from generalManager.src.auxiliary import noneToZero
 
 
 class Project(GeneralManager):
@@ -56,14 +55,22 @@ class Project(GeneralManager):
             ]
 
             rules = [
-                Rule(lambda x: x.start_date < x.end_date),
-                Rule(lambda x: x.total_capex >= "0 EUR"),
+                Rule["Project"](lambda x: x.start_date < x.end_date),
+                Rule["Project"](lambda x: x.total_capex >= "0 EUR"),
             ]
 
         class Factory:
             name = LazyProjectName()
             end_date = LazyDeltaDate(365 * 6, "start_date")
             total_capex = LazyMeasurement(75_000, 1_000_000, "EUR")
+
+    # class Permission(ManagerBasedPermission):
+    #     __read__ = ["public"]
+    #     __create__ = ["admin", "isMatchingKeyAccount"]
+    #     __update__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
+    #     __delete__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
+
+    #     total_capex = {"update": ["isSalesResponsible", "isProjectManager"]}
 
 
 class Derivative(GeneralManager):
@@ -78,7 +85,7 @@ class Derivative(GeneralManager):
         name = CharField(max_length=50)
         estimated_weight = MeasurementField(base_unit="kg", null=True, blank=True)
         estimated_volume = IntegerField(null=True, blank=True)
-        project = ForeignKey("Project", on_delete=CASCADE)  # type: ignore
+        project = ForeignKey("Project", on_delete=CASCADE)
         price = MeasurementField(base_unit="EUR", null=True, blank=True)
 
     @graphQlProperty
@@ -86,6 +93,9 @@ class Derivative(GeneralManager):
         if self.estimated_weight is None or self.estimated_volume is None:
             return None
         return self.estimated_weight * self.estimated_volume
+
+    # class Permission(ManagerBasedPermission):
+    #     __based_on__ = project
 
 
 def generate_volume_distribution(years: int, total_volume: float) -> list[float]:
@@ -131,10 +141,10 @@ def generateVolume(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
 class DerivativeVolume(GeneralManager):
     derivative: Derivative
     date: date
-    volume: Measurement
+    volume: int
 
     class Interface(DatabaseInterface):
-        derivative = ForeignKey("Derivative", on_delete=CASCADE)  # type: ignore
+        derivative = ForeignKey("Derivative", on_delete=CASCADE)
         date = DateField()
         volume = IntegerField()
 
@@ -144,8 +154,7 @@ class DerivativeVolume(GeneralManager):
                     fields=["derivative", "date"], name="unique_volume"
                 )
             ]
-
-            Rule(lambda x: x.volume >= 0)
+            rules = [Rule["DerivativeVolume"](lambda x: x.volume >= 0)]
 
         class Factory:
             _adjustmentMethod = generateVolume
@@ -154,7 +163,7 @@ class DerivativeVolume(GeneralManager):
 def getPossibleDates(project: Project):
     dates = []
     for derivative in project.derivative_list:
-        for volume in derivative.derivativevolume_list:  # type: ignore
+        for volume in derivative.derivativevolume_list:
             volume: DerivativeVolume
             dates.append(volume.date)
 
@@ -175,37 +184,31 @@ class ProjectCommercial(GeneralManager):
         date = Input(date, possible_values=getPossibleDates)
 
     @graphQlProperty
-    def total_volume(self) -> int:
+    def total_volume(self) -> int | float | Measurement:
         return sum(
-            self.noneToZero(volume.volume)  # type: ignore
+            noneToZero(volume.volume)
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
-
-    @staticmethod
-    def noneToZero(
-        value: Optional[Measurement | int | float],
-    ) -> Measurement | int | float:
-        return value if value is not None else 0
 
     @graphQlProperty
     def total_shipment(self) -> Optional[Measurement]:
         total = sum(
-            self.noneToZero(derivative.estimated_weight) * self.noneToZero(volume.volume)  # type: ignore
+            noneToZero(derivative.estimated_weight) * noneToZero(volume.volume)
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
-        if total != 0:
+        if isinstance(total, Measurement):
             return total
         return None
 
     @graphQlProperty
     def total_revenue(self) -> Optional[Measurement]:
         total = sum(
-            self.noneToZero(derivative.price) * self.noneToZero(volume.volume)  # type: ignore
+            noneToZero(derivative.price) * noneToZero(volume.volume)
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
-        if total != 0:
+        if isinstance(total, Measurement):
             return total
         return None
