@@ -1,4 +1,12 @@
-from typing import Callable, Optional, Union, Any, Dict, List, TypeVar, Generic
+from typing import (
+    Callable,
+    Optional,
+    Any,
+    Dict,
+    List,
+    TypeVar,
+    Generic,
+)
 import ast
 import inspect
 import re
@@ -9,11 +17,11 @@ T = TypeVar("T")
 class Rule(Generic[T]):
     def __init__(
         self,
-        func: Callable[[T], Union[bool, None]],
+        func: Callable[[T], bool],
         custom_error_message: Optional[str] = None,
         ignore_if_none: bool = True,
     ) -> None:
-        self.__func: Callable[[T], Union[bool, None]] = func
+        self.__func: Callable[[T], bool] = func
         self.__customErrorMessage: Optional[str] = custom_error_message
         self.__variables: List[str] = self.__extractVariables()
         self.__lastEvaluationResult: Optional[bool] = None
@@ -26,7 +34,7 @@ class Rule(Generic[T]):
         }
 
     @property
-    def func(self) -> Callable[[T], Union[bool, None]]:
+    def func(self) -> Callable[[T], bool]:
         return self.__func
 
     @property
@@ -56,13 +64,18 @@ class Rule(Generic[T]):
             if any(value is None for value in var_values.values()):
                 self.__lastEvaluationResult = None
                 return True
-        self.__lastEvaluationResult = self.__func(x)
+        try:
+            self.__lastEvaluationResult = self.__func(x)
+        except TypeError:
+            self.__lastEvaluationResult = False
         return self.__lastEvaluationResult
 
     def getErrorMessage(self) -> Optional[Dict[str, str]]:
         if self.__lastEvaluationResult or self.__lastEvaluationResult is None:
             return None
         x = self.__lastEvaluationInput
+        if x is None:
+            raise ValueError("No input provided for error message generation")
         var_values = self.__extractVariableValues(x)
 
         if self.__customErrorMessage:
@@ -150,7 +163,7 @@ class Rule(Generic[T]):
 
         return list(extractor.variables)
 
-    def __extractVariableValues(self, x: Any) -> Dict[str, Optional[Any]]:
+    def __extractVariableValues(self, x: T) -> Dict[str, Optional[Any]]:
         var_values: dict[str, Any] = {}
         for var in self.__variables:
             parts = var.split(".")
