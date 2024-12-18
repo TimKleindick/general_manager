@@ -7,13 +7,13 @@ from datetime import date, datetime
 from generalManager.src.measurement import Measurement
 
 
-T = TypeVar("T", bound=type)
+INPUT_TYPE = TypeVar("INPUT_TYPE", bound=type)
 
 
-class Input(Generic[T]):
+class Input(Generic[INPUT_TYPE]):
     def __init__(
         self,
-        type: T,
+        type: INPUT_TYPE,
         possible_values: Optional[Callable | Iterable] = None,
         depends_on: Optional[List[str]] = None,
     ):
