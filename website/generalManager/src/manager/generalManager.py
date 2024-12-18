@@ -1,13 +1,15 @@
 from __future__ import annotations
-from typing import Generic, Type, Any, TypeVar
+from typing import Generic, Type, Any
 from generalManager.src.manager.meta import GeneralManagerMeta
-from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
+from generalManager.src.interface.baseInterface import (
+    InterfaceBase,
+    Bucket,
+    GeneralManagerType,
+)
 from generalManager.src.manager.property import GraphQLProperty
 
-T = TypeVar("T", bound="GeneralManager")
 
-
-class GeneralManager(Generic[T], metaclass=GeneralManagerMeta):
+class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     Interface: Type[InterfaceBase]
     _attributes: dict[str, Any]
 
@@ -63,13 +65,13 @@ class GeneralManager(Generic[T], metaclass=GeneralManagerMeta):
         return self.__class__(self.__id)
 
     @classmethod
-    def filter(cls, **kwargs: Any) -> Bucket[T]:
+    def filter(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
         return cls.Interface.filter(**kwargs)
 
     @classmethod
-    def exclude(cls, **kwargs: Any) -> Bucket[T]:
+    def exclude(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
-    def all(cls) -> Bucket[T]:
+    def all(cls) -> Bucket[GeneralManagerType]:
         return cls.Interface.filter()

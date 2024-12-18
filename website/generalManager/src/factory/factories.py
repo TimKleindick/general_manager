@@ -13,13 +13,13 @@ from generalManager.src.measurement.measurementField import MeasurementField
 from datetime import date, datetime, time
 
 if TYPE_CHECKING:
-    from generalManager.src.interface.databaseInterface import DBBasedInterface
+    from generalManager.src.interface.databaseInterface import (
+        DBBasedInterface,
+        modelsModel,
+    )
 
 
-T = TypeVar("T", bound=models.Model)
-
-
-class AutoFactory(DjangoModelFactory[T]):
+class AutoFactory(DjangoModelFactory[modelsModel]):
     """
     A factory class that automatically generates values for model fields,
     including handling of unique fields and constraints.

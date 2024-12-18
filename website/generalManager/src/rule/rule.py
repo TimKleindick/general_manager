@@ -1,27 +1,20 @@
-from typing import (
-    Callable,
-    Optional,
-    Any,
-    Dict,
-    List,
-    TypeVar,
-    Generic,
-)
+from typing import Callable, Optional, Any, Dict, List, TypeVar, Generic, TYPE_CHECKING
 import ast
 import inspect
 import re
 
-T = TypeVar("T")
+if TYPE_CHECKING:
+    from generalManager.src.interface.baseInterface import GeneralManagerType
 
 
-class Rule(Generic[T]):
+class Rule(Generic[GeneralManagerType]):
     def __init__(
         self,
-        func: Callable[[T], bool],
+        func: Callable[[GeneralManagerType], bool],
         custom_error_message: Optional[str] = None,
         ignore_if_none: bool = True,
     ) -> None:
-        self.__func: Callable[[T], bool] = func
+        self.__func: Callable[[GeneralManagerType], bool] = func
         self.__customErrorMessage: Optional[str] = custom_error_message
         self.__variables: List[str] = self.__extractVariables()
         self.__lastEvaluationResult: Optional[bool] = None
@@ -34,7 +27,7 @@ class Rule(Generic[T]):
         }
 
     @property
-    def func(self) -> Callable[[T], bool]:
+    def func(self) -> Callable[[GeneralManagerType], bool]:
         return self.__func
 
     @property
@@ -57,7 +50,7 @@ class Rule(Generic[T]):
     def ignoreIfNone(self) -> bool:
         return self.__ignoreIfNone
 
-    def evaluate(self, x: T) -> bool | None:
+    def evaluate(self, x: GeneralManagerType) -> bool | None:
         self.__lastEvaluationInput = x
         var_values = self.__extractVariableValues(x)
         if self.__ignoreIfNone:
@@ -163,7 +156,9 @@ class Rule(Generic[T]):
 
         return list(extractor.variables)
 
-    def __extractVariableValues(self, x: T) -> Dict[str, Optional[Any]]:
+    def __extractVariableValues(
+        self, x: GeneralManagerType
+    ) -> Dict[str, Optional[Any]]:
         var_values: dict[str, Any] = {}
         for var in self.__variables:
             parts = var.split(".")

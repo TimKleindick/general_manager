@@ -22,6 +22,7 @@ from generalManager.src.interface.baseInterface import (
     newlyCreatedGeneralManagerClass,
     newlyCreatedInterfaceClass,
     relatedClass,
+    GeneralManagerType,
 )
 from generalManager.src.manager.input import Input
 
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from generalManager.src.manager.meta import GeneralManagerMeta
     from django.contrib.auth.models import AbstractUser
     from generalManager.src.rule.rule import Rule
+
+modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 
 def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
@@ -541,22 +544,19 @@ class DatabaseInterface(DBBasedInterface):
         return instance.pk
 
 
-T1 = TypeVar("T1", bound=models.Model)
-
-
-class DatabaseBucket(Bucket["GeneralManager"]):
+class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __init__(
         self,
-        data: models.QuerySet[T1],
-        manager_class: Type[GeneralManager],
+        data: models.QuerySet[modelsModel],
+        manager_class: Type[GeneralManagerType],
         filter_definitions: dict[str, list[Any]] = {},
     ):
         self._data = data
         self._manager_class = manager_class
         self._filter_definitions = {**filter_definitions}
 
-    def __iter__(self) -> Generator[GeneralManager]:
+    def __iter__(self) -> Generator[GeneralManagerType]:
         for item in self._data:
             yield self._manager_class(item.pk)
 
@@ -582,13 +582,13 @@ class DatabaseBucket(Bucket["GeneralManager"]):
             self._data.exclude(**kwargs), self._manager_class, merged_filter
         )
 
-    def first(self) -> GeneralManager | None:
+    def first(self) -> GeneralManagerType | None:
         first_element = self._data.first()
         if first_element is None:
             return None
         return self._manager_class(first_element.pk)
 
-    def last(self) -> GeneralManager | None:
+    def last(self) -> GeneralManagerType | None:
         first_element = self._data.last()
         if first_element is None:
             return None
@@ -604,7 +604,7 @@ class DatabaseBucket(Bucket["GeneralManager"]):
         element = self._data.get(**kwargs)
         return self._manager_class(element.pk)
 
-    def __getitem__(self, item: int | slice) -> GeneralManager | DatabaseBucket:
+    def __getitem__(self, item: int | slice) -> GeneralManagerType | DatabaseBucket:
         if isinstance(item, slice):
             return self.__class__(self._data[item], self._manager_class)
         return self._manager_class(self._data[item].pk)
@@ -615,7 +615,7 @@ class DatabaseBucket(Bucket["GeneralManager"]):
     def __repr__(self) -> str:
         return f"{self._manager_class.__name__}Bucket ({self._data})"
 
-    def __contains__(self, item: GeneralManager | models.Model) -> bool:
+    def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
         from generalManager.src.manager.generalManager import GeneralManager
 
         if isinstance(item, GeneralManager):
