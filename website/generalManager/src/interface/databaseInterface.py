@@ -11,7 +11,18 @@ from generalManager.src.measurement.measurementField import MeasurementField
 from decimal import Decimal
 from generalManager.src.factory.factories import AutoFactory
 from django.core.exceptions import ValidationError
-from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
+from generalManager.src.interface.baseInterface import (
+    InterfaceBase,
+    Bucket,
+    classPostCreationMethod,
+    classPreCreationMethod,
+    generalManagerClassName,
+    attributes,
+    interfaceBaseClass,
+    newlyCreatedGeneralManagerClass,
+    newlyCreatedInterfaceClass,
+    relatedClass,
+)
 from generalManager.src.manager.input import Input
 
 if TYPE_CHECKING:
@@ -281,8 +292,8 @@ class DBBasedInterface(InterfaceBase):
 
     @staticmethod
     def _preCreate(
-        name: str, attrs: dict[str, Any], interface: Type[DBBasedInterface]
-    ) -> tuple[dict[str, Any], Type[DBBasedInterface], Type[models.Model]]:
+        name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
+    ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Felder aus der Interface-Klasse sammeln
         model_fields: dict[str, Any] = {}
         meta_class = None
@@ -315,7 +326,7 @@ class DBBasedInterface(InterfaceBase):
         # Interface-Typ bestimmen
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(interface.__name__, (interface,), {})
-        interface_cls._model = model
+        setattr(interface_cls, "_model", model)
         attrs["Interface"] = interface_cls
 
         # add factory class
@@ -335,30 +346,17 @@ class DBBasedInterface(InterfaceBase):
 
     @staticmethod
     def _postCreate(
-        mcs: Type[GeneralManagerMeta],
-        new_class: Type[GeneralManager],
-        interface_class: Type[DBBasedInterface],
-        model: Type[GeneralManagerModel],
+        new_class: newlyCreatedGeneralManagerClass,
+        interface_class: newlyCreatedInterfaceClass,
+        model: relatedClass,
     ) -> None:
         interface_class._parent_class = new_class
         setattr(model, "_general_manager_class", new_class)
 
     @classmethod
-    def handleInterface(cls) -> tuple[  # type: ignore
-        Callable[
-            [str, dict[str, Any], Type[DBBasedInterface]],
-            tuple[dict[str, Any], Type[DBBasedInterface], Type[models.Model]],
-        ],
-        Callable[
-            [
-                Type[GeneralManagerMeta],
-                Type[GeneralManager],
-                Type[DBBasedInterface],
-                Type[GeneralManagerModel],
-            ],
-            None,
-        ],
-    ]:
+    def handleInterface(
+        cls,
+    ) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         This method returns a pre and a post GeneralManager creation method
         and is called inside the GeneralManagerMeta class to initialize the
@@ -458,21 +456,7 @@ class ReadOnlyInterface(DBBasedInterface):
         return wrapper
 
     @classmethod
-    def handleInterface(cls) -> tuple[  # type: ignore
-        Callable[
-            [str, dict[str, Any], Type[DBBasedInterface]],
-            tuple[dict[str, Any], Type[DBBasedInterface], Type[models.Model]],
-        ],
-        Callable[
-            [
-                Type[GeneralManagerMeta],
-                Type[GeneralManager],
-                Type[DBBasedInterface],
-                Type[GeneralManagerModel],
-            ],
-            None,
-        ],
-    ]:
+    def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         This method returns a pre and a post GeneralManager creation method
         and is called inside the GeneralManagerMeta class to initialize the

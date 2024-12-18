@@ -26,7 +26,7 @@ class GeneralManagerMeta(type):
             preCreation, postCreation = interface.handleInterface()
             attrs, interface_cls, model = preCreation(name, attrs, interface)
             new_class = super().__new__(mcs, name, bases, attrs)
-            postCreation(mcs, new_class, interface_cls, model)
+            postCreation(new_class, interface_cls, model)
             mcs.pending_attribute_initialization.append(new_class)
             mcs.all_classes.append(new_class)
 

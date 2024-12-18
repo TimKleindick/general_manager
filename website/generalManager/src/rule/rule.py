@@ -156,7 +156,7 @@ class Rule(Generic[T]):
 
         for node in ast.walk(tree):
             for child in ast.iter_child_nodes(node):
-                child.parent = node  # type: ignore
+                setattr(child, "parent", node)
 
         extractor = VariableExtractor()
         extractor.visit(tree)
@@ -371,7 +371,7 @@ class Rule(Generic[T]):
         tree = ast.parse(source)
         func_def = tree.body[0]
         if isinstance(func_def, ast.FunctionDef):
-            return func_def.body[0].value  # type: ignore
+            return getattr(func_def.body[0], "value")
         elif isinstance(func_def, ast.Expr):
             return func_def.value
         return None

@@ -11,7 +11,18 @@ from typing import (
     Generator,
     List,
 )
-from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
+from generalManager.src.interface.baseInterface import (
+    InterfaceBase,
+    Bucket,
+    classPostCreationMethod,
+    classPreCreationMethod,
+    generalManagerClassName,
+    attributes,
+    interfaceBaseClass,
+    newlyCreatedGeneralManagerClass,
+    newlyCreatedInterfaceClass,
+    relatedClass,
+)
 from generalManager.src.manager.input import Input
 
 if TYPE_CHECKING:
@@ -61,8 +72,8 @@ class CalculationInterface(InterfaceBase):
 
     @staticmethod
     def _preCreate(
-        name: str, attrs: dict[str, Any], interface: Type[CalculationInterface]
-    ) -> tuple[dict[str, Any], Type[CalculationInterface], None]:
+        name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
+    ) -> tuple[attributes, interfaceBaseClass, None]:
         # Felder aus der Interface-Klasse sammeln
         input_fields: dict[str, Input[Any]] = {}
         for key, value in vars(interface).items():
@@ -82,29 +93,14 @@ class CalculationInterface(InterfaceBase):
 
     @staticmethod
     def _postCreate(
-        mcs: Type[GeneralManagerMeta],
-        new_class: Type[GeneralManager],
-        interface_class: Type[CalculationInterface],
-        model: None,
+        new_class: newlyCreatedGeneralManagerClass,
+        interface_class: newlyCreatedInterfaceClass,
+        model: relatedClass,
     ) -> None:
         interface_class._parent_class = new_class
 
     @classmethod
-    def handleInterface(cls) -> tuple[  # type: ignore
-        Callable[
-            [str, dict[str, Any], Type[CalculationInterface]],
-            tuple[dict[str, Any], Type[CalculationInterface], None],
-        ],
-        Callable[
-            [
-                Type[GeneralManagerMeta],
-                Type[GeneralManager],
-                Type[CalculationInterface],
-                None,
-            ],
-            None,
-        ],
-    ]:
+    def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         This method returns a pre and a post GeneralManager creation method
         and is called inside the GeneralManagerMeta class to initialize the
