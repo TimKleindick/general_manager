@@ -14,6 +14,7 @@ from typing import (
 
 from datetime import datetime
 from django.conf import settings
+from django.db.models import Model
 from generalManager.src.auxiliary import args_to_kwargs
 
 if TYPE_CHECKING:
@@ -21,7 +22,23 @@ if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
     from generalManager.src.manager.meta import GeneralManagerMeta
 
-T = TypeVar("T")
+GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+type generalManagerClassName = str
+type attributes = dict[str, Any]
+type interfaceBaseClass = Type[InterfaceBase]
+type newlyCreatedInterfaceClass = Type[InterfaceBase]
+type relatedClass = Type[Model] | None
+type newlyCreatedGeneralManagerClass = Type[GeneralManager]
+
+type classPreCreationMethod = Callable[
+    [generalManagerClassName, attributes, interfaceBaseClass],
+    tuple[attributes, interfaceBaseClass, relatedClass],
+]
+
+type classPostCreationMethod = Callable[
+    [newlyCreatedGeneralManagerClass, newlyCreatedInterfaceClass, relatedClass],
+    None,
+]
 
 
 class InterfaceBase(ABC):
@@ -145,19 +162,8 @@ class InterfaceBase(ABC):
     def handleInterface(
         cls,
     ) -> tuple[
-        Callable[
-            [str, dict[str, Any], Type[InterfaceBase]],
-            tuple[dict[str, Any], Type[InterfaceBase], Type[Any]],
-        ],
-        Callable[
-            [
-                Type[GeneralManagerMeta],
-                Type[GeneralManager],
-                Type[InterfaceBase],
-                Type[Any],
-            ],
-            None,
-        ],
+        classPreCreationMethod,
+        classPostCreationMethod,
     ]:
         """
         This method returns a pre and a post GeneralManager creation method
@@ -171,7 +177,7 @@ class InterfaceBase(ABC):
         raise NotImplementedError
 
 
-class Bucket(ABC, Generic[T]):
+class Bucket(ABC, Generic[GeneralManagerType]):
 
     def __init__(self, manager_class: Type[GeneralManager]):
         self._manager_class = manager_class
@@ -182,23 +188,23 @@ class Bucket(ABC, Generic[T]):
             return False
         return self._data == other._data and self._manager_class == other._manager_class
 
-    def __iter__(self) -> Generator[T]:
+    def __iter__(self) -> Generator[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
-    def filter(self, **kwargs: Any) -> Bucket[T]:
+    def filter(self, **kwargs: Any) -> Bucket[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
-    def exclude(self, **kwargs: Any) -> Bucket[T]:
+    def exclude(self, **kwargs: Any) -> Bucket[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
-    def first(self) -> T | None:
+    def first(self) -> GeneralManagerType | None:
         raise NotImplementedError
 
     @abstractmethod
-    def last(self) -> T | None:
+    def last(self) -> GeneralManagerType | None:
         raise NotImplementedError
 
     @abstractmethod
@@ -206,15 +212,17 @@ class Bucket(ABC, Generic[T]):
         raise NotImplementedError
 
     @abstractmethod
-    def all(self) -> Bucket[T]:
+    def all(self) -> Bucket[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
-    def get(self, **kwargs: Any) -> T:
+    def get(self, **kwargs: Any) -> GeneralManagerType:
         raise NotImplementedError
 
     @abstractmethod
-    def __getitem__(self, item: int | slice) -> T | Bucket[T]:
+    def __getitem__(
+        self, item: int | slice
+    ) -> GeneralManagerType | Bucket[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
@@ -222,5 +230,5 @@ class Bucket(ABC, Generic[T]):
         raise NotImplementedError
 
     @abstractmethod
-    def __contains__(self, item: T) -> bool:
+    def __contains__(self, item: GeneralManagerType) -> bool:
         raise NotImplementedError
