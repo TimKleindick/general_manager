@@ -4,10 +4,12 @@ import inspect
 import re
 
 if TYPE_CHECKING:
-    from generalManager.src.interface.baseInterface import GeneralManagerType
+    from generalManager.src.manager.generalManager import GeneralManager
+
+    GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
 
-class Rule(Generic[GeneralManagerType]):
+class Rule[GeneralManagerType]:
     def __init__(
         self,
         func: Callable[[GeneralManagerType], bool],
