@@ -15,8 +15,9 @@ from datetime import date, datetime, time
 if TYPE_CHECKING:
     from generalManager.src.interface.databaseInterface import (
         DBBasedInterface,
-        modelsModel,
     )
+
+modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 
 class AutoFactory(DjangoModelFactory[modelsModel]):
