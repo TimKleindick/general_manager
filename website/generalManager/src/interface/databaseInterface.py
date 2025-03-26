@@ -600,7 +600,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def all(self) -> DatabaseBucket:
         return self.__class__(self._data.all(), self._manager_class)
 
-    def get(self, **kwargs: Any) -> GeneralManager:
+    def get(self, **kwargs: Any) -> GeneralManagerType:
         element = self._data.get(**kwargs)
         return self._manager_class(element.pk)
 

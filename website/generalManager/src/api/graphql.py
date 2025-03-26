@@ -163,8 +163,12 @@ class GraphQL:
 
     @classmethod
     def __add_queries_to_schema(
-        cls, graphene_type: type, generalManagerClass: type[GeneralManager]
+        cls, graphene_type: type, generalManagerClass: GeneralManagerMeta
     ):
+        if not issubclass(generalManagerClass, GeneralManager):
+            raise TypeError(
+                "generalManagerClass must be a subclass of GeneralManager to create a GraphQL interface"
+            )
         # Sammeln der Felder
         if not hasattr(cls, "_query_fields"):
             cls._query_fields: dict[str, Any] = {}
