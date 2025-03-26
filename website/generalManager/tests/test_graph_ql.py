@@ -50,8 +50,9 @@ class GraphQLTests(TestCase):
     def test_create_graphql_interface_no_interface(self, mock_interface):
         # Test case where no Interface is present
         self.general_manager_class.Interface = None
-        result = GraphQL._createGraphQlInterface(self.general_manager_class)
-        self.assertIsNone(result)
+        with patch("generalManager.src.api.graphql.issubclass", return_value=True):
+            result = GraphQL._createGraphQlInterface(self.general_manager_class)
+            self.assertIsNone(result)
 
     @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_with_interface(self, mock_interface):
@@ -61,8 +62,9 @@ class GraphQLTests(TestCase):
             "int_field": int,
         }
         self.general_manager_class.Interface = mock_interface
-        GraphQL._createGraphQlInterface(self.general_manager_class)
-        self.assertIn("TestManager", GraphQL.graphql_type_registry)
+        with patch("generalManager.src.api.graphql.issubclass", return_value=True):
+            GraphQL._createGraphQlInterface(self.general_manager_class)
+            self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_map_field_to_graphene(self):
         # Test type mappings
@@ -145,39 +147,37 @@ class GraphQLTests(TestCase):
                 return []
 
         graphene_type = MagicMock()
-        GraphQL._GraphQL__add_queries_to_schema(graphene_type, TestGeneralManager)  # type: ignore
+        with patch("generalManager.src.api.graphql.issubclass", return_value=True):
+            GraphQL._GraphQL__add_queries_to_schema(graphene_type, TestGeneralManager)  # type: ignore
 
-        self.assertIn("testgeneralmanager_list", GraphQL._query_fields)
-        self.assertIn("resolve_testgeneralmanager_list", GraphQL._query_fields)
-        self.assertIn("testgeneralmanager", GraphQL._query_fields)
-        self.assertIn("resolve_testgeneralmanager", GraphQL._query_fields)
-
-
-class GraphQLAdditionalTests(TestCase):
-    def setUp(self):
-        # Setup mock general manager class
-        self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
-        self.general_manager_class.__name__ = "TestManager"
+            self.assertIn("testgeneralmanager_list", GraphQL._query_fields)
+            self.assertIn("resolve_testgeneralmanager_list", GraphQL._query_fields)
+            self.assertIn("testgeneralmanager", GraphQL._query_fields)
+            self.assertIn("resolve_testgeneralmanager", GraphQL._query_fields)
 
     @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):
-        # Test with a class having GraphQLProperty attributes
-        mock_interface.getAttributeTypes.return_value = {
-            "test_field": str,
-        }
-        self.general_manager_class.Interface = mock_interface
+        # Patch den issubclass-Check in dem graphql-Modul, sodass er immer True zurückgibt.
+        with patch("generalManager.src.api.graphql.issubclass", return_value=True):
+            # Konfiguriere das Mock für InterfaceBase
+            mock_interface.getAttributeTypes.return_value = {"test_field": str}
+            self.general_manager_class.Interface = mock_interface
 
-        def graphql_property_func() -> int:
-            return 42
+            # Füge ein GraphQLProperty-Attribut hinzu
+            def graphql_property_func() -> int:
+                return 42
 
-        setattr(
-            self.general_manager_class,
-            "test_prop",
-            GraphQLProperty(graphql_property_func),
-        )
-        GraphQL._createGraphQlInterface(self.general_manager_class)
+            setattr(
+                self.general_manager_class,
+                "test_prop",
+                GraphQLProperty(graphql_property_func),
+            )
 
-        self.assertIn("TestManager", GraphQL.graphql_type_registry)
+            # Aufruf der zu testenden Methode
+            GraphQL._createGraphQlInterface(self.general_manager_class)
+
+            # Prüfe, ob der erwartete GraphQL-Typ registriert wurde
+            self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_map_field_to_graphene_general_manager(self):
         # Test field mapping for a GeneralManager type with list suffix
@@ -215,8 +215,9 @@ class GraphQLAdditionalTests(TestCase):
                 return ["item1", "item2"]
 
         graphene_type = MagicMock()
-        GraphQL._GraphQL__add_queries_to_schema(graphene_type, TestGeneralManager)  # type: ignore
+        with patch("generalManager.src.api.graphql.issubclass", return_value=True):
+            GraphQL._GraphQL__add_queries_to_schema(graphene_type, TestGeneralManager)  # type: ignore
 
-        resolve_list_func = GraphQL._query_fields["resolve_testgeneralmanager_list"]
-        result = resolve_list_func(self, None)
-        self.assertEqual(result, ["item1", "item2"])
+            resolve_list_func = GraphQL._query_fields["resolve_testgeneralmanager_list"]
+            result = resolve_list_func(self, None)
+            self.assertEqual(result, ["item1", "item2"])

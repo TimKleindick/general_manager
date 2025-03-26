@@ -1,5 +1,5 @@
 from typing import Any
-from factory import LazyFunction, LazyAttribute, LazyAttributeSequence
+from factory.declarations import LazyFunction, LazyAttribute, LazyAttributeSequence
 import random
 from generalManager.src.measurement.measurement import Measurement
 from datetime import timedelta, date

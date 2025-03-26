@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Type, Callable, Union, Any, TypeVar, Literal, cast
-import factory
+from factory.declarations import LazyFunction, LazyAttribute, LazyAttributeSequence
+from factory.faker import Faker
 import exrex  # type: ignore
 from django.db import models
 from django.core.validators import RegexValidator
@@ -167,7 +168,7 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
     if isinstance(field, MeasurementField):
         base_unit = field.base_unit
         value = Decimal(str(random.uniform(0, 10_000))[:10])
-        return factory.LazyFunction(lambda: Measurement(value, base_unit))
+        return LazyFunction(lambda: Measurement(value, base_unit))
     elif isinstance(field, models.CharField):
         max_length = field.max_length or 100
         # Check for RegexValidator
@@ -178,20 +179,20 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
                 break
         if regex:
             # Use exrex to generate a string matching the regex
-            return factory.LazyFunction(lambda: exrex.getone(regex))  # type: ignore
+            return LazyFunction(lambda: exrex.getone(regex))  # type: ignore
         else:
-            return cast(str, factory.Faker("text", max_nb_chars=max_length))
+            return cast(str, Faker("text", max_nb_chars=max_length))
     elif isinstance(field, models.TextField):
-        return cast(str, factory.Faker("paragraph"))
+        return cast(str, Faker("paragraph"))
     elif isinstance(field, models.IntegerField):
-        return cast(int, factory.Faker("random_int"))
+        return cast(int, Faker("random_int"))
     elif isinstance(field, models.DecimalField):
         max_digits = field.max_digits
         decimal_places = field.decimal_places
         left_digits = max_digits - decimal_places
         return cast(
             Decimal,
-            factory.Faker(
+            Faker(
                 "pydecimal",
                 left_digits=left_digits,
                 right_digits=decimal_places,
@@ -199,15 +200,13 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
             ),
         )
     elif isinstance(field, models.FloatField):
-        return cast(float, factory.Faker("pyfloat", positive=True))
+        return cast(float, Faker("pyfloat", positive=True))
     elif isinstance(field, models.DateField):
-        return cast(
-            date, factory.Faker("date_between", start_date="-1y", end_date="today")
-        )
+        return cast(date, Faker("date_between", start_date="-1y", end_date="today"))
     elif isinstance(field, models.DateTimeField):
         return cast(
             datetime,
-            factory.Faker(
+            Faker(
                 "date_time_between",
                 start_date="-1y",
                 end_date="now",
@@ -215,7 +214,7 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
             ),
         )
     elif isinstance(field, models.BooleanField):
-        return cast(bool, factory.Faker("pybool"))
+        return cast(bool, Faker("pybool"))
     elif isinstance(field, models.ForeignKey):
         # Create or get an instance of the related model
         if hasattr(field.related_model, "_general_manager_class"):
@@ -225,7 +224,7 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
             # If no factory exists, pick a random existing instance
             related_instances = list(field.related_model.objects.all())
             if related_instances:
-                return factory.LazyFunction(lambda: random.choice(related_instances))
+                return LazyFunction(lambda: random.choice(related_instances))
             else:
                 raise ValueError(
                     f"No factory found for {field.related_model.__name__} and no instances found"
@@ -239,21 +238,21 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
             # If no factory exists, pick a random existing instance
             related_instances = list(field.related_model.objects.all())
             if related_instances:
-                return factory.LazyFunction(lambda: random.choice(related_instances))
+                return LazyFunction(lambda: random.choice(related_instances))
             else:
                 raise ValueError(
                     f"No factory found for {field.related_model.__name__} and no instances found"
                 )
     elif isinstance(field, models.EmailField):
-        return cast(str, factory.Faker("email"))
+        return cast(str, Faker("email"))
     elif isinstance(field, models.URLField):
-        return cast(str, factory.Faker("url"))
+        return cast(str, Faker("url"))
     elif isinstance(field, models.GenericIPAddressField):
-        return cast(str, factory.Faker("ipv4"))
+        return cast(str, Faker("ipv4"))
     elif isinstance(field, models.UUIDField):
-        return cast(str, factory.Faker("uuid4"))
+        return cast(str, Faker("uuid4"))
     elif isinstance(field, models.DurationField):
-        return cast(time, factory.Faker("time_delta"))
+        return cast(time, Faker("time_delta"))
     else:
         return None  # For unsupported field types
 

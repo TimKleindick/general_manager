@@ -28,7 +28,7 @@ type attributes = dict[str, Any]
 type interfaceBaseClass = Type[InterfaceBase]
 type newlyCreatedInterfaceClass = Type[InterfaceBase]
 type relatedClass = Type[Model] | None
-type newlyCreatedGeneralManagerClass = Type[GeneralManager]
+type newlyCreatedGeneralManagerClass = GeneralManagerMeta
 
 type classPreCreationMethod = Callable[
     [generalManagerClassName, attributes, interfaceBaseClass],

@@ -11,10 +11,10 @@ if TYPE_CHECKING:
 
 
 class GeneralManagerMeta(type):
-    all_classes: list[Type[GeneralManager]] = []
+    all_classes: list[GeneralManagerMeta] = []
     read_only_classes: list[Type[ReadOnlyInterface]] = []
-    pending_graphql_interfaces: list[Type[GeneralManager]] = []
-    pending_attribute_initialization: list[Type[GeneralManager]] = []
+    pending_graphql_interfaces: list[GeneralManagerMeta] = []
+    pending_attribute_initialization: list[GeneralManagerMeta] = []
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         if "Interface" in attrs:
