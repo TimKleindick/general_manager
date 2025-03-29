@@ -2,7 +2,7 @@ from __future__ import annotations
 import random
 import numpy as np
 from datetime import date
-from typing import Optional, Any
+from typing import Optional, cast, Any
 from django.db.models import (
     CharField,
     TextField,
@@ -19,6 +19,7 @@ from generalManager.src.interface import (
     CalculationInterface,
 )
 from generalManager.src.manager import GeneralManager, graphQlProperty, Input
+from generalManager.src.permission import ManagerBasedPermission
 from generalManager.src.measurement import (
     MeasurementField,
     Measurement,
@@ -55,8 +56,10 @@ class Project(GeneralManager):
             ]
 
             rules = [
-                Rule["Project"](lambda x: x.start_date < x.end_date),
-                Rule["Project"](lambda x: x.total_capex >= "0 EUR"),
+                Rule["Project"](
+                    lambda x: cast(date, x.start_date) < cast(date, x.end_date)
+                ),
+                Rule["Project"](lambda x: cast(Measurement, x.total_capex) >= "0 EUR"),
             ]
 
         class Factory:
@@ -64,13 +67,13 @@ class Project(GeneralManager):
             end_date = LazyDeltaDate(365 * 6, "start_date")
             total_capex = LazyMeasurement(75_000, 1_000_000, "EUR")
 
-    # class Permission(ManagerBasedPermission):
-    #     __read__ = ["public"]
-    #     __create__ = ["admin", "isMatchingKeyAccount"]
-    #     __update__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
-    #     __delete__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
+    class Permission(ManagerBasedPermission):
+        __read__ = ["ends_with:name:X-771"]
+        __create__ = ["admin", "isMatchingKeyAccount"]
+        __update__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
+        __delete__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
 
-    #     total_capex = {"update": ["isSalesResponsible", "isProjectManager"]}
+        total_capex = {"update": ["isSalesResponsible", "isProjectManager"]}
 
 
 class Derivative(GeneralManager):
@@ -95,7 +98,7 @@ class Derivative(GeneralManager):
         return self.estimated_weight * self.estimated_volume
 
     # class Permission(ManagerBasedPermission):
-    #     __based_on__ = project
+    #     __based_on__ = "project"
 
 
 def generate_volume_distribution(years: int, total_volume: float) -> list[float]:
@@ -110,7 +113,7 @@ def generate_volume_distribution(years: int, total_volume: float) -> list[float]
         )
 
     volumes = volumes / np.sum(volumes) * total_volume
-    return volumes.tolist()
+    return cast(list[float], volumes.tolist())
 
 
 def generateVolume(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
