@@ -176,6 +176,14 @@ class InterfaceBase(ABC):
         """
         raise NotImplementedError
 
+    @classmethod
+    @abstractmethod
+    def getFieldType(cls, field_name: str) -> type:
+        """
+        Returns the type of the field with the given name.
+        """
+        raise NotImplementedError
+
 
 class Bucket(ABC, Generic[GeneralManagerType]):
 

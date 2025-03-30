@@ -1,6 +1,15 @@
 from __future__ import annotations
 import json
-from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, Generator, TypeVar
+from typing import (
+    Type,
+    ClassVar,
+    Any,
+    Callable,
+    TYPE_CHECKING,
+    Generator,
+    TypeVar,
+    cast,
+)
 from django.db import models, transaction
 from django.contrib.auth import get_user_model
 from simple_history.utils import update_change_reason  # type: ignore
@@ -370,6 +379,16 @@ class DBBasedInterface(InterfaceBase):
         is created to modify the instance and add additional data.
         """
         return cls._preCreate, cls._postCreate
+
+    @classmethod
+    def getFieldType(cls, field_name: str) -> type:
+        """
+        This method returns the field type for the given field name.
+        """
+        field = cls._model._meta.get_field(field_name)
+        if field.is_relation and field.related_model:
+            return field.related_model._general_manager_class
+        return type(field)
 
 
 class ReadOnlyInterface(DBBasedInterface):
