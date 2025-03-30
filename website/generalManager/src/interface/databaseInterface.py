@@ -582,6 +582,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def __or__(self, other: object) -> Bucket[GeneralManagerType]:
         if not isinstance(other, self.__class__):
             raise ValueError("Cannot combine different bucket types")
+        if self._manager_class != other._manager_class:
+            raise ValueError("Cannot combine different bucket managers")
         return self.__class__(
             self._data | other._data,
             self._manager_class,

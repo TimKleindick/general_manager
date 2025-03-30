@@ -187,7 +187,7 @@ class InterfaceBase(ABC):
 
 class Bucket(ABC, Generic[GeneralManagerType]):
 
-    def __init__(self, manager_class: Type[GeneralManager]):
+    def __init__(self, manager_class: Type[GeneralManagerType]):
         self._manager_class = manager_class
         self._data = None
 
