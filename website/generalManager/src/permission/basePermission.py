@@ -45,7 +45,7 @@ class BasePermission(ABC):
 
     def getPermissionFilter(
         self,
-    ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
+    ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         """
         Returns the filter for the permission
         """

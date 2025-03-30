@@ -137,41 +137,35 @@ class ManagerBasedPermission(BasePermission):
 
     def getPermissionFilter(
         self,
-    ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
+    ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         """
         Returns the filter for the permission
         """
         __based_on__ = getattr(self, "__based_on__")
-        filters: dict[Literal["filter", "exclude"], dict[str, str]] = {
-            "filter": {},
-            "exclude": {},
-        }
+        filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
+
         if self.__based_on_permission is not None:
             base_permissions = self.__based_on_permission.getPermissionFilter()
-            base_filters = base_permissions.get("filter", {})
-            base_exclude = base_permissions.get("exclude", {})
+            for permission in base_permissions:
+                filter = permission.get("filter", {})
+                exclude = permission.get("exclude", {})
+                filters.append(
+                    {
+                        "filter": {
+                            f"{__based_on__}__{key}": value
+                            for key, value in filter.items()
+                        },
+                        "exclude": {
+                            f"{__based_on__}__{key}": value
+                            for key, value in exclude.items()
+                        },
+                    }
+                )
 
-            filters = {
-                "filter": {
-                    f"{__based_on__}__{key}": value
-                    for key, value in base_filters.items()
-                },
-                "exclude": {
-                    f"{__based_on__}__{key}": value
-                    for key, value in base_exclude.items()
-                },
-            }
         for permission in self.__read__:
             filter = self._getPermissionFilter(permission)
             if filter is None:
                 continue
-            filters["filter"] = {
-                **filters["filter"],
-                **filter.get("filter", {}),
-            }
-            filters["exclude"] = {
-                **filters["exclude"],
-                **filter.get("exclude", {}),
-            }
+            filters.append(filter)
 
         return filters

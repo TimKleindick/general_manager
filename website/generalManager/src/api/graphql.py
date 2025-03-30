@@ -207,21 +207,22 @@ class GraphQL:
         def get_read_permission_filter(
             generalManagerClass: GeneralManagerMeta,
             info: GraphQLResolveInfo,
-        ) -> tuple[dict[str, Any], dict[str, Any]]:
-            filter_dict, exclude_dict = {}, {}
+        ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+            filters = []
             PermissionClass: type[BasePermission] | None = getattr(
                 generalManagerClass, "Permission", None
             )
             if PermissionClass:
-                permission_filter = PermissionClass(
+                permission_filters = PermissionClass(
                     generalManagerClass, info.context.user
                 ).getPermissionFilter()
-                if permission_filter:
+                for permission_filter in permission_filters:
                     filter_dict, exclude_dict = (
                         permission_filter.get("filter", {}),
                         permission_filter.get("exclude", {}),
                     )
-            return filter_dict, exclude_dict
+                    filters.append((filter_dict, exclude_dict))
+            return filters
 
         def resolve_list(
             self: GeneralManager,
@@ -229,12 +230,18 @@ class GraphQL:
             filter: dict[str, Any] | str | None = None,
             exclude: dict[str, Any] | str | None = None,
         ):
-            permission_filter_dict, permission_exclude_dict = (
-                get_read_permission_filter(generalManagerClass, info)
-            )
-            queryset = generalManagerClass.exclude(**permission_exclude_dict).filter(
-                **permission_filter_dict
-            )
+            queryset = None
+            permission_list = get_read_permission_filter(generalManagerClass, info)
+            for permission_filter_dict, permission_exclude_dict in permission_list:
+                permission_queryset = generalManagerClass.exclude(
+                    **permission_exclude_dict
+                ).filter(**permission_filter_dict)
+                if queryset is None:
+                    queryset = permission_queryset
+                else:
+                    queryset = queryset | permission_queryset
+            if queryset is None:
+                queryset = generalManagerClass.all()
             if filter:
                 filter_dict = json.loads(filter) if isinstance(filter, str) else filter
                 queryset = queryset.filter(**filter_dict)
