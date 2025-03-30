@@ -196,6 +196,10 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             return False
         return self._data == other._data and self._manager_class == other._manager_class
 
+    @abstractmethod
+    def __or__(self, other: object) -> Bucket[GeneralManagerType]:
+        raise NotImplementedError
+
     def __iter__(self) -> Generator[GeneralManagerType]:
         raise NotImplementedError
 

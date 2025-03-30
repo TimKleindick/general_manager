@@ -579,6 +579,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         for item in self._data:
             yield self._manager_class(item.pk)
 
+    def __or__(self, other: object) -> Bucket[GeneralManagerType]:
+        if not isinstance(other, self.__class__):
+            raise ValueError("Cannot combine different bucket types")
+        return self.__class__(
+            self._data | other._data,
+            self._manager_class,
+            {},
+        )
+
     def __mergeFilterDefinitions(self, **kwargs: Any) -> dict[str, list[Any]]:
         kwarg_filter: dict[str, list[Any]] = {}
         for key, value in self._filter_definitions.items():
