@@ -68,7 +68,7 @@ class Project(GeneralManager):
             total_capex = LazyMeasurement(75_000, 1_000_000, "EUR")
 
     class Permission(ManagerBasedPermission):
-        __read__ = ["ends_with:name:X-771"]
+        __read__ = ["ends_with:name:X-771", "public"]
         __create__ = ["admin", "isMatchingKeyAccount"]
         __update__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
         __delete__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
@@ -97,8 +97,10 @@ class Derivative(GeneralManager):
             return None
         return self.estimated_weight * self.estimated_volume
 
-    # class Permission(ManagerBasedPermission):
-    #     __based_on__ = "project"
+    class Permission(ManagerBasedPermission):
+        __based_on__ = "project"
+
+        name = {"read": ["ends_with:name:AAA"]}
 
 
 def generate_volume_distribution(years: int, total_volume: float) -> list[float]:
