@@ -22,6 +22,7 @@ from generalManager.src.interface.baseInterface import (
     newlyCreatedGeneralManagerClass,
     newlyCreatedInterfaceClass,
     relatedClass,
+    GeneralManagerType,
 )
 from generalManager.src.manager.input import Input
 
@@ -123,10 +124,10 @@ class CalculationInterface(InterfaceBase):
         return input.type
 
 
-class CalculationBucket(Bucket["GeneralManager"]):
+class CalculationBucket(Bucket[GeneralManagerType]):
     def __init__(
         self,
-        manager_class: Type[GeneralManager],
+        manager_class: Type[GeneralManagerType],
         filter_definitions: Optional[dict[str, dict]] = None,
         exclude_definitions: Optional[dict[str, dict]] = None,
     ):
@@ -145,6 +146,30 @@ class CalculationBucket(Bucket["GeneralManager"]):
         self.filters = {} if filter_definitions is None else filter_definitions
         self.excludes = {} if exclude_definitions is None else exclude_definitions
         self.__current_combinations = None
+
+    def __or__(self, other: object) -> CalculationBucket[GeneralManagerType]:
+        if not isinstance(other, self.__class__):
+            raise ValueError("Cannot combine different bucket types")
+        if self._manager_class != other._manager_class:
+            raise ValueError("Cannot combine different manager classes")
+
+        combined_filters = {
+            key: value
+            for key, value in self.filters.items()
+            if key in other.filters and value == other.filters[key]
+        }
+
+        combined_excludes = {
+            key: value
+            for key, value in self.excludes.items()
+            if key in other.excludes and value == other.excludes[key]
+        }
+
+        return CalculationBucket(
+            self._manager_class,
+            combined_filters,
+            combined_excludes,
+        )
 
     def __str__(self) -> str:
         PRINT_MAX = 5
@@ -177,7 +202,7 @@ class CalculationBucket(Bucket["GeneralManager"]):
     def all(self) -> CalculationBucket:
         return self
 
-    def __iter__(self) -> Generator[GeneralManager, None, None]:
+    def __iter__(self) -> Generator[GeneralManagerType]:
         combinations = self.generate_combinations()
         for combo in combinations:
             yield self._manager_class(**combo)
@@ -382,13 +407,13 @@ class CalculationBucket(Bucket["GeneralManager"]):
 
         return list(helper(0, {}))
 
-    def first(self) -> GeneralManager | None:
+    def first(self) -> GeneralManagerType | None:
         try:
             return next(iter(self))
         except StopIteration:
             return None
 
-    def last(self) -> GeneralManager | None:
+    def last(self) -> GeneralManagerType | None:
         items = list(self)
         if items:
             return items[-1]
@@ -400,7 +425,9 @@ class CalculationBucket(Bucket["GeneralManager"]):
     def __len__(self) -> int:
         return self.count()
 
-    def __getitem__(self, item: int | slice) -> GeneralManager | CalculationBucket:
+    def __getitem__(
+        self, item: int | slice
+    ) -> GeneralManagerType | CalculationBucket[GeneralManagerType]:
         items = self.generate_combinations()
         result = items[item]
         if isinstance(result, list):
@@ -410,10 +437,10 @@ class CalculationBucket(Bucket["GeneralManager"]):
             return new_bucket
         return self._manager_class(**result)
 
-    def __contains__(self, item: GeneralManager) -> bool:
+    def __contains__(self, item: GeneralManagerType) -> bool:
         return item in list(self)
 
-    def get(self, **kwargs: Any) -> GeneralManager:
+    def get(self, **kwargs: Any) -> GeneralManagerType:
         filtered_bucket = self.filter(**kwargs)
         items = list(filtered_bucket)
         if len(items) == 1:
