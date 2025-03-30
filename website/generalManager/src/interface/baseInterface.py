@@ -176,6 +176,14 @@ class InterfaceBase(ABC):
         """
         raise NotImplementedError
 
+    @classmethod
+    @abstractmethod
+    def getFieldType(cls, field_name: str) -> type:
+        """
+        Returns the type of the field with the given name.
+        """
+        raise NotImplementedError
+
 
 class Bucket(ABC, Generic[GeneralManagerType]):
 
@@ -187,6 +195,10 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         if not isinstance(other, self.__class__):
             return False
         return self._data == other._data and self._manager_class == other._manager_class
+
+    @abstractmethod
+    def __or__(self, other: object) -> Bucket[GeneralManagerType]:
+        raise NotImplementedError
 
     def __iter__(self) -> Generator[GeneralManagerType]:
         raise NotImplementedError

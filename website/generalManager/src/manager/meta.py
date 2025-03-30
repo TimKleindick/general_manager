@@ -39,16 +39,27 @@ class GeneralManagerMeta(type):
         return new_class
 
     @staticmethod
-    def createAtPropertiesForAttributes(attributes: dict[str, Any], new_class: type):
+    def createAtPropertiesForAttributes(
+        attributes: dict[str, Any], new_class: Type[GeneralManager]
+    ):
 
-        def propertyMethod(attr_name: str) -> property:
-            def getter(self: GeneralManager):
-                attribute = self._attributes[attr_name]
-                if callable(attribute):
-                    return attribute(self._interface)
-                return attribute
+        def desciptorMethod(attr_name: str, new_class: type):
+            class Descriptor:
+                def __init__(self, attr_name: str, new_class: Type[GeneralManager]):
+                    self.attr_name = attr_name
+                    self.new_class = new_class
 
-            return property(getter)
+                def __get__(
+                    self, instance: GeneralManager | None, owner: type | None = None
+                ):
+                    if instance is None:
+                        return self.new_class.Interface.getFieldType(self.attr_name)
+                    attribute = instance._attributes[attr_name]
+                    if callable(attribute):
+                        return attribute(instance._interface)
+                    return attribute
+
+            return Descriptor(attr_name, new_class)
 
         for attr_name in attributes.keys():
-            setattr(new_class, attr_name, propertyMethod(attr_name))
+            setattr(new_class, attr_name, desciptorMethod(attr_name, new_class))
