@@ -119,12 +119,15 @@ class ManagerBasedPermission(BasePermission):
             last_result = self.__overall_results.get(action)
             if last_result is not None:
                 return last_result
+            attribute_permission = True
         else:
-            permissions = permissions + self.__attribute_permissions[attriubte][action]
+            attribute_permission = self.__checkSpecificPermission(
+                self.__attribute_permissions[attriubte][action]
+            )
 
-        result = self.__checkSpecificPermission(permissions)
-        self.__overall_results[action] = result
-        return result
+        permission = self.__checkSpecificPermission(permissions)
+        self.__overall_results[action] = permission
+        return permission and attribute_permission
 
     def __checkSpecificPermission(
         self,
