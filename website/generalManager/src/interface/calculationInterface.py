@@ -112,6 +112,16 @@ class CalculationInterface(InterfaceBase):
         """
         return cls._preCreate, cls._postCreate
 
+    @classmethod
+    def getFieldType(cls, field_name: str) -> type:
+        """
+        This method returns the field type for the given field name.
+        """
+        input = cls.input_fields.get(field_name)
+        if input is None:
+            raise ValueError(f"Field '{field_name}' not found in input fields.")
+        return input.type
+
 
 class CalculationBucket(Bucket["GeneralManager"]):
     def __init__(

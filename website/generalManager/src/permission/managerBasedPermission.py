@@ -44,16 +44,18 @@ class ManagerBasedPermission(BasePermission):
     def __getBasedOnPermission(self) -> Optional[BasePermission]:
         from generalManager.src.manager.generalManager import GeneralManager
 
-        __based_on__ = getattr(self, "__based_on__", None)
+        __based_on__ = getattr(self, "__based_on__")
         if __based_on__ is None:
             return None
 
-        basis_object = getattr(self.__instance, __based_on__, None)
+        basis_object = getattr(self.instance, __based_on__, None)
         if basis_object is None:
             raise ValueError(
                 f"Based on object {__based_on__} not found in instance {self.__instance}"
             )
-        if not isinstance(basis_object, GeneralManager):
+        if not isinstance(basis_object, GeneralManager) and not issubclass(
+            basis_object, GeneralManager
+        ):
             raise TypeError(f"Based on object {__based_on__} is not a GeneralManager")
 
         Permission = getattr(basis_object, "Permission", None)
@@ -139,10 +141,37 @@ class ManagerBasedPermission(BasePermission):
         """
         Returns the filter for the permission
         """
-        filters = {}
+        __based_on__ = getattr(self, "__based_on__")
+        filters: dict[Literal["filter", "exclude"], dict[str, str]] = {
+            "filter": {},
+            "exclude": {},
+        }
+        if self.__based_on_permission is not None:
+            base_permissions = self.__based_on_permission.getPermissionFilter()
+            base_filters = base_permissions.get("filter", {})
+            base_exclude = base_permissions.get("exclude", {})
+
+            filters = {
+                "filter": {
+                    f"{__based_on__}__{key}": value
+                    for key, value in base_filters.items()
+                },
+                "exclude": {
+                    f"{__based_on__}__{key}": value
+                    for key, value in base_exclude.items()
+                },
+            }
         for permission in self.__read__:
             filter = self._getPermissionFilter(permission)
-            if filter is not None:
-                filters.update(filter)
+            if filter is None:
+                continue
+            filters["filter"] = {
+                **filters["filter"],
+                **filter.get("filter", {}),
+            }
+            filters["exclude"] = {
+                **filters["exclude"],
+                **filter.get("exclude", {}),
+            }
 
         return filters
