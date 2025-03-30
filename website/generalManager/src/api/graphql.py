@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from generalManager.src.interface.baseInterface import (
         InterfaceBase,
     )
+    from generalManager.src.permission.basePermission import BasePermission
+    from graphene import ResolveInfo as GraphQLResolveInfo
 
 
 class MeasurementType(graphene.ObjectType):  # type: ignore
@@ -112,11 +114,26 @@ class GraphQL:
     def __create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
         from generalManager.src.manager.generalManager import GeneralManager
 
+        def check_read_permission(
+            self: GeneralManager,
+            info: GraphQLResolveInfo,
+            field_name: str,
+        ) -> bool:
+            PermissionClass: type[BasePermission] | None = getattr(
+                self, "Permission", None
+            )
+            if PermissionClass:
+                permission_allowed = PermissionClass(
+                    self, info.context.user
+                ).checkPermission("read", field_name)
+                return permission_allowed
+            return True
+
         if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
 
             def list_resolver(
                 self: GeneralManager,
-                info: str,
+                info: GraphQLResolveInfo,
                 filter: dict[str, Any] | str | None = None,
                 exclude: dict[str, Any] | str | None = None,
             ):
@@ -142,8 +159,13 @@ class GraphQL:
         if issubclass(field_type, Measurement):
 
             def measurement_resolver(
-                self: GeneralManager, info: str, target_unit: str | None = None
+                self: GeneralManager,
+                info: GraphQLResolveInfo,
+                target_unit: str | None = None,
             ) -> dict[str, Any] | None:
+                has_permision = check_read_permission(self, info, field_name)
+                if not has_permision:
+                    return None
                 result = getattr(self, field_name)
                 if not isinstance(result, Measurement):
                     return None
@@ -156,7 +178,10 @@ class GraphQL:
 
             return measurement_resolver
 
-        def normal_resolver(self: GeneralManager, info: str) -> Any:
+        def normal_resolver(self: GeneralManager, info: GraphQLResolveInfo) -> Any:
+            has_permision = check_read_permission(self, info, field_name)
+            if not has_permision:
+                return None
             return getattr(self, field_name)
 
         return normal_resolver
@@ -179,13 +204,44 @@ class GraphQL:
             graphene_type, filter=graphene.JSONString(), exclude=graphene.JSONString()
         )
 
+        def get_read_permission_filter(
+            generalManagerClass: GeneralManagerMeta,
+            info: GraphQLResolveInfo,
+        ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+            filters = []
+            PermissionClass: type[BasePermission] | None = getattr(
+                generalManagerClass, "Permission", None
+            )
+            if PermissionClass:
+                permission_filters = PermissionClass(
+                    generalManagerClass, info.context.user
+                ).getPermissionFilter()
+                for permission_filter in permission_filters:
+                    filter_dict, exclude_dict = (
+                        permission_filter.get("filter", {}),
+                        permission_filter.get("exclude", {}),
+                    )
+                    filters.append((filter_dict, exclude_dict))
+            return filters
+
         def resolve_list(
             self: GeneralManager,
-            info: str,
+            info: GraphQLResolveInfo,
             filter: dict[str, Any] | str | None = None,
             exclude: dict[str, Any] | str | None = None,
         ):
-            queryset = generalManagerClass.all()
+            queryset = None
+            permission_list = get_read_permission_filter(generalManagerClass, info)
+            for permission_filter_dict, permission_exclude_dict in permission_list:
+                permission_queryset = generalManagerClass.exclude(
+                    **permission_exclude_dict
+                ).filter(**permission_filter_dict)
+                if queryset is None:
+                    queryset = permission_queryset
+                else:
+                    queryset = queryset | permission_queryset
+            if queryset is None:
+                queryset = generalManagerClass.all()
             if filter:
                 filter_dict = json.loads(filter) if isinstance(filter, str) else filter
                 queryset = queryset.filter(**filter_dict)
@@ -223,7 +279,7 @@ class GraphQL:
         item_field = graphene.Field(graphene_type, **identification_dict)
 
         def resolve_item(
-            self: GeneralManager, info: str, **identification: dict
+            self: GeneralManager, info: GraphQLResolveInfo, **identification: dict
         ) -> GeneralManager:
             return generalManagerClass(**identification)
 

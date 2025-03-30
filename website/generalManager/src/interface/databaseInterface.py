@@ -1,6 +1,15 @@
 from __future__ import annotations
 import json
-from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, Generator, TypeVar
+from typing import (
+    Type,
+    ClassVar,
+    Any,
+    Callable,
+    TYPE_CHECKING,
+    Generator,
+    TypeVar,
+    cast,
+)
 from django.db import models, transaction
 from django.contrib.auth import get_user_model
 from simple_history.utils import update_change_reason  # type: ignore
@@ -371,6 +380,16 @@ class DBBasedInterface(InterfaceBase):
         """
         return cls._preCreate, cls._postCreate
 
+    @classmethod
+    def getFieldType(cls, field_name: str) -> type:
+        """
+        This method returns the field type for the given field name.
+        """
+        field = cls._model._meta.get_field(field_name)
+        if field.is_relation and field.related_model:
+            return field.related_model._general_manager_class
+        return type(field)
+
 
 class ReadOnlyInterface(DBBasedInterface):
     _interface_type = "readonly"
@@ -559,6 +578,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def __iter__(self) -> Generator[GeneralManagerType]:
         for item in self._data:
             yield self._manager_class(item.pk)
+
+    def __or__(self, other: object) -> Bucket[GeneralManagerType]:
+        if not isinstance(other, self.__class__):
+            raise ValueError("Cannot combine different bucket types")
+        return self.__class__(
+            self._data | other._data,
+            self._manager_class,
+            {},
+        )
 
     def __mergeFilterDefinitions(self, **kwargs: Any) -> dict[str, list[Any]]:
         kwarg_filter: dict[str, list[Any]] = {}
