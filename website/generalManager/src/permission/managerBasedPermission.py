@@ -56,7 +56,8 @@ class ManagerBasedPermission(BasePermission):
         if not isinstance(basis_object, GeneralManager) and not issubclass(
             basis_object, GeneralManager
         ):
-            raise TypeError(f"Based on object {__based_on__} is not a GeneralManager")
+            raise TypeError(
+                f"Based on object {__based_on__} is not a GeneralManager")
 
         Permission = getattr(basis_object, "Permission", None)
 
@@ -166,9 +167,6 @@ class ManagerBasedPermission(BasePermission):
                 )
 
         for permission in self.__read__:
-            filter = self._getPermissionFilter(permission)
-            if filter is None:
-                continue
-            filters.append(filter)
+            filters.append(self._getPermissionFilter(permission))
 
         return filters
