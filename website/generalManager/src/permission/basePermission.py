@@ -53,16 +53,19 @@ class BasePermission(ABC):
 
     def _getPermissionFilter(
         self, permission: str
-    ) -> dict[Literal["filter", "exclude"], dict[str, str]] | None:
+    ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
         """
         Returns the filter for the permission
         """
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise ValueError(f"Permission {permission} not found")
-        return permission_functions[permission_function]["permission_filter"](
+        permission_filter = permission_functions[permission_function]["permission_filter"](
             self.request_user, config
         )
+        if permission_filter is None:
+            return {"filter": {}, "exclude": {}}
+        return permission_filter
 
     def validatePermissionString(
         self,
