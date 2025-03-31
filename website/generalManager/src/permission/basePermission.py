@@ -8,7 +8,7 @@ from generalManager.src.permission.permissionChecks import (
 
 
 if TYPE_CHECKING:
-    from django.contrib.auth.models import AbstractUser
+    from django.contrib.auth.models import AbstractUser, AnonymousUser
     from generalManager.src.permission.permissionDataManager import (
         PermissionDataManager,
     )
@@ -21,19 +21,18 @@ class BasePermission(ABC):
     def __init__(
         self,
         instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-        request_user: AbstractUser,
+        request_user: AbstractUser | AnonymousUser,
     ) -> None:
-        pass
+        self._instance = instance
+        self._request_user = request_user
 
     @property
-    @abstractmethod
-    def instance(self) -> PermissionDataManager | GeneralManager:
-        raise NotImplementedError
+    def instance(self) -> PermissionDataManager | GeneralManager | GeneralManagerMeta:
+        return self._instance
 
     @property
-    @abstractmethod
-    def request_user(self) -> AbstractUser:
-        raise NotImplementedError
+    def request_user(self) -> AbstractUser | AnonymousUser:
+        return self._request_user
 
     @abstractmethod
     def checkPermission(
@@ -60,9 +59,9 @@ class BasePermission(ABC):
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise ValueError(f"Permission {permission} not found")
-        permission_filter = permission_functions[permission_function]["permission_filter"](
-            self.request_user, config
-        )
+        permission_filter = permission_functions[permission_function][
+            "permission_filter"
+        ](self.request_user, config)
         if permission_filter is None:
             return {"filter": {}, "exclude": {}}
         return permission_filter

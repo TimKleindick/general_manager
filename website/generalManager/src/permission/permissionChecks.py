@@ -1,19 +1,26 @@
 from typing import Any, Callable, TYPE_CHECKING, TypedDict, Literal
 
 if TYPE_CHECKING:
-    from django.contrib.auth.models import AbstractUser
+    from django.contrib.auth.models import AbstractUser, AnonymousUser
     from generalManager.src.permission.permissionDataManager import (
         PermissionDataManager,
     )
     from generalManager.src.manager.generalManager import GeneralManager
+    from generalManager.src.manager.meta import GeneralManagerMeta
 
 
 type permission_filter = Callable[
-    [AbstractUser, list[str]], dict[Literal["filter", "exclude"], dict[str, str]] | None
+    [AbstractUser | AnonymousUser, list[str]],
+    dict[Literal["filter", "exclude"], dict[str, str]] | None,
 ]
 
 type permission_method = Callable[
-    [PermissionDataManager | GeneralManager, AbstractUser, list[str]], bool
+    [
+        PermissionDataManager | GeneralManager | GeneralManagerMeta,
+        AbstractUser | AnonymousUser,
+        list[str],
+    ],
+    bool,
 ]
 
 
