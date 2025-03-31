@@ -6,6 +6,7 @@ from datetime import date, datetime
 import graphene
 from generalManager.src.manager.generalManager import GeneralManager, GeneralManagerMeta
 from generalManager.src.measurement.measurement import Measurement, ureg
+from django.contrib.auth.models import AnonymousUser
 
 from generalManager.src.api.graphql import (
     MeasurementType,
@@ -45,6 +46,8 @@ class GraphQLTests(TestCase):
         # Setup mock general manager class
         self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
         self.general_manager_class.__name__ = "TestManager"
+        self.info = MagicMock()
+        self.info.context.user = AnonymousUser()
 
     @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_no_interface(self, mock_interface):
@@ -69,22 +72,28 @@ class GraphQLTests(TestCase):
     def test_map_field_to_graphene(self):
         # Test type mappings
         self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(str, "name"), graphene.String  # type: ignore
+            GraphQL._GraphQL__map_field_to_graphene(str, "name"),  # type: ignore
+            graphene.String,
         )
         self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(int, "age"), graphene.Int  # type: ignore
+            GraphQL._GraphQL__map_field_to_graphene(int, "age"),  # type: ignore
+            graphene.Int,
         )
         self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(float, "value"), graphene.Float  # type: ignore
+            GraphQL._GraphQL__map_field_to_graphene(float, "value"),  # type: ignore
+            graphene.Float,
         )
         self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(Decimal, "decimal"), graphene.Float  # type: ignore
+            GraphQL._GraphQL__map_field_to_graphene(Decimal, "decimal"),  # type: ignore
+            graphene.Float,
         )
         self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(bool, "active"), graphene.Boolean  # type: ignore
+            GraphQL._GraphQL__map_field_to_graphene(bool, "active"),  # type: ignore
+            graphene.Boolean,
         )
         self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(date, "birth_date"), graphene.Date  # type: ignore
+            GraphQL._GraphQL__map_field_to_graphene(date, "birth_date"),  # type: ignore
+            graphene.Date,
         )
         self.assertIsInstance(
             GraphQL._GraphQL__map_field_to_graphene(Measurement, "measurement"),  # type: ignore
@@ -95,8 +104,9 @@ class GraphQLTests(TestCase):
         # Test resolver for a normal field type
         mock_instance = MagicMock()
         mock_instance.some_field = "expected_value"
+
         resolver = GraphQL._GraphQL__create_resolver("some_field", str)  # type: ignore
-        self.assertEqual(resolver(mock_instance, None), "expected_value")
+        self.assertEqual(resolver(mock_instance, self.info), "expected_value")
 
     def test_create_resolver_measurement_case(self):
         # Test resolver for Measurement field type with unit conversion
@@ -105,7 +115,7 @@ class GraphQLTests(TestCase):
         mock_instance.measurement_field = mock_measurement
 
         resolver = GraphQL._GraphQL__create_resolver("measurement_field", Measurement)  # type: ignore
-        result = resolver(mock_instance, None, target_unit="cm")
+        result = resolver(mock_instance, self.info, target_unit="cm")
         self.assertEqual(result, {"value": Decimal(100), "unit": ureg("cm")})
 
     def test_create_resolver_list_case(self):
