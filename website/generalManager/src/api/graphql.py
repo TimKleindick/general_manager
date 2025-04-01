@@ -25,6 +25,7 @@ class MeasurementType(graphene.ObjectType):  # type: ignore
 class GraphQL:
     _query_class: type
     graphql_type_registry: dict[str, type] = {}
+    graphql_filter_type_registry: dict[str, type] = {}
 
     @classmethod
     def _createGraphQlInterface(cls, generalManagerClass: GeneralManagerMeta):
@@ -67,8 +68,64 @@ class GraphQL:
         cls.__add_queries_to_schema(graphene_type, generalManagerClass)
 
     @staticmethod
+    def _createFilterOptions(field_name: str, field_type: GeneralManagerMeta):
+        number_options = [
+            "exact",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+        ]
+        string_options = [
+            "exact",
+            "icontains",
+            "contains",
+            "in",
+            "startswith",
+            "endswith",
+        ]
+
+        graphene_filter_type_name = f"{field_type.__name__}FilterType"
+        if graphene_filter_type_name in GraphQL.graphql_filter_type_registry:
+            return GraphQL.graphql_filter_type_registry[graphene_filter_type_name]
+        filter_fields = {}
+        for field_name, field_type in field_type.Interface.getAttributeTypes().items():
+            if issubclass(field_type, GeneralManager):
+                continue
+            elif issubclass(field_type, Measurement):
+                filter_fields[f"{field_name}_value"] = graphene.Float()
+                filter_fields[f"{field_name}_unit"] = graphene.String()
+                for option in number_options:
+                    filter_fields[f"{field_name}_value__{option}"] = graphene.Float()
+                    filter_fields[f"{field_name}_unit__{option}"] = graphene.String()
+
+            else:
+                filter_fields[field_name] = GraphQL.__map_field_to_graphene(
+                    field_type, field_name
+                )
+                if issubclass(field_type, (int, float, Decimal, date, datetime)):
+                    for option in number_options:
+                        filter_fields[f"{field_name}__{option}"] = (
+                            GraphQL.__map_field_to_graphene(field_type, field_name)
+                        )
+                elif issubclass(field_type, str):
+                    for option in string_options:
+                        filter_fields[f"{field_name}__{option}"] = (
+                            GraphQL.__map_field_to_graphene(field_type, field_name)
+                        )
+
+        filter_class = type(
+            graphene_filter_type_name,
+            (graphene.InputObjectType,),
+            filter_fields,
+        )
+        GraphQL.graphql_filter_type_registry[graphene_filter_type_name] = filter_class
+        return filter_class
+
+    @classmethod
     def __map_field_to_graphene(
-        field_type: type,
+        cls,
+        field_type: GeneralManagerMeta | type,
         field_name: str,
     ) -> (
         graphene.Field
@@ -95,12 +152,13 @@ class GraphQL:
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
+                filter_options = cls._createFilterOptions(field_name, field_type)
                 return graphene.List(
                     lambda field_type=field_type: GraphQL.graphql_type_registry[
                         field_type.__name__
                     ],
-                    filter=graphene.JSONString(),
-                    exclude=graphene.JSONString(),
+                    filter=filter_options(),
+                    exclude=filter_options(),
                 )
             return graphene.Field(
                 lambda field_type=field_type: GraphQL.graphql_type_registry[
@@ -200,8 +258,11 @@ class GraphQL:
 
         # Abfrage für die Liste
         list_field_name = f"{generalManagerClass.__name__.lower()}_list"
+        filter_options = cls._createFilterOptions(
+            generalManagerClass.__name__.lower(), generalManagerClass
+        )
         list_field = graphene.List(
-            graphene_type, filter=graphene.JSONString(), exclude=graphene.JSONString()
+            graphene_type, filter=filter_options(), exclude=filter_options()
         )
 
         def get_read_permission_filter(
