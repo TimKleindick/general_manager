@@ -137,6 +137,8 @@ class DBBasedInterface(InterfaceBase):
     @classmethod
     def getAttributeTypes(cls) -> dict[str, type]:
         TRANSLATION: dict[Type[models.Field[Any, Any]], type] = {
+            models.fields.BigAutoField: int,
+            models.AutoField: int,
             models.CharField: str,
             models.TextField: str,
             models.BooleanField: bool,
@@ -146,6 +148,11 @@ class DBBasedInterface(InterfaceBase):
             models.DateTimeField: datetime,
             MeasurementField: Measurement,
             models.DecimalField: Decimal,
+            models.EmailField: str,
+            models.FileField: str,
+            models.ImageField: str,
+            models.URLField: str,
+            models.TimeField: datetime,
         }
         fields: dict[str, Type[models.Field[Any, Any]]] = {}
         field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)

@@ -15,6 +15,7 @@ class GeneralManagerMeta(type):
     read_only_classes: list[Type[ReadOnlyInterface]] = []
     pending_graphql_interfaces: list[GeneralManagerMeta] = []
     pending_attribute_initialization: list[GeneralManagerMeta] = []
+    Interface: type[InterfaceBase]
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         if "Interface" in attrs:

@@ -152,6 +152,10 @@ class GraphQLTests(TestCase):
             class Interface:
                 input_fields = {}
 
+                @staticmethod
+                def getAttributeTypes():
+                    return {"test_field": str}
+
             @classmethod
             def all(cls):
                 return []
@@ -167,7 +171,19 @@ class GraphQLTests(TestCase):
 
     @patch("generalManager.src.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):
-        # Patch den issubclass-Check in dem graphql-Modul, sodass er immer True zurückgibt.
+        # Dummy-Interface definieren
+        class TestGeneralManager:
+            class Interface:
+                input_fields = {}
+
+                @staticmethod
+                def getAttributeTypes():
+                    return {"test_field": str}
+
+            @classmethod
+            def all(cls):
+                return []
+
         with patch("generalManager.src.api.graphql.issubclass", return_value=True):
             # Konfiguriere das Mock für InterfaceBase
             mock_interface.getAttributeTypes.return_value = {"test_field": str}
@@ -178,7 +194,7 @@ class GraphQLTests(TestCase):
                 return 42
 
             setattr(
-                self.general_manager_class,
+                TestGeneralManager,
                 "test_prop",
                 GraphQLProperty(graphql_property_func),
             )
@@ -190,11 +206,37 @@ class GraphQLTests(TestCase):
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_map_field_to_graphene_general_manager(self):
+        class TestGeneralManager:
+            class Interface:
+                input_fields = {}
+
+                @staticmethod
+                def getAttributeTypes():
+                    return {"test_field": str}
+
+            @classmethod
+            def all(cls):
+                return []
+
+            @property
+            def test_list(self):
+                return ["item1", "item2"]
+
+        def custom_side_effect(cls, base):
+            # Beispiel: Wenn nach einer bestimmten Basisklasse gefragt wird, gib True zurück
+            if base == GeneralManager:
+                return True
+            return False
+
         # Test field mapping for a GeneralManager type with list suffix
-        self.assertIsInstance(
-            GraphQL._GraphQL__map_field_to_graphene(GeneralManager, "test_list"),  # type: ignore
-            graphene.List,
-        )
+        with patch(
+            "generalManager.src.api.graphql.issubclass",
+            side_effect=custom_side_effect,
+        ):
+            self.assertIsInstance(
+                GraphQL._GraphQL__map_field_to_graphene(TestGeneralManager, "test_list"),  # type: ignore
+                graphene.List,
+            )
 
     def test_list_resolver_with_invalid_filter_exclude(self):
         # Test handling of invalid JSON in filter/exclude parameters
@@ -220,6 +262,10 @@ class GraphQLTests(TestCase):
             class Interface:
                 input_fields = {}
 
+                @staticmethod
+                def getAttributeTypes():
+                    return {"test_field": str}
+
             @classmethod
             def all(cls):
                 return ["item1", "item2"]
@@ -231,3 +277,77 @@ class GraphQLTests(TestCase):
             resolve_list_func = GraphQL._query_fields["resolve_testgeneralmanager_list"]
             result = resolve_list_func(self, None)
             self.assertEqual(result, ["item1", "item2"])
+
+    def test_create_filter_options_measurement_fields(self):
+        # Dummy-Manager definieren, dessen Interface verschiedene Feldtypen zurückgibt
+        class DummyManager:
+            __name__ = "DummyManager"
+
+            class Interface:
+                input_fields = {}
+
+                @staticmethod
+                def getAttributeTypes():
+                    from generalManager.src.measurement.measurement import Measurement
+                    from generalManager.src.manager.generalManager import GeneralManager
+
+                    return {
+                        "num_field": int,
+                        "str_field": str,
+                        "measurement_field": Measurement,
+                        "gm_field": GeneralManager,  # sollte übersprungen werden
+                    }
+
+        # Sicherstellen, dass das Filter-Registry-Cache leer ist
+        GraphQL.graphql_filter_type_registry = {}
+        # Aufruf der neuen Funktion
+        filter_class = GraphQL._createFilterOptions("dummy", DummyManager)  # type: ignore
+        # Zugriff auf die Felder der erzeugten InputObjectType
+        fields = filter_class._meta.fields
+
+        # Überprüfen, dass gm_field übersprungen wird
+        self.assertNotIn("gm_field", fields)
+
+        # Teste num_field: Es sollte das Basisfeld sowie die number_options-Felder geben.
+        self.assertIn("num_field", fields)
+        for option in ["exact", "gt", "gte", "lt", "lte"]:
+            self.assertIn(f"num_field__{option}", fields)
+
+        # Teste str_field: Basisfeld plus string_options-Felder.
+        self.assertIn("str_field", fields)
+        for option in [
+            "exact",
+            "icontains",
+            "contains",
+            "in",
+            "startswith",
+            "endswith",
+        ]:
+            self.assertIn(f"str_field__{option}", fields)
+
+        # Teste measurement_field: Es sollten eigene Felder für den Wert und die Einheit
+        # sowie entsprechende number_options-Felder existieren.
+        self.assertIn("measurement_field_value", fields)
+        self.assertIn("measurement_field_unit", fields)
+        for option in ["exact", "gt", "gte", "lt", "lte"]:
+            self.assertIn(f"measurement_field_value__{option}", fields)
+            self.assertIn(f"measurement_field_unit__{option}", fields)
+
+    def test_create_filter_options_registry_cache(self):
+        # Überprüfe, dass _createFilterOptions den Filtertyp cached.
+        class DummyManager:
+            __name__ = "DummyManager"
+
+            class Interface:
+                input_fields = {}
+
+                @staticmethod
+                def getAttributeTypes():
+                    return {"num_field": int}
+
+        # Leere das Registry
+        GraphQL.graphql_filter_type_registry = {}
+        filter_class_first = GraphQL._createFilterOptions("dummy", DummyManager)  # type: ignore
+        filter_class_second = GraphQL._createFilterOptions("dummy", DummyManager)  # type: ignore
+        # Beide Aufrufe sollten denselben Typ zurückgeben
+        self.assertEqual(filter_class_first, filter_class_second)
