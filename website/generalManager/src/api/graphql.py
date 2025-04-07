@@ -51,7 +51,7 @@ class GraphQL:
                 if type_hint:
                     field_type: type = type_hint[0] or type_hint[1]
                 else:
-                    field_type = graphene.String
+                    field_type = cast(type, attr_value.graphql_type_hint)
 
                 fields[attr_name] = cls.__map_field_to_graphene(field_type, attr_name)
 
