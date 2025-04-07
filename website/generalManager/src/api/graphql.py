@@ -186,6 +186,8 @@ class GraphQL:
                     exclude=filter_options(),
                     sort_by=sort_by_options(),
                     reverse=graphene.Boolean(),
+                    page=graphene.Int(required=False, default_value=1),
+                    page_size=graphene.Int(required=False, default_value=10),
                 )
             return graphene.Field(
                 lambda field_type=field_type: GraphQL.graphql_type_registry[
@@ -221,8 +223,10 @@ class GraphQL:
                 info: GraphQLResolveInfo,
                 filter: dict[str, Any] | str | None = None,
                 exclude: dict[str, Any] | str | None = None,
-                sort_by: tuple[str] | str | None = None,
+                sort_by: graphene.Enum | None = None,
                 reverse: bool = False,
+                page: int | None = None,
+                page_size: int | None = None,
             ) -> Bucket[GeneralManager]:
                 # Get related objects
                 queryset = cast(Bucket, getattr(self, field_name).all())
@@ -240,7 +244,13 @@ class GraphQL:
                 except Exception:
                     pass
                 if sort_by:
-                    queryset = queryset.sort(sort_by, reverse=reverse)
+                    sort_by_str = cast(str, getattr(sort_by, "value"))
+                    queryset = queryset.sort(sort_by_str, reverse=reverse)
+                if page or page_size:
+                    page = page or 1
+                    page_size = page_size or 10
+                    offset = (page - 1) * page_size
+                    queryset = queryset[offset : offset + page_size]
                 return queryset
 
             return list_resolver
@@ -299,6 +309,8 @@ class GraphQL:
             exclude=filter_options(),
             sort_by=sort_by_options(),
             reverse=graphene.Boolean(),
+            page=graphene.Int(required=False, default_value=1),
+            page_size=graphene.Int(required=False, default_value=10),
         )
 
         def get_read_permission_filter(
@@ -328,6 +340,8 @@ class GraphQL:
             exclude: dict[str, Any] | str | None = None,
             sort_by: graphene.Enum | None = None,
             reverse: bool = False,
+            page: int | None = None,
+            page_size: int | None = None,
         ):
             queryset = None
             permission_list = get_read_permission_filter(generalManagerClass, info)
@@ -352,6 +366,11 @@ class GraphQL:
             if sort_by:
                 sort_by_str = cast(str, getattr(sort_by, "value"))
                 queryset = queryset.sort(sort_by_str, reverse=reverse)
+            if page or page_size:
+                page = page or 1
+                page_size = page_size or 10
+                offset = (page - 1) * page_size
+                queryset = queryset[offset : offset + page_size]
             return queryset
 
         cls._query_fields[list_field_name] = list_field
