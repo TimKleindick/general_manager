@@ -244,3 +244,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def __contains__(self, item: GeneralManagerType) -> bool:
         raise NotImplementedError
+
+    @abstractmethod
+    def sort(
+        self,
+        key: tuple[str] | str,
+        reverse: bool = False,
+    ) -> Bucket[GeneralManagerType]:
+        raise NotImplementedError

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import graphene
-from typing import Any, Callable, get_args, TYPE_CHECKING
+from typing import Any, Callable, get_args, TYPE_CHECKING, cast
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -51,7 +51,7 @@ class GraphQL:
                 if type_hint:
                     field_type: type = type_hint[0] or type_hint[1]
                 else:
-                    field_type = attr_value.graphql_type_hint
+                    field_type = graphene.String
 
                 fields[attr_name] = cls.__map_field_to_graphene(field_type, attr_name)
 
@@ -66,6 +66,30 @@ class GraphQL:
 
         # Hinzufügen der Abfragen zum Schema
         cls.__add_queries_to_schema(graphene_type, generalManagerClass)
+
+    @staticmethod
+    def _sort_by_options(
+        generalManagerClass: GeneralManagerMeta,
+    ) -> type[graphene.Enum]:
+        sort_by_options = []
+        for (
+            field_name,
+            field_type,
+        ) in generalManagerClass.Interface.getAttributeTypes().items():
+            if issubclass(field_type, GeneralManager):
+                continue
+            elif issubclass(field_type, Measurement):
+                sort_by_options.append(f"{field_name}_value")
+                sort_by_options.append(f"{field_name}_unit")
+            else:
+                sort_by_options.append(field_name)
+
+        sort_by_options_class = type(
+            f"{generalManagerClass.__name__}SortByOptions",
+            (graphene.Enum,),
+            {option: option for option in sort_by_options},
+        )
+        return sort_by_options_class
 
     @staticmethod
     def _createFilterOptions(field_name: str, field_type: GeneralManagerMeta):
@@ -153,12 +177,15 @@ class GraphQL:
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
                 filter_options = cls._createFilterOptions(field_name, field_type)
+                sort_by_options = cls._sort_by_options(field_type)
                 return graphene.List(
                     lambda field_type=field_type: GraphQL.graphql_type_registry[
                         field_type.__name__
                     ],
                     filter=filter_options(),
                     exclude=filter_options(),
+                    sort_by=sort_by_options(),
+                    reverse=graphene.Boolean(),
                 )
             return graphene.Field(
                 lambda field_type=field_type: GraphQL.graphql_type_registry[
@@ -170,7 +197,7 @@ class GraphQL:
 
     @staticmethod
     def __create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
-        from generalManager.src.manager.generalManager import GeneralManager
+        from generalManager.src.manager.generalManager import GeneralManager, Bucket
 
         def check_read_permission(
             self: GeneralManager,
@@ -194,9 +221,11 @@ class GraphQL:
                 info: GraphQLResolveInfo,
                 filter: dict[str, Any] | str | None = None,
                 exclude: dict[str, Any] | str | None = None,
-            ):
+                sort_by: tuple[str] | str | None = None,
+                reverse: bool = False,
+            ) -> Bucket[GeneralManager]:
                 # Get related objects
-                queryset = getattr(self, field_name).all()
+                queryset = cast(Bucket, getattr(self, field_name).all())
                 try:
                     if filter:
                         filter_dict = (
@@ -210,6 +239,8 @@ class GraphQL:
                         queryset = queryset.exclude(**exclude_dict)
                 except Exception:
                     pass
+                if sort_by:
+                    queryset = queryset.sort(sort_by, reverse=reverse)
                 return queryset
 
             return list_resolver
@@ -261,8 +292,13 @@ class GraphQL:
         filter_options = cls._createFilterOptions(
             generalManagerClass.__name__.lower(), generalManagerClass
         )
+        sort_by_options = cls._sort_by_options(generalManagerClass)
         list_field = graphene.List(
-            graphene_type, filter=filter_options(), exclude=filter_options()
+            graphene_type,
+            filter=filter_options(),
+            exclude=filter_options(),
+            sort_by=sort_by_options(),
+            reverse=graphene.Boolean(),
         )
 
         def get_read_permission_filter(
@@ -290,6 +326,8 @@ class GraphQL:
             info: GraphQLResolveInfo,
             filter: dict[str, Any] | str | None = None,
             exclude: dict[str, Any] | str | None = None,
+            sort_by: graphene.Enum | None = None,
+            reverse: bool = False,
         ):
             queryset = None
             permission_list = get_read_permission_filter(generalManagerClass, info)
@@ -311,6 +349,9 @@ class GraphQL:
                     json.loads(exclude) if isinstance(exclude, str) else exclude
                 )
                 queryset = queryset.exclude(**exclude_dict)
+            if sort_by:
+                sort_by_str = cast(str, getattr(sort_by, "value"))
+                queryset = queryset.sort(sort_by_str, reverse=reverse)
             return queryset
 
         cls._query_fields[list_field_name] = list_field

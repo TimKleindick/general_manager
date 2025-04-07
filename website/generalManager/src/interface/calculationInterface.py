@@ -130,6 +130,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         filter_definitions: Optional[dict[str, dict]] = None,
         exclude_definitions: Optional[dict[str, dict]] = None,
+        sort_key: Optional[Union[str, tuple[str]]] = None,
+        reverse: bool = False,
     ):
         from generalManager.src.interface.calculationInterface import (
             CalculationInterface,
@@ -146,6 +148,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self.filters = {} if filter_definitions is None else filter_definitions
         self.excludes = {} if exclude_definitions is None else exclude_definitions
         self.__current_combinations = None
+        self.sort_key = sort_key
+        self.reverse = reverse
 
     def __or__(self, other: object) -> CalculationBucket[GeneralManagerType]:
         if not isinstance(other, self.__class__):
@@ -211,9 +215,22 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if self.__current_combinations is None:
             # Implementierung ähnlich wie im InputManager
             sorted_inputs = self.topological_sort_inputs()
-            self.__current_combinations = self._generate_combinations(
+            current_combinations = self._generate_combinations(
                 sorted_inputs, self.filters, self.excludes
             )
+            if self.sort_key is not None:
+                sort_key = self.sort_key
+                if isinstance(sort_key, str):
+                    sort_key = (sort_key,)
+                key_func = lambda x: (tuple(x[key] for key in sort_key))
+                current_combinations = sorted(
+                    current_combinations,
+                    key=key_func,
+                )
+            if self.reverse:
+                current_combinations.reverse()
+            self.__current_combinations = current_combinations
+
         return self.__current_combinations
 
     def parse_filters(self, filter_kwargs: dict[str, Any]) -> dict[str, dict]:
@@ -449,3 +466,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             raise ValueError("No matching calculation found.")
         else:
             raise ValueError("Multiple matching calculations found.")
+
+    def sort(
+        self, key: str | tuple[str], reverse: bool = False
+    ) -> CalculationBucket[GeneralManagerType]:
+        return CalculationBucket(
+            self._manager_class, self.filters, self.excludes, key, reverse
+        )
