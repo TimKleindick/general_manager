@@ -658,3 +658,16 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if isinstance(item, GeneralManager):
             return item.id in self._data.values_list("pk", flat=True)
         return item in self._data
+
+    def sort(
+        self,
+        key: tuple[str] | str,
+        reverse: bool = False,
+    ) -> DatabaseBucket:
+        if isinstance(key, str):
+            key = (key,)
+        if reverse:
+            sorted_data = self._data.order_by(*[f"-{k}" for k in key])
+        else:
+            sorted_data = self._data.order_by(*key)
+        return self.__class__(sorted_data, self._manager_class)
