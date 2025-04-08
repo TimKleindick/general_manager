@@ -47,7 +47,7 @@ class GeneralmanagerConfig(AppConfig):
             from generalManager.src.api.graphql import GraphQL
 
             for general_manager_class in GeneralManagerMeta.pending_graphql_interfaces:
-                GraphQL._createGraphQlInterface(general_manager_class)
+                GraphQL.createGraphqlInterface(general_manager_class)
 
             query_class = type("Query", (graphene.ObjectType,), GraphQL._query_fields)
             GraphQL._query_class = query_class
