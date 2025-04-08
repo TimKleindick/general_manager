@@ -250,20 +250,14 @@ class GraphQL:
                 page_size: int | None = None,
             ) -> Bucket[GeneralManager]:
                 # Get related objects
-                base_queryset = cast(Bucket, getattr(self, field_name))
-                queryset = None
+                queryset = cast(Bucket, getattr(self, field_name))
                 generalManagerClass = getattr(self, field_name)._manager_class
                 permission_list = get_read_permission_filter(generalManagerClass, info)
                 for permission_filter_dict, permission_exclude_dict in permission_list:
-                    permission_queryset = base_queryset.exclude(
+                    permission_queryset = queryset.exclude(
                         **permission_exclude_dict
                     ).filter(**permission_filter_dict)
-                    if queryset is None:
-                        queryset = permission_queryset
-                    else:
-                        queryset = queryset | permission_queryset
-                if queryset is None:
-                    queryset = generalManagerClass.all()
+                    queryset = queryset | permission_queryset
                 if filter:
                     filter_dict = (
                         json.loads(filter) if isinstance(filter, str) else filter
@@ -367,18 +361,13 @@ class GraphQL:
             page: int | None = None,
             page_size: int | None = None,
         ):
-            queryset = None
+            queryset = generalManagerClass.all()
             permission_list = get_read_permission_filter(generalManagerClass, info)
             for permission_filter_dict, permission_exclude_dict in permission_list:
-                permission_queryset = generalManagerClass.exclude(
+                permission_queryset = queryset.exclude(
                     **permission_exclude_dict
                 ).filter(**permission_filter_dict)
-                if queryset is None:
-                    queryset = permission_queryset
-                else:
-                    queryset = queryset | permission_queryset
-            if queryset is None:
-                queryset = generalManagerClass.all()
+                queryset = queryset | permission_queryset
             if filter:
                 filter_dict = json.loads(filter) if isinstance(filter, str) else filter
                 queryset = queryset.filter(**filter_dict)
