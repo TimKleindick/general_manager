@@ -22,6 +22,27 @@ class MeasurementType(graphene.ObjectType):  # type: ignore
     unit = graphene.String()
 
 
+def get_read_permission_filter(
+    generalManagerClass: GeneralManagerMeta,
+    info: GraphQLResolveInfo,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    filters = []
+    PermissionClass: type[BasePermission] | None = getattr(
+        generalManagerClass, "Permission", None
+    )
+    if PermissionClass:
+        permission_filters = PermissionClass(
+            generalManagerClass, info.context.user
+        ).getPermissionFilter()
+        for permission_filter in permission_filters:
+            filter_dict, exclude_dict = (
+                permission_filter.get("filter", {}),
+                permission_filter.get("exclude", {}),
+            )
+            filters.append((filter_dict, exclude_dict))
+    return filters
+
+
 class GraphQL:
     _query_class: type
     graphql_type_registry: dict[str, type] = {}
@@ -229,7 +250,30 @@ class GraphQL:
                 page_size: int | None = None,
             ) -> Bucket[GeneralManager]:
                 # Get related objects
-                queryset = cast(Bucket, getattr(self, field_name).all())
+                base_queryset = cast(Bucket, getattr(self, field_name))
+                queryset = None
+                generalManagerClass = getattr(self, field_name)._manager_class
+                permission_list = get_read_permission_filter(generalManagerClass, info)
+                for permission_filter_dict, permission_exclude_dict in permission_list:
+                    permission_queryset = base_queryset.exclude(
+                        **permission_exclude_dict
+                    ).filter(**permission_filter_dict)
+                    if queryset is None:
+                        queryset = permission_queryset
+                    else:
+                        queryset = queryset | permission_queryset
+                if queryset is None:
+                    queryset = generalManagerClass.all()
+                if filter:
+                    filter_dict = (
+                        json.loads(filter) if isinstance(filter, str) else filter
+                    )
+                    queryset = queryset.filter(**filter_dict)
+                if exclude:
+                    exclude_dict = (
+                        json.loads(exclude) if isinstance(exclude, str) else exclude
+                    )
+                    queryset = queryset.exclude(**exclude_dict)
                 try:
                     if filter:
                         filter_dict = (
@@ -312,26 +356,6 @@ class GraphQL:
             page=graphene.Int(required=False, default_value=1),
             page_size=graphene.Int(required=False, default_value=10),
         )
-
-        def get_read_permission_filter(
-            generalManagerClass: GeneralManagerMeta,
-            info: GraphQLResolveInfo,
-        ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-            filters = []
-            PermissionClass: type[BasePermission] | None = getattr(
-                generalManagerClass, "Permission", None
-            )
-            if PermissionClass:
-                permission_filters = PermissionClass(
-                    generalManagerClass, info.context.user
-                ).getPermissionFilter()
-                for permission_filter in permission_filters:
-                    filter_dict, exclude_dict = (
-                        permission_filter.get("filter", {}),
-                        permission_filter.get("exclude", {}),
-                    )
-                    filters.append((filter_dict, exclude_dict))
-            return filters
 
         def resolve_list(
             self: GeneralManager,
