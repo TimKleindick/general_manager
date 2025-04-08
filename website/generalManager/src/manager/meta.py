@@ -11,13 +11,18 @@ if TYPE_CHECKING:
 
 
 class GeneralManagerMeta(type):
-    all_classes: list[GeneralManagerMeta] = []
+    all_classes: list[Type[GeneralManager]] = []
     read_only_classes: list[Type[ReadOnlyInterface]] = []
-    pending_graphql_interfaces: list[GeneralManagerMeta] = []
-    pending_attribute_initialization: list[GeneralManagerMeta] = []
+    pending_graphql_interfaces: list[Type[GeneralManager]] = []
+    pending_attribute_initialization: list[Type[GeneralManager]] = []
     Interface: type[InterfaceBase]
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
+        def createNewGeneralManagerClass(
+            mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
+        ) -> Type[GeneralManager]:
+            return super().__new__(mcs, name, bases, attrs)
+
         if "Interface" in attrs:
             interface = attrs.pop("Interface")
             if not issubclass(interface, InterfaceBase):
@@ -26,13 +31,13 @@ class GeneralManagerMeta(type):
                 )
             preCreation, postCreation = interface.handleInterface()
             attrs, interface_cls, model = preCreation(name, attrs, interface)
-            new_class = super().__new__(mcs, name, bases, attrs)
+            new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
             postCreation(new_class, interface_cls, model)
             mcs.pending_attribute_initialization.append(new_class)
             mcs.all_classes.append(new_class)
 
         else:
-            new_class = super().__new__(mcs, name, bases, attrs)
+            new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
 
         if AUTOCREATE_GRAPHQL:
             mcs.pending_graphql_interfaces.append(new_class)
