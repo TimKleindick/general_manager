@@ -353,8 +353,8 @@ class GraphQL:
             exclude=filter_options(),
             sort_by=sort_by_options(),
             reverse=graphene.Boolean(),
-            page=graphene.Int(required=False, default_value=1),
-            page_size=graphene.Int(required=False, default_value=10),
+            page=graphene.Int(),
+            page_size=graphene.Int(),
         )
 
         def resolve_list(
