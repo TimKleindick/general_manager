@@ -170,6 +170,8 @@ class DBBasedInterface(InterfaceBase):
                 "_general_manager_class",
             ):
                 fields[field_name] = related_model._general_manager_class
+            elif related_model is not None:
+                fields[field_name] = related_model
 
         for field_name, field_call in [
             *cls.__getManyToManyFields(),
@@ -186,6 +188,8 @@ class DBBasedInterface(InterfaceBase):
                 "_general_manager_class",
             ):
                 fields[f"{field_name}_list"] = related_model._general_manager_class
+            elif related_model is not None:
+                fields[f"{field_name}_list"] = related_model
 
         return {
             field_name: TRANSLATION.get(field, field)
