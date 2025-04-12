@@ -9,9 +9,9 @@ import json
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.manager.generalManager import GeneralManagerMeta, GeneralManager
 from generalManager.src.manager.property import GraphQLProperty
+from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
 
 if TYPE_CHECKING:
-    from generalManager.src.interface.baseInterface import InterfaceBase
     from generalManager.src.permission.basePermission import BasePermission
     from graphene import ResolveInfo as GraphQLResolveInfo
 
@@ -204,6 +204,7 @@ class GraphQL:
                     reverse=graphene.Boolean(),
                     page=graphene.Int(),
                     page_size=graphene.Int(),
+                    group_by=graphene.List(graphene.String),
                 )
             return graphene.Field(
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
@@ -227,14 +228,14 @@ class GraphQL:
 
     @staticmethod
     def _applyQueryParameters(
-        queryset: Any,
+        queryset: Bucket[GeneralManager],
         filter_input: dict[str, Any] | str | None,
         exclude_input: dict[str, Any] | str | None,
         sort_by: graphene.Enum | None,
         reverse: bool,
         page: int | None,
         page_size: int | None,
-    ) -> Any:
+    ) -> Bucket[GeneralManager]:
         """
         Wendet Filter, Excludes, Sortierung und Paginierung auf das Queryset an.
         """
@@ -254,16 +255,16 @@ class GraphQL:
             page = page or 1
             page_size = page_size or 10
             offset = (page - 1) * page_size
-            queryset = queryset[offset : offset + page_size]
+            queryset = cast(Bucket, queryset[offset : offset + page_size])
 
         return queryset
 
     @staticmethod
     def _applyPermissionFilters(
-        queryset: Any,
+        queryset: Bucket,
         general_manager_class: type[GeneralManager],
         info: GraphQLResolveInfo,
-    ) -> Any:
+    ) -> Bucket:
         """
         Wendet die vom Permission-Interface vorgegebenen Filter auf das Queryset an.
         """
@@ -311,6 +312,7 @@ class GraphQL:
             reverse: bool = False,
             page: int | None = None,
             page_size: int | None = None,
+            group_by: list[str] | None = None,
         ) -> Any:
             base_queryset = base_getter(self)
             # Verwende _manager_class aus dem Attribut falls vorhanden, ansonsten das Fallback
@@ -321,6 +323,11 @@ class GraphQL:
             qs = GraphQL._applyQueryParameters(
                 qs, filter, exclude, sort_by, reverse, page, page_size
             )
+            if group_by is not None:
+                if group_by == [""]:
+                    qs = qs.group_by()
+                else:
+                    qs = qs.group_by(*group_by)
             return qs
 
         return resolver
@@ -406,6 +413,7 @@ class GraphQL:
             reverse=graphene.Boolean(),
             page=graphene.Int(),
             page_size=graphene.Int(),
+            group_by=graphene.List(graphene.String),
         )
 
         list_resolver = cls._createListResolver(

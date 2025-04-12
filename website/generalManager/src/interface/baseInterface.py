@@ -11,7 +11,6 @@ from typing import (
     ClassVar,
     Callable,
 )
-
 from datetime import datetime
 from django.conf import settings
 from django.db.models import Model
@@ -21,6 +20,8 @@ if TYPE_CHECKING:
     from generalManager.src.manager.input import Input
     from generalManager.src.manager.generalManager import GeneralManager
     from generalManager.src.manager.meta import GeneralManagerMeta
+    from generalManager.src.manager.groupManager import GroupedManager, GroupBucket
+
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 type generalManagerClassName = str
@@ -200,7 +201,10 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     def __or__(self, other: object) -> Bucket[GeneralManagerType]:
         raise NotImplementedError
 
-    def __iter__(self) -> Generator[GeneralManagerType]:
+    @abstractmethod
+    def __iter__(
+        self,
+    ) -> Generator[GeneralManagerType | GroupedManager[GeneralManagerType]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -212,11 +216,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         raise NotImplementedError
 
     @abstractmethod
-    def first(self) -> GeneralManagerType | None:
+    def first(self) -> GeneralManagerType | GroupedManager[GeneralManagerType] | None:
         raise NotImplementedError
 
     @abstractmethod
-    def last(self) -> GeneralManagerType | None:
+    def last(self) -> GeneralManagerType | GroupedManager[GeneralManagerType] | None:
         raise NotImplementedError
 
     @abstractmethod
@@ -228,13 +232,19 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         raise NotImplementedError
 
     @abstractmethod
-    def get(self, **kwargs: Any) -> GeneralManagerType:
+    def get(
+        self, **kwargs: Any
+    ) -> GeneralManagerType | GroupedManager[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
     def __getitem__(
         self, item: int | slice
-    ) -> GeneralManagerType | Bucket[GeneralManagerType]:
+    ) -> (
+        GeneralManagerType
+        | GroupedManager[GeneralManagerType]
+        | Bucket[GeneralManagerType]
+    ):
         raise NotImplementedError
 
     @abstractmethod
@@ -252,3 +262,12 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         reverse: bool = False,
     ) -> Bucket[GeneralManagerType]:
         raise NotImplementedError
+
+    def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
+        """
+        This method groups the data by the given arguments.
+        It returns a GroupBucket with the grouped data.
+        """
+        from generalManager.src.manager.groupManager import GroupBucket
+
+        return GroupBucket(self._manager_class, group_by_keys, self)
