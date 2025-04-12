@@ -25,6 +25,7 @@ from generalManager.src.interface.baseInterface import (
     GeneralManagerType,
 )
 from generalManager.src.manager.input import Input
+from generalManager.src.auxiliary.filterParser import parse_filters
 
 if TYPE_CHECKING:
     from generalManager.src.manager.generalManager import GeneralManager
@@ -194,13 +195,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     def filter(self, **kwargs: Any) -> CalculationBucket:
         filters = self.filters.copy()
         excludes = self.excludes.copy()
-        filters.update(self.parse_filters(kwargs))
+        filters.update(parse_filters(kwargs, self.input_fields))
         return CalculationBucket(self._manager_class, filters, excludes)
 
     def exclude(self, **kwargs: Any) -> CalculationBucket:
         filters = self.filters.copy()
         excludes = self.excludes.copy()
-        excludes.update(self.parse_filters(kwargs))
+        excludes.update(parse_filters(kwargs, self.input_fields))
         return CalculationBucket(self._manager_class, filters, excludes)
 
     def all(self) -> CalculationBucket:
@@ -232,98 +233,6 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             self.__current_combinations = current_combinations
 
         return self.__current_combinations
-
-    def parse_filters(self, filter_kwargs: dict[str, Any]) -> dict[str, dict]:
-        from generalManager.src.manager.generalManager import GeneralManager
-
-        filters = {}
-        for kwarg, value in filter_kwargs.items():
-            parts = kwarg.split("__")
-            field_name = parts[0]
-            if field_name not in self.input_fields:
-                raise ValueError(f"Unknown input field '{field_name}' in filter")
-            input_field = self.input_fields[field_name]
-
-            lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
-
-            if issubclass(input_field.type, GeneralManager):
-                # Sammle die Filter-Keyword-Argumente für das InputField
-                if lookup == "":
-                    lookup = "id"
-                    value = value.id
-                filters.setdefault(field_name, {}).setdefault("filter_kwargs", {})[
-                    lookup
-                ] = value
-            else:
-                # Erstelle Filterfunktionen für Nicht-Bucket-Typen
-                if isinstance(value, (list, tuple)) and not isinstance(
-                    value, input_field.type
-                ):
-                    casted_value = [input_field.cast(v) for v in value]
-                else:
-                    casted_value = input_field.cast(value)
-                filter_func = self.create_filter_function(lookup, casted_value)
-                filters.setdefault(field_name, {}).setdefault(
-                    "filter_funcs", []
-                ).append(filter_func)
-        return filters
-
-    def create_filter_function(
-        self, lookup_str: str, value: Any
-    ) -> Callable[[Any], bool]:
-        parts = lookup_str.split("__") if lookup_str else []
-        if parts and parts[-1] in [
-            "exact",
-            "lt",
-            "lte",
-            "gt",
-            "gte",
-            "contains",
-            "startswith",
-            "endswith",
-            "in",
-        ]:
-            lookup = parts[-1]
-            attr_path = parts[:-1]
-        else:
-            lookup = "exact"
-            attr_path = parts
-
-        def filter_func(x):
-            for attr in attr_path:
-                if hasattr(x, attr):
-                    x = getattr(x, attr)
-                else:
-                    return False
-            return self.apply_lookup(x, lookup, value)
-
-        return filter_func
-
-    def apply_lookup(self, x: Any, lookup: str, value: Any) -> bool:
-        try:
-            if lookup == "exact":
-                return x == value
-            elif lookup == "lt":
-                return x < value
-            elif lookup == "lte":
-                return x <= value
-            elif lookup == "gt":
-                return x > value
-            elif lookup == "gte":
-                return x >= value
-            elif lookup == "contains" and isinstance(x, str):
-                return value in x
-            elif lookup == "startswith" and isinstance(x, str):
-                return x.startswith(value)
-            elif lookup == "endswith" and isinstance(x, str):
-                return x.endswith(value)
-            elif lookup == "in":
-                return x in value
-            else:
-                return False
-        except TypeError as e:
-            print(e)
-            return False
 
     def topological_sort_inputs(self) -> List[str]:
         from collections import defaultdict
