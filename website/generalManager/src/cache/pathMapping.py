@@ -47,7 +47,7 @@ class PathMap:
             self.start_class_name = path_start
 
     def to(
-        self, path_destination: PathDestination | type[GeneralManager]
+        self, path_destination: PathDestination | type[GeneralManager] | str
     ) -> PathTracer | None:
         if isinstance(path_destination, type):
             path_destination = path_destination.__name__
@@ -58,7 +58,7 @@ class PathMap:
         return tracer
 
     def goTo(
-        self, path_destination: PathDestination | type[GeneralManager]
+        self, path_destination: PathDestination | type[GeneralManager] | str
     ) -> GeneralManager | Bucket | None:
         if isinstance(path_destination, type):
             path_destination = path_destination.__name__
