@@ -590,7 +590,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         for item in self._data:
             yield self._manager_class(item.pk)
 
-    def __or__(self, other: object) -> Bucket[GeneralManagerType]:
+    def __or__(
+        self,
+        other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType],
+    ) -> DatabaseBucket[GeneralManagerType]:
+        from generalManager.src.manager.generalManager import GeneralManager
+
+        if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
+            return self.__or__(self.filter(id__in=[other.id]))
         if not isinstance(other, self.__class__):
             raise ValueError("Cannot combine different bucket types")
         if self._manager_class != other._manager_class:

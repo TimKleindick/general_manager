@@ -198,7 +198,9 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         return self._data == other._data and self._manager_class == other._manager_class
 
     @abstractmethod
-    def __or__(self, other: object) -> Bucket[GeneralManagerType]:
+    def __or__(
+        self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]
+    ) -> Bucket[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
