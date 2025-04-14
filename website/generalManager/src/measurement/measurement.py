@@ -30,6 +30,18 @@ class Measurement:
             value = Decimal(str(value))
         self.__quantity = self.formatDecimal(value) * ureg.Quantity(1, unit)
 
+    def __getstate__(self):
+        state = {
+            "magnitude": str(self.quantity.magnitude),
+            "unit": str(self.quantity.units),
+        }
+        return state
+
+    def __setstate__(self, state):
+        value = Decimal(state["magnitude"])
+        unit = state["unit"]
+        self.__quantity = self.formatDecimal(value) * ureg.Quantity(1, unit)
+
     @property
     def quantity(self) -> pint.Quantity:
         return self.__quantity
