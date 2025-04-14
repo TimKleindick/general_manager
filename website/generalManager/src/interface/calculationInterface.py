@@ -192,6 +192,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         return f"{prefix}{main}{sufix} "
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     def filter(self, **kwargs: Any) -> CalculationBucket:
         filters = self.filters.copy()
         excludes = self.excludes.copy()
