@@ -3,11 +3,13 @@ from generalManager.src.interface.baseInterface import (
     InterfaceBase,
 )
 from website.settings import AUTOCREATE_GRAPHQL
-from typing import Any, Type, TYPE_CHECKING
+from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     from generalManager.src.interface.databaseInterface import ReadOnlyInterface
     from generalManager.src.manager.generalManager import GeneralManager
+
+GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 
 
 class GeneralManagerMeta(type):
@@ -50,13 +52,15 @@ class GeneralManagerMeta(type):
     ):
 
         def desciptorMethod(attr_name: str, new_class: type):
-            class Descriptor:
+            class Descriptor(Generic[GeneralManagerType]):
                 def __init__(self, attr_name: str, new_class: Type[GeneralManager]):
                     self.attr_name = attr_name
                     self.new_class = new_class
 
                 def __get__(
-                    self, instance: GeneralManager | None, owner: type | None = None
+                    self,
+                    instance: GeneralManager[GeneralManagerType] | None,
+                    owner: type | None = None,
                 ):
                     if instance is None:
                         return self.new_class.Interface.getFieldType(self.attr_name)

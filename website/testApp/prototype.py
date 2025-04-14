@@ -14,9 +14,9 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 from generalManager.src.interface import (
-    Bucket,
     DatabaseInterface,
     CalculationInterface,
+    DatabaseBucket,
 )
 from generalManager.src.manager import GeneralManager, graphQlProperty, Input
 from generalManager.src.permission import ManagerBasedPermission
@@ -38,7 +38,7 @@ class Project(GeneralManager):
     start_date: Optional[date]
     end_date: Optional[date]
     total_capex: Optional[Measurement]
-    derivative_list: list[Derivative]
+    derivative_list: DatabaseBucket[Derivative]
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
@@ -82,7 +82,7 @@ class Derivative(GeneralManager):
     estimated_volume: Optional[int]
     project: Project
     price: Optional[Measurement]
-    derivativevolume_list: Bucket[DerivativeVolume]
+    derivativevolume_list: DatabaseBucket[DerivativeVolume]
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
@@ -165,11 +165,12 @@ class DerivativeVolume(GeneralManager):
             _adjustmentMethod = generateVolume
 
 
-def getPossibleDates(project: Project):
+def getPossibleDates(project: Project) -> list[date]:
     dates = []
     for derivative in project.derivative_list:
         for volume in derivative.derivativevolume_list:
-            volume: DerivativeVolume
+            if not isinstance(volume.date, date):
+                continue
             dates.append(volume.date)
 
     return sorted(dates)
