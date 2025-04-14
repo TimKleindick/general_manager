@@ -8,7 +8,7 @@ import json
 # Eigene Module
 from generalManager.src.measurement.measurement import Measurement
 from generalManager.src.manager.generalManager import GeneralManagerMeta, GeneralManager
-from generalManager.src.manager.property import GraphQLProperty
+from generalManager.src.api.property import GraphQLProperty
 from generalManager.src.interface.baseInterface import InterfaceBase, Bucket
 
 if TYPE_CHECKING:

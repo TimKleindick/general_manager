@@ -6,7 +6,7 @@ from generalManager.src.interface.baseInterface import (
     Bucket,
     GeneralManagerType,
 )
-from generalManager.src.manager.property import GraphQLProperty
+from generalManager.src.api.property import GraphQLProperty
 
 
 class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):

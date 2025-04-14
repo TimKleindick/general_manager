@@ -14,7 +14,7 @@ class GeneralmanagerConfig(AppConfig):
         from generalManager.src.manager.meta import GeneralManagerMeta
         from generalManager.src.manager.generalManager import GeneralManager
         from generalManager.src.manager.input import Input
-        from generalManager.src.manager.property import graphQlProperty
+        from generalManager.src.api.property import graphQlProperty
 
         for general_manager_class in GeneralManagerMeta.all_classes:
             attributes = getattr(general_manager_class.Interface, "input_fields", {})
