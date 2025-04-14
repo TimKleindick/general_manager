@@ -1,4 +1,5 @@
 from typing import Any, Callable, get_type_hints
+from generalManager.src.cache.cacheDecorator import cached
 
 
 class GraphQLProperty(property):
@@ -15,4 +16,4 @@ def graphQlProperty(func: Callable[..., Any]):
     - die Resolver-Informationen speichert,
     - den Field-Typ aus dem Type-Hint ableitet.
     """
-    return GraphQLProperty(func)
+    return GraphQLProperty(cached()(func))

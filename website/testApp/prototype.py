@@ -31,6 +31,7 @@ from generalManager.src.factory import (
     LazyProjectName,
 )
 from generalManager.src.auxiliary import noneToZero
+from generalManager.src.cache.cacheDecorator import cached
 
 
 class Project(GeneralManager):
@@ -176,6 +177,10 @@ def getPossibleDates(project: Project) -> list[date]:
     return sorted(dates)
 
 
+def getPossibleProjects():
+    return Project.exclude(derivative__derivativevolume__isnull=True)
+
+
 class ProjectCommercial(GeneralManager):
     project: Project
     date: date
@@ -183,9 +188,7 @@ class ProjectCommercial(GeneralManager):
     class Interface(CalculationInterface):
         project = Input(
             Project,
-            possible_values=lambda: Project.exclude(
-                derivative__derivativevolume__isnull=True
-            ),
+            possible_values=getPossibleProjects,
         )
         date = Input(date, possible_values=getPossibleDates)
 
