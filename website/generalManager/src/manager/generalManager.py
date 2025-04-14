@@ -23,6 +23,16 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     def __repr__(self):
         return f"{self.__class__.__name__}({self.__id})"
 
+    def __or__(
+        self, other: GeneralManager[GeneralManagerType] | Bucket[GeneralManagerType]
+    ) -> Bucket[GeneralManagerType]:
+        if isinstance(other, Bucket):
+            return other | self
+        elif isinstance(other, GeneralManager) and other.__class__ == self.__class__:
+            return self.filter(id__in=[self.id, other.id])
+        else:
+            raise TypeError(f"Unsupported type for union: {type(other)}")
+
     @property
     def id(self):
         return self.__id
