@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast, get_args
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.manager.generalManager import GeneralManager
-from generalManager.src.manager.property import GraphQLProperty
+from generalManager.src.api.property import GraphQLProperty
 from generalManager.src.interface.baseInterface import Bucket
 
 
