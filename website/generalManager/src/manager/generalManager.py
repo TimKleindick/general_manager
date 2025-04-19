@@ -7,6 +7,8 @@ from generalManager.src.interface.baseInterface import (
     GeneralManagerType,
 )
 from generalManager.src.api.property import GraphQLProperty
+from generalManager.src.cache.cacheTracker import addDependency
+from generalManager.src.cache.signals import dataChange
 
 
 class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
@@ -16,12 +18,16 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     def __init__(self, *args: Any, **kwargs: Any):
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
+        addDependency(self.__class__.__name__, "identification", f"{self.__id}")
 
     def __str__(self):
-        return f"{self.__class__.__name__}({self.__id})"
+        return f"{self.__class__.__name__}(**{self.__id})"
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({self.__id})"
+        return f"{self.__class__.__name__}(**{self.__id})"
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        return (self.__class__, tuple(self.__id.values()))
 
     def __or__(
         self, other: GeneralManager[GeneralManagerType] | Bucket[GeneralManagerType]
@@ -29,12 +35,12 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
         if isinstance(other, Bucket):
             return other | self
         elif isinstance(other, GeneralManager) and other.__class__ == self.__class__:
-            return self.filter(id__in=[self.id, other.id])
+            return self.filter(id__in=[self.__id, other.__id])
         else:
             raise TypeError(f"Unsupported type for union: {type(other)}")
 
     @property
-    def id(self):
+    def identification(self):
         return self.__id
 
     def __iter__(self):
@@ -48,6 +54,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
                 yield name, getattr(self, name)
 
     @classmethod
+    @dataChange
     def create(
         cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> GeneralManager:
@@ -56,6 +63,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
         )
         return cls(identification)
 
+    @dataChange
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> GeneralManager:
@@ -64,24 +72,42 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
             history_comment=history_comment,
             **kwargs,
         )
-        return self.__class__(self.__id)
+        return self.__class__(**self.identification)
 
+    @dataChange
     def deactivate(
         self, creator_id: int, history_comment: str | None = None
     ) -> GeneralManager:
         self._interface.deactivate(
             creator_id=creator_id, history_comment=history_comment
         )
-        return self.__class__(self.__id)
+        return self.__class__(**self.identification)
 
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
+        addDependency(cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}")
         return cls.Interface.filter(**kwargs)
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
+        addDependency(cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}")
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
     def all(cls) -> Bucket[GeneralManagerType]:
         return cls.Interface.filter()
+
+    @staticmethod
+    def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+        for key, value in kwargs.items():
+            if isinstance(value, GeneralManager):
+                kwargs[key] = value.identification
+            elif isinstance(value, list):
+                kwargs[key] = [
+                    v.identification for v in value if isinstance(v, GeneralManager)
+                ]
+            elif isinstance(value, tuple):
+                kwargs[key] = tuple(
+                    v.identification for v in value if isinstance(v, GeneralManager)
+                )
+        return kwargs if kwargs else None

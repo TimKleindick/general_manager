@@ -19,6 +19,7 @@ class Input(Generic[INPUT_TYPE]):
     ):
         self.type = type
         self.possible_values = possible_values
+        self.is_manager = issubclass(type, GeneralManager)
 
         if depends_on is not None:
             # Verwende die angegebenen Abhängigkeiten

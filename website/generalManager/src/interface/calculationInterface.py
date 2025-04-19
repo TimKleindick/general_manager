@@ -56,7 +56,9 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def getAttributes(cls) -> dict[str, Any]:
         return {
-            name: lambda self, name=name: self.identification.get(name)
+            name: lambda self, name=name: cls.input_fields[name].cast(
+                self.identification.get(name)
+            )
             for name in cls.input_fields.keys()
         }
 
@@ -151,6 +153,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self.__current_combinations = None
         self.sort_key = sort_key
         self.reverse = reverse
+
+    def __reduce__(self) -> generalManagerClassName | tuple[Any, ...]:
+        return (
+            self.__class__,
+            (
+                self._manager_class,
+                self.filters,
+                self.excludes,
+                self.sort_key,
+                self.reverse,
+            ),
+        )
 
     def __or__(
         self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]

@@ -1,9 +1,11 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, get_args
 from generalManager.src.manager.meta import GeneralManagerMeta
-from generalManager.src.manager.generalManager import GeneralManager
 from generalManager.src.api.property import GraphQLProperty
-from generalManager.src.interface.baseInterface import Bucket
+
+if TYPE_CHECKING:
+    from generalManager.src.interface.baseInterface import Bucket
+    from generalManager.src.manager.generalManager import GeneralManager
 
 
 type PathStart = str
@@ -32,6 +34,7 @@ class PathMap:
                     ] = PathTracer(start_class, destination_class)
 
     def __init__(self, path_start: PathStart | GeneralManager | type[GeneralManager]):
+        from generalManager.src.manager.generalManager import GeneralManager
 
         if isinstance(path_start, GeneralManager):
             self.start_instance = path_start
@@ -70,6 +73,17 @@ class PathMap:
             raise ValueError("Cannot call goTo on a PathMap without a start instance.")
         return tracer.traversePath(self.start_instance)
 
+    def getAllConnected(self) -> set[str]:
+        """
+        Returns a list of all classes that are connected to the start class.
+        """
+        connected_classes: set[str] = set()
+        for path_tuple in self.mapping.keys():
+            if path_tuple[0] == self.start_class_name:
+                destination_class_name = path_tuple[1]
+                connected_classes.add(destination_class_name)
+        return connected_classes
+
 
 class PathTracer:
     def __init__(
@@ -85,6 +99,8 @@ class PathTracer:
     def createPath(
         self, current_manager: type[GeneralManager], path: list[str]
     ) -> list[str] | None:
+        from generalManager.src.manager.generalManager import GeneralManager
+
         current_connections = current_manager.Interface.getAttributeTypes()
         for attr_name, attr_value in current_manager.__dict__.items():
             if not isinstance(attr_value, GraphQLProperty):
@@ -112,6 +128,8 @@ class PathTracer:
     def traversePath(
         self, start_instance: GeneralManager | Bucket
     ) -> GeneralManager | Bucket | None:
+        from generalManager.src.interface.baseInterface import Bucket
+
         current_instance = start_instance
         if not self.path:
             return None

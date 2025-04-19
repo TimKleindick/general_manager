@@ -125,7 +125,7 @@ class DBBasedInterface(InterfaceBase):
     def __createFilterDefinitions(**kwargs: Any) -> dict[str, Any]:
         filter_definitions: dict[str, Any] = {}
         for key, value in kwargs.items():
-            filter_definitions[key] = [value]
+            filter_definitions[key] = value
         return filter_definitions
 
     @classmethod
@@ -244,13 +244,12 @@ class DBBasedInterface(InterfaceBase):
                 cls._model._meta.get_field(field_name).related_model,
                 "_general_manager_class",
             ):
-                field_values[f"{field_name}_list"] = (
-                    lambda self, field_name=field_name, field_call=field_call: DatabaseBucket(
-                        getattr(self._instance, field_call).all(),
-                        self._instance._meta.get_field(
-                            field_name
-                        ).related_model._general_manager_class,  # type: ignore
-                    )
+                field_values[
+                    f"{field_name}_list"
+                ] = lambda self, field_name=field_name: self._instance._meta.get_field(
+                    field_name
+                ).related_model._general_manager_class.filter(
+                    **{self._instance.__class__.__name__.lower(): self.pk}
                 )
             else:
                 field_values[f"{field_name}_list"] = (
@@ -581,10 +580,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         data: models.QuerySet[modelsModel],
         manager_class: Type[GeneralManagerType],
         filter_definitions: dict[str, list[Any]] = {},
+        exclude_definitions: dict[str, list[Any]] = {},
     ):
+        if data is None:
+            data = manager_class.filter(**filter_definitions).exclude(
+                **exclude_definitions
+            )
         self._data = data
+
         self._manager_class = manager_class
-        self._filter_definitions = {**filter_definitions}
+        self.filters = {**filter_definitions}
+        self.excludes = {**exclude_definitions}
 
     def __iter__(self) -> Generator[GeneralManagerType]:
         for item in self._data:
@@ -608,9 +614,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             {},
         )
 
-    def __mergeFilterDefinitions(self, **kwargs: Any) -> dict[str, list[Any]]:
+    def __mergeFilterDefinitions(
+        self, basis: dict[str, list[Any]], **kwargs: Any
+    ) -> dict[str, list[Any]]:
         kwarg_filter: dict[str, list[Any]] = {}
-        for key, value in self._filter_definitions.items():
+        for key, value in basis.items():
             kwarg_filter[key] = value
         for key, value in kwargs.items():
             if key not in kwarg_filter:
@@ -619,15 +627,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         return kwarg_filter
 
     def filter(self, **kwargs: Any) -> DatabaseBucket:
-        merged_filter = self.__mergeFilterDefinitions(**kwargs)
+        merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
         return self.__class__(
-            self._data.filter(**kwargs), self._manager_class, merged_filter
+            self._data.filter(**kwargs),
+            self._manager_class,
+            merged_filter,
+            self.excludes,
         )
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket:
-        merged_filter = self.__mergeFilterDefinitions(**kwargs)
+        merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
         return self.__class__(
-            self._data.exclude(**kwargs), self._manager_class, merged_filter
+            self._data.exclude(**kwargs),
+            self._manager_class,
+            self.filters,
+            merged_exclude,
         )
 
     def first(self) -> GeneralManagerType | None:
