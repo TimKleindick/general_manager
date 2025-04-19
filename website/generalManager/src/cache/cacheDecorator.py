@@ -24,7 +24,6 @@ def cached(timeout: Optional[int] = None) -> Callable:
             ).hexdigest()
             cached_result = django_cache.get(django_cache_key)
             if cached_result is not None:
-                print("Cache hit:", django_cache_key)
                 return cached_result
             # Dependency Tracking aktivieren
             with DependencyTracker() as dependencies:
@@ -66,7 +65,6 @@ def cached(timeout: Optional[int] = None) -> Callable:
                     django_cache_key,
                     dependencies,
                 )
-            print("Cache miss:", django_cache_key)
             return result
 
         return wrapper
