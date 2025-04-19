@@ -49,6 +49,7 @@ class InterfaceBase(ABC):
 
     def __init__(self, *args: Any, **kwargs: Any):
         self.identification = self.parseInputFieldsToIdentification(*args, **kwargs)
+        self.formatIdentification()
 
     def parseInputFieldsToIdentification(
         self,
@@ -91,6 +92,18 @@ class InterfaceBase(ABC):
                     f"Circular dependency detected among inputs: {', '.join(unresolved)}"
                 )
         return identification
+
+    def formatIdentification(self) -> dict[str, Any]:
+        from generalManager.src.manager.generalManager import GeneralManager
+
+        for key, value in self.identification.items():
+            if isinstance(value, GeneralManager):
+                self.identification[key] = value.id
+            elif isinstance(value, (list, tuple)):
+                self.identification[key] = [
+                    v.id if isinstance(v, GeneralManager) else v for v in value
+                ]
+        return self.identification
 
     def _process_input(
         self, name: str, value: Any, identification: dict[str, Any]
@@ -191,11 +204,19 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     def __init__(self, manager_class: Type[GeneralManagerType]):
         self._manager_class = manager_class
         self._data = None
+        self.excludes = {}
+        self.filters = {}
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, self.__class__):
             return False
         return self._data == other._data and self._manager_class == other._manager_class
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        return (
+            self.__class__,
+            (None, self._manager_class, self.filters, self.excludes),
+        )
 
     @abstractmethod
     def __or__(

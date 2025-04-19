@@ -20,6 +20,8 @@ def parse_filters(
             # Sammle die Filter-Keyword-Argumente für das InputField
             if lookup == "":
                 lookup = "id"
+                if not isinstance(value, GeneralManager):
+                    value = input_field.cast(value)
                 value = value.id
             filters.setdefault(field_name, {}).setdefault("filter_kwargs", {})[
                 lookup
@@ -92,5 +94,4 @@ def apply_lookup(x: Any, lookup: str, value: Any) -> bool:
         else:
             return False
     except TypeError as e:
-        print(e)
         return False

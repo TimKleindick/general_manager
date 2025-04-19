@@ -1,5 +1,4 @@
 from typing import Any, Callable, get_type_hints
-from generalManager.src.cache.cacheDecorator import cached
 
 
 class GraphQLProperty(property):
@@ -10,6 +9,8 @@ class GraphQLProperty(property):
 
 
 def graphQlProperty(func: Callable[..., Any]):
+    from generalManager.src.cache.cacheDecorator import cached
+
     """
     Dekorator für GraphQL-Feld-Resolver, der automatisch:
     - die Methode als benutzerdefiniertes Property registriert,
