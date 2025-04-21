@@ -18,6 +18,7 @@ class MeasurementField(models.Field):  # type: ignore
         base_unit: str,
         null: bool = False,
         blank: bool = False,
+        editable: bool = True,
         *args: list[Any],
         **kwargs: dict[str, Any],
     ):
@@ -30,11 +31,16 @@ class MeasurementField(models.Field):  # type: ignore
             null_blank_kwargs["null"] = True
         if blank is True:
             null_blank_kwargs["blank"] = True
+        self.editable = editable
         self.value_field: models.DecimalField[Decimal] = models.DecimalField(
-            max_digits=30, decimal_places=10, db_index=True, **null_blank_kwargs
+            max_digits=30,
+            decimal_places=10,
+            db_index=True,
+            **null_blank_kwargs,
+            editable=editable,
         )
         self.unit_field: models.CharField[str] = models.CharField(
-            max_length=30, **null_blank_kwargs
+            max_length=30, **null_blank_kwargs, editable=editable
         )
         super().__init__(*args, **kwargs)
 
@@ -79,6 +85,8 @@ class MeasurementField(models.Field):  # type: ignore
         )
 
     def __set__(self, instance: Any, value: Any) -> None:
+        if self.editable is False:
+            raise ValidationError(f"{self.name} is not editable.")
         if value is None:
             setattr(instance, self.value_attr, None)
             setattr(instance, self.unit_attr, None)
