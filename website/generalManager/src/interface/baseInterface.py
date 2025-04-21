@@ -98,10 +98,11 @@ class InterfaceBase(ABC):
 
         for key, value in self.identification.items():
             if isinstance(value, GeneralManager):
-                self.identification[key] = value.id
+                self.identification[key] = value.identification
             elif isinstance(value, (list, tuple)):
                 self.identification[key] = [
-                    v.id if isinstance(v, GeneralManager) else v for v in value
+                    v.identification if isinstance(v, GeneralManager) else v
+                    for v in value
                 ]
         return self.identification
 
