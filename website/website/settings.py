@@ -124,5 +124,18 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-snowflake",  # Eine eindeutige Kennung für deinen Cache
+        "OPTIONS": {
+            "MAX_ENTRIES": 10000,  # Erhöht die maximale Anzahl der Einträge
+            "CULL_FREQUENCY": 3,  # Legt fest, wie viele Einträge entfernt werden, wenn das Limit erreicht wird
+        },
+    }
+}
+
+# GraphQL settings
 AUTOCREATE_GRAPHQL = True
 GRAPHQL_URL = "graphql/"
