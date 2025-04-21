@@ -603,7 +603,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         from generalManager.src.manager.generalManager import GeneralManager
 
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
-            return self.__or__(self.filter(id__in=[other.id]))
+            return self.__or__(self.filter(id__in=[getattr(other, "id")]))
         if not isinstance(other, self.__class__):
             raise ValueError("Cannot combine different bucket types")
         if self._manager_class != other._manager_class:
@@ -681,7 +681,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         from generalManager.src.manager.generalManager import GeneralManager
 
         if isinstance(item, GeneralManager):
-            return item.id in self._data.values_list("pk", flat=True)
+            return getattr(item, "id") in self._data.values_list("pk", flat=True)
         return item in self._data
 
     def sort(

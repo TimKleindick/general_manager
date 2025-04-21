@@ -172,7 +172,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         from generalManager.src.manager.generalManager import GeneralManager
 
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
-            return self.__or__(self.filter(id__in=[other.id]))
+            return self.__or__(self.filter(id__in=[other.identification]))
         if not isinstance(other, self.__class__):
             raise ValueError("Cannot combine different bucket types")
         if self._manager_class != other._manager_class:
