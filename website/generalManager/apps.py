@@ -48,11 +48,26 @@ class GeneralmanagerConfig(AppConfig):
 
             for general_manager_class in GeneralManagerMeta.pending_graphql_interfaces:
                 GraphQL.createGraphqlInterface(general_manager_class)
+                if general_manager_class.__name__ == "Project":
+                    GraphQL.createGraphqlMutation(general_manager_class)
 
             query_class = type("Query", (graphene.ObjectType,), GraphQL._query_fields)
             GraphQL._query_class = query_class
 
-            schema = graphene.Schema(query=GraphQL._query_class)
+            mutation_class = type(
+                "Mutation",
+                (graphene.ObjectType,),
+                {
+                    name: mutation.Field()
+                    for name, mutation in GraphQL._mutation_fields.items()
+                },
+            )
+            GraphQL._mutation_class = mutation_class
+
+            schema = graphene.Schema(
+                query=GraphQL._query_class,
+                mutation=GraphQL._mutation_class,
+            )
             self.add_graphql_url(schema)
 
     def add_graphql_url(self, schema):
