@@ -101,7 +101,10 @@ class PathTracer:
     ) -> list[str] | None:
         from generalManager.src.manager.generalManager import GeneralManager
 
-        current_connections = current_manager.Interface.getAttributeTypes()
+        current_connections = {
+            attr_name: attr_value["type"]
+            for attr_name, attr_value in current_manager.Interface.getAttributeTypes().items()
+        }
         for attr_name, attr_value in current_manager.__dict__.items():
             if not isinstance(attr_value, GraphQLProperty):
                 continue

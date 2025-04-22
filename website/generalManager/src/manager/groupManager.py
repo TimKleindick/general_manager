@@ -238,7 +238,9 @@ class GroupedManager(Generic[GeneralManagerType]):
         if item == "id":
             return None
 
-        data_type = self._manager_class.Interface.getAttributeTypes().get(item)
+        data_type = (
+            self._manager_class.Interface.getAttributeTypes().get(item, {}).get("type")
+        )
         if data_type is None and item in self._manager_class.__dict__:
             attr_value = self._manager_class.__dict__[item]
             if isinstance(attr_value, GraphQLProperty):

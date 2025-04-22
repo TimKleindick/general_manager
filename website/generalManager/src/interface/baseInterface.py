@@ -10,6 +10,7 @@ from typing import (
     Iterable,
     ClassVar,
     Callable,
+    TypedDict,
 )
 from datetime import datetime
 from django.conf import settings
@@ -40,6 +41,19 @@ type classPostCreationMethod = Callable[
     [newlyCreatedGeneralManagerClass, newlyCreatedInterfaceClass, relatedClass],
     None,
 ]
+
+
+class AttributeTypedDict(TypedDict):
+    """
+    This class is used to define the type of the attributes dictionary.
+    It is used to define the type of the attributes dictionary in the
+    GeneralManager class.
+    """
+
+    type: type
+    default: Any
+    is_required: bool
+    is_editable: bool
 
 
 class InterfaceBase(ABC):
@@ -154,7 +168,7 @@ class InterfaceBase(ABC):
 
     @classmethod
     @abstractmethod
-    def getAttributeTypes(cls) -> dict[str, type]:
+    def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         raise NotImplementedError
 
     @classmethod

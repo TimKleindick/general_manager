@@ -32,6 +32,7 @@ from generalManager.src.interface.baseInterface import (
     newlyCreatedInterfaceClass,
     relatedClass,
     GeneralManagerType,
+    AttributeTypedDict,
 )
 from generalManager.src.manager.input import Input
 
@@ -135,7 +136,7 @@ class DBBasedInterface(InterfaceBase):
         return instance.history.filter(history_date__lte=search_date).last()  # type: ignore
 
     @classmethod
-    def getAttributeTypes(cls) -> dict[str, type]:
+    def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         TRANSLATION: dict[Type[models.Field[Any, Any]], type] = {
             models.fields.BigAutoField: int,
             models.AutoField: int,
@@ -154,24 +155,47 @@ class DBBasedInterface(InterfaceBase):
             models.URLField: str,
             models.TimeField: datetime,
         }
-        fields: dict[str, Type[models.Field[Any, Any]]] = {}
+        fields: dict[str, AttributeTypedDict] = {}
         field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
         for field_name in field_name_list:
-            fields[field_name] = type(getattr(cls, field_name))
+            field: models.Field = getattr(cls._model, field_name)
+            fields[field_name] = {
+                "type": type(field),
+                "is_required": not field.null,
+                "is_editable": field.editable,
+                "default": field.default,
+            }
 
         for field_name in cls.__getModelFields():
             if field_name not in to_ignore_list:
-                fields[field_name] = type(getattr(cls._model, field_name).field)
+                field: models.Field = getattr(cls._model, field_name).field
+                fields[field_name] = {
+                    "type": type(field),
+                    "is_required": not field.null,
+                    "is_editable": field.editable,
+                    "default": field.default,
+                }
 
         for field_name in cls.__getForeignKeyFields():
-            related_model = cls._model._meta.get_field(field_name).related_model
+            field = cls._model._meta.get_field(field_name)
+            related_model = field.related_model
             if related_model and hasattr(
                 related_model,
                 "_general_manager_class",
             ):
-                fields[field_name] = related_model._general_manager_class
+                fields[field_name] = {
+                    "type": related_model._general_manager_class,
+                    "is_required": not field.null,
+                    "is_editable": field.editable,
+                    "default": field.default,
+                }
             elif related_model is not None:
-                fields[field_name] = related_model
+                fields[field_name] = {
+                    "type": related_model,
+                    "is_required": not field.null,
+                    "is_editable": field.editable,
+                    "default": field.default,
+                }
 
         for field_name, field_call in [
             *cls.__getManyToManyFields(),
@@ -187,12 +211,22 @@ class DBBasedInterface(InterfaceBase):
                 related_model,
                 "_general_manager_class",
             ):
-                fields[f"{field_name}_list"] = related_model._general_manager_class
+                fields[f"{field_name}_list"] = {
+                    "type": related_model._general_manager_class,
+                    "is_required": False,
+                    "is_editable": False,
+                    "default": None,
+                }
             elif related_model is not None:
-                fields[f"{field_name}_list"] = related_model
+                fields[f"{field_name}_list"] = {
+                    "type": related_model,
+                    "is_required": False,
+                    "is_editable": False,
+                    "default": None,
+                }
 
         return {
-            field_name: TRANSLATION.get(field, field)
+            field_name: {**field, "type": TRANSLATION.get(field["type"], field["type"])}
             for field_name, field in fields.items()
         }
 

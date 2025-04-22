@@ -23,6 +23,7 @@ from generalManager.src.interface.baseInterface import (
     newlyCreatedInterfaceClass,
     relatedClass,
     GeneralManagerType,
+    AttributeTypedDict,
 )
 from generalManager.src.manager.input import Input
 from generalManager.src.auxiliary.filterParser import parse_filters
@@ -50,8 +51,16 @@ class CalculationInterface(InterfaceBase):
         raise NotImplementedError("Calculations do not store data.")
 
     @classmethod
-    def getAttributeTypes(cls) -> dict[str, type]:
-        return {name: field.type for name, field in cls.input_fields.items()}
+    def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
+        return {
+            name: {
+                "type": field.type,
+                "default": None,
+                "is_editable": False,
+                "is_required": True,
+            }
+            for name, field in cls.input_fields.items()
+        }
 
     @classmethod
     def getAttributes(cls) -> dict[str, Any]:

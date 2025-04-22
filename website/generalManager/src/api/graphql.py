@@ -51,6 +51,7 @@ class GraphQL:
     """
 
     _query_class: type[graphene.ObjectType] | None = None
+    _mutaion_class: type[graphene.ObjectType] | None = None
     graphql_type_registry: dict[str, type] = {}
     graphql_filter_type_registry: dict[str, type] = {}
 
@@ -73,7 +74,8 @@ class GraphQL:
         fields: dict[str, Any] = {}
 
         # Felder aus dem Interface mappen
-        for field_name, field_type in interface_cls.getAttributeTypes().items():
+        for field_name, field_info in interface_cls.getAttributeTypes().items():
+            field_type = field_info["type"]
             fields[field_name] = cls._mapFieldToGraphene(field_type, field_name)
             resolver_name = f"resolve_{field_name}"
             fields[resolver_name] = cls._createResolver(field_name, field_type)
@@ -107,8 +109,9 @@ class GraphQL:
         sort_options = []
         for (
             field_name,
-            field_type,
+            field_info,
         ) in generalManagerClass.Interface.getAttributeTypes().items():
+            field_type = field_info["type"]
             if issubclass(field_type, GeneralManager):
                 continue
             elif issubclass(field_type, Measurement):
@@ -143,7 +146,8 @@ class GraphQL:
             return GraphQL.graphql_filter_type_registry[graphene_filter_type_name]
 
         filter_fields = {}
-        for attr_name, attr_type in field_type.Interface.getAttributeTypes().items():
+        for attr_name, attr_info in field_type.Interface.getAttributeTypes().items():
+            attr_type = attr_info["type"]
             if issubclass(attr_type, GeneralManager):
                 continue
             elif issubclass(attr_type, Measurement):
