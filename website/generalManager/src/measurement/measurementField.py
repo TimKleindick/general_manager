@@ -42,7 +42,7 @@ class MeasurementField(models.Field):  # type: ignore
         self.unit_field: models.CharField[str] = models.CharField(
             max_length=30, **null_blank_kwargs, editable=editable
         )
-        super().__init__(*args, **kwargs)
+        super().__init__(null=null, blank=blank, *args, **kwargs)
 
     def contribute_to_class(
         self, cls: type, name: str, private_only: bool = False, **kwargs: dict[str, Any]
