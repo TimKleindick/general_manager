@@ -226,20 +226,6 @@ class GraphQL:
         return filter_class
 
     @staticmethod
-    def _mapFieldToGrapheneWrite(field_type: type, field_name: str) -> Any:
-        """
-        Ordnet einen Python-Typ einem entsprechenden Graphene-Feld zu.
-        """
-        if issubclass(field_type, Measurement):
-            return graphene.String()
-        elif issubclass(field_type, GeneralManager):
-            if field_name.endswith("_list"):
-                return graphene.List(graphene.ID)
-            return graphene.ID()
-        else:
-            return GraphQL._mapFieldToGrapheneBaseType(field_type, field_name)
-
-    @staticmethod
     def _mapFieldToGrapheneRead(field_type: type, field_name: str) -> Any:
         if issubclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
