@@ -37,16 +37,6 @@ class CalculationInterface(InterfaceBase):
     _interface_type = "calculation"
     input_fields: dict[str, Input]
 
-    @classmethod
-    def create(cls, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("Calculations are generated, not created directly.")
-
-    def update(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("Calculations cannot be updated.")
-
-    def deactivate(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("Calculations cannot be deactivated.")
-
     def getData(self, search_date: datetime | None = None) -> Any:
         raise NotImplementedError("Calculations do not store data.")
 

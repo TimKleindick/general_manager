@@ -439,22 +439,6 @@ class ReadOnlyInterface(DBBasedInterface):
     _interface_type = "readonly"
 
     @classmethod
-    def create(cls, **kwargs: Any) -> None:
-        raise NotImplementedError(
-            "Create operation is not allowed in ReadOnlyInterface."
-        )
-
-    def update(self, **kwargs: Any) -> None:
-        raise NotImplementedError(
-            "Update operation is not allowed in ReadOnlyInterface."
-        )
-
-    def deactivate(self, **kwargs: Any) -> None:
-        raise NotImplementedError(
-            "Deactivate operation is not allowed in ReadOnlyInterface."
-        )
-
-    @classmethod
     def sync_data(cls) -> None:
         model: Type[models.Model] | None = getattr(cls, "_model", None)
         parent_class = getattr(cls, "_parent_class", None)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import graphene
-from typing import Any, Callable, get_args, TYPE_CHECKING, cast
+from typing import Any, Callable, get_args, TYPE_CHECKING, cast, Literal, Type
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -70,169 +70,36 @@ class GraphQL:
           - Der neue Type in das Registry eingetragen und Mutationen angehängt.
         """
 
-        def create_mutation(
-            self,
-            info: GraphQLResolveInfo,
-            **kwargs: dict[str, Any],
-        ) -> GeneralManager:
-            instance = generalManagerClass.create(
-                **kwargs, creator_id=info.context.user.id
-            )
-            return self.__class__(
-                **{
-                    "success": True,
-                    "errors": [],
-                    generalManagerClass.__name__: instance,
-                }
-            )
-
-        def update_mutation(
-            self,
-            info: GraphQLResolveInfo,
-            **kwargs: dict[str, Any],
-        ) -> GeneralManager:
-            manager_id = kwargs.pop("id", None)
-            instance = generalManagerClass(manager_id).update(
-                creator_id=info.context.user.id, **kwargs
-            )
-            return self.__class__(
-                **{
-                    "success": True,
-                    "errors": [],
-                    generalManagerClass.__name__: instance,
-                }
-            )
-
-        def delete_mutation(
-            self,
-            info: GraphQLResolveInfo,
-            **kwargs: dict[str, Any],
-        ) -> GeneralManager:
-            manager_id = kwargs.pop("id", None)
-            instance = generalManagerClass(manager_id).deactivate(
-                creator_id=info.context.user.id
-            )
-            return self.__class__(
-                **{
-                    "success": True,
-                    "errors": [],
-                    generalManagerClass.__name__: None,
-                }
-            )
-
         interface_cls: InterfaceBase | None = getattr(
             generalManagerClass, "Interface", None
         )
         if not interface_cls:
             return
 
-        create_name = f"Create{generalManagerClass.__name__}"
-        update_name = f"Update{generalManagerClass.__name__}"
-        delete_name = f"Delete{generalManagerClass.__name__}"
-        fields: dict[str, Any] = {}
-
-        for field_name, field_info in interface_cls.getAttributeTypes().items():
-            field_type = field_info["type"]
-            is_req = field_info["is_required"]
-            default = field_info["default"]
-
-            # --- Schreib-Argumente: nur IDs bzw. Listen von IDs ---
-            if issubclass(field_type, GeneralManager) and field_name.endswith("_list"):
-                fields[field_name] = graphene.List(
-                    graphene.ID,
-                    required=is_req,
-                    default_value=default,
-                )
-            elif issubclass(field_type, GeneralManager):
-                fields[field_name] = graphene.ID(
-                    required=is_req,
-                    default_value=default,
-                )
-            elif issubclass(field_type, Measurement):
-                # Measurement-Objekte als Input-Type instanziieren
-                fields[field_name] = graphene.String(
-                    required=is_req,
-                    default_value=default,
-                )
-            else:
-                # Skalare und Messwerte direkt als Input-Type instanziieren
-                # _mapFieldToGraphene liefert für write-Skalare z.B. String(), Boolean() etc.
-                inst = cls._mapFieldToGraphene(field_type, field_name)
-                # Zieh den zugrundeliegenden Typ heraus, falls nötig
-                base = getattr(inst, "_type", inst.__class__)
-                # Jetzt als Argument-Feld instanziieren
-                fields[field_name] = base(
-                    required=is_req,
-                    default_value=default,
-                )
-
-            # Meta‑Infos, weiterverwendet beim Erzeugen der update‑Arguments
-            setattr(fields[field_name], "required", field_info["is_required"])
-            setattr(fields[field_name], "editable", field_info["is_editable"])
-            setattr(
-                fields[field_name], "default", default
-            )  # Felder aus dem Interface mappen
-        # for field_name, field_info in interface_cls.getAttributeTypes().items():
-        #     field_type = field_info["type"]
-        #     fields[field_name] = cls._mapFieldToGraphene(field_type, field_name)
-        #     fields[field_name].required = field_info["is_required"]
-        #     fields[field_name].editable = field_info["is_editable"]
-        #     fields[field_name].default = field_info["default"]
-
-        fields["history_comment"] = graphene.String()
-        setattr(fields["history_comment"], "editable", True)
-
-        return_values = {
+        default_return_values = {
             "success": graphene.Boolean(),
             "errors": graphene.List(graphene.String),
             generalManagerClass.__name__: graphene.Field(
                 lambda: GraphQL.graphql_type_registry[generalManagerClass.__name__]
             ),
         }
+        if InterfaceBase.create.__code__ != interface_cls.create.__code__:
+            create_name = f"Create{generalManagerClass.__name__}"
+            cls._mutation_fields[create_name] = cls.generateCreateMutationClass(
+                generalManagerClass, default_return_values
+            )
 
-        create_arguments = type(
-            "Arguments",
-            (),
-            {
-                field_name: field
-                for field_name, field in fields.items()
-                if field_name != "id"
-            },
-        )
-        update_arguments = type(
-            "Arguments",
-            (),
-            {
-                field_name: field
-                for field_name, field in fields.items()
-                if field.editable
-            },
-        )
-        delete_arguments = type("Arguments", (), {"id": graphene.ID(required=True)})
+        if InterfaceBase.update.__code__ != interface_cls.update.__code__:
+            update_name = f"Update{generalManagerClass.__name__}"
+            cls._mutation_fields[update_name] = cls.generateUpdateMutationClass(
+                generalManagerClass, default_return_values
+            )
 
-        # Mutationen erstellen
-        create_mutation_class = type(
-            create_name,
-            (graphene.Mutation,),
-            {**return_values, "Arguments": create_arguments, "mutate": create_mutation},
-        )
-        update_mutation_class = type(
-            update_name,
-            (graphene.Mutation,),
-            {**return_values, "Arguments": update_arguments, "mutate": update_mutation},
-        )
-        delete_mutation_class = type(
-            delete_name,
-            (graphene.Mutation,),
-            {**return_values, "Arguments": delete_arguments, "mutate": delete_mutation},
-        )
-
-        if not hasattr(cls, "_mutation_fields"):
-            cls._mutation_fields: dict[str, Any] = {}
-        # Mutationen in das Registry eintragen
-        cls._mutation_fields[create_name] = create_mutation_class
-        cls._mutation_fields[update_name] = update_mutation_class
-        cls._mutation_fields[delete_name] = delete_mutation_class
+        if InterfaceBase.deactivate.__code__ != interface_cls.deactivate.__code__:
+            delete_name = f"Delete{generalManagerClass.__name__}"
+            cls._mutation_fields[delete_name] = cls.generateDeleteMutationClass(
+                generalManagerClass, default_return_values
+            )
 
     @classmethod
     def createGraphqlInterface(cls, generalManagerClass: GeneralManagerMeta) -> None:
@@ -255,7 +122,7 @@ class GraphQL:
         # Felder aus dem Interface mappen
         for field_name, field_info in interface_cls.getAttributeTypes().items():
             field_type = field_info["type"]
-            fields[field_name] = cls._mapFieldToGraphene(field_type, field_name)
+            fields[field_name] = cls._mapFieldToGrapheneRead(field_type, field_name)
             resolver_name = f"resolve_{field_name}"
             fields[resolver_name] = cls._createResolver(field_name, field_type)
 
@@ -268,7 +135,7 @@ class GraphQL:
                     if type_hints
                     else cast(type, attr_value.graphql_type_hint)
                 )
-                fields[attr_name] = cls._mapFieldToGraphene(field_type, attr_name)
+                fields[attr_name] = cls._mapFieldToGrapheneRead(field_type, attr_name)
                 fields[f"resolve_{attr_name}"] = cls._createResolver(
                     attr_name, field_type
                 )
@@ -336,18 +203,18 @@ class GraphQL:
                     filter_fields[f"{attr_name}_value__{option}"] = graphene.Float()
                     filter_fields[f"{attr_name}_unit__{option}"] = graphene.String()
             else:
-                filter_fields[attr_name] = GraphQL._mapFieldToGraphene(
+                filter_fields[attr_name] = GraphQL._mapFieldToGrapheneRead(
                     attr_type, attr_name
                 )
                 if issubclass(attr_type, (int, float, Decimal, date, datetime)):
                     for option in number_options:
                         filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGraphene(attr_type, attr_name)
+                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
                         )
                 elif issubclass(attr_type, str):
                     for option in string_options:
                         filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGraphene(attr_type, attr_name)
+                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
                         )
 
         filter_class = type(
@@ -359,21 +226,22 @@ class GraphQL:
         return filter_class
 
     @staticmethod
-    def _mapFieldToGraphene(field_type: type, field_name: str) -> Any:
+    def _mapFieldToGrapheneWrite(field_type: type, field_name: str) -> Any:
         """
         Ordnet einen Python-Typ einem entsprechenden Graphene-Feld zu.
         """
-        if issubclass(field_type, str):
+        if issubclass(field_type, Measurement):
             return graphene.String()
-        elif issubclass(field_type, bool):
-            return graphene.Boolean()
-        elif issubclass(field_type, int):
-            return graphene.Int()
-        elif issubclass(field_type, (float, Decimal)):
-            return graphene.Float()
-        elif issubclass(field_type, (date, datetime)):
-            return graphene.Date()
-        elif issubclass(field_type, Measurement):
+        elif issubclass(field_type, GeneralManager):
+            if field_name.endswith("_list"):
+                return graphene.List(graphene.ID)
+            return graphene.ID()
+        else:
+            return GraphQL._mapFieldToGrapheneBaseType(field_type, field_name)
+
+    @staticmethod
+    def _mapFieldToGrapheneRead(field_type: type, field_name: str) -> Any:
+        if issubclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
@@ -392,6 +260,24 @@ class GraphQL:
             return graphene.Field(
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
             )
+        else:
+            return GraphQL._mapFieldToGrapheneBaseType(field_type, field_name)
+
+    @staticmethod
+    def _mapFieldToGrapheneBaseType(field_type: type, field_name: str) -> Any:
+        """
+        Ordnet einen Python-Typ einem entsprechenden Graphene-Feld zu.
+        """
+        if issubclass(field_type, str):
+            return graphene.String()
+        elif issubclass(field_type, bool):
+            return graphene.Boolean()
+        elif issubclass(field_type, int):
+            return graphene.Int()
+        elif issubclass(field_type, (float, Decimal)):
+            return graphene.Float()
+        elif issubclass(field_type, (date, datetime)):
+            return graphene.Date()
         else:
             return graphene.String()
 
@@ -618,7 +504,7 @@ class GraphQL:
             elif input_field_name == "id":
                 identification_fields[input_field_name] = graphene.ID(required=True)
             else:
-                identification_fields[input_field_name] = cls._mapFieldToGraphene(
+                identification_fields[input_field_name] = cls._mapFieldToGrapheneRead(
                     input_field.type, input_field_name
                 )
                 identification_fields[input_field_name].required = True
@@ -632,3 +518,211 @@ class GraphQL:
 
         cls._query_fields[item_field_name] = item_field
         cls._query_fields[f"resolve_{item_field_name}"] = resolver
+
+    @classmethod
+    def createWriteFields(cls, interface_cls: InterfaceBase) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+
+        for name, info in interface_cls.getAttributeTypes().items():
+            if name in ["changed_by", "created_at", "updated_at"]:
+                continue
+
+            typ = info["type"]
+            req = info["is_required"]
+            if req:
+                print(name)
+            default = info["default"]
+
+            if issubclass(typ, GeneralManager):
+                if name.endswith("_list"):
+                    fld = graphene.List(
+                        graphene.ID,
+                        required=req,
+                        default_value=default,
+                    )
+                else:
+                    fld = graphene.ID(
+                        required=req,
+                        default_value=default,
+                    )
+
+            elif issubclass(typ, Measurement):
+                print(f"Measurement {name} als String", req, default)
+                fld = graphene.String(
+                    required=req,
+                    default_value=default,
+                )
+
+            else:
+                base = cls._mapFieldToGrapheneBaseType(typ, name)
+                # Base ist z.B. String(), Int() … wir müssen die Klasse und ggf. Default extrahieren
+                base_cls = getattr(base, "_type", base.__class__)
+                fld = base_cls(
+                    required=req,
+                    default_value=default,
+                )
+
+            # Markierung, damit Dein generate*-Code weiß, was editable ist
+            setattr(fld, "editable", info["is_editable"])
+            fields[name] = fld
+
+        # history_comment bleibt optional ohne Default
+        fields["history_comment"] = graphene.String()
+        setattr(fields["history_comment"], "editable", True)
+
+        return fields
+
+    @classmethod
+    def generateCreateMutationClass(
+        cls,
+        generalManagerClass: type[GeneralManager],
+        default_return_values: dict[str, Any],
+    ) -> type[graphene.Mutation] | None:
+        """
+        Generiert eine Mutation-Klasse für die Erstellung eines Objekts.
+        """
+        interface_cls: InterfaceBase | None = getattr(
+            generalManagerClass, "Interface", None
+        )
+        if not interface_cls:
+            return
+
+        def create_mutation(
+            self,
+            info: GraphQLResolveInfo,
+            **kwargs: dict[str, Any],
+        ) -> GeneralManager:
+            instance = generalManagerClass.create(
+                **kwargs, creator_id=info.context.user.id
+            )
+            return self.__class__(
+                **{
+                    "success": True,
+                    "errors": [],
+                    generalManagerClass.__name__: instance,
+                }
+            )
+
+        return type(
+            f"Create{generalManagerClass.__name__}",
+            (graphene.Mutation,),
+            {
+                **default_return_values,
+                "Arguments": type(
+                    "Arguments",
+                    (),
+                    {
+                        field_name: field
+                        for field_name, field in cls.createWriteFields(
+                            interface_cls
+                        ).items()
+                        if field_name not in generalManagerClass.Interface.input_fields
+                    },
+                ),
+                "mutate": create_mutation,
+            },
+        )
+
+    @classmethod
+    def generateUpdateMutationClass(
+        cls,
+        generalManagerClass: type[GeneralManager],
+        default_return_values: dict[str, Any],
+    ) -> type[graphene.Mutation] | None:
+        """
+        Generiert eine Mutation-Klasse für die Aktualisierung eines Objekts.
+        """
+        interface_cls: InterfaceBase | None = getattr(
+            generalManagerClass, "Interface", None
+        )
+        if not interface_cls:
+            return
+
+        def update_mutation(
+            self,
+            info: GraphQLResolveInfo,
+            **kwargs: dict[str, Any],
+        ) -> GeneralManager:
+            manager_id = kwargs.pop("id", None)
+            instance = generalManagerClass(manager_id).update(
+                creator_id=info.context.user.id, **kwargs
+            )
+            return self.__class__(
+                **{
+                    "success": True,
+                    "errors": [],
+                    generalManagerClass.__name__: instance,
+                }
+            )
+
+        return type(
+            f"Create{generalManagerClass.__name__}",
+            (graphene.Mutation,),
+            {
+                **default_return_values,
+                "Arguments": type(
+                    "Arguments",
+                    (),
+                    {
+                        field_name: field
+                        for field_name, field in cls.createWriteFields(
+                            interface_cls
+                        ).items()
+                        if field.editable
+                    },
+                ),
+                "mutate": update_mutation,
+            },
+        )
+
+    @classmethod
+    def generateDeleteMutationClass(
+        cls,
+        generalManagerClass: type[GeneralManager],
+        default_return_values: dict[str, Any],
+    ) -> type[graphene.Mutation] | None:
+        """
+        Generiert eine Mutation-Klasse für die Löschung eines Objekts.
+        """
+        interface_cls: InterfaceBase | None = getattr(
+            generalManagerClass, "Interface", None
+        )
+        if not interface_cls:
+            return
+
+        def delete_mutation(
+            self,
+            info: GraphQLResolveInfo,
+            **kwargs: dict[str, Any],
+        ) -> GeneralManager:
+            manager_id = kwargs.pop("id", None)
+            instance = generalManagerClass(manager_id).deactivate(
+                creator_id=info.context.user.id
+            )
+            return self.__class__(
+                **{
+                    "success": True,
+                    "errors": [],
+                    generalManagerClass.__name__: instance,
+                }
+            )
+
+        return type(
+            f"Delete{generalManagerClass.__name__}",
+            (graphene.Mutation,),
+            {
+                **default_return_values,
+                "Arguments": type(
+                    "Arguments",
+                    (),
+                    {
+                        field_name: field
+                        for field_name, field in cls.createWriteFields(
+                            interface_cls
+                        ).items()
+                        if field_name in generalManagerClass.Interface.input_fields
+                    },
+                ),
+                "mutate": delete_mutation,
+            },
+        )
