@@ -150,15 +150,12 @@ class InterfaceBase(ABC):
                     )
 
     @classmethod
-    @abstractmethod
     def create(cls, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
-    @abstractmethod
     def update(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
-    @abstractmethod
     def deactivate(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
