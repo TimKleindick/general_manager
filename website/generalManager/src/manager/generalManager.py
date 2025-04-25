@@ -57,7 +57,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @dataChange
     def create(
         cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
-    ) -> GeneralManager:
+    ) -> GeneralManager[GeneralManagerType]:
         identification = cls.Interface.create(
             creator_id=creator_id, history_comment=history_comment, **kwargs
         )
@@ -66,7 +66,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @dataChange
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any
-    ) -> GeneralManager:
+    ) -> GeneralManager[GeneralManagerType]:
         self._interface.update(
             creator_id=creator_id,
             history_comment=history_comment,
@@ -77,7 +77,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @dataChange
     def deactivate(
         self, creator_id: int, history_comment: str | None = None
-    ) -> GeneralManager:
+    ) -> GeneralManager[GeneralManagerType]:
         self._interface.deactivate(
             creator_id=creator_id, history_comment=history_comment
         )
