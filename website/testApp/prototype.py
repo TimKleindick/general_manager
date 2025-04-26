@@ -31,7 +31,7 @@ from generalManager.src.factory import (
     LazyProjectName,
 )
 from generalManager.src.auxiliary import noneToZero
-from generalManager.src.cache.cacheDecorator import cached
+from generalManager.src.api.mutation import graphQlMutation
 
 
 class Project(GeneralManager):
@@ -221,3 +221,31 @@ class ProjectCommercial(GeneralManager):
         if isinstance(total, Measurement):
             return total
         return None
+
+
+@graphQlMutation()
+def startProject(
+    info,
+    project_name: str,
+    project_number: str,
+    derivative_name: str,
+    derivative_weight: Measurement,
+    derivative_volume: int,
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> tuple[Project, Derivative]:
+    project = Project.create(
+        name=project_name,
+        number=project_number,
+        start_date=start_date or date.today(),
+        end_date=end_date or date.today(),
+        creator_id=info.context.user.id,
+    )
+    derivative = Derivative.create(
+        name=derivative_name,
+        estimated_weight=derivative_weight,
+        estimated_volume=derivative_volume,
+        project=project,
+        creator_id=info.context.user.id,
+    )
+    return project, derivative

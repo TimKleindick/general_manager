@@ -55,7 +55,7 @@ class GraphQL:
 
     _query_class: type[graphene.ObjectType] | None = None
     _mutation_class: type[graphene.ObjectType] | None = None
-    _mutation_fields: dict[str, Any] = {}
+    _mutations: dict[str, Any] = {}
     _query_fields: dict[str, Any] = {}
     graphql_type_registry: dict[str, type] = {}
     graphql_filter_type_registry: dict[str, type] = {}
@@ -84,20 +84,20 @@ class GraphQL:
             ),
         }
         if InterfaceBase.create.__code__ != interface_cls.create.__code__:
-            create_name = f"Create{generalManagerClass.__name__}"
-            cls._mutation_fields[create_name] = cls.generateCreateMutationClass(
+            create_name = f"create{generalManagerClass.__name__}"
+            cls._mutations[create_name] = cls.generateCreateMutationClass(
                 generalManagerClass, default_return_values
             )
 
         if InterfaceBase.update.__code__ != interface_cls.update.__code__:
-            update_name = f"Update{generalManagerClass.__name__}"
-            cls._mutation_fields[update_name] = cls.generateUpdateMutationClass(
+            update_name = f"update{generalManagerClass.__name__}"
+            cls._mutations[update_name] = cls.generateUpdateMutationClass(
                 generalManagerClass, default_return_values
             )
 
         if InterfaceBase.deactivate.__code__ != interface_cls.deactivate.__code__:
-            delete_name = f"Delete{generalManagerClass.__name__}"
-            cls._mutation_fields[delete_name] = cls.generateDeleteMutationClass(
+            delete_name = f"delete{generalManagerClass.__name__}"
+            cls._mutations[delete_name] = cls.generateDeleteMutationClass(
                 generalManagerClass, default_return_values
             )
 
@@ -247,25 +247,25 @@ class GraphQL:
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
             )
         else:
-            return GraphQL._mapFieldToGrapheneBaseType(field_type, field_name)
+            return GraphQL._mapFieldToGrapheneBaseType(field_type)()
 
     @staticmethod
-    def _mapFieldToGrapheneBaseType(field_type: type, field_name: str) -> Any:
+    def _mapFieldToGrapheneBaseType(field_type: type) -> Type[Any]:
         """
         Ordnet einen Python-Typ einem entsprechenden Graphene-Feld zu.
         """
         if issubclass(field_type, str):
-            return graphene.String()
+            return graphene.String
         elif issubclass(field_type, bool):
-            return graphene.Boolean()
+            return graphene.Boolean
         elif issubclass(field_type, int):
-            return graphene.Int()
+            return graphene.Int
         elif issubclass(field_type, (float, Decimal)):
-            return graphene.Float()
+            return graphene.Float
         elif issubclass(field_type, (date, datetime)):
-            return graphene.Date()
+            return graphene.Date
         else:
-            return graphene.String()
+            return graphene.String
 
     @staticmethod
     def _parseInput(input_val: dict[str, Any] | str | None) -> dict[str, Any]:
@@ -515,8 +515,6 @@ class GraphQL:
 
             typ = info["type"]
             req = info["is_required"]
-            if req:
-                print(name)
             default = info["default"]
 
             if issubclass(typ, GeneralManager):
@@ -531,18 +529,8 @@ class GraphQL:
                         required=req,
                         default_value=default,
                     )
-
-            elif issubclass(typ, Measurement):
-                print(f"Measurement {name} als String", req, default)
-                fld = graphene.String(
-                    required=req,
-                    default_value=default,
-                )
-
             else:
-                base = cls._mapFieldToGrapheneBaseType(typ, name)
-                # Base ist z.B. String(), Int() … wir müssen die Klasse und ggf. Default extrahieren
-                base_cls = getattr(base, "_type", base.__class__)
+                base_cls = cls._mapFieldToGrapheneBaseType(typ)
                 fld = base_cls(
                     required=req,
                     default_value=default,
@@ -578,9 +566,18 @@ class GraphQL:
             info: GraphQLResolveInfo,
             **kwargs: dict[str, Any],
         ) -> GeneralManager:
-            instance = generalManagerClass.create(
-                **kwargs, creator_id=info.context.user.id
-            )
+            try:
+                instance = generalManagerClass.create(
+                    **kwargs, creator_id=info.context.user.id
+                )
+            except Exception as e:
+                return self.__class__(
+                    **{
+                        "success": False,
+                        "errors": [str(e)],
+                        generalManagerClass.__name__: None,
+                    }
+                )
             return self.__class__(
                 **{
                     "success": True,
@@ -594,6 +591,7 @@ class GraphQL:
             (graphene.Mutation,),
             {
                 **default_return_values,
+                "__doc__": f"Mutation to create {generalManagerClass.__name__}",
                 "Arguments": type(
                     "Arguments",
                     (),
@@ -629,10 +627,19 @@ class GraphQL:
             info: GraphQLResolveInfo,
             **kwargs: dict[str, Any],
         ) -> GeneralManager:
-            manager_id = kwargs.pop("id", None)
-            instance = generalManagerClass(manager_id).update(
-                creator_id=info.context.user.id, **kwargs
-            )
+            try:
+                manager_id = kwargs.pop("id", None)
+                instance = generalManagerClass(manager_id).update(
+                    creator_id=info.context.user.id, **kwargs
+                )
+            except Exception as e:
+                return self.__class__(
+                    **{
+                        "success": False,
+                        "errors": [str(e)],
+                        generalManagerClass.__name__: None,
+                    }
+                )
             return self.__class__(
                 **{
                     "success": True,
@@ -646,6 +653,7 @@ class GraphQL:
             (graphene.Mutation,),
             {
                 **default_return_values,
+                "__doc__": f"Mutation to update {generalManagerClass.__name__}",
                 "Arguments": type(
                     "Arguments",
                     (),
@@ -681,10 +689,19 @@ class GraphQL:
             info: GraphQLResolveInfo,
             **kwargs: dict[str, Any],
         ) -> GeneralManager:
-            manager_id = kwargs.pop("id", None)
-            instance = generalManagerClass(manager_id).deactivate(
-                creator_id=info.context.user.id
-            )
+            try:
+                manager_id = kwargs.pop("id", None)
+                instance = generalManagerClass(manager_id).deactivate(
+                    creator_id=info.context.user.id
+                )
+            except Exception as e:
+                return self.__class__(
+                    **{
+                        "success": False,
+                        "errors": [str(e)],
+                        generalManagerClass.__name__: None,
+                    }
+                )
             return self.__class__(
                 **{
                     "success": True,
@@ -698,6 +715,7 @@ class GraphQL:
             (graphene.Mutation,),
             {
                 **default_return_values,
+                "__doc__": f"Mutation to delete {generalManagerClass.__name__}",
                 "Arguments": type(
                     "Arguments",
                     (),
