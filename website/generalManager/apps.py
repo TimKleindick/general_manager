@@ -58,7 +58,7 @@ class GeneralmanagerConfig(AppConfig):
                 (graphene.ObjectType,),
                 {
                     name: mutation.Field()
-                    for name, mutation in GraphQL._mutation_fields.items()
+                    for name, mutation in GraphQL._mutations.items()
                 },
             )
             GraphQL._mutation_class = mutation_class
