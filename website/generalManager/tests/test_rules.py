@@ -3,6 +3,7 @@ from datetime import datetime
 from generalManager.src.rule.rule import (
     Rule,
 )
+from typing import cast
 
 
 class TestObject:
@@ -176,3 +177,13 @@ class RuleTests(TestCase):
         rule.evaluate(x)
         self.assertEqual(rule.lastEvaluationResult, False)
         self.assertEqual(rule.lastEvaluationInput, x)
+
+    def test_rule_with_type_hint(self):
+        """Testet die Rule-Klasse mit Typ-Hinweisen."""
+        func = lambda x: cast(float, x.price) < 100.0
+        x = TestObject(price=150.75)
+        rule = Rule[TestObject](func)  # type: ignore
+        result = rule.evaluate(x)
+        self.assertFalse(result)
+        error_message = rule.getErrorMessage()
+        self.assertIsNone(error_message)
