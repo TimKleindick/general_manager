@@ -526,10 +526,15 @@ class DatabaseInterface(DBBasedInterface):
     def create(
         cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> int:
+        from generalManager.src.manager.generalManager import GeneralManager
+
         cls.__checkForInvalidKwargs(cls._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls.__sortKwargs(cls._model, kwargs)
         instance = cls._model()
         for key, value in kwargs.items():
+            if isinstance(value, GeneralManager):
+                value = value.identification["id"]
+                key = f"{key}_id"
             setattr(instance, key, value)
         for key, value in many_to_many_kwargs.items():
             getattr(instance, key).set(value)
@@ -538,10 +543,15 @@ class DatabaseInterface(DBBasedInterface):
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> int:
+        from generalManager.src.manager.generalManager import GeneralManager
+
         self.__checkForInvalidKwargs(self._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self.__sortKwargs(self._model, kwargs)
         instance = self._model.objects.get(pk=self.pk)
         for key, value in kwargs.items():
+            if isinstance(value, GeneralManager):
+                value = value.identification["id"]
+                key = f"{key}_id"
             setattr(instance, key, value)
         for key, value in many_to_many_kwargs.items():
             getattr(instance, key).set(value)
