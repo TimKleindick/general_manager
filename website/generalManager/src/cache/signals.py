@@ -15,15 +15,13 @@ def dataChange(func: Callable[..., Any]) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         action = func.__name__
-        if isinstance(func, classmethod):
+        if func.__name__ == "create":
             sender = args[0]
             instance_before = None
-            identification = None
         else:
             instance = args[0]
             sender = instance.__class__
             instance_before = instance
-            identification = instance.id
         pre_data_change.send(
             sender=sender,
             instance=instance_before,
@@ -36,10 +34,7 @@ def dataChange(func: Callable[..., Any]) -> Callable:
             if isinstance(func, classmethod)
             else func(*args, **kwargs)
         )
-        if isinstance(func, classmethod):
-            instance = sender(result)
-        else:
-            instance = sender(identification)
+        instance = result
 
         post_data_change.send(
             sender=sender,
