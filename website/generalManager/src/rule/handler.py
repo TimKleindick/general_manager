@@ -1,13 +1,19 @@
 # generalManager/src/rule/handlers.py
 
-from typing import Dict, Any, Optional
+from __future__ import annotations
 import ast
+from typing import Dict, Optional, TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    # Forward-Reference auf Rule mit beliebigem Generic-Parameter
+    from generalManager.src.rule.rule import Rule
+    from generalManager.src.manager import GeneralManager
 
 
 class BaseRuleHandler:
-    """Interface für alle Rule-Handler."""
+    """Schnittstelle für Rule-Handler."""
 
-    function_name: str  # der Name, unter dem der Handler registriert wird
+    function_name: str  # ClassVar, der Name, unter dem dieser Handler registriert wird
 
     def handle(
         self,
@@ -15,10 +21,12 @@ class BaseRuleHandler:
         left: Optional[ast.expr],
         right: Optional[ast.expr],
         op: Optional[ast.cmpop],
-        var_values: Dict[str, Optional[Any]],
-        rule: Any,
+        var_values: Dict[str, Optional[object]],
+        rule: Rule,
     ) -> Dict[str, str]:
-        """Gibt ein Dict var→Fehlermeldung zurück."""
+        """
+        Erstelle Fehlermeldungen für den Vergleichs- oder Funktionsaufruf.
+        """
         raise NotImplementedError
 
 
@@ -27,53 +35,53 @@ class LenHandler(BaseRuleHandler):
 
     def handle(
         self,
-        node: ast.AST,  # jetzt ast.AST statt ast.Compare
+        node: ast.AST,
         left: Optional[ast.expr],
         right: Optional[ast.expr],
         op: Optional[ast.cmpop],
-        var_values: Dict[str, Optional[Any]],
-        rule: Any,
+        var_values: Dict[str, Optional[object]],
+        rule: Rule,
     ) -> Dict[str, str]:
-        # wir erwarten hier einen Compare-Knoten
+        # Wir erwarten hier einen Compare-Knoten
         if not isinstance(node, ast.Compare):
             return {}
-        left_node = node.left
-        right_node = node.comparators[0]
+        compare_node = node
+
+        left_node = compare_node.left
+        right_node = compare_node.comparators[0]
         op_symbol = rule._get_op_symbol(op)
 
-        if isinstance(left_node, ast.Call) and left_node.args:
-            arg_node = left_node.args[0]
-        else:
+        # Argument von len(...)
+        if not (isinstance(left_node, ast.Call) and left_node.args):
             raise ValueError("Invalid left node for len function")
+        arg_node = left_node.args[0]
 
         var_name = rule._get_node_name(arg_node)
         var_value = var_values.get(var_name)
 
-        right_value = rule._eval_node(right_node)
-        if right_value is None:
+        # --- Hier der Typ-Guard für right_value ---
+        raw = rule._eval_node(right_node)
+        if not isinstance(raw, (int, float)):
             raise ValueError("Invalid arguments for len function")
+        right_value: int | float = raw
 
-        # Schwellenwerte je nach Operator
+        # Schwellenwert je nach Operator
         if op_symbol == ">":
-            compare_value = right_value + 1
+            threshold = right_value + 1
         elif op_symbol == ">=":
-            compare_value = right_value
+            threshold = right_value
         elif op_symbol == "<":
-            compare_value = right_value - 1
+            threshold = right_value - 1
         elif op_symbol == "<=":
-            compare_value = right_value
+            threshold = right_value
         else:
-            compare_value = right_value
+            threshold = right_value
 
-        # Fehlermeldung bauen
+        # Fehlermeldung formulieren
         if op_symbol in (">", ">="):
-            msg = (
-                f"[{var_name}] ({var_value}) is too short (min length {compare_value})!"
-            )
+            msg = f"[{var_name}] ({var_value}) is too short (min length {threshold})!"
         elif op_symbol in ("<", "<="):
-            msg = (
-                f"[{var_name}] ({var_value}) is too long (max length {compare_value})!"
-            )
+            msg = f"[{var_name}] ({var_value}) is too long (max length {threshold})!"
         else:
             msg = f"[{var_name}] ({var_value}) must be {op_symbol} {right_value}!"
 
@@ -85,17 +93,19 @@ class IntersectionCheckHandler(BaseRuleHandler):
 
     def handle(
         self,
-        node: ast.AST,  # jetzt ast.AST statt ast.Call
+        node: ast.AST,
         left: Optional[ast.expr],
         right: Optional[ast.expr],
         op: Optional[ast.cmpop],
-        var_values: Dict[str, Optional[Any]],
-        rule: Any,
+        var_values: Dict[str, Optional[object]],
+        rule: Rule[GeneralManager],
     ) -> Dict[str, str]:
-        # Wir erwarten hier, dass `left` der Call-Knoten ist.
-        if not isinstance(left, ast.Call):
+        # Der Aufruf steht in `left`, nicht in `node`
+        call_node = cast(ast.Call, left)
+        if not isinstance(call_node, ast.Call):
             return {"error": "Invalid arguments for intersectionCheck"}
-        args = left.args
+
+        args = call_node.args
         if len(args) < 2:
             return {"error": "Invalid arguments for intersectionCheck"}
 

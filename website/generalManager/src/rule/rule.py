@@ -1,11 +1,20 @@
 # generalManager/src/rule/rule.py
+
 from __future__ import annotations
-from typing import Callable, Optional, Any, Dict, List, TypeVar, Generic, TYPE_CHECKING
 import ast
 import inspect
 import re
 import textwrap
-
+from typing import (
+    Callable,
+    ClassVar,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    TypeVar,
+    cast,
+)
 
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -15,13 +24,26 @@ from generalManager.src.rule.handler import (
     LenHandler,
     IntersectionCheckHandler,
 )
-
 from generalManager.src.manager.generalManager import GeneralManager
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
 
 class Rule(Generic[GeneralManagerType]):
+    """
+    Rule kapselt eine boolsche Bedingungsfunktion und erzeugt bei Fehlschlag
+    automatisierte oder benutzerdefinierte Fehlermeldungen auf Basis des AST.
+    """
+
+    _func: Callable[[GeneralManagerType], bool]
+    _custom_error_message: Optional[str]
+    _ignore_if_none: bool
+    _last_result: Optional[bool]
+    _last_input: Optional[GeneralManagerType]
+    _tree: ast.AST
+    _variables: List[str]
+    _handlers: Dict[str, BaseRuleHandler]
+
     def __init__(
         self,
         func: Callable[[GeneralManagerType], bool],
@@ -31,27 +53,28 @@ class Rule(Generic[GeneralManagerType]):
         self._func = func
         self._custom_error_message = custom_error_message
         self._ignore_if_none = ignore_if_none
-        self._last_result: Optional[bool] = None
-        self._last_input: Optional[Any] = None
+        self._last_result = None
+        self._last_input = None
 
-        # 1x Quelltext & AST parsen
+        # 1) Quelltext holen, Decorators abschneiden, Dedent
         src = inspect.getsource(func)
         lines = src.splitlines()
         if lines and lines[0].strip().startswith("@"):
             idx = next(i for i, L in enumerate(lines) if not L.strip().startswith("@"))
             src = "\n".join(lines[idx:])
         src = textwrap.dedent(src)
+
+        # 2) AST parsen & Elternverweise setzen
         self._tree = ast.parse(src)
-        # Elternverweise für komplexe Analysen
         for parent in ast.walk(self._tree):
             for child in ast.iter_child_nodes(parent):
                 setattr(child, "parent", parent)
 
-        # Attribute x.foo.bar als Variablen extrahieren
+        # 3) Variablen extrahieren
         self._variables = self._extract_variables()
 
-        # Handler laden: built-in + custom aus settings
-        self._handlers: Dict[str, BaseRuleHandler] = {}
+        # 4) Handler registrieren
+        self._handlers = {}  # type: Dict[str, BaseRuleHandler]
         for cls in (LenHandler, IntersectionCheckHandler):
             inst = cls()
             self._handlers[inst.function_name] = inst
@@ -77,26 +100,35 @@ class Rule(Generic[GeneralManagerType]):
         return self._last_result
 
     @property
-    def lastEvaluationInput(self) -> Optional[Any]:
+    def lastEvaluationInput(self) -> Optional[GeneralManagerType]:
         return self._last_input
 
     @property
     def ignoreIfNone(self) -> bool:
         return self._ignore_if_none
 
-    def evaluate(self, x: GeneralManagerType) -> bool | None:
+    def evaluate(self, x: GeneralManagerType) -> Optional[bool]:
+        """
+        Führt die Regel aus. Gibt False bei Fehlschlag, True bei Erfolg
+        und None, falls ignore_if_none aktiv ist und eine Variable None war.
+        """
         self._last_input = x
         vals = self._extract_variable_values(x)
         if self._ignore_if_none and any(v is None for v in vals.values()):
             self._last_result = None
-            return True
+            return None
+
         self._last_result = self._func(x)
         return self._last_result
 
     def validateCustomErrorMessage(self) -> None:
-        """Prüft, dass alle Variablen in der custom_error_message vorkommen."""
+        """
+        Stellt sicher, dass in der custom_error_message alle Variablen
+        aus self._variables verwendet werden.
+        """
         if not self._custom_error_message:
             return
+
         vars_in_msg = set(re.findall(r"{([^}]+)}", self._custom_error_message))
         missing = [v for v in self._variables if v not in vars_in_msg]
         if missing:
@@ -105,17 +137,18 @@ class Rule(Generic[GeneralManagerType]):
             )
 
     def getErrorMessage(self) -> Optional[Dict[str, str]]:
+        """
+        Liefert ein Dict variable→message, oder None, wenn kein Fehler.
+        """
         if self._last_result or self._last_result is None:
             return None
         if self._last_input is None:
             raise ValueError("No input provided for error message generation")
 
-        # Erst Custom-Template validieren
+        # Validierung und Ersetzen der Template-Platzhalter
         self.validateCustomErrorMessage()
-
         vals = self._extract_variable_values(self._last_input)
 
-        # custom message?
         if self._custom_error_message:
             formatted = re.sub(
                 r"{([^}]+)}",
@@ -124,23 +157,21 @@ class Rule(Generic[GeneralManagerType]):
             )
             return {v: formatted for v in self._variables}
 
-        # automatische Generierung
         errors = self._generate_error_messages(vals)
         return errors or None
 
     def _extract_variables(self) -> List[str]:
         class VarVisitor(ast.NodeVisitor):
-            def __init__(self):
-                self.vars: set[str] = set()
+            vars: set[str] = set()
 
             def visit_Attribute(self, node: ast.Attribute) -> None:
-                names: List[str] = []
-                curr = node
+                parts: list[str] = []
+                curr: ast.AST = node
                 while isinstance(curr, ast.Attribute):
-                    names.append(curr.attr)
+                    parts.append(curr.attr)
                     curr = curr.value
                 if isinstance(curr, ast.Name) and curr.id == "x":
-                    self.vars.add(".".join(reversed(names)))
+                    self.vars.add(".".join(reversed(parts)))
                 self.generic_visit(node)
 
         visitor = VarVisitor()
@@ -149,10 +180,10 @@ class Rule(Generic[GeneralManagerType]):
 
     def _extract_variable_values(
         self, x: GeneralManagerType
-    ) -> Dict[str, Optional[Any]]:
-        out: Dict[str, Any] = {}
+    ) -> Dict[str, Optional[object]]:
+        out: Dict[str, Optional[object]] = {}
         for var in self._variables:
-            obj = x
+            obj: object = x  # type: ignore
             for part in var.split("."):
                 obj = getattr(obj, part)
                 if obj is None:
@@ -160,42 +191,40 @@ class Rule(Generic[GeneralManagerType]):
             out[var] = obj
         return out
 
-    def _extract_comparisons(self) -> List[ast.Compare]:
+    def _extract_comparisons(self) -> list[ast.Compare]:
         class CompVisitor(ast.NodeVisitor):
-            def __init__(self):
-                self.comps: List[ast.Compare] = []
+            comps: list[ast.Compare] = []
 
             def visit_Compare(self, node: ast.Compare) -> None:
                 self.comps.append(node)
                 self.generic_visit(node)
 
-        v = CompVisitor()
-        v.visit(self._tree)
-        return v.comps
+        visitor = CompVisitor()
+        visitor.visit(self._tree)
+        return visitor.comps
 
     def _contains_logical_ops(self) -> bool:
         class LogicVisitor(ast.NodeVisitor):
-            def __init__(self):
-                self.found = False
+            found: bool = False
 
             def visit_BoolOp(self, node: ast.BoolOp) -> None:
                 if isinstance(node.op, (ast.And, ast.Or)):
                     self.found = True
                 self.generic_visit(node)
 
-        v = LogicVisitor()
-        v.visit(self._tree)
-        return v.found
+        visitor = LogicVisitor()
+        visitor.visit(self._tree)
+        return visitor.found
 
     def _generate_error_messages(
-        self, var_values: Dict[str, Optional[Any]]
+        self, var_values: Dict[str, Optional[object]]
     ) -> Dict[str, str]:
         errors: Dict[str, str] = {}
-        comps = self._extract_comparisons()
+        comparisons = self._extract_comparisons()
         logical = self._contains_logical_ops()
 
-        if comps:
-            for cmp in comps:
+        if comparisons:
+            for cmp in comparisons:
                 left, rights, ops = cmp.left, cmp.comparators, cmp.ops
                 for right, op in zip(rights, ops):
                     # Spezial-Handler?
@@ -234,7 +263,7 @@ class Rule(Generic[GeneralManagerType]):
         combo = ", ".join(f"[{v}]" for v in self._variables)
         return {v: f"{combo} combination is not valid" for v in self._variables}
 
-    def _get_op_symbol(self, op: ast.cmpop) -> str:
+    def _get_op_symbol(self, op: Optional[ast.cmpop]) -> str:
         return {
             ast.Lt: "<",
             ast.LtE: "<=",
@@ -250,7 +279,7 @@ class Rule(Generic[GeneralManagerType]):
 
     def _get_node_name(self, node: ast.AST) -> str:
         if isinstance(node, ast.Attribute):
-            parts: List[str] = []
+            parts: list[str] = []
             curr: ast.AST = node
             while isinstance(curr, ast.Attribute):
                 parts.insert(0, curr.attr)
@@ -265,23 +294,20 @@ class Rule(Generic[GeneralManagerType]):
             args = ", ".join(self._get_node_name(a) for a in node.args)
             return f"{fn}({args})"
         try:
+            # ast.unparse gibt einen str zurück
             return ast.unparse(node)
         except Exception:
             return ""
 
-    def _eval_node(self, node: ast.expr) -> Optional[Any]:
+    def _eval_node(self, node: ast.expr) -> Optional[object]:
         """
-        Evaluiert einen AST-Ausdrucks-Knoten sicher im Kontext von `x`.
-        Gibt None zurück, wenn der Knoten kein ast.expr ist oder ein Fehler auftritt.
+        Evaluiert einen AST-Ausdruck im Kontext von `x`.
         """
-        # Pylance-freundliche Typprüfung
         if not isinstance(node, ast.expr):
             return None
-
         try:
-            # ast.Expression erwartet nun wirklich einen ast.expr
             expr = ast.Expression(body=node)
-            code = compile(expr, filename="<ast>", mode="eval")
+            code = compile(expr, "<ast>", "eval")
             return eval(code, {"x": self._last_input}, {})
         except Exception:
             return None
