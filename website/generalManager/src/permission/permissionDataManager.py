@@ -37,7 +37,6 @@ class PermissionDataManager(Generic[GeneralManagerData]):
     @classmethod
     def forUpdate(
         cls,
-        request_user: AbstractUser,
         base_data: GeneralManagerData,
         update_data: Dict[str, Any],
     ) -> PermissionDataManager:

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Generic, Type, Any
+from typing import Generic, Type, Any, TYPE_CHECKING
 from generalManager.src.manager.meta import GeneralManagerMeta
 from generalManager.src.interface.baseInterface import (
     InterfaceBase,
@@ -9,6 +9,9 @@ from generalManager.src.interface.baseInterface import (
 from generalManager.src.api.property import GraphQLProperty
 from generalManager.src.cache.cacheTracker import addDependency
 from generalManager.src.cache.signals import dataChange
+
+if TYPE_CHECKING:
+    from generalManager.src.permission.basePermission import BasePermission
 
 
 class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
@@ -56,8 +59,15 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @classmethod
     @dataChange
     def create(
-        cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
+        cls,
+        creator_id: int,
+        history_comment: str | None = None,
+        ignore_permission: bool = False,
+        **kwargs: dict[str, Any],
     ) -> GeneralManager[GeneralManagerType]:
+        Permission: Type[BasePermission] | None = getattr(cls, "Permission", None)
+        if Permission is not None and not ignore_permission:
+            Permission.checkCreatePermission(kwargs, cls, creator_id)
         identification = cls.Interface.create(
             creator_id=creator_id, history_comment=history_comment, **kwargs
         )
@@ -65,8 +75,15 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
 
     @dataChange
     def update(
-        self, creator_id: int, history_comment: str | None = None, **kwargs: Any
+        self,
+        creator_id: int,
+        history_comment: str | None = None,
+        ignore_permission: bool = False,
+        **kwargs: dict[str, Any],
     ) -> GeneralManager[GeneralManagerType]:
+        Permission: Type[BasePermission] | None = getattr(self, "Permission", None)
+        if Permission is not None and not ignore_permission:
+            Permission.checkUpdatePermission(kwargs, self, creator_id)
         self._interface.update(
             creator_id=creator_id,
             history_comment=history_comment,
@@ -76,8 +93,14 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
 
     @dataChange
     def deactivate(
-        self, creator_id: int, history_comment: str | None = None
+        self,
+        creator_id: int,
+        history_comment: str | None = None,
+        ignore_permission: bool = False,
     ) -> GeneralManager[GeneralManagerType]:
+        Permission: Type[BasePermission] | None = getattr(self, "Permission", None)
+        if Permission is not None and not ignore_permission:
+            Permission.checkDeletePermission(self, creator_id)
         self._interface.deactivate(
             creator_id=creator_id, history_comment=history_comment
         )
