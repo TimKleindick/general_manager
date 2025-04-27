@@ -34,6 +34,91 @@ class BasePermission(ABC):
     def request_user(self) -> AbstractUser | AnonymousUser:
         return self._request_user
 
+    @classmethod
+    def checkCreatePermission(
+        cls,
+        data: dict[str, Any],
+        manager: type[GeneralManager],
+        request_user: AbstractUser | AnonymousUser | Any,
+    ) -> None:
+        request_user = cls.getUserWithId(request_user)
+        errors = []
+        permission_data = PermissionDataManager(permission_data=data, manager=manager)
+        Permission = cls(permission_data, request_user)
+        for key in data.keys():
+            is_allowed = Permission.checkPermission("create", key)
+            if not is_allowed:
+                errors.append(
+                    f"Permission denied for {key} with value {data[key]} for user {request_user}"
+                )
+        if errors:
+            raise PermissionError(
+                f"Permission denied for user {request_user} with errors: {errors}"
+            )
+
+    @classmethod
+    def checkUpdatePermission(
+        cls,
+        data: dict[str, Any],
+        old_manager_instance: GeneralManager,
+        request_user: AbstractUser | AnonymousUser | Any,
+    ) -> None:
+        request_user = cls.getUserWithId(request_user)
+
+        errors = []
+        permission_data = PermissionDataManager[GeneralManager].forUpdate(
+            base_data=old_manager_instance, update_data=data
+        )
+        Permission = cls(permission_data, request_user)
+        for key in data.keys():
+            is_allowed = Permission.checkPermission("update", key)
+            if not is_allowed:
+                errors.append(
+                    f"Permission denied for {key} with value {data[key]} for user {request_user}"
+                )
+        if errors:
+            raise PermissionError(
+                f"Permission denied for user {request_user} with errors: {errors}"
+            )
+
+    @classmethod
+    def checkDeletePermission(
+        cls,
+        manager_instance: GeneralManager,
+        request_user: AbstractUser | AnonymousUser | Any,
+    ) -> None:
+        request_user = cls.getUserWithId(request_user)
+
+        errors = []
+        permission_data = PermissionDataManager[GeneralManager](manager_instance)
+        Permission = cls(permission_data, request_user)
+        for key in manager_instance.__dict__.keys():
+            is_allowed = Permission.checkPermission("delete", key)
+            if not is_allowed:
+                errors.append(
+                    f"Permission denied for {key} with value {getattr(manager_instance, key)} for user {request_user}"
+                )
+        if errors:
+            raise PermissionError(
+                f"Permission denied for user {request_user} with errors: {errors}"
+            )
+
+    @staticmethod
+    def getUserWithId(
+        user: Any | AbstractUser | AnonymousUser,
+    ) -> AbstractUser | AnonymousUser:
+        """
+        Returns the user with the given id
+        """
+        from django.contrib.auth.models import User
+
+        if isinstance(user, (AbstractUser, AnonymousUser)):
+            return user
+        try:
+            return User.objects.get(id=user)
+        except User.DoesNotExist:
+            return AnonymousUser()
+
     @abstractmethod
     def checkPermission(
         self,
