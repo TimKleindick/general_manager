@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "GeneralManager"
+version = "0.0.0"
+description = "Kurzbeschreibung deines Pakets"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name="Tim Kleindick", email="tkleindick@yahoo.de" }]
+requires-python = ">=3.12"
+dependencies = [
+    "asgiref>=3.8.1",
+    "Django>=5.2",
+    "django-simple-history>=3.8.0",
+    "exrex>=0.12.0",
+    "factory_boy>=3.3.3",
+    "Faker>=37.1.0",
+    "flexcache>=0.3",
+    "flexparser>=0.4",
+    "gitdb>=4.0.12",
+    "GitPython>=3.1.41",
+    "graphene>=3.4.3",
+    "graphene-django>=3.2.3",
+    "graphql-core>=3.2.6",
+    "graphql-relay>=3.2.0",
+    "numpy>=2.2.5",
+    "Pint>=0.24.4",
+    "platformdirs>=4.3.7",
+    "promise>=2.3",
+    "python-dateutil>=2.9.0.post0",
+    "setuptools>=75.6.0",
+    "six>=1.17.0",
+    "smmap>=5.0.2",
+    "sqlparse>=0.5.3",
+    "text-unidecode>=1.3",
+    "typing_extensions>=4.13.2",
+    "tzdata>=2025.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["website", "general_manager"]
