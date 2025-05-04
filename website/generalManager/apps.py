@@ -4,6 +4,11 @@ from django.conf import settings
 from django.urls import path
 from graphene_django.views import GraphQLView
 from importlib import import_module
+from generalManager.src.manager.generalManager import GeneralManager
+from generalManager.src.manager.meta import GeneralManagerMeta
+from generalManager.src.manager.input import Input
+from generalManager.src.api.property import graphQlProperty
+from generalManager.src.api.graphql import GraphQL
 
 
 class GeneralmanagerConfig(AppConfig):
@@ -11,10 +16,6 @@ class GeneralmanagerConfig(AppConfig):
     name = "generalManager"
 
     def ready(self):
-        from generalManager.src.manager.meta import GeneralManagerMeta
-        from generalManager.src.manager.generalManager import GeneralManager
-        from generalManager.src.manager.input import Input
-        from generalManager.src.api.property import graphQlProperty
 
         for general_manager_class in GeneralManagerMeta.all_classes:
             attributes = getattr(general_manager_class.Interface, "input_fields", {})
@@ -44,7 +45,6 @@ class GeneralmanagerConfig(AppConfig):
             )
 
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
-            from generalManager.src.api.graphql import GraphQL
 
             for general_manager_class in GeneralManagerMeta.pending_graphql_interfaces:
                 GraphQL.createGraphqlInterface(general_manager_class)

@@ -13,10 +13,16 @@ from django.db.models import (
     constraints,
 )
 from django.core.validators import RegexValidator
-from generalManager.src.interface import (
-    DatabaseInterface,
-    CalculationInterface,
+
+# from generalManager.src.interface import (
+#     DatabaseInterface,
+#     CalculationInterface,
+#     DatabaseBucket,
+# )
+from generalManager.src.interface.calculationInterface import CalculationInterface
+from generalManager.src.interface.databaseInterface import (
     DatabaseBucket,
+    DatabaseInterface,
 )
 from generalManager.src.manager import GeneralManager, graphQlProperty, Input
 from generalManager.src.permission import ManagerBasedPermission
