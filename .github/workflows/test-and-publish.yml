@@ -1,0 +1,3 @@
+pip install .[test]        # falls du extra Extras nutzt
+pip install pytest pytest-django
+pytest
