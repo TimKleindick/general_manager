@@ -40,4 +40,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["website", "general_manager"]
+where = ["src", "general_manager"]
