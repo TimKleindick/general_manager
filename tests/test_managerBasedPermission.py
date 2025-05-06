@@ -4,22 +4,22 @@ from django.test import TestCase
 from django.contrib.auth.models import User, AnonymousUser
 from unittest.mock import Mock, patch, PropertyMock, MagicMock
 
-from src.general_manager.permission.basePermission import BasePermission
-from src.general_manager.permission.managerBasedPermission import ManagerBasedPermission
-from src.general_manager.permission.permissionChecks import (
+from general_manager.permission.basePermission import BasePermission
+from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.permission.permissionChecks import (
     permission_functions,
     PermissionDict,
 )
 
 if TYPE_CHECKING:
-    from src.general_manager.manager.generalManager import GeneralManager
-    from src.general_manager.permission.permissionDataManager import (
+    from general_manager.manager.generalManager import GeneralManager
+    from general_manager.permission.permissionDataManager import (
         PermissionDataManager,
     )
     from django.contrib.auth.models import AbstractUser
 
 
-class TestPermission(BasePermission):
+class DummyPermission(BasePermission):
     """Test permission class for testing purposes."""
 
     def checkPermission(
@@ -91,12 +91,12 @@ class ManagerBasedPermissionTests(TestCase):
         # Set up patches for GeneralManager
         # We'll patch the entire check in __getBasedOnPermission to avoid issubclass issues
         self.check_patcher = patch(
-            "permission.managerBasedPermission.ManagerBasedPermission._ManagerBasedPermission__getBasedOnPermission"
+            "general_manager.permission.managerBasedPermission.ManagerBasedPermission._ManagerBasedPermission__getBasedOnPermission"
         )
         self.mock_check = self.check_patcher.start()
 
         # Create based_on permissions for different scenarios
-        self.mock_permission = TestPermission(Mock(), self.user)
+        self.mock_permission = DummyPermission(Mock(), self.user)
 
         # By default, return None as the based_on permission
         self.mock_check.return_value = None
