@@ -3,12 +3,12 @@
 from django.test import TestCase
 from decimal import Decimal
 from django.core.exceptions import ValidationError
-from src.general_manager.measurement.measurement import (
+from general_manager.measurement.measurement import (
     Measurement,
     ureg,
     currency_units,
 )
-from src.general_manager.measurement.measurementField import MeasurementField
+from general_manager.measurement.measurementField import MeasurementField
 import pint
 from django.db import models
 

@@ -1,5 +1,5 @@
 from django.test import TestCase
-from src.general_manager.auxiliary.argsToKwargs import args_to_kwargs
+from general_manager.auxiliary.argsToKwargs import args_to_kwargs
 
 
 class TestArgsToKwargs(TestCase):

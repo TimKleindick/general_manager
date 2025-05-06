@@ -1,12 +1,12 @@
 from django.test import TestCase
 from datetime import datetime
-from src.general_manager.rule.rule import (
+from general_manager.rule.rule import (
     Rule,
 )
 from typing import cast
 
 
-class TestObject:
+class DummyObject:
     """Ein generisches Objekt zum Testen mit beliebigen Attributen."""
 
     def __init__(self, **kwargs):
@@ -19,7 +19,7 @@ class RuleTests(TestCase):
     def test_rule_with_floats(self):
         """Testet die Rule-Klasse mit Gleitkommazahlen."""
         func = lambda x: x.price < 100.0
-        x = TestObject(price=150.75)
+        x = DummyObject(price=150.75)
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -30,7 +30,7 @@ class RuleTests(TestCase):
     def test_rule_with_booleans(self):
         """Testet die Rule-Klasse mit booleschen Werten."""
         func = lambda x: x.is_active == True
-        x = TestObject(is_active=False)
+        x = DummyObject(is_active=False)
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -41,7 +41,7 @@ class RuleTests(TestCase):
     def test_rule_with_dates(self):
         """Testet die Rule-Klasse mit Datumswerten."""
         func = lambda x: x.start_date < x.end_date
-        x = TestObject(
+        x = DummyObject(
             start_date=datetime.strptime("2022-01-20", "%Y-%m-%d").date(),
             end_date=datetime.strptime("2022-01-15", "%Y-%m-%d").date(),
         )
@@ -58,7 +58,7 @@ class RuleTests(TestCase):
     def test_rule_with_integers(self):
         """Testet die Rule-Klasse mit Ganzzahlen."""
         func = lambda x: x.age >= 18
-        x = TestObject(age=16)
+        x = DummyObject(age=16)
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -69,7 +69,7 @@ class RuleTests(TestCase):
     def test_rule_with_integers_reverse(self):
         """Testet die Rule-Klasse mit Ganzzahlen."""
         func = lambda x: 18 <= x.age
-        x = TestObject(age=16)
+        x = DummyObject(age=16)
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -80,7 +80,7 @@ class RuleTests(TestCase):
     def test_rule_with_strings(self):
         """Testet die Rule-Klasse mit Zeichenketten."""
         func = lambda x: len(x.username) >= 5
-        x = TestObject(username="abc")
+        x = DummyObject(username="abc")
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -91,7 +91,7 @@ class RuleTests(TestCase):
     def test_rule_with_lists(self):
         """Testet die Rule-Klasse mit Listen."""
         func = lambda x: len(x.items) > 0
-        x = TestObject(items=[])
+        x = DummyObject(items=[])
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -105,7 +105,7 @@ class RuleTests(TestCase):
         custom_message = (
             "Ordered quantity ({quantity}) exceeds available stock ({stock})."
         )
-        x = TestObject(quantity=10, stock=5)
+        x = DummyObject(quantity=10, stock=5)
         rule = Rule(func, custom_error_message=custom_message)
         rule.validateCustomErrorMessage()
         result = rule.evaluate(x)
@@ -128,7 +128,7 @@ class RuleTests(TestCase):
     def test_rule_with_complex_condition(self):
         """Testet die Rule-Klasse mit einer komplexen Bedingung."""
         func = lambda x: x.age >= 18 and x.has_permission
-        x = TestObject(age=20, has_permission=False)
+        x = DummyObject(age=20, has_permission=False)
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
@@ -146,7 +146,7 @@ class RuleTests(TestCase):
     def test_rule_with_no_variables(self):
         """Testet die Rule-Klasse mit einer Funktion ohne Variablen."""
         func = lambda x: True
-        x = TestObject()
+        x = DummyObject()
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertTrue(result)
@@ -159,7 +159,7 @@ class RuleTests(TestCase):
         def func(x):
             return x.non_existent_attribute > 0
 
-        x = TestObject()
+        x = DummyObject()
         rule = Rule(func)
         with self.assertRaises(AttributeError):
             rule.evaluate(x)
@@ -173,7 +173,7 @@ class RuleTests(TestCase):
         self.assertEqual(rule.variables, ["value"])
         self.assertIsNone(rule.lastEvaluationResult)
         self.assertIsNone(rule.lastEvaluationInput)
-        x = TestObject(value=10)
+        x = DummyObject(value=10)
         rule.evaluate(x)
         self.assertEqual(rule.lastEvaluationResult, False)
         self.assertEqual(rule.lastEvaluationInput, x)
@@ -181,8 +181,8 @@ class RuleTests(TestCase):
     def test_rule_with_type_hint(self):
         """Testet die Rule-Klasse mit Typ-Hinweisen."""
         func = lambda x: cast(float, x.price) < 100.0
-        x = TestObject(price=150.75)
-        rule = Rule[TestObject](func)  # type: ignore
+        x = DummyObject(price=150.75)
+        rule = Rule[DummyObject](func)  # type: ignore
         result = rule.evaluate(x)
         self.assertFalse(result)
         error_message = rule.getErrorMessage()

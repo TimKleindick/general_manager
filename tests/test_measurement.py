@@ -1,5 +1,5 @@
 from django.test import TestCase
-from src.general_manager.measurement.measurement import Measurement, ureg
+from general_manager.measurement.measurement import Measurement, ureg
 from decimal import Decimal
 import random
 
