@@ -31,7 +31,7 @@ jobs:
           pip install pytest pytest-django
 
       - name: Run pytest
-        run: pytest --maxfail=1 --disable-warnings -q
+        run: python3 -m pytest --maxfail=1 --disable-warnings -q
 
   publish:
     name: 🚀 Publish to PyPI
