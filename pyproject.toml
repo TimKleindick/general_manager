@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = [
+    "setuptools>=42",
+    "wheel",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +10,9 @@ name = "GeneralManager"
 version = "0.0.0"
 description = "Kurzbeschreibung deines Pakets"
 readme = "README.md"
-license = { file = "LICENSE" }
-authors = [{ name="Tim Kleindick", email="tkleindick@yahoo.de" }]
+authors = [
+    { name = "Tim Kleindick", email = "tkleindick@yahoo.de" },
+]
 requires-python = ">=3.12"
 dependencies = [
     "asgiref>=3.8.1",
@@ -39,5 +43,11 @@ dependencies = [
     "tzdata>=2025.2",
 ]
 
+[project.license]
+file = "LICENSE"
+
 [tool.setuptools.packages.find]
-where = ["src", "general_manager"]
+where = [
+    "src",
+    "general_manager",
+]
