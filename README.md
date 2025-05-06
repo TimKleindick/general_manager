@@ -140,8 +140,3 @@ query {
 ## Lizenz
 
 Dieses Projekt steht unter der **Non-Commercial MIT License**. Es darf nur für nicht-kommerzielle Zwecke verwendet werden. Weitere Details finden Sie in der [LICENSE](./LICENSE).
-
-## Kontakt
-
-Autor: Tim Kleindick  
-E-Mail: tkleindick@yahoo.de
