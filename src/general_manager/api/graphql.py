@@ -19,9 +19,6 @@ if TYPE_CHECKING:
 class MeasurementType(graphene.ObjectType):  # type: ignore
     value = graphene.Float()
     unit = graphene.String()
-    required = graphene.Boolean()
-    editable = graphene.Boolean()
-    default_value = graphene.String()
 
 
 def getReadPermissionFilter(
