@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v0.1.1 (2025-05-11)
+
+### Bug Fixes
+
+- Remove required, editable, defaultValue from MeasurementType
+  ([`733a1ae`](https://github.com/TimKleindick/general_manager/commit/733a1ae9804797d88871c8bb0f101343878eb195))
+
+### Testing
+
+- Fix test for removed required, editable, defaultValue
+  ([`34be32a`](https://github.com/TimKleindick/general_manager/commit/34be32aab05748dd46eb131fecf3264b0b5e9eab))
+
+
 ## v0.1.0 (2025-05-11)
 
 ### Continuous Integration
