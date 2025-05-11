@@ -32,51 +32,47 @@ jobs:
       - name: Run pytest
         run: python3 -m pytest --maxfail=1 --disable-warnings -q
 
-  publish:
-    name: 🚀 Publish to PyPI
+  release:
+    name: 🚀 Release
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-release-${{ github.ref_name }}
+      cancel-in-progress: false
+
+    permissions:
+      id-token: write       # für Actions @v4 nötig
+      contents: write       # um Commits, Tags & Releases zu pushen
 
     steps:
-      - name: Checkout code (with history)
-        uses: actions/checkout@v3
+      # 1) Vollständiges Repo auschecken
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
 
-      - name: Extract version from Git tag
-        id: extract_version
-        run: |
-          # GITHUB_REF is like "refs/tags/v1.2.3"
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Setup Python for version sync
+      # 2) Python bereitstellen
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.13'
 
-      - name: Install sync-script deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install tomli-w
-
-      - name: Sync version into pyproject.toml
-        run: python scripts/sync_version.py "${{ steps.extract_version.outputs.version }}"
-
-      - name: Show updated version
-        run: grep -E '^version' pyproject.toml
-
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-
-      - name: Build distributions
-        run: python -m build
-
-      - name: Publish to PyPI
+      # 3) Semantic Release ausführen (Version-Bump, Tag, GitHub-Release, PyPI-Upload)
+      - id: semantic_release
+        name: Semantic Version Release
+        uses: python-semantic-release/python-semantic-release@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          git_committer_name:  "github-actions"
+          git_committer_email: "actions@users.noreply.github.com"
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+
+      # 4) (Optional) Artefakte in GitHub-Release hochladen
+      - name: Publish to GitHub Release Assets
+        if: steps.semantic_release.outputs.released == 'true'
+        uses: python-semantic-release/publish-action@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.semantic_release.outputs.tag }}
