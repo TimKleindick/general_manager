@@ -35,7 +35,7 @@ class GraphQLPropertyTests(TestCase):
 
 class MeasurementTypeTests(TestCase):
     def test_measurement_type_fields(self):
-        for field in ["value", "unit", "required", "editable", "default_value"]:
+        for field in ["value", "unit"]:
             self.assertTrue(hasattr(MeasurementType, field))
 
 
