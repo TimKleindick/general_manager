@@ -33,16 +33,20 @@ class Input(Generic[INPUT_TYPE]):
             self.depends_on = []
 
     def cast(self, value: Any) -> Any:
+        if self.type == date:
+            if isinstance(value, datetime) and type(value) is not date:
+                return value.date()
+            return date.fromisoformat(value)
+        if self.type == datetime:
+            if isinstance(value, date):
+                return datetime.combine(value, datetime.min.time())
+            return datetime.fromisoformat(value)
         if isinstance(value, self.type):
             return value
         if issubclass(self.type, GeneralManager):
             if isinstance(value, dict):
                 return self.type(**value)  # type: ignore
             return self.type(id=value)  # type: ignore
-        if self.type == date:
-            return date.fromisoformat(value)
-        if self.type == datetime:
-            return datetime.fromisoformat(value)
         if self.type == Measurement and isinstance(value, str):
             return Measurement.from_string(value)
         return self.type(value)
