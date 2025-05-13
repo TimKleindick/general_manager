@@ -645,6 +645,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def __mergeFilterDefinitions(
         self, basis: dict[str, list[Any]], **kwargs: Any
     ) -> dict[str, list[Any]]:
+        """
+        Merges filter definitions by combining existing filter criteria with additional keyword arguments.
+        
+        Args:
+            basis: A dictionary mapping filter keys to lists of values.
+        
+        Returns:
+            A dictionary where each key maps to a list of all values from both the original basis and the new keyword arguments.
+        """
         kwarg_filter: dict[str, list[Any]] = {}
         for key, value in basis.items():
             kwarg_filter[key] = value
@@ -655,6 +664,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         return kwarg_filter
 
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
+        """
+        Returns a new bucket containing manager instances matching the given filter criteria.
+        
+        Additional filter keyword arguments are merged with existing filters to refine the queryset.
+        """
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
         return self.__class__(
             self._data.filter(**kwargs),
@@ -664,6 +678,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
+        """
+        Returns a new bucket excluding items matching the given filter criteria.
+        
+        Args:
+            **kwargs: Field lookups to exclude from the queryset.
+        
+        Returns:
+            A DatabaseBucket containing items not matching the specified filters.
+        """
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
         return self.__class__(
             self._data.exclude(**kwargs),
