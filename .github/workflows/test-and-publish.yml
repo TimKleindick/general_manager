@@ -31,7 +31,7 @@ jobs:
 
       - name: Run pytest
         run: python3 -m pytest --maxfail=1 --disable-warnings -q
-
+        
   release:
     name: 🚀 Release
     needs: test
@@ -41,35 +41,36 @@ jobs:
       cancel-in-progress: false
 
     permissions:
-      id-token: write       # für Actions @v4 nötig
-      contents: write       # um Commits, Tags & Releases zu pushen
+      id-token: write
+      contents: write
 
     steps:
-      # 1) Vollständiges Repo auschecken
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
 
-      # 2) Python bereitstellen
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.13'
 
-      # 3) Semantic Release ausführen (Version-Bump, Tag, GitHub-Release, PyPI-Upload)
+      # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
         name: Semantic Version Release
         uses: python-semantic-release/python-semantic-release@v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          build: "false"          # → (--skip-build) :contentReference[oaicite:0]{index=0}
+          build: "false"
           git_committer_name:  "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+
+      # 2) Build & Upload nur, wenn wirklich was released wurde
       - name: Build & Publish to PyPI
+        if: ${{ steps.semantic_release.outputs.released == 'true' }}
         run: |
           python -m pip install --upgrade pip
           pip install build twine
@@ -78,9 +79,10 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-      # 4) (Optional) Artefakte in GitHub-Release hochladen
+
+      # 3) Release-Assets nur im echten Release-Fall
       - name: Publish to GitHub Release Assets
-        if: steps.semantic_release.outputs.released == 'true'
+        if: ${{ steps.semantic_release.outputs.released == 'true' }}
         uses: python-semantic-release/publish-action@v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
