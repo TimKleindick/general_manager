@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.1.2 (2025-05-13)
+
+### Bug Fixes
+
+- Typehint for filter/exclude in databaseInterface
+  ([`e70e550`](https://github.com/TimKleindick/general_manager/commit/e70e55041778264f0f8704828d281efa822faa26))
+
+### Testing
+
+- 100% coverage for input
+  ([`8f57f8a`](https://github.com/TimKleindick/general_manager/commit/8f57f8add6a24a53a425618f0c0f4540d27027c8))
+
+- Nonetozero for full coverage
+  ([`4992a73`](https://github.com/TimKleindick/general_manager/commit/4992a736331f2a83c7a7e8e2fffa0e89f9349336))
+
+- Pytest config in vscode
+  ([`3a69c57`](https://github.com/TimKleindick/general_manager/commit/3a69c57f2cd99e7988158cbaa3a5142135103d12))
+
+
 ## v0.1.1 (2025-05-11)
 
 ### Bug Fixes
