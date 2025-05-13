@@ -1,5 +1,6 @@
 from django.test import TestCase
 from general_manager.auxiliary.noneToZero import noneToZero
+from general_manager.measurement import Measurement
 
 
 class TestNoneToZero(TestCase):
@@ -12,3 +13,5 @@ class TestNoneToZero(TestCase):
         """
         self.assertEqual(noneToZero(None), 0)
         self.assertEqual(noneToZero(5), 5)
+        self.assertEqual(noneToZero(3.14), 3.14)
+        self.assertEqual(noneToZero(Measurement(5, "kg")), Measurement(5, "kg"))
