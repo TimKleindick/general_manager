@@ -654,7 +654,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             kwarg_filter[key].append(value)
         return kwarg_filter
 
-    def filter(self, **kwargs: Any) -> DatabaseBucket:
+    def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
         return self.__class__(
             self._data.filter(**kwargs),
@@ -663,7 +663,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.excludes,
         )
 
-    def exclude(self, **kwargs: Any) -> DatabaseBucket:
+    def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
         return self.__class__(
             self._data.exclude(**kwargs),
