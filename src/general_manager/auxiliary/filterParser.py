@@ -1,8 +1,10 @@
-from typing import Any, Callable, List
+from __future__ import annotations
+from typing import Any, Callable
+from general_manager.manager.input import Input
 
 
 def parse_filters(
-    filter_kwargs: dict[str, Any], possible_values: dict[str, Any]
+    filter_kwargs: dict[str, Any], possible_values: dict[str, Input]
 ) -> dict[str, dict]:
     from general_manager.manager.generalManager import GeneralManager
 
@@ -71,26 +73,26 @@ def create_filter_function(lookup_str: str, value: Any) -> Callable[[Any], bool]
     return filter_func
 
 
-def apply_lookup(x: Any, lookup: str, value: Any) -> bool:
+def apply_lookup(value_to_check: Any, lookup: str, filter_value: Any) -> bool:
     try:
         if lookup == "exact":
-            return x == value
+            return value_to_check == filter_value
         elif lookup == "lt":
-            return x < value
+            return value_to_check < filter_value
         elif lookup == "lte":
-            return x <= value
+            return value_to_check <= filter_value
         elif lookup == "gt":
-            return x > value
+            return value_to_check > filter_value
         elif lookup == "gte":
-            return x >= value
-        elif lookup == "contains" and isinstance(x, str):
-            return value in x
-        elif lookup == "startswith" and isinstance(x, str):
-            return x.startswith(value)
-        elif lookup == "endswith" and isinstance(x, str):
-            return x.endswith(value)
+            return value_to_check >= filter_value
+        elif lookup == "contains" and isinstance(value_to_check, str):
+            return filter_value in value_to_check
+        elif lookup == "startswith" and isinstance(value_to_check, str):
+            return value_to_check.startswith(filter_value)
+        elif lookup == "endswith" and isinstance(value_to_check, str):
+            return value_to_check.endswith(filter_value)
         elif lookup == "in":
-            return x in value
+            return value_to_check in filter_value
         else:
             return False
     except TypeError as e:
