@@ -12,7 +12,7 @@ class TestFilterParser(TestCase):
     def test_parse_filters_simple(self):
         """
         Tests that parse_filters correctly handles a simple exact match filter.
-        
+
         Verifies that the generated filter function returns True for matching values and False for non-matching values when filtering by an exact string.
         """
         possible_values = {
@@ -27,7 +27,7 @@ class TestFilterParser(TestCase):
     def test_parse_filters_with_list(self):
         """
         Tests that parse_filters correctly handles 'in' lookups with a list of values.
-        
+
         Verifies that the generated filter function returns True for values present in the list
         and False for values not in the list.
         """
@@ -44,7 +44,7 @@ class TestFilterParser(TestCase):
     def test_parse_filters_with_multiple_conditions(self):
         """
         Tests that parse_filters correctly handles multiple filter conditions with different operators.
-        
+
         Verifies that the returned filter functions for each field and operator combination evaluate values as expected.
         """
         possible_values = {
@@ -60,7 +60,7 @@ class TestFilterParser(TestCase):
     def test_parse_filters_without_operators(self):
         """
         Tests that parse_filters defaults to exact match when no operator is specified.
-        
+
         Verifies that the generated filter function correctly matches the provided value
         against the expected exact value.
         """
@@ -76,7 +76,7 @@ class TestFilterParser(TestCase):
     def test_parse_filters_with_general_manager(self):
         """
         Tests parse_filters handling of manager-type fields with and without explicit operators.
-        
+
         Verifies that when a field is typed as a manager class, parse_filters generates correct
         filter keyword arguments depending on whether an operator is specified. Uses mocking to
         simulate issubclass returning True for the manager type.
@@ -119,7 +119,7 @@ class TestFilterParser(TestCase):
     def test_filter_function_with_deep_lookup(self):
         """
         Tests that create_filter_function correctly handles deep attribute lookups.
-        
+
         Verifies that the generated filter function can access nested attributes (e.g., 'address__city') and accurately determines if the value matches the expected target. Also checks behavior when the attribute path does not exist.
         """
         mock_manager = MagicMock()
@@ -155,7 +155,7 @@ class TestFilterParser(TestCase):
     def test_apply_lookup(self):
         """
         Tests the apply_lookup function with various lookup types and values.
-        
+
         Verifies that apply_lookup returns correct boolean results for supported
         lookup operations, including exact match, membership, substring checks,
         string prefix/suffix, and comparison operators.
@@ -178,6 +178,11 @@ class TestFilterParser(TestCase):
         self.assertFalse(apply_lookup("value", "gt", "z"))
         self.assertTrue(apply_lookup(10, "gte", 8))
         self.assertFalse(apply_lookup(1, "gte", 10))
+        self.assertTrue(apply_lookup(10, "gte", 10))
+        self.assertFalse(apply_lookup(10, "gt", 10))
+        self.assertTrue(apply_lookup(10, "lte", 10))
+        self.assertFalse(apply_lookup(10, "lt", 10))
+        self.assertFalse(apply_lookup("Test", "exact", "test"))
 
     def test_apply_lookup_invalid(self):
         """
