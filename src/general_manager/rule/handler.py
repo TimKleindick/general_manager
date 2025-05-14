@@ -78,25 +78,6 @@ class FunctionHandler(BaseRuleHandler, ABC):
         """
         raise NotImplementedError("Subclasses should implement this method")
 
-    @staticmethod
-    def getThreshold(
-        op_symbol: str,
-        right_value: int | float,
-    ) -> int | float:
-        """
-        Berechne den Schwellenwert basierend auf dem Operator.
-        """
-        if op_symbol == ">":
-            return right_value + 1
-        elif op_symbol == ">=":
-            return right_value
-        elif op_symbol == "<":
-            return right_value - 1
-        elif op_symbol == "<=":
-            return right_value
-        else:
-            return right_value
-
 
 class LenHandler(FunctionHandler):
     function_name = "len"
@@ -119,7 +100,16 @@ class LenHandler(FunctionHandler):
             raise ValueError("Invalid arguments for len function")
         right_value: int | float = raw
 
-        threshold = self.getThreshold(op_symbol, right_value)
+        if op_symbol == ">":
+            threshold = right_value + 1
+        elif op_symbol == ">=":
+            threshold = right_value
+        elif op_symbol == "<":
+            threshold = right_value - 1
+        elif op_symbol == "<=":
+            threshold = right_value
+        else:
+            threshold = right_value
 
         # Fehlermeldung formulieren
         if op_symbol in (">", ">="):
@@ -159,13 +149,15 @@ class SumHandler(FunctionHandler):
             raise ValueError("Invalid arguments for sum function")
         right_value = raw
 
-        threshold = self.getThreshold(op_symbol, right_value)
-
         # Message formulieren
         if op_symbol in (">", ">="):
-            msg = f"[{var_name}] (sum={total}) is too small (min sum {threshold})!"
+            msg = (
+                f"[{var_name}] (sum={total}) is too small ({op_symbol} {right_value})!"
+            )
         elif op_symbol in ("<", "<="):
-            msg = f"[{var_name}] (sum={total}) is too large (max sum {threshold})!"
+            msg = (
+                f"[{var_name}] (sum={total}) is too large ({op_symbol} {right_value})!"
+            )
         else:
             msg = f"[{var_name}] (sum={total}) must be {right_value}!"
 
@@ -197,12 +189,10 @@ class MaxHandler(FunctionHandler):
             raise ValueError("Invalid arguments for max function")
         right_value = raw
 
-        threshold = self.getThreshold(op_symbol, right_value)
-
         if op_symbol in (">", ">="):
-            msg = f"[{var_name}] (max={current}) is too small (min {threshold})!"
+            msg = f"[{var_name}] (max={current}) is too small ({op_symbol} {right_value})!"
         elif op_symbol in ("<", "<="):
-            msg = f"[{var_name}] (max={current}) is too large (max {threshold})!"
+            msg = f"[{var_name}] (max={current}) is too large ({op_symbol} {right_value})!"
         else:
             msg = f"[{var_name}] (max={current}) must be {right_value}!"
 
@@ -234,12 +224,10 @@ class MinHandler(FunctionHandler):
             raise ValueError("Invalid arguments for min function")
         right_value = raw
 
-        threshold = self.getThreshold(op_symbol, right_value)
-
         if op_symbol in (">", ">="):
-            msg = f"[{var_name}] (min={current}) is too small (min {threshold})!"
+            msg = f"[{var_name}] (min={current}) is too small ({op_symbol} {right_value})!"
         elif op_symbol in ("<", "<="):
-            msg = f"[{var_name}] (min={current}) is too large (max {threshold})!"
+            msg = f"[{var_name}] (min={current}) is too large ({op_symbol} {right_value})!"
         else:
             msg = f"[{var_name}] (min={current}) must be {right_value}!"
 
