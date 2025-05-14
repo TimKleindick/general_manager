@@ -3,6 +3,7 @@
 from __future__ import annotations
 import ast
 from typing import Dict, Optional, TYPE_CHECKING, cast
+from abc import ABC, abstractmethod
 
 if TYPE_CHECKING:
     # Forward-Reference auf Rule mit beliebigem Generic-Parameter
@@ -10,11 +11,12 @@ if TYPE_CHECKING:
     from general_manager.manager import GeneralManager
 
 
-class BaseRuleHandler:
+class BaseRuleHandler(ABC):
     """Schnittstelle für Rule-Handler."""
 
     function_name: str  # ClassVar, der Name, unter dem dieser Handler registriert wird
 
+    @abstractmethod
     def handle(
         self,
         node: ast.AST,
@@ -27,7 +29,7 @@ class BaseRuleHandler:
         """
         Erstelle Fehlermeldungen für den Vergleichs- oder Funktionsaufruf.
         """
-        raise NotImplementedError
+        pass
 
 
 class LenHandler(BaseRuleHandler):
@@ -83,13 +85,13 @@ class LenHandler(BaseRuleHandler):
         elif op_symbol in ("<", "<="):
             msg = f"[{var_name}] ({var_value}) is too long (max length {threshold})!"
         else:
-            msg = f"[{var_name}] ({var_value}) must be {op_symbol} {right_value}!"
+            msg = f"[{var_name}] ({var_value}) must have a length of {right_value}!"
 
         return {var_name: msg}
 
 
-class IntersectionCheckHandler(BaseRuleHandler):
-    function_name = "intersectionCheck"
+class SumHandler(BaseRuleHandler):
+    function_name = "sum"
 
     def handle(
         self,
@@ -98,25 +100,161 @@ class IntersectionCheckHandler(BaseRuleHandler):
         right: Optional[ast.expr],
         op: Optional[ast.cmpop],
         var_values: Dict[str, Optional[object]],
-        rule: Rule[GeneralManager],
+        rule: Rule,
     ) -> Dict[str, str]:
-        # Der Aufruf steht in `left`, nicht in `node`
-        call_node = cast(ast.Call, left)
-        if not isinstance(call_node, ast.Call):
-            return {"error": "Invalid arguments for intersectionCheck"}
+        if not isinstance(node, ast.Compare):
+            return {}
+        compare_node = node
+        left_node = compare_node.left
+        right_node = compare_node.comparators[0]
+        op_symbol = rule._get_op_symbol(op)
 
-        args = call_node.args
-        if len(args) < 2:
-            return {"error": "Invalid arguments for intersectionCheck"}
+        # Call-Knoten checken
+        if not (isinstance(left_node, ast.Call) and left_node.args):
+            raise ValueError("Invalid left node for sum function")
+        arg_node = left_node.args[0]
 
-        start_node, end_node = args[0], args[1]
-        start_name = rule._get_node_name(start_node)
-        end_name = rule._get_node_name(end_node)
-        start_val = var_values.get(start_name)
-        end_val = var_values.get(end_name)
+        # Name und Wert holen
+        var_name = rule._get_node_name(arg_node)
+        raw_iter = var_values.get(var_name)
+        if not isinstance(raw_iter, (list, tuple)):
+            raise ValueError("sum expects an iterable of numbers")
+        total = sum(raw_iter)
 
-        msg = (
-            f"[{start_name}] ({start_val}) and "
-            f"[{end_name}] ({end_val}) must not overlap with existing ranges."
-        )
-        return {start_name: msg, end_name: msg}
+        # Schwellenwert aus dem rechten Knoten
+        raw = rule._eval_node(right_node)
+        if not isinstance(raw, (int, float)):
+            raise ValueError("Invalid arguments for sum function")
+        right_value = raw
+
+        # Threshold je nach Operator
+        if op_symbol == ">":
+            threshold = right_value + 1
+        elif op_symbol == ">=":
+            threshold = right_value
+        elif op_symbol == "<":
+            threshold = right_value - 1
+        elif op_symbol == "<=":
+            threshold = right_value
+        else:
+            threshold = right_value
+
+        # Message formulieren
+        if op_symbol in (">", ">="):
+            msg = f"[{var_name}] (sum={total}) is too small (min sum {threshold})!"
+        elif op_symbol in ("<", "<="):
+            msg = f"[{var_name}] (sum={total}) is too large (max sum {threshold})!"
+        else:
+            msg = f"[{var_name}] (sum={total}) must be {right_value}!"
+
+        return {var_name: msg}
+
+
+class MaxHandler(BaseRuleHandler):
+    function_name = "max"
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: Optional[ast.expr],
+        right: Optional[ast.expr],
+        op: Optional[ast.cmpop],
+        var_values: Dict[str, Optional[object]],
+        rule: Rule,
+    ) -> Dict[str, str]:
+        if not isinstance(node, ast.Compare):
+            return {}
+        compare_node = node
+        left_node = compare_node.left
+        right_node = compare_node.comparators[0]
+        op_symbol = rule._get_op_symbol(op)
+
+        if not (isinstance(left_node, ast.Call) and left_node.args):
+            raise ValueError("Invalid left node for max function")
+        arg_node = left_node.args[0]
+
+        var_name = rule._get_node_name(arg_node)
+        raw_iter = var_values.get(var_name)
+        if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
+            raise ValueError("max expects a non-empty iterable")
+        current = max(raw_iter)
+
+        raw = rule._eval_node(right_node)
+        if not isinstance(raw, (int, float)):
+            raise ValueError("Invalid arguments for max function")
+        right_value = raw
+
+        if op_symbol == ">":
+            threshold = right_value + 1
+        elif op_symbol == ">=":
+            threshold = right_value
+        elif op_symbol == "<":
+            threshold = right_value - 1
+        elif op_symbol == "<=":
+            threshold = right_value
+        else:
+            threshold = right_value
+
+        if op_symbol in (">", ">="):
+            msg = f"[{var_name}] (max={current}) is too small (min {threshold})!"
+        elif op_symbol in ("<", "<="):
+            msg = f"[{var_name}] (max={current}) is too large (max {threshold})!"
+        else:
+            msg = f"[{var_name}] (max={current}) must be {right_value}!"
+
+        return {var_name: msg}
+
+
+class MinHandler(BaseRuleHandler):
+    function_name = "min"
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: Optional[ast.expr],
+        right: Optional[ast.expr],
+        op: Optional[ast.cmpop],
+        var_values: Dict[str, Optional[object]],
+        rule: Rule,
+    ) -> Dict[str, str]:
+        if not isinstance(node, ast.Compare):
+            return {}
+        compare_node = node
+        left_node = compare_node.left
+        right_node = compare_node.comparators[0]
+        op_symbol = rule._get_op_symbol(op)
+
+        if not (isinstance(left_node, ast.Call) and left_node.args):
+            raise ValueError("Invalid left node for min function")
+        arg_node = left_node.args[0]
+
+        var_name = rule._get_node_name(arg_node)
+        raw_iter = var_values.get(var_name)
+        if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
+            raise ValueError("min expects a non-empty iterable")
+        current = min(raw_iter)
+
+        raw = rule._eval_node(right_node)
+        if not isinstance(raw, (int, float)):
+            raise ValueError("Invalid arguments for min function")
+        right_value = raw
+
+        if op_symbol == ">":
+            threshold = right_value + 1
+        elif op_symbol == ">=":
+            threshold = right_value
+        elif op_symbol == "<":
+            threshold = right_value - 1
+        elif op_symbol == "<=":
+            threshold = right_value
+        else:
+            threshold = right_value
+
+        if op_symbol in (">", ">="):
+            msg = f"[{var_name}] (min={current}) is too small (min {threshold})!"
+        elif op_symbol in ("<", "<="):
+            msg = f"[{var_name}] (min={current}) is too large (max {threshold})!"
+        else:
+            msg = f"[{var_name}] (min={current}) must be {right_value}!"
+
+        return {var_name: msg}
