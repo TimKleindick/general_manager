@@ -1,6 +1,55 @@
 # CHANGELOG
 
 
+## v0.2.0 (2025-05-14)
+
+### Bug Fixes
+
+- Improve error handling for function handlers in rule system
+  ([`c94d17a`](https://github.com/TimKleindick/general_manager/commit/c94d17a11a9c2332bf460ff29fafe08ad00737c1))
+
+- Update error messages for sum, max, and min functions to include parentheses
+  ([`29e44fa`](https://github.com/TimKleindick/general_manager/commit/29e44fae8a26e6f538cfe95dccbd631d5ecbd3e0))
+
+### Continuous Integration
+
+- Release only when version change is detected
+  ([`e929f8e`](https://github.com/TimKleindick/general_manager/commit/e929f8e5d95bcdf742b281cf082cbdb2cd294971))
+
+### Features
+
+- Implement sum, max, and min handlers in rule system
+  ([`1bfc1e6`](https://github.com/TimKleindick/general_manager/commit/1bfc1e6e60bb90d7a246e9652db72f5101dad2f1))
+
+### Refactoring
+
+- Clean up filterParser.py
+  ([`8e077c6`](https://github.com/TimKleindick/general_manager/commit/8e077c6359d473547ae5813a18553f099a303e87))
+
+- Handler for DRY and maintainability
+  ([`a360ec6`](https://github.com/TimKleindick/general_manager/commit/a360ec69f44c052ca698bd15b9ce359bd68982d1))
+
+- Remove getThreshold method and inline threshold calculations for clarity
+  ([`93d0b40`](https://github.com/TimKleindick/general_manager/commit/93d0b40db1837de77ef3ae05de5e4906ae2084f6))
+
+### Testing
+
+- Add comprehensive tests for LenHandler, SumHandler, MaxHandler, and MinHandler
+  ([`875c606`](https://github.com/TimKleindick/general_manager/commit/875c60679c5381302f9e3614d96aedf0a425860a))
+
+- Add edge cases for gte/lte/exact
+  ([`fe11010`](https://github.com/TimKleindick/general_manager/commit/fe1101044cb036a0bc13052570c740413d24649b))
+
+- Filterparser for full coverage
+  ([`605f8a8`](https://github.com/TimKleindick/general_manager/commit/605f8a846dcc9ca65a2d448b6bca0dd944bc5427))
+
+- Improve error messages for sum, max, and min handlers for clarity and consistency + add edge cases
+  ([`078a806`](https://github.com/TimKleindick/general_manager/commit/078a806d7830268bc928b119a375f1248c3bbc31))
+
+- Other numeric types for noneToZero
+  ([`ff3c310`](https://github.com/TimKleindick/general_manager/commit/ff3c3106b2265ef3ea8c1a49458e9378662cd02f))
+
+
 ## v0.1.2 (2025-05-13)
 
 ### Bug Fixes
