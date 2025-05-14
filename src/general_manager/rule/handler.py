@@ -53,7 +53,7 @@ class FunctionHandler(BaseRuleHandler, ABC):
         op_symbol = rule._get_op_symbol(op)
 
         if not (isinstance(left_node, ast.Call) and left_node.args):
-            raise ValueError(f"Invalid left node for {self.function_name} function")
+            raise ValueError(f"Invalid left node for {self.function_name}() function")
         arg_node = left_node.args[0]
 
         return self.aggregate(
@@ -149,6 +149,8 @@ class SumHandler(FunctionHandler):
         raw_iter = var_values.get(var_name)
         if not isinstance(raw_iter, (list, tuple)):
             raise ValueError("sum expects an iterable of numbers")
+        if not all(isinstance(x, (int, float)) for x in raw_iter):
+            raise ValueError("sum expects an iterable of numbers")
         total = sum(raw_iter)
 
         # Schwellenwert aus dem rechten Knoten
@@ -186,6 +188,8 @@ class MaxHandler(FunctionHandler):
         raw_iter = var_values.get(var_name)
         if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
             raise ValueError("max expects a non-empty iterable")
+        if not all(isinstance(x, (int, float)) for x in raw_iter):
+            raise ValueError("max expects an iterable of numbers")
         current = max(raw_iter)
 
         raw = rule._eval_node(right_node)
@@ -221,6 +225,8 @@ class MinHandler(FunctionHandler):
         raw_iter = var_values.get(var_name)
         if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
             raise ValueError("min expects a non-empty iterable")
+        if not all(isinstance(x, (int, float)) for x in raw_iter):
+            raise ValueError("min expects an iterable of numbers")
         current = min(raw_iter)
 
         raw = rule._eval_node(right_node)
