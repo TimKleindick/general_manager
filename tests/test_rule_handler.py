@@ -7,18 +7,44 @@ import pytest
 
 class DummyRule:
     def __init__(self, op_symbol: str):
+        """
+        Initializes a DummyRule with the specified operator symbol.
+        
+        Args:
+            op_symbol: The comparison operator symbol to be used by this rule (e.g., '>', '<=', '==').
+        """
         self._op_symbol = op_symbol
 
     def _get_op_symbol(self, op: Optional[ast.cmpop]) -> str:
+        """
+        Returns the stored operator symbol for this rule.
+        
+        Args:
+        	op: Ignored; present for interface compatibility.
+        
+        Returns:
+        	The operator symbol as a string.
+        """
         return self._op_symbol
 
     def _get_node_name(self, node: ast.AST) -> str:
+        """
+        Returns the identifier name from an AST Name node.
+        
+        Raises:
+            ValueError: If the node is not an instance of ast.Name.
+        """
         if isinstance(node, ast.Name):
             return node.id
         raise ValueError("Unexpected node type")
 
     def _eval_node(self, node: ast.AST) -> Any:
         # Im rechten Literal-Fall: ast.Constant
+        """
+        Evaluates an AST node and returns its value or identifier.
+        
+        If the node is an `ast.Constant`, returns its value. If the node is an `ast.Name`, returns `None`. Raises a `ValueError` for unsupported node types.
+        """
         if isinstance(node, ast.Constant):
             return node.value
         # Oder: Name-Knoten für var_values lookup
@@ -71,6 +97,12 @@ min_handler = MinHandler()
 )
 def test_len_handler_success(expr, op_symbol, var_values, expected):
     # AST erzeugen
+    """
+    Tests that LenHandler correctly validates length constraints and returns expected messages.
+    
+    Parses a length comparison expression, simulates rule context, and asserts that LenHandler
+    produces the correct error messages or validation results for given variable values.
+    """
     node = ast.parse(expr, mode="eval").body
     # DummyRule mit vorgegebener Op-Symbol-Antwort
     rule = DummyRule(op_symbol)
@@ -82,6 +114,9 @@ def test_len_handler_success(expr, op_symbol, var_values, expected):
 
 def test_non_compare_node_returns_empty():
     # z. B. ein Call-Knoten statt Compare
+    """
+    Tests that LenHandler.handle returns an empty dictionary for non-compare AST nodes.
+    """
     node = ast.parse("print('hallo')", mode="eval").body
     rule = DummyRule(">")
     assert len_handler.handle(node, None, None, None, {}, rule) == {}
@@ -95,6 +130,13 @@ def test_non_compare_node_returns_empty():
     ],
 )
 def test_len_handler_invalid_raises(bad_expr, op):
+    """
+    Tests that LenHandler.handle raises ValueError for invalid length comparison expressions.
+    
+    Args:
+        bad_expr: The invalid expression string to parse and test.
+        op: The operator symbol to use in the DummyRule.
+    """
     node = ast.parse(bad_expr, mode="eval").body
     rule = DummyRule(op)
     with pytest.raises(ValueError):
@@ -144,6 +186,12 @@ def test_len_handler_invalid_raises(bad_expr, op):
     ],
 )
 def test_sum_handler_success(expr, op_symbol, var_values, expected):
+    """
+    Tests that SumHandler correctly validates sum constraints and returns expected messages.
+    
+    Parses the given expression, invokes the SumHandler with provided variable values and operator,
+    and asserts that the result matches the expected error messages for sum constraint violations.
+    """
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
     result = sum_handler.handle(
@@ -154,6 +202,9 @@ def test_sum_handler_success(expr, op_symbol, var_values, expected):
 
 # Fehler-Fälle für SumHandler
 def test_sum_handler_non_compare_returns_empty():
+    """
+    Tests that SumHandler.handle returns an empty dictionary for non-compare AST nodes.
+    """
     node = ast.parse("print(1)", mode="eval").body
     rule = DummyRule(">")
     assert sum_handler.handle(node, None, None, None, {}, rule) == {}
@@ -168,6 +219,14 @@ def test_sum_handler_non_compare_returns_empty():
     ],
 )
 def test_sum_handler_invalid(expr, var_values, error_msg):
+    """
+    Tests that SumHandler raises ValueError with the expected message for invalid sum expressions.
+    
+    Args:
+        expr: The expression string to parse and evaluate.
+        var_values: Dictionary of variable values for evaluation.
+        error_msg: Substring expected in the raised ValueError message.
+    """
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(">")
     with pytest.raises(ValueError) as excinfo:
@@ -218,6 +277,12 @@ def test_sum_handler_invalid(expr, var_values, error_msg):
     ],
 )
 def test_max_handler_success(expr, op_symbol, var_values, expected):
+    """
+    Tests that MaxHandler correctly validates max() expressions against expected constraints.
+    
+    Parses a max() comparison expression, evaluates it using MaxHandler with provided variable
+    values and operator, and asserts that the returned error messages match the expected output.
+    """
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
     result = max_handler.handle(
@@ -227,6 +292,9 @@ def test_max_handler_success(expr, op_symbol, var_values, expected):
 
 
 def test_max_handler_non_compare_returns_empty():
+    """
+    Tests that MaxHandler returns an empty dictionary when given a non-compare AST node.
+    """
     node = ast.parse("42", mode="eval").body
     rule = DummyRule("<")
     assert max_handler.handle(node, None, None, None, {}, rule) == {}
@@ -241,6 +309,14 @@ def test_max_handler_non_compare_returns_empty():
     ],
 )
 def test_max_handler_invalid(expr, var_values, error_msg):
+    """
+    Tests that MaxHandler raises ValueError with the expected message for invalid max() expressions.
+    
+    Args:
+        expr: The expression string to parse and test.
+        var_values: Dictionary of variable values for evaluation.
+        error_msg: Substring expected in the raised ValueError message.
+    """
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(">")
     with pytest.raises(ValueError) as excinfo:
@@ -291,6 +367,12 @@ def test_max_handler_invalid(expr, var_values, error_msg):
     ],
 )
 def test_min_handler_success(expr, op_symbol, var_values, expected):
+    """
+    Tests that MinHandler correctly validates min() expressions against expected constraints.
+    
+    Parses a min() comparison expression, invokes the handler with provided variable values,
+    and asserts that the returned error messages match the expected output.
+    """
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
     result = min_handler.handle(
@@ -300,6 +382,9 @@ def test_min_handler_success(expr, op_symbol, var_values, expected):
 
 
 def test_min_handler_non_compare_returns_empty():
+    """
+    Tests that MinHandler.handle returns an empty dictionary for non-compare AST nodes.
+    """
     node = ast.parse("'foo'", mode="eval").body
     rule = DummyRule(">=")
     assert min_handler.handle(node, None, None, None, {}, rule) == {}
@@ -314,6 +399,14 @@ def test_min_handler_non_compare_returns_empty():
     ],
 )
 def test_min_handler_invalid(expr, var_values, error_msg):
+    """
+    Tests that MinHandler raises ValueError with the expected message for invalid min() expressions.
+    
+    Args:
+        expr: The expression string to parse and test.
+        var_values: Dictionary of variable values for evaluation.
+        error_msg: Substring expected in the raised ValueError message.
+    """
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule("<")
     with pytest.raises(ValueError) as excinfo:

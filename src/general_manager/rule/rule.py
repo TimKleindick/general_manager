@@ -52,6 +52,16 @@ class Rule(Generic[GeneralManagerType]):
         custom_error_message: Optional[str] = None,
         ignore_if_none: bool = True,
     ) -> None:
+        """
+        Initializes a Rule instance by parsing the rule function, extracting variables, and registering error handlers.
+        
+        Args:
+            func: A boolean function defining the rule to evaluate.
+            custom_error_message: Optional template for custom error messages.
+            ignore_if_none: If True, skips evaluation when any variable is None.
+        
+        The function's source code is parsed into an AST to extract variable names and set up parent references. Built-in and custom error handlers are registered for generating error messages based on rule evaluation.
+        """
         self._func = func
         self._custom_error_message = custom_error_message
         self._ignore_if_none = ignore_if_none
