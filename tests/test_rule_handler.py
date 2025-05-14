@@ -162,7 +162,7 @@ def test_sum_handler_non_compare_returns_empty():
 @pytest.mark.parametrize(
     "expr, var_values, error_msg",
     [
-        ("x + 1 > 2", {"x": [1]}, "Invalid left node for sum function"),
+        ("x + 1 > 2", {"x": [1]}, "Invalid left node for sum() function"),
         ("sum(x) > 3", {"x": None}, "sum expects an iterable of numbers"),
         ("sum(x) > 'a'", {"x": [1, 2]}, "Invalid arguments for sum function"),
     ],
@@ -235,7 +235,7 @@ def test_max_handler_non_compare_returns_empty():
 @pytest.mark.parametrize(
     "expr, var_values, error_msg",
     [
-        ("x + 1 < 5", {"x": [1]}, "Invalid left node for max function"),
+        ("x + 1 < 5", {"x": [1]}, "Invalid left node for max() function"),
         ("max(x) > 3", {"x": []}, "max expects a non-empty iterable"),
         ("max(x) > 'a'", {"x": [1, 2]}, "Invalid arguments for max function"),
     ],
@@ -308,7 +308,7 @@ def test_min_handler_non_compare_returns_empty():
 @pytest.mark.parametrize(
     "expr, var_values, error_msg",
     [
-        ("1 + x >= 2", {"x": [1]}, "Invalid left node for min function"),
+        ("1 + x >= 2", {"x": [1]}, "Invalid left node for min() function"),
         ("min(x) < 5", {"x": []}, "min expects a non-empty iterable"),
         ("min(x) > 'a'", {"x": [1]}, "Invalid arguments for min function"),
     ],
