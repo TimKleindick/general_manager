@@ -81,7 +81,7 @@ class Rule(Generic[GeneralManagerType]):
             inst = cls()
             self._handlers[inst.function_name] = inst
         for path in getattr(settings, "RULE_HANDLERS", []):
-            handler_cls = import_string(path)
+            handler_cls: type[BaseRuleHandler] = import_string(path)
             inst = handler_cls()
             self._handlers[inst.function_name] = inst
 
