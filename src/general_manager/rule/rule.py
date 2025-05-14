@@ -22,7 +22,9 @@ from django.utils.module_loading import import_string
 from general_manager.rule.handler import (
     BaseRuleHandler,
     LenHandler,
-    IntersectionCheckHandler,
+    MaxHandler,
+    MinHandler,
+    SumHandler,
 )
 from general_manager.manager.generalManager import GeneralManager
 
@@ -75,7 +77,7 @@ class Rule(Generic[GeneralManagerType]):
 
         # 4) Handler registrieren
         self._handlers = {}  # type: Dict[str, BaseRuleHandler]
-        for cls in (LenHandler, IntersectionCheckHandler):
+        for cls in (LenHandler, MaxHandler, MinHandler, SumHandler):
             inst = cls()
             self._handlers[inst.function_name] = inst
         for path in getattr(settings, "RULE_HANDLERS", []):
