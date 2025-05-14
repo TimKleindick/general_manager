@@ -1,7 +1,6 @@
-from django.test import TestCase
 import ast
 from general_manager.rule.handler import LenHandler, MinHandler, MaxHandler, SumHandler
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 import pytest
 
 
@@ -18,13 +17,18 @@ class DummyRule:
         raise ValueError("Unexpected node type")
 
     def _eval_node(self, node: ast.AST) -> Any:
-        # Im rechten Literal-Fall: ast.Constant
+        # 1) Direktes Literal
         if isinstance(node, ast.Constant):
             return node.value
-        # Oder: Name-Knoten für var_values lookup
+        # 2) Negativer Literal-Fall: -2, -3.5, …
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            val = self._eval_node(node.operand)
+            if isinstance(val, (int, float)):
+                return -val
+        # 3) Name-Knoten für var_values lookup
         if isinstance(node, ast.Name):
             return None
-        raise ValueError("Cannot eval node")
+        raise ValueError(f"Cannot eval node of type {type(node).__name__}")
 
 
 # Handler-Instanz
@@ -115,25 +119,25 @@ def test_len_handler_invalid_raises(bad_expr, op):
             "sum(x) > 3",
             ">",
             {"x": [1, 1]},
-            {"x": "[x] (sum=2) is too small (min sum 4)!"},
+            {"x": "[x] (sum=2) is too small (> 3)!"},
         ),
         (
             "sum(y) >= 4",
             ">=",
             {"y": [1, 2]},
-            {"y": "[y] (sum=3) is too small (min sum 4)!"},
+            {"y": "[y] (sum=3) is too small (>= 4)!"},
         ),
         (
             "sum(z) < 5",
             "<",
             {"z": [2, 6]},
-            {"z": "[z] (sum=8) is too large (max sum 4)!"},
+            {"z": "[z] (sum=8) is too large (< 5)!"},
         ),
         (
             "sum(w) <= 3",
             "<=",
             {"w": [1, 4]},
-            {"w": "[w] (sum=5) is too large (max sum 3)!"},
+            {"w": "[w] (sum=5) is too large (<= 3)!"},
         ),
         (
             "sum(a) == 4",
@@ -189,25 +193,25 @@ def test_sum_handler_invalid(expr, var_values, error_msg):
             "max(x) > 3",
             ">",
             {"x": [1, 2]},
-            {"x": "[x] (max=2) is too small (min 4)!"},
+            {"x": "[x] (max=2) is too small (> 3)!"},
         ),
         (
             "max(y) >= 2",
             ">=",
             {"y": [1, 1]},
-            {"y": "[y] (max=1) is too small (min 2)!"},
+            {"y": "[y] (max=1) is too small (>= 2)!"},
         ),
         (
             "max(z) < 5",
             "<",
             {"z": [6, 7]},
-            {"z": "[z] (max=7) is too large (max 4)!"},
+            {"z": "[z] (max=7) is too large (< 5)!"},
         ),
         (
             "max(w) <= 3",
             "<=",
             {"w": [1, 4]},
-            {"w": "[w] (max=4) is too large (max 3)!"},
+            {"w": "[w] (max=4) is too large (<= 3)!"},
         ),
         (
             "max(a) == 4",
@@ -262,25 +266,25 @@ def test_max_handler_invalid(expr, var_values, error_msg):
             "min(x) > 3",
             ">",
             {"x": [0.1234]},
-            {"x": "[x] (min=0.1234) is too small (min 4)!"},
+            {"x": "[x] (min=0.1234) is too small (> 3)!"},
         ),
         (
             "min(y) >= 2",
             ">=",
             {"y": [1, 3]},
-            {"y": "[y] (min=1) is too small (min 2)!"},
+            {"y": "[y] (min=1) is too small (>= 2)!"},
         ),
         (
             "min(z) < 5",
             "<",
             {"z": [6, 7, 8]},
-            {"z": "[z] (min=6) is too large (max 4)!"},
+            {"z": "[z] (min=6) is too large (< 5)!"},
         ),
         (
             "min(w) <= 2",
             "<=",
             {"w": [3]},
-            {"w": "[w] (min=3) is too large (max 2)!"},
+            {"w": "[w] (min=3) is too large (<= 2)!"},
         ),
         (
             "min(a) == 4",
@@ -323,6 +327,109 @@ def test_min_handler_invalid(expr, var_values, error_msg):
             getattr(node, "comparators", [None])[0],
             node.ops[0],
             var_values,
+            rule,
+        )
+    assert error_msg in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "expr, op_symbol, var_values, expected",
+    [
+        (
+            "sum(mixed) < 7",
+            "<",
+            {"mixed": [1, 2.5, 4]},
+            {"mixed": "[mixed] (sum=7.5) is too large (< 7)!"},
+        ),
+        (
+            "max(mixed) > 2.5",
+            ">",
+            {"mixed": [1, 2.5, 3]},
+            {"mixed": "[mixed] (max=3) is too small (> 2.5)!"},
+        ),
+        (
+            "min(mixed) <= -2",
+            "<=",
+            {"mixed": [-1.5, 2, 3]},
+            {"mixed": "[mixed] (min=-1.5) is too large (<= -2)!"},
+        ),
+    ],
+)
+def test_mixed_numeric_types(expr, op_symbol, var_values, expected):
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule(op_symbol)
+    # dispatch auf den richtigen Handler
+    if expr.startswith("sum"):
+        result = sum_handler.handle(
+            node, node.left, node.comparators[0], node.ops[0], var_values, rule
+        )
+    elif expr.startswith("max"):
+        result = max_handler.handle(
+            node, node.left, node.comparators[0], node.ops[0], var_values, rule
+        )
+    else:
+        result = min_handler.handle(
+            node, node.left, node.comparators[0], node.ops[0], var_values, rule
+        )
+    assert result == expected
+
+
+# --- Very large collections (funktionale Korrektheit, kein Benchmark) ---
+def test_sum_handler_large_collection():
+    n = 100_000
+    large = [1] * n
+    expr = f"sum(large) >= {n}"
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule(">=")
+    result = sum_handler.handle(
+        node, node.left, node.comparators[0], node.ops[0], {"large": large}, rule
+    )
+    assert result == {"large": f"[large] (sum={n}) is too small (>= {n})!"}
+
+
+def test_max_handler_large_collection():
+    n = 100_000
+    large = list(range(n))
+    expr = f"max(large) == {n-1}"
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule("==")
+    result = max_handler.handle(
+        node, node.left, node.comparators[0], node.ops[0], {"large": large}, rule
+    )
+    assert result == {"large": f"[large] (max={n-1}) must be {n-1}!"}
+
+
+def test_min_handler_large_collection():
+    n = 100_000
+    large = list(range(n))
+    expr = "min(large) == 0"
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule("==")
+    result = min_handler.handle(
+        node, node.left, node.comparators[0], node.ops[0], {"large": large}, rule
+    )
+    assert result == {"large": "[large] (min=0) must be 0!"}
+
+
+# --- Edge case: var_values liefert None ---
+@pytest.mark.parametrize(
+    "handler, expr, error_msg",
+    [
+        (sum_handler, "sum(x) > 0", "sum expects an iterable of numbers"),
+        (max_handler, "max(x) > 0", "max expects a non-empty iterable"),
+        (min_handler, "min(x) > 0", "min expects a non-empty iterable"),
+    ],
+)
+def test_handler_none_value_raises(handler, expr, error_msg):
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule(">")
+    with pytest.raises(ValueError) as excinfo:
+        handler.handle(
+            node,
+            node.left,
+            node.comparators[0],
+            node.ops[0],
+            {"x": None},
             rule,
         )
     assert error_msg in str(excinfo.value)
