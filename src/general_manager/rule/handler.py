@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 import ast
-from typing import Dict, Optional, TYPE_CHECKING, cast
+from typing import Dict, Optional, TYPE_CHECKING
 from abc import ABC, abstractmethod
 
 if TYPE_CHECKING:
-    # Forward-Reference auf Rule mit beliebigem Generic-Parameter
     from general_manager.rule.rule import Rule
-    from general_manager.manager import GeneralManager
 
 
 class BaseRuleHandler(ABC):
@@ -32,8 +30,10 @@ class BaseRuleHandler(ABC):
         pass
 
 
-class LenHandler(BaseRuleHandler):
-    function_name = "len"
+class FunctionHandler(BaseRuleHandler, ABC):
+    """
+    Handler für Funktionsaufrufe wie len(), max(), min(), sum().
+    """
 
     def handle(
         self,
@@ -44,7 +44,6 @@ class LenHandler(BaseRuleHandler):
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
-        # Wir erwarten hier einen Compare-Knoten
         if not isinstance(node, ast.Compare):
             return {}
         compare_node = node
@@ -53,10 +52,63 @@ class LenHandler(BaseRuleHandler):
         right_node = compare_node.comparators[0]
         op_symbol = rule._get_op_symbol(op)
 
-        # Argument von len(...)
         if not (isinstance(left_node, ast.Call) and left_node.args):
-            raise ValueError("Invalid left node for len function")
+            raise ValueError(f"Invalid left node for {self.function_name} function")
         arg_node = left_node.args[0]
+
+        return self.aggregate(
+            arg_node,
+            right_node,
+            op_symbol,
+            var_values,
+            rule,
+        )
+
+    @abstractmethod
+    def aggregate(
+        self,
+        arg_node: ast.expr,
+        right_node: ast.expr,
+        op_symbol: str,
+        var_values: Dict[str, Optional[object]],
+        rule: Rule,
+    ) -> Dict[str, str]:
+        """
+        Aggregiere die Werte und erstelle eine Fehlermeldung.
+        """
+        raise NotImplementedError("Subclasses should implement this method")
+
+    @staticmethod
+    def getThreshold(
+        op_symbol: str,
+        right_value: int | float,
+    ) -> int | float:
+        """
+        Berechne den Schwellenwert basierend auf dem Operator.
+        """
+        if op_symbol == ">":
+            return right_value + 1
+        elif op_symbol == ">=":
+            return right_value
+        elif op_symbol == "<":
+            return right_value - 1
+        elif op_symbol == "<=":
+            return right_value
+        else:
+            return right_value
+
+
+class LenHandler(FunctionHandler):
+    function_name = "len"
+
+    def aggregate(
+        self,
+        arg_node: ast.expr,
+        right_node: ast.expr,
+        op_symbol: str,
+        var_values: Dict[str, Optional[object]],
+        rule: Rule,
+    ) -> Dict[str, str]:
 
         var_name = rule._get_node_name(arg_node)
         var_value = var_values.get(var_name)
@@ -67,17 +119,7 @@ class LenHandler(BaseRuleHandler):
             raise ValueError("Invalid arguments for len function")
         right_value: int | float = raw
 
-        # Schwellenwert je nach Operator
-        if op_symbol == ">":
-            threshold = right_value + 1
-        elif op_symbol == ">=":
-            threshold = right_value
-        elif op_symbol == "<":
-            threshold = right_value - 1
-        elif op_symbol == "<=":
-            threshold = right_value
-        else:
-            threshold = right_value
+        threshold = self.getThreshold(op_symbol, right_value)
 
         # Fehlermeldung formulieren
         if op_symbol in (">", ">="):
@@ -90,29 +132,17 @@ class LenHandler(BaseRuleHandler):
         return {var_name: msg}
 
 
-class SumHandler(BaseRuleHandler):
+class SumHandler(FunctionHandler):
     function_name = "sum"
 
-    def handle(
+    def aggregate(
         self,
-        node: ast.AST,
-        left: Optional[ast.expr],
-        right: Optional[ast.expr],
-        op: Optional[ast.cmpop],
+        arg_node: ast.expr,
+        right_node: ast.expr,
+        op_symbol: str,
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
-        if not isinstance(node, ast.Compare):
-            return {}
-        compare_node = node
-        left_node = compare_node.left
-        right_node = compare_node.comparators[0]
-        op_symbol = rule._get_op_symbol(op)
-
-        # Call-Knoten checken
-        if not (isinstance(left_node, ast.Call) and left_node.args):
-            raise ValueError("Invalid left node for sum function")
-        arg_node = left_node.args[0]
 
         # Name und Wert holen
         var_name = rule._get_node_name(arg_node)
@@ -127,17 +157,7 @@ class SumHandler(BaseRuleHandler):
             raise ValueError("Invalid arguments for sum function")
         right_value = raw
 
-        # Threshold je nach Operator
-        if op_symbol == ">":
-            threshold = right_value + 1
-        elif op_symbol == ">=":
-            threshold = right_value
-        elif op_symbol == "<":
-            threshold = right_value - 1
-        elif op_symbol == "<=":
-            threshold = right_value
-        else:
-            threshold = right_value
+        threshold = self.getThreshold(op_symbol, right_value)
 
         # Message formulieren
         if op_symbol in (">", ">="):
@@ -150,28 +170,17 @@ class SumHandler(BaseRuleHandler):
         return {var_name: msg}
 
 
-class MaxHandler(BaseRuleHandler):
+class MaxHandler(FunctionHandler):
     function_name = "max"
 
-    def handle(
+    def aggregate(
         self,
-        node: ast.AST,
-        left: Optional[ast.expr],
-        right: Optional[ast.expr],
-        op: Optional[ast.cmpop],
+        arg_node: ast.expr,
+        right_node: ast.expr,
+        op_symbol: str,
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
-        if not isinstance(node, ast.Compare):
-            return {}
-        compare_node = node
-        left_node = compare_node.left
-        right_node = compare_node.comparators[0]
-        op_symbol = rule._get_op_symbol(op)
-
-        if not (isinstance(left_node, ast.Call) and left_node.args):
-            raise ValueError("Invalid left node for max function")
-        arg_node = left_node.args[0]
 
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)
@@ -184,16 +193,7 @@ class MaxHandler(BaseRuleHandler):
             raise ValueError("Invalid arguments for max function")
         right_value = raw
 
-        if op_symbol == ">":
-            threshold = right_value + 1
-        elif op_symbol == ">=":
-            threshold = right_value
-        elif op_symbol == "<":
-            threshold = right_value - 1
-        elif op_symbol == "<=":
-            threshold = right_value
-        else:
-            threshold = right_value
+        threshold = self.getThreshold(op_symbol, right_value)
 
         if op_symbol in (">", ">="):
             msg = f"[{var_name}] (max={current}) is too small (min {threshold})!"
@@ -205,28 +205,17 @@ class MaxHandler(BaseRuleHandler):
         return {var_name: msg}
 
 
-class MinHandler(BaseRuleHandler):
+class MinHandler(FunctionHandler):
     function_name = "min"
 
-    def handle(
+    def aggregate(
         self,
-        node: ast.AST,
-        left: Optional[ast.expr],
-        right: Optional[ast.expr],
-        op: Optional[ast.cmpop],
+        arg_node: ast.expr,
+        right_node: ast.expr,
+        op_symbol: str,
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
-        if not isinstance(node, ast.Compare):
-            return {}
-        compare_node = node
-        left_node = compare_node.left
-        right_node = compare_node.comparators[0]
-        op_symbol = rule._get_op_symbol(op)
-
-        if not (isinstance(left_node, ast.Call) and left_node.args):
-            raise ValueError("Invalid left node for min function")
-        arg_node = left_node.args[0]
 
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)
@@ -239,16 +228,7 @@ class MinHandler(BaseRuleHandler):
             raise ValueError("Invalid arguments for min function")
         right_value = raw
 
-        if op_symbol == ">":
-            threshold = right_value + 1
-        elif op_symbol == ">=":
-            threshold = right_value
-        elif op_symbol == "<":
-            threshold = right_value - 1
-        elif op_symbol == "<=":
-            threshold = right_value
-        else:
-            threshold = right_value
+        threshold = self.getThreshold(op_symbol, right_value)
 
         if op_symbol in (">", ">="):
             msg = f"[{var_name}] (min={current}) is too small (min {threshold})!"
