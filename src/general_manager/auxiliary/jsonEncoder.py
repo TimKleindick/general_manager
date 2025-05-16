@@ -1,10 +1,10 @@
 from datetime import datetime, date, time
 import json
+from general_manager.manager.generalManager import GeneralManager
 
 
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, o):
-        from general_manager.manager.generalManager import GeneralManager
 
         # datetime-Objekte als ISO-Strings serialisieren
         if isinstance(o, (datetime, date, time)):
