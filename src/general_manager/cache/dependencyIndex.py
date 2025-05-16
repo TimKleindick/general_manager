@@ -6,7 +6,7 @@ import re
 from django.core.cache import cache
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.dispatch import receiver
-from typing import Literal, Any, Iterable, TYPE_CHECKING, Type
+from typing import Literal, Any, Iterable, TYPE_CHECKING, Type, Tuple
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
@@ -24,6 +24,8 @@ type dependency_index = dict[
     ],
 ]
 
+type filter_type = Literal["filter", "exclude", "identification"]
+type Dependency = Tuple[general_manager_name, filter_type, str]
 
 # -----------------------------------------------------------------------------
 # CONFIG

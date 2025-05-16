@@ -7,7 +7,7 @@ from general_manager.interface.baseInterface import (
     GeneralManagerType,
 )
 from general_manager.api.property import GraphQLProperty
-from general_manager.cache.cacheTracker import addDependency
+from general_manager.cache.cacheTracker import DependencyTracker
 from general_manager.cache.signals import dataChange
 
 if TYPE_CHECKING:
@@ -21,7 +21,9 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     def __init__(self, *args: Any, **kwargs: Any):
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
-        addDependency(self.__class__.__name__, "identification", f"{self.__id}")
+        DependencyTracker.trackMe(
+            self.__class__.__name__, "identification", f"{self.__id}"
+        )
 
     def __str__(self):
         return f"{self.__class__.__name__}(**{self.__id})"
@@ -108,12 +110,16 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
 
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
-        addDependency(cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}")
+        DependencyTracker.trackMe(
+            cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}"
+        )
         return cls.Interface.filter(**kwargs)
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
-        addDependency(cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}")
+        DependencyTracker.trackMe(
+            cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}"
+        )
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
