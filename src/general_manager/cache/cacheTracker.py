@@ -1,6 +1,10 @@
 import threading
+from general_manager.cache.dependencyIndex import (
+    general_manager_name,
+    Dependency,
+    filter_type,
+)
 from general_manager.cache.dependencyIndex import general_manager_name
-from typing import Any, Literal
 
 
 # Thread-lokale Variable zur Speicherung der Abhängigkeiten
@@ -10,9 +14,7 @@ _dependency_storage = threading.local()
 class DependencyTracker:
     def __enter__(
         self,
-    ) -> set[
-        tuple[general_manager_name, Literal["filter", "exclude", "identification"], str]
-    ]:
+    ) -> set[Dependency]:
         _dependency_storage.dependencies = set()
         return _dependency_storage.dependencies
 
@@ -20,14 +22,15 @@ class DependencyTracker:
         # Optional: Aufräumen oder weitere Verarbeitung
         pass
 
-
-def addDependency(class_name: str, operation: str, identifier: str) -> None:
-    """
-    Adds a dependency to the dependency storage.
-    """
-    if hasattr(_dependency_storage, "dependencies"):
-        dependencies: set[
-            tuple[general_manager_name, Literal["filter", "exclude", "id"], str]
-        ] = _dependency_storage.dependencies
-
-        _dependency_storage.dependencies.add((class_name, operation, identifier))
+    @staticmethod
+    def trackMe(
+        class_name: general_manager_name,
+        operation: filter_type,
+        identifier: str,
+    ) -> None:
+        """
+        Adds a dependency to the dependency storage.
+        """
+        if hasattr(_dependency_storage, "dependencies"):
+            dependencies: set[Dependency] = _dependency_storage.dependencies
+            dependencies.add((class_name, operation, identifier))
