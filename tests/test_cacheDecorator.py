@@ -14,15 +14,12 @@ class FakeCacheBackend:
 
     def get(self, key, default=None):
         # return self.store.get(key, default)
-        print(f"Getting cache for key: {key}")
         cached_value = self.store.get(key, default)
-        print(f"Cache value: {cached_value}")
         if cached_value is not default:
             return pickle.loads(cached_value)  # type: ignore
         return default
 
     def set(self, key, value, timeout=None):
-        print(f"Setting cache for key: {key} with value: {value}")
         self.store[key] = pickle.dumps(value)
 
 
@@ -132,7 +129,6 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             return x + y
 
         sample_function(1, 2)
-        print(custom_cache.store)
         self.assertTrue(
             len(custom_cache.store) > 0, "Cache should have stored the result"
         )
