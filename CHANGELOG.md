@@ -1,6 +1,48 @@
 # CHANGELOG
 
 
+## v0.3.0 (2025-05-17)
+
+### Features
+
+- Implement CustomJSONEncoder for serializing datetime and GeneralManager objects
+  ([`ec98a91`](https://github.com/TimKleindick/general_manager/commit/ec98a91a758f39e17cede8b8772be4150c00456a))
+
+- Implement make_cache_key function for generating cache keys from function arguments
+  ([`135365d`](https://github.com/TimKleindick/general_manager/commit/135365d81922380ab4b9e24d3cf9ad1231082dcd))
+
+### Refactoring
+
+- Cachedecorator for better maintainability
+  ([`40b6ff6`](https://github.com/TimKleindick/general_manager/commit/40b6ff6ad9072256e8cd8ec3e7d9308939596553))
+
+- Remove commented steps in cached decorator for cleaner code
+  ([`d994a6b`](https://github.com/TimKleindick/general_manager/commit/d994a6b9a76ebe2fea36cdad108a5a527a017d70))
+
+- Remove duplicate imports and improve DependencyTracker cleanup
+  ([`c7450d1`](https://github.com/TimKleindick/general_manager/commit/c7450d1939aa35a9077fb67f0f7c9e060090ec10))
+
+- Remove unnecessary import of general_manager_name in cacheTracker.py
+  ([`dd57675`](https://github.com/TimKleindick/general_manager/commit/dd5767520ac9d6af65171cc67e03db2b5cfb9899))
+
+- Remove unused imports and obsolete test
+  ([`757e9da`](https://github.com/TimKleindick/general_manager/commit/757e9dab6c7c4a6ad491c8c67d176a31cd957256))
+
+- Remove unused imports and update docstrings for clarity
+  ([`103318f`](https://github.com/TimKleindick/general_manager/commit/103318f815a45827b0db026d75ac2a1c0919b774))
+
+- Rename trackMe method to track in DependencyTracker for consistency
+  ([`62f2cc1`](https://github.com/TimKleindick/general_manager/commit/62f2cc17754f3389322f186aaca3789e6070f9e4))
+
+- Simplify setup for CustomJSONEncoderTests by removing unnecessary module patching
+  ([`b3d529a`](https://github.com/TimKleindick/general_manager/commit/b3d529a5a9c9579d4d2e065746ffdf1c62588eec))
+
+### Testing
+
+- Jsonencoder
+  ([`3fee1d2`](https://github.com/TimKleindick/general_manager/commit/3fee1d29e91376a5b7d873d73f0e3776166a6a92))
+
+
 ## v0.2.0 (2025-05-14)
 
 ### Bug Fixes
