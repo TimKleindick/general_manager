@@ -21,7 +21,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     def __init__(self, *args: Any, **kwargs: Any):
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
-        DependencyTracker.trackMe(
+        DependencyTracker.track(
             self.__class__.__name__, "identification", f"{self.__id}"
         )
 
@@ -110,14 +110,14 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
 
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
-        DependencyTracker.trackMe(
+        DependencyTracker.track(
             cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}"
         )
         return cls.Interface.filter(**kwargs)
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
-        DependencyTracker.trackMe(
+        DependencyTracker.track(
             cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}"
         )
         return cls.Interface.exclude(**kwargs)
