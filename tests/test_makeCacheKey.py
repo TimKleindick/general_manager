@@ -1,0 +1,234 @@
+from django.test import SimpleTestCase
+from general_manager.auxiliary.makeCacheKey import make_cache_key
+
+
+class TestMakeCacheKey(SimpleTestCase):
+
+    def test_make_cache_key(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs = {"y": 3}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+        result2 = make_cache_key(sample_function, args, kwargs)
+        self.assertEqual(result, result2)
+
+    def test_make_cache_key_with_different_args(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (2,)
+        kwargs = {"y": 4}
+
+        result1 = make_cache_key(sample_function, args, kwargs)
+
+        args = (1,)
+        kwargs = {"y": 3}
+
+        result2 = make_cache_key(sample_function, args, kwargs)
+        self.assertNotEqual(result1, result2)
+
+    def test_make_cache_key_with_different_kwargs(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs1 = {"y": 3}
+        kwargs2 = {"y": 4}
+
+        result1 = make_cache_key(sample_function, args, kwargs1)
+        result2 = make_cache_key(sample_function, args, kwargs2)
+
+        self.assertNotEqual(result1, result2)
+
+    def test_make_cache_key_with_different_function(self):
+        def sample_function1(x, y):
+            return x + y
+
+        def sample_function2(x, y):
+            return x * y
+
+        args = (1,)
+        kwargs = {"y": 3}
+
+        result1 = make_cache_key(sample_function1, args, kwargs)
+        result2 = make_cache_key(sample_function2, args, kwargs)
+
+        self.assertNotEqual(result1, result2)
+
+    def test_make_cache_key_with_different_module(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs = {"y": 3}
+
+        result1 = make_cache_key(sample_function, args, kwargs)
+
+        # Simulate a different module by changing the function's __module__ attribute
+        sample_function.__module__ = "different_module"
+        result2 = make_cache_key(sample_function, args, kwargs)
+
+        self.assertNotEqual(result1, result2)
+
+    def test_make_cache_key_with_different_args_order(self):
+        def sample_function(x, y):
+            return x + y
+
+        args1 = (1, 3)
+        kwargs1 = {}
+
+        args2 = (3, 1)
+        kwargs2 = {}
+
+        result1 = make_cache_key(sample_function, args1, kwargs1)
+        result2 = make_cache_key(sample_function, args2, kwargs2)
+
+        self.assertNotEqual(result1, result2)
+
+    def test_make_cache_key_with_empty_args_and_kwargs(self):
+        def sample_function():
+            return 42
+
+        args = ()
+        kwargs = {}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_none_args_and_kwargs(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (None,)
+        kwargs = {"y": None}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_special_characters(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = ("!@#$%^&*()",)
+        kwargs = {"y": "[]{}|;:'\",.<>?"}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_large_data(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs = {"y": "a" * 10000}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 64)
+
+    def test_make_cache_key_with_nested_data(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs = {"y": {"a": 1, "b": [2, 3], "c": {"d": 4}}}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_custom_object(self):
+        class CustomObject:
+            def __init__(self, value):
+                self.value = value
+
+            def __str__(self):
+                return f"CustomObject({self.value})"
+
+        def sample_function(x, y):
+            return x + y
+
+        args = (CustomObject(1),)
+        kwargs = {"y": CustomObject(3)}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_function(self):
+        def sample_function(x, y):
+            return x + y
+
+        def inner_function(a, b):
+            return a * b
+
+        args = (1,)
+        kwargs = {"y": inner_function}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_lambda_function(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs = {"y": lambda a: a * 2}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_generator(self):
+        def sample_function(x, y):
+            return x + y
+
+        def generator_function():
+            yield from range(5)
+
+        args = (1,)
+        kwargs = {"y": generator_function()}
+
+        result = make_cache_key(sample_function, args, kwargs)
+        self.assertIsNotNone(result)
+
+    def test_make_cache_key_with_same_function_name(self):
+        def create_function():
+            def sample_function(x, y):
+                return x + y
+
+            return sample_function
+
+        def create_function2():
+            def sample_function(x, y):
+                return x * y * 5
+
+            return sample_function
+
+        args = (1,)
+        kwargs = {"y": 3}
+        sample_function = create_function()
+        sample_function2 = create_function2()
+        result1 = make_cache_key(sample_function, args, kwargs)
+        result2 = make_cache_key(sample_function2, args, kwargs)
+        self.assertNotEqual(result1, result2)
+
+    def test_make_cache_key_with_wrong_arg_kwarg_combination(self):
+        def sample_function(x, y):
+            return x + y
+
+        cases = [
+            ((1,), {"x": 3}),
+            ((1, 2), {"y": 3}),
+            ((1,), {"y": 3, "z": 4}),
+            ((1, 2), {"x": 3, "y": 4}),
+            ((), {"x": 3, "y": 4, "z": 5}),
+            ((1, 2), {"x": 2}),
+            ((), {"z": 3}),
+        ]
+        for arg_values, kwarg_values in cases:
+            with self.subTest(args=arg_values, kwargs=kwarg_values):
+                with self.assertRaises(TypeError):
+                    make_cache_key(sample_function, arg_values, kwarg_values)
