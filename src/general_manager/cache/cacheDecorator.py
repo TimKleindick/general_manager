@@ -24,16 +24,23 @@ def cached(
         @wraps(func)
         def wrapper(*args, **kwargs):
             key = make_cache_key(func, args, kwargs)
+            deps_key = f"{key}:deps"
 
-            result = cache_backend.get(key)
-            if result is not None:
-                return result
+            cached_result = cache_backend.get(key)
+            if cached_result is not None:
+                # gespeicherte Dependencies nachträglich in den aktuellen Tracker einfügen
+                cached_deps = cache_backend.get(deps_key)
+                if cached_deps:
+                    for class_name, operation, identifier in cached_deps:
+                        DependencyTracker.track(class_name, operation, identifier)
+                return cached_result
 
             with DependencyTracker() as dependencies:
                 result = func(*args, **kwargs)
                 ModelDependencyCollector.addArgs(dependencies, args, kwargs)
 
                 cache_backend.set(key, result, timeout)
+                cache_backend.set(deps_key, dependencies, timeout)
 
                 if dependencies and timeout is None:
                     record_fn(key, dependencies)
