@@ -1,6 +1,78 @@
 # CHANGELOG
 
 
+## v0.3.1 (2025-05-17)
+
+### Bug Fixes
+
+- Cache setting logic for nested cached functions
+  ([`c94db78`](https://github.com/TimKleindick/general_manager/commit/c94db7893a0670b228fc6a44cbbc79a3730741de))
+
+- Distinguish between cache miss and None result
+  ([`ee3df6f`](https://github.com/TimKleindick/general_manager/commit/ee3df6fa8efd0734d6af600352465180de0d31af))
+
+- Ensure proper cleanup of depth variable in DependencyTracker
+  ([`8bd7432`](https://github.com/TimKleindick/general_manager/commit/8bd743222dfe2799631f28c92bbf1ae3dadda1b1))
+
+- Improve cache handling imitation by adding pickle serialization in FakeCacheBackend
+  ([`3e4d14b`](https://github.com/TimKleindick/general_manager/commit/3e4d14b74657780b1f70a9d4188ad0a58c556bb3))
+
+- Improve docstrings for cache backend methods and test cases
+  ([`74759a3`](https://github.com/TimKleindick/general_manager/commit/74759a37e627c61b92a74cd8f889106962e0387d))
+
+- Reset thread-local storage in tests and adjust cache timeout for better isolation
+  ([`5a059ab`](https://github.com/TimKleindick/general_manager/commit/5a059ab5ff7db933d702a93f8849057baeb0cc4c))
+
+- Store dependecies of inner functions even with cache hit of inner function
+  ([`f5171b4`](https://github.com/TimKleindick/general_manager/commit/f5171b44140b433261ac3b67c103535cf38db155))
+
+- Update cache key generation to use qualified name instead of function name
+  ([`32c2cdf`](https://github.com/TimKleindick/general_manager/commit/32c2cdf6c528153f69b92c12bd3d95e431779a6a))
+
+### Refactoring
+
+- Change test case class from django SimpleTestCase to unittest TestCase
+  ([`04d3939`](https://github.com/TimKleindick/general_manager/commit/04d39399771b32da06a6e0ae964e6b26ad45c9d0))
+
+- Move PathMap and PathTracer classes from cache to auxiliary
+  ([`11201aa`](https://github.com/TimKleindick/general_manager/commit/11201aa01dfee75259bbf5cc87c8e22c11b73890))
+
+- Remove unnecessary TYPE_CHECKING imports in pathMapping.py
+  ([`ad6afad`](https://github.com/TimKleindick/general_manager/commit/ad6afad1c51ce4f473d6040d317daccbfc4a70f8))
+
+- Remove unused import of defaultdict in cacheTracker.py
+  ([`4885b59`](https://github.com/TimKleindick/general_manager/commit/4885b599305e8ac68d8d4ed2cb630e01e1a378db))
+
+### Testing
+
+- Add comprehensive tests for cache decorator functionality
+  ([`ab0b509`](https://github.com/TimKleindick/general_manager/commit/ab0b509d871156099ebcd08ca1f56277cf5e7c67))
+
+- Add comprehensive unit tests for make_cache_key function
+  ([`20b9667`](https://github.com/TimKleindick/general_manager/commit/20b9667dc9be8d2865dfa755883bf938ae5c5570))
+
+- Add test for make_cache_key with kwargs as args
+  ([`2397c3b`](https://github.com/TimKleindick/general_manager/commit/2397c3b617b118178de1bff8acd89c18ed232a97))
+
+- Add unit test for nested cache decorator with inner cache hit
+  ([`d67f7f8`](https://github.com/TimKleindick/general_manager/commit/d67f7f81ccccac95048aa064ff917fb0d2d840d8))
+
+- Add unit tests for DependencyTracker functionality
+  ([`8aeadc7`](https://github.com/TimKleindick/general_manager/commit/8aeadc767dd815d062f99444d9dc73f43e881bbe))
+
+- Add unit tests for ModelDependencyCollector functionality
+  ([`bdcde99`](https://github.com/TimKleindick/general_manager/commit/bdcde99217a417e925f10d43258d4dc4e34fcf93))
+
+- Change TestCase to SimpleTestCase for DependencyTracker tests
+  ([`566068e`](https://github.com/TimKleindick/general_manager/commit/566068e03df8526e2ecbdd6e2914bb0b204084c3))
+
+- Simplify exception handling in make_cache_key tests using combined context manager
+  ([`7b93125`](https://github.com/TimKleindick/general_manager/commit/7b931254da0d66437a27d98ba4d9fca733936f71))
+
+- Update exception type in dependency tracker test
+  ([`41a370d`](https://github.com/TimKleindick/general_manager/commit/41a370d7f4729d61a535caed7bee77756992f973))
+
+
 ## v0.3.0 (2025-05-17)
 
 ### Features
