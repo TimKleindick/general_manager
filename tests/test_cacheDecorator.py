@@ -232,3 +232,52 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         res2 = outer_function(2, 3)
         self.assertEqual(res2, 5)
         self.assertEqual(self.record_calls, [])
+
+    def test_nested_cache_decorator_with_inner_cache_hit(self):
+        @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
+        def outer_function(x, y):
+            DependencyTracker.track("User", "identification", str(x))
+            return inner_function(x, y)
+
+        @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
+        def inner_function(x, y):
+            DependencyTracker.track("Profile", "identification", str(y))
+            return x + y
+
+        # first call: inner function: Cache miss
+        inner_res = inner_function(2, 3)
+        self.assertEqual(inner_res, 5)
+        # now the inner function should be in the cache
+        key_inner = make_cache_key(inner_function, (2, 3), {})
+        self.assertIn(key_inner, self.fake_cache.store)
+        self.assertEqual(self.fake_cache.store[key_inner], 5)
+
+        # second call: outer function: Cache miss
+        res = outer_function(2, 3)
+        self.assertEqual(res, 5)
+        key_outer = make_cache_key(outer_function, (2, 3), {})
+
+        # Result should be in the fake cache
+        self.assertIn(key_outer, self.fake_cache.store)
+        self.assertEqual(self.fake_cache.store[key_outer], 5)
+
+        # record_fn should have been called twice
+        # once for the outer function and once for the inner function
+        self.assertEqual(len(self.record_calls), 2)
+        # first call: inner_function
+        rec_key, deps = self.record_calls[0]
+        self.assertEqual(rec_key, key_inner)
+        self.assertEqual(deps, {("Profile", "identification", "3")})
+        # second call: outer_function
+        rec_key, deps = self.record_calls[1]
+        self.assertEqual(rec_key, key_outer)
+        self.assertEqual(
+            deps,
+            {("User", "identification", "2"), ("Profile", "identification", "3")},
+        )
+
+        # second call: Cache hit -> no record_fn call
+        self.record_calls.clear()
+        res2 = outer_function(2, 3)
+        self.assertEqual(res2, 5)
+        self.assertEqual(self.record_calls, [])
