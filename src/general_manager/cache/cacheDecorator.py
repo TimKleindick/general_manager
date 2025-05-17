@@ -33,10 +33,10 @@ def cached(
                 result = func(*args, **kwargs)
                 ModelDependencyCollector.addArgs(dependencies, args, kwargs)
 
-            cache_backend.set(key, result, timeout)
+                cache_backend.set(key, result, timeout)
 
-            if dependencies and timeout is None:
-                record_fn(key, dependencies)
+                if dependencies and timeout is None:
+                    record_fn(key, dependencies)
 
             return result
 
