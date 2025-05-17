@@ -19,8 +19,8 @@ class DependencyTracker:
         return _dependency_storage.dependencies
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Optional: Aufräumen oder weitere Verarbeitung
-        pass
+        if hasattr(_dependency_storage, "dependencies"):
+            del _dependency_storage.dependencies
 
     @staticmethod
     def trackMe(
