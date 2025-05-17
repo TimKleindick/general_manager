@@ -229,9 +229,11 @@ class TestMakeCacheKey(SimpleTestCase):
             ((), {"z": 3}),
         ]
         for arg_values, kwarg_values in cases:
-            with self.subTest(args=arg_values, kwargs=kwarg_values):
-                with self.assertRaises(TypeError):
-                    make_cache_key(sample_function, arg_values, kwarg_values)
+            with (
+                self.subTest(args=arg_values, kwargs=kwarg_values),
+                self.assertRaises(TypeError),
+            ):
+                make_cache_key(sample_function, arg_values, kwarg_values)
 
     def test_make_cache_key_with_kwargs_as_args(self):
         def sample_function(x, y):
