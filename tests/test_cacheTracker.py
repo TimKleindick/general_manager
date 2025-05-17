@@ -1,8 +1,8 @@
-from django.test import SimpleTestCase
+from unittest import TestCase
 from general_manager.cache.cacheTracker import DependencyTracker
 
 
-class TestDependencyTracker(SimpleTestCase):
+class TestDependencyTracker(TestCase):
     def test_dependency_tracker(self):
         with DependencyTracker() as dependencies:
             dependencies.add(("TestClass", "identification", "TestIdentifier"))
