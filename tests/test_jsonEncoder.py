@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import SimpleTestCase
 from datetime import datetime, date, time
 import json
 import sys
@@ -9,7 +9,7 @@ from importlib import reload
 from general_manager.auxiliary import jsonEncoder
 
 
-class CustomJSONEncoderTests(TestCase):
+class CustomJSONEncoderTests(SimpleTestCase):
     def setUp(self):
         # Patch the GeneralManager class in its module
         fake_module = types.ModuleType("general_manager.manager.generalManager")
