@@ -8,11 +8,13 @@ from general_manager.auxiliary.makeCacheKey import make_cache_key
 
 
 class CacheBackend(Protocol):
-    def get(self, key: str) -> Any: ...
+    def get(self, key: str, default: Optional[Any] = None) -> Any: ...
     def set(self, key: str, value: Any, timeout: Optional[int] = None) -> None: ...
 
 
 RecordFn = Callable[[str, Set[Dependency]], None]
+
+_SENTINEL = object()
 
 
 def cached(
@@ -26,9 +28,9 @@ def cached(
             key = make_cache_key(func, args, kwargs)
             deps_key = f"{key}:deps"
 
-            cached_result = cache_backend.get(key)
-            if cached_result is not None:
-                # gespeicherte Dependencies nachträglich in den aktuellen Tracker einfügen
+            cached_result = cache_backend.get(key, _SENTINEL)
+            if cached_result is not _SENTINEL:
+                # saved dependencies are added to the current tracker
                 cached_deps = cache_backend.get(deps_key)
                 if cached_deps:
                     for class_name, operation, identifier in cached_deps:
