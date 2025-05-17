@@ -9,12 +9,6 @@ from general_manager.cache.dependencyIndex import (
 
 class ModelDependencyCollector:
 
-    def __init__(self, dependencies: set[Dependency]):
-        """
-        Initialize the ModelDependencyCollector with a set of dependencies.
-        """
-        self.dependencies = dependencies
-
     @staticmethod
     def collect(obj) -> Generator[tuple[general_manager_name, filter_type, str]]:
         """Recursively find Django model instances in the object."""
