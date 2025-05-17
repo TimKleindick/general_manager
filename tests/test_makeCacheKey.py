@@ -232,3 +232,18 @@ class TestMakeCacheKey(SimpleTestCase):
             with self.subTest(args=arg_values, kwargs=kwarg_values):
                 with self.assertRaises(TypeError):
                     make_cache_key(sample_function, arg_values, kwarg_values)
+
+    def test_make_cache_key_with_kwargs_as_args(self):
+        def sample_function(x, y):
+            return x + y
+
+        args = (1,)
+        kwargs = {"y": 3}
+
+        result1 = make_cache_key(sample_function, args, kwargs)
+
+        args = (1, 3)
+        kwargs = {}
+
+        result2 = make_cache_key(sample_function, args, kwargs)
+        self.assertEqual(result1, result2)
