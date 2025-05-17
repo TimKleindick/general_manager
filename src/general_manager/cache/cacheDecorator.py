@@ -23,21 +23,18 @@ def cached(
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
-            key = make_cache_key(func, args, kwargs)  # deine verbesserte Funktion
-            # 1) Cache lesen
+            key = make_cache_key(func, args, kwargs)
+
             result = cache_backend.get(key)
             if result is not None:
                 return result
 
-            # 2) Funktion ausführen + Dependencies sammeln
             with DependencyTracker() as dependencies:
                 result = func(*args, **kwargs)
                 ModelDependencyCollector.addArgs(dependencies, args, kwargs)
 
-            # 3) Ergebnis cachen
             cache_backend.set(key, result, timeout)
 
-            # 4) Dependencies persistieren (nur bei timeout=None)
             if dependencies and timeout is None:
                 record_fn(key, dependencies)
 
