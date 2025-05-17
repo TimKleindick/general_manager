@@ -52,8 +52,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         Initializes a fake cache backend and a call recording list, and resets thread-local dependency tracking state to ensure test isolation.
         """
-        with suppress(Exception):
-            del DependencyTracker.__dict__["_DependencyTracker__local"].dependencies
+        DependencyTracker.reset_thread_local_storage()
 
         self.fake_cache = FakeCacheBackend()
         self.record_calls = []
@@ -151,7 +150,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         `cache.get` and `cache.set` to be called again.
         """
 
-        @cached(timeout=1)
+        @cached(timeout=0.1)  # type: ignore
         def sample_function(x, y):
             return x + y
 
@@ -166,8 +165,8 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             self.assertTrue(
                 set_spy.called, "At cache miss, cache.set() should be called"
             )
-            time.sleep(2)
             # Wait for the cache to expire
+            time.sleep(0.15)
             get_spy.reset_mock()
             set_spy.reset_mock()
 
