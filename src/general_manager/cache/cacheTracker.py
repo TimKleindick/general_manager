@@ -26,6 +26,8 @@ class DependencyTracker:
             if _dependency_storage._depth == 0:
                 # Wenn wir die oberste Ebene verlassen, löschen wir die Abhängigkeiten
                 del _dependency_storage.dependencies
+                del _dependency_storage._depth
+
             else:
                 # Ansonsten reduzieren wir nur die Tiefe
                 _dependency_storage._depth -= 1
@@ -41,7 +43,8 @@ class DependencyTracker:
         Adds a dependency to the dependency storage.
         """
         if hasattr(_dependency_storage, "dependencies"):
-            dependencies: list[set[Dependency]] = _dependency_storage.dependencies
-            depth = _dependency_storage._depth
-            for i in range(depth + 1):
-                dependencies[i].add((class_name, operation, identifier))
+            for dep_set in _dependency_storage.dependencies[
+                : _dependency_storage._depth + 1
+            ]:
+                dep_set: set[Dependency]
+                dep_set.add((class_name, operation, identifier))
