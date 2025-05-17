@@ -1,9 +1,6 @@
 from django.test import SimpleTestCase
 from datetime import datetime, date, time
 import json
-import sys
-import types
-from importlib import reload
 from unittest.mock import patch
 
 # Ensure the custom encoder module path is correct
@@ -50,12 +47,3 @@ class CustomJSONEncoderTests(SimpleTestCase):
         obj = Unserializable()
         dumped = json.dumps(obj, cls=self.encoder_cls)
         self.assertEqual(dumped, '"custom_str"')
-
-    def test_fallback_via_super_default_and_str(self):
-        class Weird:
-            def __str__(self):
-                return "weird_repr"
-
-        obj = Weird()
-        dumped = json.dumps(obj, cls=self.encoder_cls)
-        self.assertEqual(dumped, '"weird_repr"')
