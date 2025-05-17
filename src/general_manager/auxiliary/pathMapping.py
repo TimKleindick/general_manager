@@ -3,9 +3,8 @@ from typing import TYPE_CHECKING, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 
-if TYPE_CHECKING:
-    from general_manager.interface.baseInterface import Bucket
-    from general_manager.manager.generalManager import GeneralManager
+from general_manager.interface.baseInterface import Bucket
+from general_manager.manager.generalManager import GeneralManager
 
 
 type PathStart = str
@@ -34,7 +33,6 @@ class PathMap:
                     ] = PathTracer(start_class, destination_class)
 
     def __init__(self, path_start: PathStart | GeneralManager | type[GeneralManager]):
-        from general_manager.manager.generalManager import GeneralManager
 
         if isinstance(path_start, GeneralManager):
             self.start_instance = path_start
@@ -99,7 +97,6 @@ class PathTracer:
     def createPath(
         self, current_manager: type[GeneralManager], path: list[str]
     ) -> list[str] | None:
-        from general_manager.manager.generalManager import GeneralManager
 
         current_connections = {
             attr_name: attr_value["type"]
@@ -131,7 +128,6 @@ class PathTracer:
     def traversePath(
         self, start_instance: GeneralManager | Bucket
     ) -> GeneralManager | Bucket | None:
-        from general_manager.interface.baseInterface import Bucket
 
         current_instance = start_instance
         if not self.path:

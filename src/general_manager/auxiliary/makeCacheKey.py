@@ -21,7 +21,7 @@ def make_cache_key(func, args, kwargs):
     bound.apply_defaults()
     payload = {
         "module": func.__module__,
-        "name": func.__name__,
+        "qualname": func.__qualname__,
         "args": bound.arguments,
     }
     raw = json.dumps(
