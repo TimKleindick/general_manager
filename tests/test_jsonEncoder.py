@@ -4,25 +4,19 @@ import json
 import sys
 import types
 from importlib import reload
+from unittest.mock import patch
 
 # Ensure the custom encoder module path is correct
 from general_manager.auxiliary import jsonEncoder
 
 
+class FakeGeneralManager:
+    def __init__(self, identification):
+        self.identification = identification
+
+
 class CustomJSONEncoderTests(SimpleTestCase):
     def setUp(self):
-        # Patch the GeneralManager class in its module
-        fake_module = types.ModuleType("general_manager.manager.generalManager")
-
-        class FakeGeneralManager:
-            def __init__(self, identification):
-                self.identification = identification
-
-        fake_module.GeneralManager = FakeGeneralManager  # type: ignore
-        sys.modules["general_manager.manager.generalManager"] = fake_module
-
-        # Reload the encoder module to pick up the patched GeneralManager
-        reload(jsonEncoder)
         self.encoder_cls = jsonEncoder.CustomJSONEncoder
         self.FakeGeneralManager = FakeGeneralManager
 
@@ -42,10 +36,11 @@ class CustomJSONEncoderTests(SimpleTestCase):
         self.assertIn('"timestamp": "2022-05-10T14:00:00"', result)
 
     def test_serialize_general_manager(self):
-        gm = self.FakeGeneralManager({"id": 123, "name": "Test"})
-        dumped = json.dumps(gm, cls=self.encoder_cls)
-        expected = f'"{gm.__class__.__name__}(**{gm.identification})"'
-        self.assertEqual(dumped, expected)
+        with patch.object(jsonEncoder, "GeneralManager", FakeGeneralManager):
+            gm = self.FakeGeneralManager({"id": 123, "name": "Test"})
+            dumped = json.dumps(gm, cls=self.encoder_cls)
+            expected = f'"{gm.__class__.__name__}(**{gm.identification})"'
+            self.assertEqual(dumped, expected)
 
     def test_fallback_to_str_on_unserializable(self):
         class Unserializable:
