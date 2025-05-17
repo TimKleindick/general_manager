@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Literal, Generator, Tuple
+from typing import Generator
 from general_manager.manager.generalManager import GeneralManager, Bucket
 from general_manager.cache.dependencyIndex import (
     general_manager_name,
@@ -11,13 +11,13 @@ class ModelDependencyCollector:
 
     def __init__(self, dependencies: set[Dependency]):
         """
-        Initialisiert den ModelDependencyCollector mit einem Set von Abhängigkeiten.
+        Initialize the ModelDependencyCollector with a set of dependencies.
         """
         self.dependencies = dependencies
 
     @staticmethod
     def collect(obj) -> Generator[tuple[general_manager_name, filter_type, str]]:
-        """Rekursiv Django-Model-Instanzen im Objekt finden."""
+        """Recursively find Django model instances in the object."""
         if isinstance(obj, GeneralManager):
             yield (
                 obj.__class__.__name__,
@@ -35,11 +35,9 @@ class ModelDependencyCollector:
                 yield from ModelDependencyCollector.collect(item)
 
     @staticmethod
-    def addArgs(dependencies, args: tuple, kwargs: dict) -> None:
+    def addArgs(dependencies: set[Dependency], args: tuple, kwargs: dict) -> None:
         """
-        Fügt Abhängigkeiten zu den Abhängigkeiten hinzu.
-        args: Tuple von Argumenten
-        kwargs: Dictionary von Schlüsselwortargumenten
+        Add dependencies to the dependency set.
         """
         if args and isinstance(args[0], GeneralManager):
             inner_self = args[0]
