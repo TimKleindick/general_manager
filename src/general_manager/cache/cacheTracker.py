@@ -21,7 +21,7 @@ class DependencyTracker:
             del _dependency_storage.dependencies
 
     @staticmethod
-    def trackMe(
+    def track(
         class_name: general_manager_name,
         operation: filter_type,
         identifier: str,
