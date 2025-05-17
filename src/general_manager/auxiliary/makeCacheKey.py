@@ -6,15 +6,18 @@ from hashlib import sha256
 
 def make_cache_key(func, args, kwargs):
     """
-    Generate a deterministic cache key for a function call.
-
+    Generates a unique, deterministic cache key for a specific function call.
+    
+    The key is derived from the function's module, qualified name, and bound arguments,
+    serialized to JSON and hashed with SHA-256 to ensure uniqueness for each call signature.
+    
     Args:
-        func: The function being called
-        args: Positional arguments to the function
-        kwargs: Keyword arguments to the function
-
+        func: The target function to be identified.
+        args: Positional arguments for the function call.
+        kwargs: Keyword arguments for the function call.
+    
     Returns:
-        str: A hexadecimal SHA-256 hash that uniquely identifies this function call
+        A hexadecimal SHA-256 hash string uniquely representing the function call.
     """
     sig = inspect.signature(func)
     bound = sig.bind_partial(*args, **kwargs)

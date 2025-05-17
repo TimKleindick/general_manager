@@ -10,16 +10,37 @@ from contextlib import suppress
 
 class FakeCacheBackend:
     def __init__(self):
+        """
+        Initializes the in-memory cache store.
+        """
         self.store = {}
 
     def get(self, key, default=None):
         # return self.store.get(key, default)
+        """
+        Retrieves a value from the cache by key, unpickling it if present.
+        
+        Args:
+            key: The cache key to look up.
+            default: Value to return if the key is not found.
+        
+        Returns:
+            The unpickled value associated with the key, or the default if not found.
+        """
         cached_value = self.store.get(key, default)
         if cached_value is not default:
             return pickle.loads(cached_value)  # type: ignore
         return default
 
     def set(self, key, value, timeout=None):
+        """
+        Stores a value in the cache under the specified key after serializing it.
+        
+        Args:
+            key: The cache key under which the value will be stored.
+            value: The value to cache; will be serialized before storage.
+            timeout: Optional expiration time for the cache entry (not used in this implementation).
+        """
         self.store[key] = pickle.dumps(value)
 
 
@@ -27,6 +48,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
     def setUp(self):
         # clear the thread-local storage before each test
 
+        """
+        Prepares the test environment before each test case.
+        
+        Initializes a fake cache backend and a call recording list, and resets thread-local dependency tracking state to ensure test isolation.
+        """
         with suppress(Exception):
             del DependencyTracker.__dict__["_DependencyTracker__local"].dependencies
 
@@ -35,16 +61,29 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # record_fn saves a copy of the set that the real tracker gives
         def record_fn(key, deps):
+            """
+            Records a cache key and its associated dependencies for later inspection.
+            
+            Args:
+                key: The cache key being recorded.
+                deps: An iterable of dependencies associated with the cache key.
+            """
             self.record_calls.append((key, set(deps)))
 
         self.record_fn = record_fn
 
     def tearDown(self):
         # clear the record_calls after each test
+        """
+        Cleans up dependency tracking state after each test by resetting DependencyTracker.
+        """
         with DependencyTracker():
             pass
 
     def test_real_tracker_records_manual_tracks(self):
+        """
+        Tests that DependencyTracker correctly records manually tracked dependencies and cleans up thread-local storage after use.
+        """
         with DependencyTracker() as deps:
             self.assertEqual(deps, set())
             DependencyTracker.track("MyModel", "filter", "foo")
@@ -60,6 +99,9 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         )
 
     def test_cache_decorator_should_not_change_result(self):
+        """
+        Tests that the cached decorator does not alter the original function's return value.
+        """
         @cached(timeout=5)
         def sample_function(x, y):
             return x + y
@@ -70,6 +112,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         )
 
     def test_cache_with_timeout(self):
+        """
+        Tests that the cached decorator with a timeout correctly triggers cache set on miss and skips set on hit.
+        
+        Verifies that on the first call, the function result is cached and both cache.get and cache.set are called. On a subsequent call with the same arguments before expiration, only cache.get is called, confirming a cache hit.
+        """
         @cached(timeout=5)
         def sample_function(x, y):
             return x + y
@@ -96,6 +143,12 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             )
 
     def test_cache_miss_and_hit(self):
+        """
+        Tests that the cached function triggers a cache miss after expiration and resets the cache.
+        
+        Verifies that after the cache timeout, the function results in a cache miss, causing both
+        `cache.get` and `cache.set` to be called again.
+        """
         @cached(timeout=1)
         def sample_function(x, y):
             return x + y
@@ -122,10 +175,25 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
     def test_cache_with_custom_backend(self):
 
+        """
+        Tests that the cached decorator correctly stores results using a custom cache backend.
+        
+        Verifies that invoking a cached function with a custom backend results in the computed value being stored in the backend's cache.
+        """
         custom_cache = FakeCacheBackend()
 
         @cached(timeout=5, cache_backend=custom_cache)
         def sample_function(x, y):
+            """
+            Returns the sum of two values.
+            
+            Args:
+                x: The first value to add.
+                y: The second value to add.
+            
+            Returns:
+                The sum of x and y.
+            """
             return x + y
 
         sample_function(1, 2)
@@ -135,6 +203,9 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
     def test_cache_decorator_uses_real_tracker(self):
 
+        """
+        Tests that the cached decorator records dependencies using DependencyTracker on cache miss and invokes the record function, but does not record dependencies or call the record function on cache hit.
+        """
         @cached(timeout=None, cache_backend=self.fake_cache, record_fn=self.record_fn)
         def fn(x, y):
             # echte Abhängigkeiten aufzeichnen
@@ -166,6 +237,10 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertEqual(self.record_calls, [])
 
     def test_cache_decorator_with_timeout_and_record_fn(self):
+        """
+        Tests that the cached decorator with a timeout stores results, but does not call the
+        dependency recording function, and that cache hits do not trigger dependency recording.
+        """
         @cached(timeout=5, cache_backend=self.fake_cache, record_fn=self.record_fn)
         def fn(x, y):
             # echte Abhängigkeiten aufzeichnen
@@ -194,6 +269,12 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertEqual(self.record_calls, [])
 
     def test_nested_cache_decorator(self):
+        """
+        Tests nested usage of the cached decorator with dependency tracking and recording.
+        
+        Verifies that both inner and outer cached functions store results and record dependencies
+        correctly on cache misses, and that dependency recording does not occur on cache hits.
+        """
         @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
         def outer_function(x, y):
             DependencyTracker.track("User", "identification", str(x))
@@ -201,6 +282,16 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
         def inner_function(x, y):
+            """
+            Tracks a dependency and returns the sum of two values.
+            
+            Args:
+                x: First value to add.
+                y: Second value to add; also used for dependency tracking.
+            
+            Returns:
+                The sum of x and y.
+            """
             DependencyTracker.track("Profile", "identification", str(y))
             return x + y
 
@@ -238,6 +329,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertEqual(self.record_calls, [])
 
     def test_nested_cache_decorator_with_inner_cache_hit(self):
+        """
+        Tests nested cached functions where the inner function cache is hit before the outer function is called.
+        
+        Verifies that dependency recording occurs separately for inner and outer cached functions on cache misses, and that no dependency recording occurs on cache hits. Ensures cached results are correctly stored and retrieved from the custom cache backend.
+        """
         @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
         def outer_function(x, y):
             DependencyTracker.track("User", "identification", str(x))
@@ -245,6 +341,16 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
         def inner_function(x, y):
+            """
+            Tracks a dependency and returns the sum of two values.
+            
+            Args:
+                x: The first value to add.
+                y: The second value to add and to use for dependency tracking.
+            
+            Returns:
+                The sum of x and y.
+            """
             DependencyTracker.track("Profile", "identification", str(y))
             return x + y
 
