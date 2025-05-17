@@ -4,7 +4,6 @@ from general_manager.cache.dependencyIndex import (
     Dependency,
     filter_type,
 )
-from collections import defaultdict
 
 # Thread-lokale Variable zur Speicherung der Abhängigkeiten
 _dependency_storage = threading.local()
