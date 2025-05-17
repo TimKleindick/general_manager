@@ -19,10 +19,9 @@ class TestDependencyTracker(TestCase):
         self.assertFalse(hasattr(dependencies, "dependencies"))
 
     def test_dependency_tracker_with_exception(self):
-        with self.assertRaises(Exception):
-            with DependencyTracker() as dependencies:
-                dependencies.add(("TestClass", "identification", "TestIdentifier"))
-                raise Exception("Test Exception")
+        with self.assertRaises(RuntimeError), DependencyTracker() as dependencies:
+            dependencies.add(("TestClass", "identification", "TestIdentifier"))
+            raise RuntimeError
 
         # Ensure that the dependencies are cleared after the exception
         self.assertFalse(hasattr(dependencies, "dependencies"))  # type: ignore
