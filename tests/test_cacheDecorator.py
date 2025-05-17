@@ -3,8 +3,9 @@ from django.core.cache import cache
 from unittest import mock
 from general_manager.cache.cacheDecorator import cached, DependencyTracker
 from general_manager.auxiliary.makeCacheKey import make_cache_key
-
+import pickle
 import time
+from contextlib import suppress
 
 
 class FakeCacheBackend:
@@ -12,24 +13,30 @@ class FakeCacheBackend:
         self.store = {}
 
     def get(self, key, default=None):
-        return self.store.get(key, default)
+        # return self.store.get(key, default)
+        print(f"Getting cache for key: {key}")
+        cached_value = self.store.get(key, default)
+        print(f"Cache value: {cached_value}")
+        if cached_value is not default:
+            return pickle.loads(cached_value)  # type: ignore
+        return default
 
     def set(self, key, value, timeout=None):
-        self.store[key] = value
+        print(f"Setting cache for key: {key} with value: {value}")
+        self.store[key] = pickle.dumps(value)
 
 
 class TestCacheDecoratorBackend(SimpleTestCase):
     def setUp(self):
-        # Vor jedem Test: alten Thread‐lokalen Speicher löschen, falls vorhanden
-        try:
+        # clear the thread-local storage before each test
+
+        with suppress(Exception):
             del DependencyTracker.__dict__["_DependencyTracker__local"].dependencies
-        except Exception:
-            pass
 
         self.fake_cache = FakeCacheBackend()
         self.record_calls = []
 
-        # record_fn speichert eine Kopie des Sets, das der echte Tracker hergibt
+        # record_fn saves a copy of the set that the real tracker gives
         def record_fn(key, deps):
             self.record_calls.append((key, set(deps)))
 
@@ -125,6 +132,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             return x + y
 
         sample_function(1, 2)
+        print(custom_cache.store)
         self.assertTrue(
             len(custom_cache.store) > 0, "Cache should have stored the result"
         )
@@ -145,7 +153,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key, self.fake_cache.store)
-        self.assertEqual(self.fake_cache.store[key], 5)
+        self.assertEqual(pickle.loads(self.fake_cache.store[key]), 5)
 
         # record_fn should have been called once
         self.assertEqual(len(self.record_calls), 1)
@@ -176,7 +184,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key, self.fake_cache.store)
-        self.assertEqual(self.fake_cache.store[key], 5)
+        self.assertEqual(pickle.loads(self.fake_cache.store[key]), 5)
 
         # no record_fn call because of timeout
         self.assertEqual(len(self.record_calls), 0)
@@ -209,8 +217,8 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         # Result should be in the fake cache
         self.assertIn(key_outer, self.fake_cache.store)
         self.assertIn(key_inner, self.fake_cache.store)
-        self.assertEqual(self.fake_cache.store[key_outer], 5)
-        self.assertEqual(self.fake_cache.store[key_inner], 5)
+        self.assertEqual(pickle.loads(self.fake_cache.store[key_outer]), 5)
+        self.assertEqual(pickle.loads(self.fake_cache.store[key_inner]), 5)
 
         # record_fn should have been called twice
         # once for the outer function and once for the inner function
@@ -250,7 +258,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         # now the inner function should be in the cache
         key_inner = make_cache_key(inner_function, (2, 3), {})
         self.assertIn(key_inner, self.fake_cache.store)
-        self.assertEqual(self.fake_cache.store[key_inner], 5)
+        self.assertEqual(pickle.loads(self.fake_cache.store[key_inner]), 5)
 
         # second call: outer function: Cache miss
         res = outer_function(2, 3)
@@ -259,7 +267,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key_outer, self.fake_cache.store)
-        self.assertEqual(self.fake_cache.store[key_outer], 5)
+        self.assertEqual(pickle.loads(self.fake_cache.store[key_outer]), 5)
 
         # record_fn should have been called twice
         # once for the outer function and once for the inner function
