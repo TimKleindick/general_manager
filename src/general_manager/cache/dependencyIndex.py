@@ -217,11 +217,24 @@ def generic_cache_invalidation(
         # wildcard / regex
         if op in ("contains", "startswith", "endswith", "regex"):
             try:
-                pattern = re.compile(val_key)
-            except:
-                return False
+                literal = ast.literal_eval(val_key)
+            except Exception:
+                literal = val_key
+
             text = value or ""
-            return bool(pattern.search(text))
+            if op == "contains":
+                return literal in text
+            if op == "startswith":
+                return text.startswith(literal)
+            if op == "endswith":
+                return text.endswith(literal)
+            # regex: val_key selbst als Pattern benutzen
+            if op == "regex":
+                try:
+                    pattern = re.compile(val_key)
+                except re.error:
+                    return False
+                return bool(pattern.search(text))
 
         return False
 
