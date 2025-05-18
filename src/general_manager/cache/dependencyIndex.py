@@ -33,6 +33,7 @@ type Dependency = Tuple[general_manager_name, filter_type, str]
 INDEX_KEY = "dependency_index"  # Key unter dem der gesamte Index liegt
 LOCK_KEY = "dependency_index_lock"  # Key für das Sperr‑Mutex
 LOCK_TIMEOUT = 5  # Sekunden TTL für den Lock
+UNDEFINED = object()  # Dummy für nicht definierte Werte
 
 
 # -----------------------------------------------------------------------------
@@ -116,7 +117,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
-            raise TimeoutError("Could not aquire lock for record_dependencies")
+            raise TimeoutError("Could not aquire lock for remove_cache_key_from_index")
         time.sleep(0.05)
 
     try:
@@ -165,7 +166,7 @@ def capture_old_values(
             attr_path = lookup.split("__")
             obj = instance
             for i, attr in enumerate(attr_path):
-                if getattr(obj, attr, None) is None:
+                if getattr(obj, attr, UNDEFINED) is UNDEFINED:
                     lookup = "__".join(attr_path[:i])
                     break
                 obj = getattr(obj, attr, None)
