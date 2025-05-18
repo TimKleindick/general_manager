@@ -1,6 +1,54 @@
 # CHANGELOG
 
 
+## v0.3.2 (2025-05-18)
+
+### Bug Fixes
+
+- Capture_old_values & update docstrings to English and improve clarity
+  ([`4d0dbf5`](https://github.com/TimKleindick/general_manager/commit/4d0dbf5be1692e31f694056aea5553f01b61d2df))
+
+- Ensure string handling in generic_cache_invalidation and update test for old value scenarios
+  ([`2d1071d`](https://github.com/TimKleindick/general_manager/commit/2d1071df7b1075b93d68bbb96057d16ff4cbf0cb))
+
+- Improve generic_cache_invalidation logic for string operations
+  ([`250a0e7`](https://github.com/TimKleindick/general_manager/commit/250a0e7d2f898f705b4462975587c79ca4e51662))
+
+- Old value handling with operator
+  ([`cd1ac5e`](https://github.com/TimKleindick/general_manager/commit/cd1ac5ea8b819b95f6f9a8b4b4be73629de53fd9))
+
+- Update error message for lock acquisition and improve undefined value handling
+  ([`de690aa`](https://github.com/TimKleindick/general_manager/commit/de690aa40b87c5101fe64549b6ea6a66614b0570))
+
+### Continuous Integration
+
+- Add webfactory/ssh-agent@v0.5.4
+  ([`e70974e`](https://github.com/TimKleindick/general_manager/commit/e70974e3d84269efb910d0623419215f33669cb1))
+
+- Add permissions for contents in test job
+  ([`55260e0`](https://github.com/TimKleindick/general_manager/commit/55260e07f8f2a58c41c759ce3cf10875f86e0f0d))
+
+- Add SSH key for repository checkout in GitHub Actions workflow
+  ([`a3b06f9`](https://github.com/TimKleindick/general_manager/commit/a3b06f924a2ec6183febd05f989d51b9b8d3f1d9))
+
+- Remove whitespaces
+  ([`1a44152`](https://github.com/TimKleindick/general_manager/commit/1a4415203f48001ebb0874dc9fd5aed29bd27a88))
+
+### Testing
+
+- Add comprehensive tests for cache management functions
+  ([`d89914f`](https://github.com/TimKleindick/general_manager/commit/d89914f0ff157e1cdb6f095e601b716859600a26))
+
+- Add signal handling tests for dataChange decorator
+  ([`459eabe`](https://github.com/TimKleindick/general_manager/commit/459eabedea97b3fc9f190dbd62eb8ef084a6b6ab))
+
+- Add unit tests for acquire and release lock functionality
+  ([`b7c70de`](https://github.com/TimKleindick/general_manager/commit/b7c70de4afec2cfa146acc7464f083443cda2848))
+
+- Rename test for clarity in GenericCacheInvalidationTests
+  ([`ce15f6d`](https://github.com/TimKleindick/general_manager/commit/ce15f6de3d2be783e0665cbdce761c339f1c25ea))
+
+
 ## v0.3.1 (2025-05-17)
 
 ### Bug Fixes
