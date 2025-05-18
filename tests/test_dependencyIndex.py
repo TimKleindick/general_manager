@@ -15,7 +15,7 @@ from general_manager.cache.dependencyIndex import (
 import time
 import json
 from unittest.mock import patch, call
-from general_manager.cache.signals import pre_data_change, post_data_change
+from general_manager.cache.signals import pre_data_change
 from types import SimpleNamespace
 
 
@@ -28,7 +28,7 @@ TEST_CACHES = {
 
 
 @override_settings(CACHES=TEST_CACHES)
-class TestAquireReleaseLock(TestCase):
+class TestAcquireReleaseLock(TestCase):
     def setUp(self):
         # Clear the cache before each test
         cache.clear()
@@ -439,7 +439,7 @@ class CaptureOldValuesTests(TestCase):
 
         self.assertTrue(hasattr(inst, "_old_values"))
         self.assertEqual(
-            getattr(inst, "_old_values"),
+            inst._old_values,  # type: ignore
             {"title": "Mein Titel", "owner__name": "Max Mustermann"},
         )
 
@@ -470,7 +470,7 @@ class CaptureOldValuesTests(TestCase):
 
         self.assertTrue(hasattr(inst, "_old_values"))
         self.assertEqual(
-            getattr(inst, "_old_values"),
+            inst._old_values,  # type: ignore
             {"title": "Mein Titel", "count": 100},
         )
 
