@@ -638,7 +638,7 @@ class GenericCacheInvalidationTests(TestCase):
     @patch("general_manager.cache.dependencyIndex.get_full_index")
     @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
     @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
-    def test_invalidation_with_regex_no_match(
+    def test_invalidation_with_contains_no_match(
         self,
         mock_remove,
         mock_invalidate,
