@@ -39,12 +39,12 @@ LOCK_TIMEOUT = 5  # Sekunden TTL für den Lock
 # LOCKING HELPERS
 # -----------------------------------------------------------------------------
 def acquire_lock(timeout: int = LOCK_TIMEOUT) -> bool:
-    """Atomar: legt den LOCK_KEY an, wenn noch frei."""
+    """Atomar: create Lock key if it doesn't exist."""
     return cache.add(LOCK_KEY, "1", timeout)
 
 
 def release_lock() -> None:
-    """Gibt den Lock frei."""
+    """Release Lock key."""
     cache.delete(LOCK_KEY)
 
 
@@ -52,7 +52,7 @@ def release_lock() -> None:
 # INDEX ACCESS
 # -----------------------------------------------------------------------------
 def get_full_index() -> dependency_index:
-    """Lädt oder initialisiert den kompletten Index."""
+    """Load or initialize the full index."""
     idx = cache.get(INDEX_KEY, None)
     if idx is None:
         idx: dependency_index = {"filter": {}, "exclude": {}}
@@ -61,7 +61,7 @@ def get_full_index() -> dependency_index:
 
 
 def set_full_index(idx: dependency_index) -> None:
-    """Schreibt den kompletten Index zurück in den Cache."""
+    """Write the complete index back to the cache."""
     cache.set(INDEX_KEY, idx, None)
 
 
@@ -78,15 +78,6 @@ def record_dependencies(
         ]
     ],
 ) -> None:
-    """
-    Speichert die Abhängigkeiten eines Cache Eintrags.
-    :param cache_key:   der Key unter dem das Ergebnis im cache steht
-    :param dependencies: Iterable von Tuplen (model_name, action, identifier)
-                         action ∈ {'filter','exclude'} oder sonstige → 'id'
-                         identifier = für filter/exclude: Dict String,
-                                      sonst: Primärschlüssel als String
-    """
-    # 1) Lock holen (Spin‑Lock mit Timeout)
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
@@ -105,7 +96,7 @@ def record_dependencies(
                     lookup_map.setdefault(val_key, set()).add(cache_key)
 
             else:
-                # Direkter ID‑Lookup als simpler filter auf 'id'
+                # director ID Lookup as simple filter on 'id'
                 section = idx["filter"].setdefault(model_name, {})
                 lookup_map = section.setdefault("identification", {})
                 val_key = identifier
@@ -120,15 +111,12 @@ def record_dependencies(
 # -----------------------------------------------------------------------------
 # INDEX CLEANUP
 # -----------------------------------------------------------------------------
-def remove_cache_key_from_index(cache_key: str) -> bool:
-    """
-    Entfernt einen cache_key aus allen Einträgen in filter/​exclude.
-    Nützlich, sobald Du den Cache gelöscht hast.
-    """
+def remove_cache_key_from_index(cache_key: str) -> None:
+    """Remove a cache key from the index."""
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
-            return False
+            raise TimeoutError("Could not aquire lock for record_dependencies")
         time.sleep(0.05)
 
     try:
@@ -149,14 +137,12 @@ def remove_cache_key_from_index(cache_key: str) -> bool:
         set_full_index(idx)
     finally:
         release_lock()
-    return True
 
 
 # -----------------------------------------------------------------------------
 # CACHE INVALIDATION
 # -----------------------------------------------------------------------------
 def invalidate_cache_key(cache_key: str) -> None:
-    """Löscht den CacheEintrag – hier nutzt du deinen CacheBackend."""
     cache.delete(cache_key)
 
 
@@ -165,31 +151,26 @@ def capture_old_values(
     sender: Type[GeneralManager], instance: GeneralManager | None, **kwargs
 ) -> None:
     if instance is None:
-        # Wenn es kein Modell ist, gibt es nichts zu tun
         return
     manager_name = sender.__name__
     idx = get_full_index()
-    # Welche Lookups interessieren uns für diesen Model?
+    # get all lookups for this model
     lookups = set()
     for action in ("filter", "exclude"):
         lookups |= set(idx.get(action, {}).get(manager_name, {}))
     if lookups and instance.identification:
-        # Speichere alle relevanten Attribute für später
+        # save old values for later comparison
         vals = {}
         for lookup in lookups:
             attr_path = lookup.split("__")
             obj = instance
-            for attr in attr_path:
-                obj = getattr(obj, attr, None)
-                if obj is None:
+            for i, attr in enumerate(attr_path):
+                if getattr(obj, attr, None) is None:
+                    lookup = "__".join(attr_path[:i])
                     break
+                obj = getattr(obj, attr, None)
             vals[lookup] = obj
         setattr(instance, "_old_values", vals)
-
-
-# -----------------------------------------------------------------------------
-# GENERIC CACHE INVALIDATION: vergleicht alt vs. neu und invalidiert nur bei Übergang
-# -----------------------------------------------------------------------------
 
 
 @receiver(post_data_change)
@@ -247,7 +228,7 @@ def generic_cache_invalidation(
     for action in ("filter", "exclude"):
         model_section = idx.get(action, {}).get(manager_name, {})
         for lookup, lookup_map in model_section.items():
-            # 1) Operator und Attributpfad ermitteln
+            # 1) get operator and attribute path
             parts = lookup.split("__")
             if parts[-1] in (
                 "gt",
@@ -266,7 +247,7 @@ def generic_cache_invalidation(
                 op = "eq"
                 attr_path = parts
 
-            # 2) Alten und neuen Wert holen
+            # 2) get old & new value
             old_val = old_relevant_values.get(lookup)
 
             obj = instance
@@ -276,13 +257,13 @@ def generic_cache_invalidation(
                     break
             new_val = obj
 
-            # 3) Für jedes val_key prüfen
+            # 3) check against all cache_keys
             for val_key, cache_keys in list(lookup_map.items()):
                 old_match = matches(op, old_val, val_key)
                 new_match = matches(op, new_val, val_key)
 
                 if action == "filter":
-                    # Direkte & alle Filter-Abhängigkeiten: immer invalidieren, wenn neu matcht
+                    # Filter: invalidate if new match or old match
                     if new_match:
                         print(
                             f"Invalidate cache key {cache_keys} for filter {lookup} with value {val_key}"
@@ -292,7 +273,7 @@ def generic_cache_invalidation(
                             remove_cache_key_from_index(ck)
 
                 else:  # action == 'exclude'
-                    # Excludes: nur invalidieren, wenn sich der Match-Status ändert
+                    # Excludes: invalidate only if matches changed
                     if old_match != new_match:
                         print(
                             f"Invalidate cache key {cache_keys} for exclude {lookup} with value {val_key}"
