@@ -221,7 +221,8 @@ def generic_cache_invalidation(
             except Exception:
                 literal = val_key
 
-            text = value or ""
+            # ensure we always work with strings to avoid TypeErrors
+            text = "" if value is None else str(value)
             if op == "contains":
                 return literal in text
             if op == "startswith":
@@ -277,7 +278,7 @@ def generic_cache_invalidation(
 
                 if action == "filter":
                     # Filter: invalidate if new match or old match
-                    if new_match:
+                    if new_match or old_match:
                         print(
                             f"Invalidate cache key {cache_keys} for filter {lookup} with value {val_key}"
                         )

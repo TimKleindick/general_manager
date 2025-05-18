@@ -940,3 +940,28 @@ class GenericCacheInvalidationTests(TestCase):
         )
         mock_invalidate.assert_not_called()
         mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_with_in_old_but_not_in_new(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {"DummyManager": {"count__in": {"[2, 3, 4]": ["X"]}}},
+            "exclude": {},
+        }
+
+        inst = DummyManager()
+        inst.count = 5
+
+        generic_cache_invalidation(
+            sender=DummyManager,
+            instance=inst,
+            old_relevant_values={"count": 3},
+        )
+        mock_invalidate.assert_called_once_with("X")
+        mock_remove.assert_called_once_with("X")
