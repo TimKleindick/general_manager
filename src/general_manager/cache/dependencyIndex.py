@@ -248,7 +248,7 @@ def generic_cache_invalidation(
                 attr_path = parts
 
             # 2) get old & new value
-            old_val = old_relevant_values.get(lookup)
+            old_val = old_relevant_values.get("__".join(attr_path))
 
             obj = instance
             for attr in attr_path:
