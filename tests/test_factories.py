@@ -153,7 +153,7 @@ class TestGetFieldValue(TestCase):
         field = DummyModel.measurement_field
         decl = get_field_value(field)
         self.assertIsInstance(decl, LazyFunction)
-        value = decl.evaluate(None, None, None)
+        value = decl.evaluate(None, None, None)  # type: ignore
         self.assertIsInstance(value, Measurement)
         self.assertIsInstance(value.magnitude, Decimal)
         self.assertIsInstance(value.unit, str)
@@ -173,8 +173,8 @@ class TestRelationFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy
-        DummyForeignKey._general_manager_class = GMC
+        GMC.Factory = lambda **kwargs: dummy  # type: ignore
+        DummyForeignKey._general_manager_class = GMC  # type: ignore
         with patch(
             "general_manager.factory.factoryMethods.random.choice", return_value=True
         ):
@@ -192,8 +192,8 @@ class TestRelationFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy
-        DummyForeignKey._general_manager_class = GMC
+        GMC.Factory = lambda **kwargs: dummy  # type: ignore
+        DummyForeignKey._general_manager_class = GMC  # type: ignore
 
         with patch(
             "general_manager.factory.factoryMethods.random.choice", return_value=False
@@ -203,7 +203,7 @@ class TestRelationFieldValue(TestCase):
             ):
                 decl = get_field_value(field)
                 self.assertIsInstance(decl, LazyFunction)
-        inst = decl.evaluate(None, None, None)
+        inst = decl.evaluate(None, None, None)  # type: ignore
         self.assertIn(inst, (dummy1, dummy2))
 
     def test_one_to_one_with_factory(self):
@@ -212,8 +212,8 @@ class TestRelationFieldValue(TestCase):
         class GMC2:
             pass
 
-        GMC2.Factory = lambda **kwargs: dummy
-        DummyForeignKey2._general_manager_class = GMC2
+        GMC2.Factory = lambda **kwargs: dummy  # type: ignore
+        DummyForeignKey2._general_manager_class = GMC2  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_one_to_one")
         result = get_field_value(field)
@@ -231,7 +231,7 @@ class TestRelationFieldValue(TestCase):
             decl = get_field_value(field)
             self.assertIsInstance(decl, LazyFunction)
             # beim Evaluieren sollte eins der beiden Objekte zurückkommen
-            inst = decl.evaluate(None, None, None)
+            inst = decl.evaluate(None, None, None)  # type: ignore
             self.assertIn(inst, (dummy1, dummy2))
 
     def test_one_to_one_without_factory_with_existing_instances(self):
@@ -244,7 +244,7 @@ class TestRelationFieldValue(TestCase):
         ):
             decl = get_field_value(field)
             self.assertIsInstance(decl, LazyFunction)
-            inst = decl.evaluate(None, None, None)
+            inst = decl.evaluate(None, None, None)  # type: ignore
             self.assertIn(inst, (dummy1, dummy2))
 
     def test_fk_without_factory_and_no_instances_raises(self):
