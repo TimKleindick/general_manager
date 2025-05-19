@@ -46,6 +46,14 @@ class Measurement:
     def quantity(self) -> pint.Quantity:
         return self.__quantity
 
+    @property
+    def magnitude(self) -> Decimal:
+        return self.__quantity.magnitude
+
+    @property
+    def unit(self) -> str:
+        return str(self.__quantity.units)
+
     @classmethod
     def from_string(cls, value: str) -> Measurement:
         value, unit = value.split(" ")
