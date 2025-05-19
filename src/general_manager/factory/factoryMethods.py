@@ -32,7 +32,3 @@ def LazyProjectName() -> LazyFunction:
             f"-{fake.random_int(min=1, max=1000)}"
         )
     )
-
-
-def LazySapNumber() -> LazyAttributeSequence:
-    return LazyAttributeSequence(lambda obj, n: f"60{n:04d}")
