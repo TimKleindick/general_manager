@@ -1,4 +1,4 @@
-from .lazy_methods import (
+from .factoryMethods import (
     LazyMeasurement,
     LazyDeltaDate,
     LazyProjectName,
