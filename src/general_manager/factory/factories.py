@@ -1,12 +1,11 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Type, Callable, Union, Any, TypeVar, Literal, cast
-from factory.declarations import LazyFunction, LazyAttribute, LazyAttributeSequence
+from factory.declarations import LazyFunction
 from factory.faker import Faker
 import exrex  # type: ignore
 from django.db import models
 from django.core.validators import RegexValidator
 from factory.django import DjangoModelFactory
-from django.utils import timezone
 import random
 from decimal import Decimal
 from general_manager.measurement.measurement import Measurement
@@ -169,19 +168,6 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
         base_unit = field.base_unit
         value = Decimal(str(random.uniform(0, 10_000))[:10])
         return LazyFunction(lambda: Measurement(value, base_unit))
-    elif isinstance(field, models.CharField):
-        max_length = field.max_length or 100
-        # Check for RegexValidator
-        regex = None
-        for validator in field.validators:
-            if isinstance(validator, RegexValidator):
-                regex = getattr(validator.regex, "pattern", None)
-                break
-        if regex:
-            # Use exrex to generate a string matching the regex
-            return LazyFunction(lambda: exrex.getone(regex))  # type: ignore
-        else:
-            return cast(str, Faker("text", max_nb_chars=max_length))
     elif isinstance(field, models.TextField):
         return cast(str, Faker("paragraph"))
     elif isinstance(field, models.IntegerField):
@@ -201,8 +187,6 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
         )
     elif isinstance(field, models.FloatField):
         return cast(float, Faker("pyfloat", positive=True))
-    elif isinstance(field, models.DateField):
-        return cast(date, Faker("date_between", start_date="-1y", end_date="today"))
     elif isinstance(field, models.DateTimeField):
         return cast(
             datetime,
@@ -210,13 +194,14 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
                 "date_time_between",
                 start_date="-1y",
                 end_date="now",
-                tzinfo=timezone.utc,
+                tzinfo="UTC",
             ),
         )
+    elif isinstance(field, models.DateField):
+        return cast(date, Faker("date_between", start_date="-1y", end_date="today"))
     elif isinstance(field, models.BooleanField):
         return cast(bool, Faker("pybool"))
-    elif isinstance(field, models.ForeignKey):
-        # Create or get an instance of the related model
+    elif isinstance(field, models.OneToOneField):
         if hasattr(field.related_model, "_general_manager_class"):
             related_factory = field.related_model._general_manager_class.Factory
             return related_factory()
@@ -229,11 +214,19 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
                 raise ValueError(
                     f"No factory found for {field.related_model.__name__} and no instances found"
                 )
-    elif isinstance(field, models.OneToOneField):
-        # Similar to ForeignKey
+    elif isinstance(field, models.ForeignKey):
+        # Create or get an instance of the related model
         if hasattr(field.related_model, "_general_manager_class"):
+            create_a_new_instance = random.choice([True, True, False])
+            if not create_a_new_instance:
+                existing_instances = list(field.related_model.objects.all())
+                if existing_instances:
+                    # Pick a random existing instance
+                    return LazyFunction(lambda: random.choice(existing_instances))
+
             related_factory = field.related_model._general_manager_class.Factory
             return related_factory()
+
         else:
             # If no factory exists, pick a random existing instance
             related_instances = list(field.related_model.objects.all())
@@ -253,6 +246,19 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
         return cast(str, Faker("uuid4"))
     elif isinstance(field, models.DurationField):
         return cast(time, Faker("time_delta"))
+    elif isinstance(field, models.CharField):
+        max_length = field.max_length or 100
+        # Check for RegexValidator
+        regex = None
+        for validator in field.validators:
+            if isinstance(validator, RegexValidator):
+                regex = getattr(validator.regex, "pattern", None)
+                break
+        if regex:
+            # Use exrex to generate a string matching the regex
+            return LazyFunction(lambda: exrex.getone(regex))  # type: ignore
+        else:
+            return cast(str, Faker("text", max_nb_chars=max_length))
     else:
         return None  # For unsupported field types
 
