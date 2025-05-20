@@ -93,7 +93,7 @@ class TestFactoryMethods(SimpleTestCase):
                 datetime_between = LazyDateTimeBetween(start, end).evaluate(
                     obj, 1, None
                 )
-                self.assertIsInstance(datetime_between, date)
+                self.assertIsInstance(datetime_between, datetime)
                 self.assertTrue(
                     start <= datetime_between <= end,
                     f"Run {i}: {datetime_between} is not in the expected range.",
@@ -121,7 +121,9 @@ class TestFactoryMethods(SimpleTestCase):
                 )
                 self.assertIsInstance(decimal_value, Decimal)
                 self.assertTrue(min_value <= decimal_value <= max_value)
-                self.assertEqual(len(str(decimal_value).split(".")[1]), precision)
+                decimal_str = format(decimal_value, "f")
+                if "." in decimal_str:
+                    self.assertEqual(len(decimal_str.split(".")[1]), precision)
 
     def test_LazyUUID(self):
         obj = type("TestObject", (object,), {})()

@@ -1,6 +1,5 @@
 # tests/test_factory_helpers.py
-import re
-from datetime import date, datetime, timedelta, time
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.db import models
@@ -164,7 +163,7 @@ class TestGetFieldValue(TestCase):
             field = DummyModel._meta.get_field("test_none")
             decl = getFieldValue(field)
             value = self._evaluate(decl)
-            self.assertIsNone(value, msg="Nullable field should return a string")
+            self.assertIsNone(value, msg="Nullable field should return None")
 
     def test_measurement_field(self):
         field = DummyModel.measurement_field
@@ -209,17 +208,18 @@ class TestRelationFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy  # type: ignore
+        GMC.Factory = lambda **kwargs: dummy1  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
 
-        with patch(
-            "general_manager.factory.factoryMethods.random.choice", return_value=False
+        with (
+            patch(
+                "general_manager.factory.factoryMethods.random.choice",
+                return_value=False,
+            ),
+            patch.object(DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]),
         ):
-            with patch.object(
-                DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]
-            ):
-                decl = getFieldValue(field)
-                self.assertIsInstance(decl, LazyFunction)
+            decl = getFieldValue(field)
+            self.assertIsInstance(decl, LazyFunction)
         inst = decl.evaluate(None, None, None)  # type: ignore
         self.assertIn(inst, (dummy1, dummy2))
 
