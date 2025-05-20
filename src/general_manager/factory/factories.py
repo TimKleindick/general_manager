@@ -166,10 +166,11 @@ def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> ob
 
     if isinstance(field, MeasurementField):
         return LazyFunction(
-            lambda: Measurement(
-                Decimal(str(random.uniform(0, 10_000))[:10]), field.base_unit
-            )
-        )
+        def _measurement():
+            value = Decimal(random.randrange(0, 10_000_000)) / Decimal("100")   # two dp
+            return Measurement(value, field.base_unit)
+
+        return LazyFunction(_measurement)
     elif isinstance(field, models.TextField):
         return cast(str, Faker("paragraph"))
     elif isinstance(field, models.IntegerField):
