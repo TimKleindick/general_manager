@@ -9,7 +9,7 @@ from django.core.validators import RegexValidator
 
 from factory.declarations import LazyFunction, LazyAttribute
 from factory.faker import Faker
-from general_manager.factory.factories import get_field_value
+from general_manager.factory.factories import getFieldValue, getManyToManyFieldValue
 from general_manager.measurement.measurementField import MeasurementField
 from general_manager.measurement.measurement import Measurement
 from unittest.mock import patch
@@ -30,6 +30,18 @@ class DummyForeignKey(models.Model):
 class DummyForeignKey2(models.Model):
     """
     Dummy ForeignKey model for testing purposes.
+    """
+
+    name = models.CharField(max_length=10, null=False)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+
+
+class DummyManyToMany(models.Model):
+    """
+    Dummy ManyToMany model for testing purposes.
     """
 
     name = models.CharField(max_length=10, null=False)
@@ -75,6 +87,11 @@ class DummyModel(models.Model):
         on_delete=models.CASCADE,
         null=False,
     )
+    dummy_m2m = models.ManyToManyField(
+        DummyManyToMany,
+        related_name="dummy_m2m",
+        blank=True,
+    )
 
     class Meta:
         app_label = "tests"
@@ -116,7 +133,7 @@ class TestGetFieldValue(TestCase):
         for name, expected_type, pattern in field_expectations:
             with self.subTest(field=name):
                 field = DummyModel._meta.get_field(name)
-                decl = get_field_value(field)
+                decl = getFieldValue(field)
 
                 self.assertIn(
                     decl.__class__.__name__,
@@ -145,13 +162,13 @@ class TestGetFieldValue(TestCase):
             return_value=True,
         ):
             field = DummyModel._meta.get_field("test_none")
-            decl = get_field_value(field)
+            decl = getFieldValue(field)
             value = self._evaluate(decl)
             self.assertIsNone(value, msg="Nullable field should return a string")
 
     def test_measurement_field(self):
         field = DummyModel.measurement_field
-        decl = get_field_value(field)
+        decl = getFieldValue(field)
         self.assertIsInstance(decl, LazyFunction)
         value = decl.evaluate(None, None, None)  # type: ignore
         self.assertIsInstance(value, Measurement)
@@ -180,7 +197,7 @@ class TestRelationFieldValue(TestCase):
         ):
 
             field = DummyModel._meta.get_field("dummy_fk")
-            result = get_field_value(field)
+            result = getFieldValue(field)
             # Hier kommt kein LazyFunction, sondern direkt das factory-Ergebnis
             self.assertIs(result, dummy)
 
@@ -201,7 +218,7 @@ class TestRelationFieldValue(TestCase):
             with patch.object(
                 DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]
             ):
-                decl = get_field_value(field)
+                decl = getFieldValue(field)
                 self.assertIsInstance(decl, LazyFunction)
         inst = decl.evaluate(None, None, None)  # type: ignore
         self.assertIn(inst, (dummy1, dummy2))
@@ -216,7 +233,7 @@ class TestRelationFieldValue(TestCase):
         DummyForeignKey2._general_manager_class = GMC2  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_one_to_one")
-        result = get_field_value(field)
+        result = getFieldValue(field)
         self.assertIs(result, dummy)
 
     def test_fk_without_factory_with_existing_instances(self):
@@ -228,7 +245,7 @@ class TestRelationFieldValue(TestCase):
         with patch.object(
             DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]
         ):
-            decl = get_field_value(field)
+            decl = getFieldValue(field)
             self.assertIsInstance(decl, LazyFunction)
             # beim Evaluieren sollte eins der beiden Objekte zurückkommen
             inst = decl.evaluate(None, None, None)  # type: ignore
@@ -242,7 +259,7 @@ class TestRelationFieldValue(TestCase):
         with patch.object(
             DummyForeignKey2.objects, "all", return_value=[dummy1, dummy2]
         ):
-            decl = get_field_value(field)
+            decl = getFieldValue(field)
             self.assertIsInstance(decl, LazyFunction)
             inst = decl.evaluate(None, None, None)  # type: ignore
             self.assertIn(inst, (dummy1, dummy2))
@@ -253,7 +270,7 @@ class TestRelationFieldValue(TestCase):
             with self.assertRaisesMessage(
                 ValueError, "No factory found for DummyForeignKey"
             ):
-                get_field_value(field)
+                getFieldValue(field)
 
     def test_one_to_one_without_factory_and_no_instances_raises(self):
         field = DummyModel._meta.get_field("dummy_one_to_one")
@@ -261,4 +278,64 @@ class TestRelationFieldValue(TestCase):
             with self.assertRaisesMessage(
                 ValueError, "No factory found for DummyForeignKey2"
             ):
-                get_field_value(field)
+                getFieldValue(field)
+
+
+class TestGetManyToManyFieldValue(TestCase):
+    def setUp(self):
+        # tidy up: no _general_manager_class assumed
+        for M in (DummyManyToMany, DummyModel):
+            if hasattr(M, "_general_manager_class"):
+                delattr(M, "_general_manager_class")
+
+    def test_m2m_with_factory_and_existing(self):
+        dummy1 = DummyManyToMany(name="foo", id=1)
+        dummy2 = DummyManyToMany(name="bar", id=2)
+
+        class GMC:
+            pass
+
+        GMC.Factory = lambda **kwargs: dummy1  # type: ignore
+        DummyManyToMany._general_manager_class = GMC  # type: ignore
+
+        field = DummyModel._meta.get_field("dummy_m2m")
+        with patch.object(
+            field.related_model.objects, "all", return_value=[dummy1, dummy2]  # type: ignore
+        ):
+            result = getManyToManyFieldValue(field)  # type: ignore
+        self.assertIsInstance(result, list)
+        self.assertIn(dummy1, result)
+
+    def test_m2m_with_factory(self):
+        dummy1 = DummyManyToMany(name="foo", id=1)
+
+        class GMC:
+            pass
+
+        GMC.Factory = lambda **kwargs: dummy1  # type: ignore
+        DummyManyToMany._general_manager_class = GMC  # type: ignore
+
+        field = DummyModel._meta.get_field("dummy_m2m")
+        with patch.object(field.related_model.objects, "all", return_value=[]):  # type: ignore
+            result = getManyToManyFieldValue(field)  # type: ignore
+        self.assertIsInstance(result, list)
+        self.assertIn(dummy1, result)
+
+    def test_m2m_without_factory(self):
+        dummy1 = DummyManyToMany(name="foo", id=1)
+        dummy2 = DummyManyToMany(name="bar", id=2)
+
+        field = DummyModel._meta.get_field("dummy_m2m")
+        with patch.object(
+            field.related_model.objects, "all", return_value=[dummy1, dummy2]  # type: ignore
+        ):
+            result = getManyToManyFieldValue(field)  # type: ignore
+        self.assertIsInstance(result, list)
+        self.assertIn(dummy1, result)
+        self.assertIn(dummy2, result)
+
+    def test_m2m_without_factory_and_no_instances_raises(self):
+        field = DummyModel._meta.get_field("dummy_m2m")
+        with patch.object(field.related_model.objects, "all", return_value=[]):  # type: ignore
+            with self.assertRaises(ValueError):
+                getManyToManyFieldValue(field)  # type: ignore

@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import SimpleTestCase
 from general_manager.factory.factoryMethods import (
     LazyMeasurement,
     LazyDeltaDate,
@@ -24,7 +24,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 
-class TestFactoryMethods(TestCase):
+class TestFactoryMethods(SimpleTestCase):
     def test_LazyMeasurement(self):
         min_value = 10.0
         max_value = 30.5
