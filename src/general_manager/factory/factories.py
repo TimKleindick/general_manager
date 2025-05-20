@@ -32,7 +32,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     ) = None
 
     @classmethod
-    def _generate(  # type: ignore
+    def _generate(
         cls, strategy: Literal["build", "create"], params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         cls._original_params = params
@@ -97,7 +97,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return kwargs
 
     @classmethod
-    def _create(  # type: ignore
+    def _create(
         cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         kwargs = cls._adjust_kwargs(**kwargs)
@@ -106,7 +106,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return cls._modelCreation(model_class, **kwargs)
 
     @classmethod
-    def _build(  # type: ignore
+    def _build(
         cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         kwargs = cls._adjust_kwargs(**kwargs)
