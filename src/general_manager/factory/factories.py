@@ -63,7 +63,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
-            params[field.name] = get_field_value(field)
+            params[field.name] = getFieldValue(field)
 
         obj: list[models.Model] | models.Model = super()._generate(strategy, params)
         if isinstance(obj, list):
@@ -83,7 +83,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             if field.name in attrs:
                 m2m_values = attrs[field.name]
             else:
-                m2m_values = get_m2m_field_value(field)
+                m2m_values = getManyToManyFieldValue(field)
             if m2m_values:
                 getattr(obj, field.name).set(m2m_values)
 
@@ -156,7 +156,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return created_objects
 
 
-def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> object:
+def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> object:
     """
     Returns a suitable value for a given Django model field.
     """
@@ -263,31 +263,38 @@ def get_field_value(field: models.Field[Any, Any] | models.ForeignObjectRel) -> 
         return None  # For unsupported field types
 
 
-def get_m2m_field_value(field: models.ManyToManyField[Any, Any]) -> list[models.Model]:
+def getManyToManyFieldValue(
+    field: models.ManyToManyField,
+) -> list[models.Model]:
     """
     Returns a list of instances for a ManyToMany field.
     """
-    related_factory = globals().get(f"{field.related_model.__name__}Factory")
-    existing_instances = list(field.related_model.objects.all())
+    related_factory = None
+    related_instances = list(field.related_model.objects.all())
+    if hasattr(field.related_model, "_general_manager_class"):
+        related_factory = field.related_model._general_manager_class.Factory
 
-    if related_factory:
-        # Use existing instances if available, otherwise create new ones
-        if existing_instances:
-            max_instances = len(existing_instances)
-            num_instances = random.randint(0, min(max_instances, 15))
-            return random.sample(existing_instances, num_instances)
-        else:
-            # No existing instances, create a few
-            num_to_create = random.randint(1, 3)
-            new_instances = [related_factory() for _ in range(num_to_create)]
-            return new_instances
+    number_of_instances = random.randint(0, 10)
+    if related_factory and related_instances:
+        number_to_create = random.randint(0, number_of_instances)
+        number_to_pick = number_of_instances - number_to_create
+        if number_to_pick > len(related_instances):
+            number_to_pick = len(related_instances)
+        existing_instances = random.sample(related_instances, number_to_pick)
+        new_instances = [related_factory() for _ in range(number_to_create)]
+        return existing_instances + new_instances
+    elif related_factory:
+        number_to_create = number_of_instances
+        new_instances = [related_factory() for _ in range(number_to_create)]
+        return new_instances
+    elif related_instances:
+        number_to_create = 0
+        number_to_pick = number_of_instances
+        if number_to_pick > len(related_instances):
+            number_to_pick = len(related_instances)
+        existing_instances = random.sample(related_instances, number_to_pick)
+        return existing_instances
     else:
-        # No factory exists, use existing instances
-        if existing_instances:
-            max_instances = len(existing_instances)
-            num_instances = random.randint(0, max_instances)
-            return random.sample(existing_instances, num_instances)
-        else:
-            raise ValueError(
-                f"No factory found for {field.related_model.__name__} and no instances found"
-            )
+        raise ValueError(
+            f"No factory found for {field.related_model.__name__} and no instances found"
+        )
