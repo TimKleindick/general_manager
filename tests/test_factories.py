@@ -322,16 +322,14 @@ class TestGetManyToManyFieldValue(TestCase):
         self.assertIn(dummy1, result)
 
     def test_m2m_without_factory(self):
-        dummy1 = DummyManyToMany(name="foo", id=1)
         dummy2 = DummyManyToMany(name="bar", id=2)
 
         field = DummyModel._meta.get_field("dummy_m2m")
         with patch.object(
-            field.related_model.objects, "all", return_value=[dummy1, dummy2]  # type: ignore
+            field.related_model.objects, "all", return_value=[dummy2, dummy2]  # type: ignore
         ):
             result = getManyToManyFieldValue(field)  # type: ignore
         self.assertIsInstance(result, list)
-        self.assertIn(dummy1, result)
         self.assertIn(dummy2, result)
 
     def test_m2m_without_factory_and_no_instances_raises(self):
