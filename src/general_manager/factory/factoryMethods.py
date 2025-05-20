@@ -36,8 +36,8 @@ def LazyProjectName() -> LazyFunction:
     )
 
 
-def LazyDateToday() -> LazyAttribute:
-    return LazyAttribute(lambda obj: date.today())
+def LazyDateToday() -> LazyFunction:
+    return LazyFunction(lambda: date.today())
 
 
 def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:

@@ -10,7 +10,7 @@ import random
 from decimal import Decimal
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 
 if TYPE_CHECKING:
     from general_manager.interface.databaseInterface import (
@@ -165,9 +165,11 @@ def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> ob
             return None
 
     if isinstance(field, MeasurementField):
-        base_unit = field.base_unit
-        value = Decimal(str(random.uniform(0, 10_000))[:10])
-        return LazyFunction(lambda: Measurement(value, base_unit))
+        return LazyFunction(
+            lambda: Measurement(
+                Decimal(str(random.uniform(0, 10_000))[:10]), field.base_unit
+            )
+        )
     elif isinstance(field, models.TextField):
         return cast(str, Faker("paragraph"))
     elif isinstance(field, models.IntegerField):
@@ -194,7 +196,7 @@ def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> ob
                 "date_time_between",
                 start_date="-1y",
                 end_date="now",
-                tzinfo="UTC",
+                tzinfo=timezone.utc,
             ),
         )
     elif isinstance(field, models.DateField):
@@ -274,9 +276,10 @@ def getManyToManyFieldValue(
     if hasattr(field.related_model, "_general_manager_class"):
         related_factory = field.related_model._general_manager_class.Factory
 
-    number_of_instances = random.randint(0, 10)
+    min_required = 0 if field.blank else 1
+    number_of_instances = random.randint(min_required, 10)
     if related_factory and related_instances:
-        number_to_create = random.randint(0, number_of_instances)
+        number_to_create = random.randint(min_required, number_of_instances)
         number_to_pick = number_of_instances - number_to_create
         if number_to_pick > len(related_instances):
             number_to_pick = len(related_instances)
