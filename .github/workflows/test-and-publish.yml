@@ -53,17 +53,22 @@ jobs:
           ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
           fetch-depth: 0
           ref: main
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.13'
+          persist-credentials: false 
 
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.5.4
         with:
           ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
 
+      - name: Ensure SSH-Remote for push
+        run: git remote set-url origin git@github.com:${{ github.repository }}.git
+
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+          
       # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
         name: Semantic Version Release
