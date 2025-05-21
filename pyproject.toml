@@ -55,11 +55,7 @@ where = [
 [tool.semantic_release]
 allow_zero_version = true
 major_on_zero     = false
-remote = { 
-  name                   = "origin", 
-  url                    = "git@github.com:TimKleindick/general_manager.git", 
-  ignore_token_for_push  = true 
-}
+
 # Wo die Version upgedated wird
 version_toml      = ["pyproject.toml:project.version"]
 
@@ -70,3 +66,8 @@ branch            = "main"
 build_command     = "python -m build"
 upload_to_PyPI    = true
 upload_to_release = true
+
+[tool.semantic_release.remote]
+name                   = "origin"
+url                    = "git@github.com:TimKleindick/general_manager.git"
+ignore_token_for_push  = true
