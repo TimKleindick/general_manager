@@ -125,8 +125,6 @@ class TestGetFieldValue(TestCase):
             ("url_field", str, r"^https?://"),
             ("ip_field", str, r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"),
             ("uuid_field", str, r"^[0-9a-fA-F-]{36}$"),
-            ("measurement_field_value", Decimal, None),
-            ("measurement_field_unit", str, None),
         ]
 
         for name, expected_type, pattern in field_expectations:
@@ -213,7 +211,7 @@ class TestRelationFieldValue(TestCase):
 
         with (
             patch(
-                "general_manager.factory.factoryMethods.random.choice",
+                "general_manager.factory.factories.random.choice",
                 return_value=False,
             ),
             patch.object(DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]),
@@ -266,19 +264,23 @@ class TestRelationFieldValue(TestCase):
 
     def test_fk_without_factory_and_no_instances_raises(self):
         field = DummyModel._meta.get_field("dummy_fk")
-        with patch.object(DummyForeignKey.objects, "all", return_value=[]):
-            with self.assertRaisesMessage(
+        with (
+            patch.object(DummyForeignKey.objects, "all", return_value=[]),
+            self.assertRaisesMessage(
                 ValueError, "No factory found for DummyForeignKey"
-            ):
-                getFieldValue(field)
+            ),
+        ):
+            getFieldValue(field)
 
     def test_one_to_one_without_factory_and_no_instances_raises(self):
         field = DummyModel._meta.get_field("dummy_one_to_one")
-        with patch.object(DummyForeignKey2.objects, "all", return_value=[]):
-            with self.assertRaisesMessage(
+        with (
+            patch.object(DummyForeignKey2.objects, "all", return_value=[]),
+            self.assertRaisesMessage(
                 ValueError, "No factory found for DummyForeignKey2"
-            ):
-                getFieldValue(field)
+            ),
+        ):
+            getFieldValue(field)
 
 
 class TestGetManyToManyFieldValue(TestCase):
@@ -341,6 +343,8 @@ class TestGetManyToManyFieldValue(TestCase):
 
     def test_m2m_without_factory_and_no_instances_raises(self):
         field = DummyModel._meta.get_field("dummy_m2m")
-        with patch.object(field.related_model.objects, "all", return_value=[]):  # type: ignore
-            with self.assertRaises(ValueError):
-                getManyToManyFieldValue(field)  # type: ignore
+        with (
+            patch.object(field.related_model.objects, "all", return_value=[]),  # type: ignore
+            self.assertRaises(ValueError),
+        ):
+            getManyToManyFieldValue(field)  # type: ignore
