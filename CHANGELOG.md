@@ -1,6 +1,60 @@
 # CHANGELOG
 
 
+## v0.4.0 (2025-05-21)
+
+### Bug Fixes
+
+- Getmanytomanyfieldvalue
+  ([`9ead241`](https://github.com/TimKleindick/general_manager/commit/9ead241c58b9c21941231d2b2245a494b789a6ae))
+
+### Features
+
+- Add magnitude and unit properties to Measurement class
+  ([`6d09ac3`](https://github.com/TimKleindick/general_manager/commit/6d09ac39b6623013e59f219577fffe5d76ff7355))
+
+- Add new lazy loading functions and corresponding tests for date, time, integer, decimal, boolean,
+  and faker attributes
+  ([`3e5ca27`](https://github.com/TimKleindick/general_manager/commit/3e5ca2714b18db47f2e11022b87bc53e6a9803a1))
+
+### Refactoring
+
+- Improve datetime handling and random instance creation in factories
+  ([`e87d9f2`](https://github.com/TimKleindick/general_manager/commit/e87d9f240f7f0330b447535e606f75c26508a244))
+
+- Remove type ignore comments from _generate, _create, and _build methods
+  ([`cd9560c`](https://github.com/TimKleindick/general_manager/commit/cd9560c47fd74788324bbb2bd4516b00389a82db))
+
+- Update import path for factory methods and add factoryMethods module
+  ([`0517eaf`](https://github.com/TimKleindick/general_manager/commit/0517eafd7385e2ccb20dd68171a314a29b831322))
+
+- Update test cases to improve clarity and consistency
+  ([`2096ca3`](https://github.com/TimKleindick/general_manager/commit/2096ca32aa3bdfb4303509b6fc3ebd2a380fe690))
+
+### Testing
+
+- Add type ignore comments for evaluate method in TestGetFieldValue and TestRelationFieldValue
+  ([`0017f45`](https://github.com/TimKleindick/general_manager/commit/0017f4507311c2e987ec525cfca3dea92fdaae6b))
+
+- Add unit tests for LazyMeasurement, LazyDeltaDate, and LazyProjectName
+  ([`12ee785`](https://github.com/TimKleindick/general_manager/commit/12ee78560db142908888c5a7624697fee97baff8))
+
+- Enhance test factories with ManyToManyField support and refactor field value retrieval
+  ([`c317803`](https://github.com/TimKleindick/general_manager/commit/c31780356191ede6d5229dfd48c76c2650cbcad5))
+
+- Ensure dummy instance is included in ManyToManyField results only if not empty
+  ([`25a9174`](https://github.com/TimKleindick/general_manager/commit/25a9174ca96b281e8b4534e0bad71b66b135dbde))
+
+- Fix test_m2m_without_factory to use correct dummy instance
+  ([`dbf9a3c`](https://github.com/TimKleindick/general_manager/commit/dbf9a3cdc6b4bb94bd5479678b79fcfb492ebac4))
+
+- Implement comprehensive tests for get_field_value function across various field types
+  ([`994f55e`](https://github.com/TimKleindick/general_manager/commit/994f55ead31ad36b09ef2383ad06beeaed0c1e24))
+
+- Refactor tests to improve readability and consistency in exception handling
+  ([`f0e06cb`](https://github.com/TimKleindick/general_manager/commit/f0e06cb66b07fb89c13d8d5cd22245265a6dc999))
+
+
 ## v0.3.2 (2025-05-18)
 
 ### Bug Fixes
