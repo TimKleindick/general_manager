@@ -69,5 +69,5 @@ upload_to_release = true
 
 [tool.semantic_release.remote]
 name                   = "origin"
-url                    = "git@github.com:TimKleindick/general_manager.git"
+url                    = "ssh://git@github.com/TimKleindick/general_manager.git"
 ignore_token_for_push  = true
