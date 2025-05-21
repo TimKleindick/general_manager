@@ -1,9 +1,9 @@
-from django.test import TestCase
+from django.test import SimpleTestCase
 from general_manager.auxiliary.noneToZero import noneToZero
 from general_manager.measurement import Measurement
 
 
-class TestNoneToZero(TestCase):
+class TestNoneToZero(SimpleTestCase):
 
     def test_none_to_zero(self):
         """

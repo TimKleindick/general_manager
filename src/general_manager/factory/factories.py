@@ -165,9 +165,9 @@ def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> ob
             return None
 
     if isinstance(field, MeasurementField):
-        return LazyFunction(
+
         def _measurement():
-            value = Decimal(random.randrange(0, 10_000_000)) / Decimal("100")   # two dp
+            value = Decimal(random.randrange(0, 10_000_000)) / Decimal("100")  # two dp
             return Measurement(value, field.base_unit)
 
         return LazyFunction(_measurement)
