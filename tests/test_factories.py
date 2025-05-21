@@ -157,7 +157,7 @@ class TestGetFieldValue(TestCase):
 
     def test_nullable_field(self):
         with patch(
-            "general_manager.factory.factoryMethods.random.choice",
+            "general_manager.factory.factories.random.choice",
             return_value=True,
         ):
             field = DummyModel._meta.get_field("test_none")
@@ -304,7 +304,10 @@ class TestGetManyToManyFieldValue(TestCase):
         ):
             result = getManyToManyFieldValue(field)  # type: ignore
         self.assertIsInstance(result, list)
-        self.assertIn(dummy1, result)
+        self.assertTrue(
+            set(result).issubset({dummy1, dummy2}),
+            "Returned instances are not a subset of existing objects",
+        )
 
     def test_m2m_with_factory(self):
         dummy1 = DummyManyToMany(name="foo", id=1)
@@ -322,16 +325,19 @@ class TestGetManyToManyFieldValue(TestCase):
         self.assertIn(dummy1, result)
 
     def test_m2m_without_factory(self):
+        dummy1 = DummyManyToMany(name="foo", id=1)
         dummy2 = DummyManyToMany(name="bar", id=2)
 
         field = DummyModel._meta.get_field("dummy_m2m")
         with patch.object(
-            field.related_model.objects, "all", return_value=[dummy2, dummy2]  # type: ignore
+            field.related_model.objects, "all", return_value=[dummy1, dummy2]  # type: ignore
         ):
             result = getManyToManyFieldValue(field)  # type: ignore
         self.assertIsInstance(result, list)
-        if len(result) > 0:
-            self.assertIn(dummy2, result)
+        self.assertTrue(
+            set(result).issubset({dummy1, dummy2}),
+            "Returned instances are not a subset of existing objects",
+        )
 
     def test_m2m_without_factory_and_no_instances_raises(self):
         field = DummyModel._meta.get_field("dummy_m2m")

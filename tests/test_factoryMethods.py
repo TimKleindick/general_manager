@@ -120,7 +120,9 @@ class TestFactoryMethods(SimpleTestCase):
                     obj, 1, None
                 )
                 self.assertIsInstance(decimal_value, Decimal)
-                self.assertTrue(min_value <= decimal_value <= max_value)
+                self.assertTrue(
+                    Decimal(min_value) <= decimal_value <= Decimal(max_value)
+                )
                 decimal_str = format(decimal_value, "f")
                 if "." in decimal_str:
                     self.assertEqual(len(decimal_str.split(".")[1]), precision)
