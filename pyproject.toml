@@ -55,6 +55,7 @@ where = [
 [tool.semantic_release]
 allow_zero_version = true
 major_on_zero     = false
+remote = "git@github.com:TimKleindick/general_manager.git"
 
 # Wo die Version upgedated wird
 version_toml      = ["pyproject.toml:project.version"]
