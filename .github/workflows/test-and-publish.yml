@@ -47,33 +47,6 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
-          fetch-depth: 0
-          ref: main
-          persist-credentials: false 
-
-      - name: Set up SSH agent
-        uses: webfactory/ssh-agent@v0.5.4
-        with:
-          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
-
-      - name: Ensure SSH-Remote for push
-        run: git remote set-url origin git@github.com:${{ github.repository }}.git
-
-      - name: Add GitHub to known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          echo "Host github.com\n  StrictHostKeyChecking no\n" >> ~/.ssh/config
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-        
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.13'
-          
       # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
         name: Semantic Version Release
