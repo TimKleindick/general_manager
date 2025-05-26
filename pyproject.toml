@@ -66,3 +66,4 @@ branch            = "main"
 build_command     = "python -m build"
 upload_to_PyPI    = true
 upload_to_release = true
+ignore_token_for_push = true
