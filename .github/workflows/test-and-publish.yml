@@ -45,16 +45,22 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout Repository
+      # 1) SSH-Agent starten und Key laden
+      - name: 🚪 Start SSH-Agent
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      # 2) Checkout via SSH
+      - name: Checkout Repository über SSH
         uses: actions/checkout@v4
         with:
+          # SSH statt HTTPS
+          repository: TimKleindick/general_manager
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          # verhindert, dass GITHUB_TOKEN überschreibt
+          persist-credentials: false
           fetch-depth: 0
-          ref: main
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.13'
 
       # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
