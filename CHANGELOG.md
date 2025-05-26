@@ -1,501 +1,467 @@
 # CHANGELOG
 
 
+## v0.4.1 (2025-05-26)
+
+### Bug Fixes
+
+- Ci pipeline
+  ([`07c258f`](https://github.com/TimKleindick/general_manager/commit/07c258fd817686ef145f2d21e93fed591404672f))
+
+### Continuous Integration
+
+- Add checkout
+  ([`f7a5284`](https://github.com/TimKleindick/general_manager/commit/f7a5284aa99ec389274f94254196f0a5bb10636f))
+
+- Add github to known hosts
+  ([`cbe4d75`](https://github.com/TimKleindick/general_manager/commit/cbe4d755e84a04e778acd9b64f76787d89ed800e))
+
+- Add remote to pyproject toml to enable ssh based releases
+  ([`8dc2edb`](https://github.com/TimKleindick/general_manager/commit/8dc2edb92125770e7b96942eb7a5721bb7344ef8))
+
+- Add ssh prefix for remote url
+  ([`b9341b8`](https://github.com/TimKleindick/general_manager/commit/b9341b8ce2eb8b58387fff9999c2aeccfe55e238))
+
+- Go back to basic
+  ([`211827b`](https://github.com/TimKleindick/general_manager/commit/211827b88ebded3040562f8104217497ae895eef))
+
+- Go back to https
+  ([`db8365e`](https://github.com/TimKleindick/general_manager/commit/db8365e43835c7e9d611702e19fcca71caaba3df))
+
+- Reorganize semantic release remote configuration in pyproject.toml
+  ([`e51a097`](https://github.com/TimKleindick/general_manager/commit/e51a097ba7c0d4ca57fa1b8b6f1818d368184cad))
+
+- Update remote configuration in pyproject.toml for semantic release
+  ([`f9c2681`](https://github.com/TimKleindick/general_manager/commit/f9c26814d41ab4d2f753feab4dd4e0c219a423b9))
+
+
 ## v0.4.0 (2025-05-21)
 
 ### Bug Fixes
 
-- Getmanytomanyfieldvalue
-  ([`9ead241`](https://github.com/TimKleindick/general_manager/commit/9ead241c58b9c21941231d2b2245a494b789a6ae))
-
-### Features
-
-- Add magnitude and unit properties to Measurement class
-  ([`6d09ac3`](https://github.com/TimKleindick/general_manager/commit/6d09ac39b6623013e59f219577fffe5d76ff7355))
-
-- Add new lazy loading functions and corresponding tests for date, time, integer, decimal, boolean,
-  and faker attributes
-  ([`3e5ca27`](https://github.com/TimKleindick/general_manager/commit/3e5ca2714b18db47f2e11022b87bc53e6a9803a1))
-
-### Refactoring
-
-- Improve datetime handling and random instance creation in factories
-  ([`e87d9f2`](https://github.com/TimKleindick/general_manager/commit/e87d9f240f7f0330b447535e606f75c26508a244))
-
-- Remove type ignore comments from _generate, _create, and _build methods
-  ([`cd9560c`](https://github.com/TimKleindick/general_manager/commit/cd9560c47fd74788324bbb2bd4516b00389a82db))
-
-- Update import path for factory methods and add factoryMethods module
-  ([`0517eaf`](https://github.com/TimKleindick/general_manager/commit/0517eafd7385e2ccb20dd68171a314a29b831322))
-
-- Update test cases to improve clarity and consistency
-  ([`2096ca3`](https://github.com/TimKleindick/general_manager/commit/2096ca32aa3bdfb4303509b6fc3ebd2a380fe690))
-
-### Testing
-
-- Add type ignore comments for evaluate method in TestGetFieldValue and TestRelationFieldValue
-  ([`0017f45`](https://github.com/TimKleindick/general_manager/commit/0017f4507311c2e987ec525cfca3dea92fdaae6b))
-
-- Add unit tests for LazyMeasurement, LazyDeltaDate, and LazyProjectName
-  ([`12ee785`](https://github.com/TimKleindick/general_manager/commit/12ee78560db142908888c5a7624697fee97baff8))
-
-- Enhance test factories with ManyToManyField support and refactor field value retrieval
-  ([`c317803`](https://github.com/TimKleindick/general_manager/commit/c31780356191ede6d5229dfd48c76c2650cbcad5))
-
-- Ensure dummy instance is included in ManyToManyField results only if not empty
-  ([`25a9174`](https://github.com/TimKleindick/general_manager/commit/25a9174ca96b281e8b4534e0bad71b66b135dbde))
-
-- Fix test_m2m_without_factory to use correct dummy instance
-  ([`dbf9a3c`](https://github.com/TimKleindick/general_manager/commit/dbf9a3cdc6b4bb94bd5479678b79fcfb492ebac4))
-
-- Implement comprehensive tests for get_field_value function across various field types
-  ([`994f55e`](https://github.com/TimKleindick/general_manager/commit/994f55ead31ad36b09ef2383ad06beeaed0c1e24))
-
-- Refactor tests to improve readability and consistency in exception handling
-  ([`f0e06cb`](https://github.com/TimKleindick/general_manager/commit/f0e06cb66b07fb89c13d8d5cd22245265a6dc999))
-
-
-## v0.3.2 (2025-05-18)
-
-### Bug Fixes
-
-- Capture_old_values & update docstrings to English and improve clarity
-  ([`4d0dbf5`](https://github.com/TimKleindick/general_manager/commit/4d0dbf5be1692e31f694056aea5553f01b61d2df))
-
-- Ensure string handling in generic_cache_invalidation and update test for old value scenarios
-  ([`2d1071d`](https://github.com/TimKleindick/general_manager/commit/2d1071df7b1075b93d68bbb96057d16ff4cbf0cb))
-
-- Improve generic_cache_invalidation logic for string operations
-  ([`250a0e7`](https://github.com/TimKleindick/general_manager/commit/250a0e7d2f898f705b4462975587c79ca4e51662))
-
-- Old value handling with operator
-  ([`cd1ac5e`](https://github.com/TimKleindick/general_manager/commit/cd1ac5ea8b819b95f6f9a8b4b4be73629de53fd9))
-
-- Update error message for lock acquisition and improve undefined value handling
-  ([`de690aa`](https://github.com/TimKleindick/general_manager/commit/de690aa40b87c5101fe64549b6ea6a66614b0570))
-
-### Continuous Integration
-
-- Add webfactory/ssh-agent@v0.5.4
-  ([`e70974e`](https://github.com/TimKleindick/general_manager/commit/e70974e3d84269efb910d0623419215f33669cb1))
-
-- Add permissions for contents in test job
-  ([`55260e0`](https://github.com/TimKleindick/general_manager/commit/55260e07f8f2a58c41c759ce3cf10875f86e0f0d))
-
-- Add SSH key for repository checkout in GitHub Actions workflow
-  ([`a3b06f9`](https://github.com/TimKleindick/general_manager/commit/a3b06f924a2ec6183febd05f989d51b9b8d3f1d9))
-
-- Remove whitespaces
-  ([`1a44152`](https://github.com/TimKleindick/general_manager/commit/1a4415203f48001ebb0874dc9fd5aed29bd27a88))
-
-### Testing
-
-- Add comprehensive tests for cache management functions
-  ([`d89914f`](https://github.com/TimKleindick/general_manager/commit/d89914f0ff157e1cdb6f095e601b716859600a26))
-
-- Add signal handling tests for dataChange decorator
-  ([`459eabe`](https://github.com/TimKleindick/general_manager/commit/459eabedea97b3fc9f190dbd62eb8ef084a6b6ab))
-
-- Add unit tests for acquire and release lock functionality
-  ([`b7c70de`](https://github.com/TimKleindick/general_manager/commit/b7c70de4afec2cfa146acc7464f083443cda2848))
-
-- Rename test for clarity in GenericCacheInvalidationTests
-  ([`ce15f6d`](https://github.com/TimKleindick/general_manager/commit/ce15f6de3d2be783e0665cbdce761c339f1c25ea))
-
-
-## v0.3.1 (2025-05-17)
-
-### Bug Fixes
-
-- Cache setting logic for nested cached functions
-  ([`c94db78`](https://github.com/TimKleindick/general_manager/commit/c94db7893a0670b228fc6a44cbbc79a3730741de))
-
-- Distinguish between cache miss and None result
-  ([`ee3df6f`](https://github.com/TimKleindick/general_manager/commit/ee3df6fa8efd0734d6af600352465180de0d31af))
-
-- Ensure proper cleanup of depth variable in DependencyTracker
-  ([`8bd7432`](https://github.com/TimKleindick/general_manager/commit/8bd743222dfe2799631f28c92bbf1ae3dadda1b1))
-
-- Improve cache handling imitation by adding pickle serialization in FakeCacheBackend
-  ([`3e4d14b`](https://github.com/TimKleindick/general_manager/commit/3e4d14b74657780b1f70a9d4188ad0a58c556bb3))
-
-- Improve docstrings for cache backend methods and test cases
-  ([`74759a3`](https://github.com/TimKleindick/general_manager/commit/74759a37e627c61b92a74cd8f889106962e0387d))
-
-- Reset thread-local storage in tests and adjust cache timeout for better isolation
-  ([`5a059ab`](https://github.com/TimKleindick/general_manager/commit/5a059ab5ff7db933d702a93f8849057baeb0cc4c))
-
-- Store dependecies of inner functions even with cache hit of inner function
-  ([`f5171b4`](https://github.com/TimKleindick/general_manager/commit/f5171b44140b433261ac3b67c103535cf38db155))
-
-- Update cache key generation to use qualified name instead of function name
-  ([`32c2cdf`](https://github.com/TimKleindick/general_manager/commit/32c2cdf6c528153f69b92c12bd3d95e431779a6a))
-
-### Refactoring
-
-- Change test case class from django SimpleTestCase to unittest TestCase
-  ([`04d3939`](https://github.com/TimKleindick/general_manager/commit/04d39399771b32da06a6e0ae964e6b26ad45c9d0))
-
-- Move PathMap and PathTracer classes from cache to auxiliary
-  ([`11201aa`](https://github.com/TimKleindick/general_manager/commit/11201aa01dfee75259bbf5cc87c8e22c11b73890))
-
-- Remove unnecessary TYPE_CHECKING imports in pathMapping.py
-  ([`ad6afad`](https://github.com/TimKleindick/general_manager/commit/ad6afad1c51ce4f473d6040d317daccbfc4a70f8))
-
-- Remove unused import of defaultdict in cacheTracker.py
-  ([`4885b59`](https://github.com/TimKleindick/general_manager/commit/4885b599305e8ac68d8d4ed2cb630e01e1a378db))
-
-### Testing
-
-- Add comprehensive tests for cache decorator functionality
-  ([`ab0b509`](https://github.com/TimKleindick/general_manager/commit/ab0b509d871156099ebcd08ca1f56277cf5e7c67))
-
-- Add comprehensive unit tests for make_cache_key function
-  ([`20b9667`](https://github.com/TimKleindick/general_manager/commit/20b9667dc9be8d2865dfa755883bf938ae5c5570))
-
-- Add test for make_cache_key with kwargs as args
-  ([`2397c3b`](https://github.com/TimKleindick/general_manager/commit/2397c3b617b118178de1bff8acd89c18ed232a97))
-
-- Add unit test for nested cache decorator with inner cache hit
-  ([`d67f7f8`](https://github.com/TimKleindick/general_manager/commit/d67f7f81ccccac95048aa064ff917fb0d2d840d8))
-
-- Add unit tests for DependencyTracker functionality
-  ([`8aeadc7`](https://github.com/TimKleindick/general_manager/commit/8aeadc767dd815d062f99444d9dc73f43e881bbe))
-
-- Add unit tests for ModelDependencyCollector functionality
-  ([`bdcde99`](https://github.com/TimKleindick/general_manager/commit/bdcde99217a417e925f10d43258d4dc4e34fcf93))
-
-- Change TestCase to SimpleTestCase for DependencyTracker tests
-  ([`566068e`](https://github.com/TimKleindick/general_manager/commit/566068e03df8526e2ecbdd6e2914bb0b204084c3))
-
-- Simplify exception handling in make_cache_key tests using combined context manager
-  ([`7b93125`](https://github.com/TimKleindick/general_manager/commit/7b931254da0d66437a27d98ba4d9fca733936f71))
-
-- Update exception type in dependency tracker test
-  ([`41a370d`](https://github.com/TimKleindick/general_manager/commit/41a370d7f4729d61a535caed7bee77756992f973))
-
-
-## v0.3.0 (2025-05-17)
-
-### Features
-
-- Implement CustomJSONEncoder for serializing datetime and GeneralManager objects
-  ([`ec98a91`](https://github.com/TimKleindick/general_manager/commit/ec98a91a758f39e17cede8b8772be4150c00456a))
-
-- Implement make_cache_key function for generating cache keys from function arguments
-  ([`135365d`](https://github.com/TimKleindick/general_manager/commit/135365d81922380ab4b9e24d3cf9ad1231082dcd))
-
-### Refactoring
-
-- Cachedecorator for better maintainability
-  ([`40b6ff6`](https://github.com/TimKleindick/general_manager/commit/40b6ff6ad9072256e8cd8ec3e7d9308939596553))
-
-- Remove commented steps in cached decorator for cleaner code
-  ([`d994a6b`](https://github.com/TimKleindick/general_manager/commit/d994a6b9a76ebe2fea36cdad108a5a527a017d70))
-
-- Remove duplicate imports and improve DependencyTracker cleanup
-  ([`c7450d1`](https://github.com/TimKleindick/general_manager/commit/c7450d1939aa35a9077fb67f0f7c9e060090ec10))
-
-- Remove unnecessary import of general_manager_name in cacheTracker.py
-  ([`dd57675`](https://github.com/TimKleindick/general_manager/commit/dd5767520ac9d6af65171cc67e03db2b5cfb9899))
-
-- Remove unused imports and obsolete test
-  ([`757e9da`](https://github.com/TimKleindick/general_manager/commit/757e9dab6c7c4a6ad491c8c67d176a31cd957256))
-
-- Remove unused imports and update docstrings for clarity
-  ([`103318f`](https://github.com/TimKleindick/general_manager/commit/103318f815a45827b0db026d75ac2a1c0919b774))
-
-- Rename trackMe method to track in DependencyTracker for consistency
-  ([`62f2cc1`](https://github.com/TimKleindick/general_manager/commit/62f2cc17754f3389322f186aaca3789e6070f9e4))
-
-- Simplify setup for CustomJSONEncoderTests by removing unnecessary module patching
-  ([`b3d529a`](https://github.com/TimKleindick/general_manager/commit/b3d529a5a9c9579d4d2e065746ffdf1c62588eec))
-
-### Testing
-
-- Jsonencoder
-  ([`3fee1d2`](https://github.com/TimKleindick/general_manager/commit/3fee1d29e91376a5b7d873d73f0e3776166a6a92))
-
-
-## v0.2.0 (2025-05-14)
-
-### Bug Fixes
-
-- Improve error handling for function handlers in rule system
-  ([`c94d17a`](https://github.com/TimKleindick/general_manager/commit/c94d17a11a9c2332bf460ff29fafe08ad00737c1))
-
-- Update error messages for sum, max, and min functions to include parentheses
-  ([`29e44fa`](https://github.com/TimKleindick/general_manager/commit/29e44fae8a26e6f538cfe95dccbd631d5ecbd3e0))
-
-### Continuous Integration
-
-- Release only when version change is detected
-  ([`e929f8e`](https://github.com/TimKleindick/general_manager/commit/e929f8e5d95bcdf742b281cf082cbdb2cd294971))
-
-### Features
-
-- Implement sum, max, and min handlers in rule system
-  ([`1bfc1e6`](https://github.com/TimKleindick/general_manager/commit/1bfc1e6e60bb90d7a246e9652db72f5101dad2f1))
-
-### Refactoring
-
-- Clean up filterParser.py
-  ([`8e077c6`](https://github.com/TimKleindick/general_manager/commit/8e077c6359d473547ae5813a18553f099a303e87))
-
-- Handler for DRY and maintainability
-  ([`a360ec6`](https://github.com/TimKleindick/general_manager/commit/a360ec69f44c052ca698bd15b9ce359bd68982d1))
-
-- Remove getThreshold method and inline threshold calculations for clarity
-  ([`93d0b40`](https://github.com/TimKleindick/general_manager/commit/93d0b40db1837de77ef3ae05de5e4906ae2084f6))
-
-### Testing
-
-- Add comprehensive tests for LenHandler, SumHandler, MaxHandler, and MinHandler
-  ([`875c606`](https://github.com/TimKleindick/general_manager/commit/875c60679c5381302f9e3614d96aedf0a425860a))
-
-- Add edge cases for gte/lte/exact
-  ([`fe11010`](https://github.com/TimKleindick/general_manager/commit/fe1101044cb036a0bc13052570c740413d24649b))
-
-- Filterparser for full coverage
-  ([`605f8a8`](https://github.com/TimKleindick/general_manager/commit/605f8a846dcc9ca65a2d448b6bca0dd944bc5427))
-
-- Improve error messages for sum, max, and min handlers for clarity and consistency + add edge cases
-  ([`078a806`](https://github.com/TimKleindick/general_manager/commit/078a806d7830268bc928b119a375f1248c3bbc31))
-
-- Other numeric types for noneToZero
-  ([`ff3c310`](https://github.com/TimKleindick/general_manager/commit/ff3c3106b2265ef3ea8c1a49458e9378662cd02f))
-
-
-## v0.1.2 (2025-05-13)
-
-### Bug Fixes
-
-- Typehint for filter/exclude in databaseInterface
-  ([`e70e550`](https://github.com/TimKleindick/general_manager/commit/e70e55041778264f0f8704828d281efa822faa26))
-
-### Testing
-
-- 100% coverage for input
-  ([`8f57f8a`](https://github.com/TimKleindick/general_manager/commit/8f57f8add6a24a53a425618f0c0f4540d27027c8))
-
-- Nonetozero for full coverage
-  ([`4992a73`](https://github.com/TimKleindick/general_manager/commit/4992a736331f2a83c7a7e8e2fffa0e89f9349336))
-
-- Pytest config in vscode
-  ([`3a69c57`](https://github.com/TimKleindick/general_manager/commit/3a69c57f2cd99e7988158cbaa3a5142135103d12))
-
-
-## v0.1.1 (2025-05-11)
-
-### Bug Fixes
-
-- Remove required, editable, defaultValue from MeasurementType
-  ([`733a1ae`](https://github.com/TimKleindick/general_manager/commit/733a1ae9804797d88871c8bb0f101343878eb195))
-
-### Testing
-
-- Fix test for removed required, editable, defaultValue
-  ([`34be32a`](https://github.com/TimKleindick/general_manager/commit/34be32aab05748dd46eb131fecf3264b0b5e9eab))
-
-
-## v0.1.0 (2025-05-11)
-
-### Continuous Integration
-
-- Add build and twine to action
-  ([`37dd646`](https://github.com/TimKleindick/general_manager/commit/37dd6461e8112d58f1421f552370719ce9d89d69))
-
-- Change build command location into pyproject
-  ([`41115a7`](https://github.com/TimKleindick/general_manager/commit/41115a760f894bafbe7a216d91bacfbf13661c20))
-
-- Manal build process
-  ([`d2db282`](https://github.com/TimKleindick/general_manager/commit/d2db2829d19ddd0af6b01be75310a8b5abf0d415))
-
-- Update github action workflow for automatic version sync
-  ([`b1f104c`](https://github.com/TimKleindick/general_manager/commit/b1f104cbca8860247c363d567a9c9f47cac45711))
-
-- Update to github action, added automatic versioning
-  ([`bd60b52`](https://github.com/TimKleindick/general_manager/commit/bd60b528849e7f88f6ca025476e676964d24e117))
-
-### Testing
-
-- Add some graphql tests
-  ([`bf06d84`](https://github.com/TimKleindick/general_manager/commit/bf06d8459b7819583345120b8c664507289ccec6))
-
-
-## v0.0.0 (2025-05-06)
-
-### Bug Fixes
-
 - Automatic tests with pytest
-  ([`6b89e81`](https://github.com/TimKleindick/general_manager/commit/6b89e81faeba4f32c5fdcb4b877024d3af657000))
+  ([`a21da5a`](https://github.com/TimKleindick/general_manager/commit/a21da5abac4491526e11d58b8e7ad768c57af528))
 
 - Blank and null for measurementField
-  ([`f28f115`](https://github.com/TimKleindick/general_manager/commit/f28f11522319f5ae0f3fd0b2bfea2433b9e3a921))
+  ([`22ebde3`](https://github.com/TimKleindick/general_manager/commit/22ebde3816ce5e2022f0959a0212c84c4a155838))
+
+- Cache setting logic for nested cached functions
+  ([`f293440`](https://github.com/TimKleindick/general_manager/commit/f2934406127275f458cafbf80019a683c64c3ef3))
+
+- Capture_old_values & update docstrings to English and improve clarity
+  ([`49a9ac9`](https://github.com/TimKleindick/general_manager/commit/49a9ac9c067353b9a97af607657ed8ef7b0c2c25))
 
 - Circular import
-  ([`c028554`](https://github.com/TimKleindick/general_manager/commit/c028554c82cfa9678dcd5205b1a902bef22c30ee))
+  ([`4808782`](https://github.com/TimKleindick/general_manager/commit/4808782414ac4296a56ab77f4225b0dff8f69757))
 
 - Combination of filter permission and not filter permission
-  ([`51af5db`](https://github.com/TimKleindick/general_manager/commit/51af5dbde32f8ab005d101605d8e0599a4cb0125))
+  ([`54382aa`](https://github.com/TimKleindick/general_manager/commit/54382aa98af76c916aec3ff972563017f457e028))
 
 - if one permission defines a filter and one does not - This leads to NO filter --> every entry is
   findable
 
+- Distinguish between cache miss and None result
+  ([`12a0389`](https://github.com/TimKleindick/general_manager/commit/12a038930ce9e44d7f0e684aca77c2333fd08e2d))
+
+- Ensure proper cleanup of depth variable in DependencyTracker
+  ([`18d8811`](https://github.com/TimKleindick/general_manager/commit/18d88116c05f596249dcf33c19bd01850d2577ff))
+
+- Ensure string handling in generic_cache_invalidation and update test for old value scenarios
+  ([`a1c5823`](https://github.com/TimKleindick/general_manager/commit/a1c5823b4cfb2a731ccaeb81c60e509b64368e61))
+
 - Field permissions
-  ([`5ce3966`](https://github.com/TimKleindick/general_manager/commit/5ce39666d35e50bda4909acc11c0751aa943e38e))
+  ([`f9a11e5`](https://github.com/TimKleindick/general_manager/commit/f9a11e59c1f5ed01c3e928bc844d5bd8275c0c44))
 
 - Field type
-  ([`65d747d`](https://github.com/TimKleindick/general_manager/commit/65d747dd7ce613657bc4ea5c163184d1c2928045))
+  ([`7621179`](https://github.com/TimKleindick/general_manager/commit/7621179ec803d77ab74f6767603883a9a2f63745))
 
 - Filter condition with permissions
-  ([`88b342c`](https://github.com/TimKleindick/general_manager/commit/88b342caa83b2ed099885394f7587d806d935559))
+  ([`bbac5ed`](https://github.com/TimKleindick/general_manager/commit/bbac5ed766d458fe0704f6f52bc18697fa9b92d4))
 
 - no defined permission led to all objects instead of no filter
 
 - Foreignkey relation with general manager
-  ([`6e2667f`](https://github.com/TimKleindick/general_manager/commit/6e2667fbb99d3035be783bb09592691606fb92bb))
+  ([`1fce800`](https://github.com/TimKleindick/general_manager/commit/1fce8004377ec12350c19ba004f4249da20a056d))
+
+- Getmanytomanyfieldvalue
+  ([`7906be9`](https://github.com/TimKleindick/general_manager/commit/7906be9e5aac1728ffea1f3e9b1dd7cb5b548ce9))
 
 - Id to identification to match new standard
-  ([`3905f82`](https://github.com/TimKleindick/general_manager/commit/3905f82b436bb7c296765a72ee41b02d42ccd8ae))
+  ([`1d17375`](https://github.com/TimKleindick/general_manager/commit/1d173753236dd5abd7c90a34879df46315b61f02))
 
 - Identification for comparision
-  ([`7e31922`](https://github.com/TimKleindick/general_manager/commit/7e31922849a0a1f8f5a1618b232bc5b6fd916c02))
+  ([`42db402`](https://github.com/TimKleindick/general_manager/commit/42db402688605ac3cbf236f06215a677e87ca438))
+
+- Improve cache handling imitation by adding pickle serialization in FakeCacheBackend
+  ([`7d47285`](https://github.com/TimKleindick/general_manager/commit/7d4728556d6975d4f36b351703aa43148e509eef))
+
+- Improve docstrings for cache backend methods and test cases
+  ([`12798f5`](https://github.com/TimKleindick/general_manager/commit/12798f55f1461984118eaa061e95063e9b920f53))
+
+- Improve error handling for function handlers in rule system
+  ([`df479d8`](https://github.com/TimKleindick/general_manager/commit/df479d880034cddba34604bdc49fd38d26dae3e7))
+
+- Improve generic_cache_invalidation logic for string operations
+  ([`25a99b8`](https://github.com/TimKleindick/general_manager/commit/25a99b8f8c9c9f778a93e3e501b26e403dc5d1dd))
 
 - Info object in graph ql tests
-  ([`31a290a`](https://github.com/TimKleindick/general_manager/commit/31a290add992c9aaf3b77c20ea0462bed58aa559))
+  ([`2358902`](https://github.com/TimKleindick/general_manager/commit/23589028d9f420d8d02d1f2a6515cacdb43a7ce5))
 
 - Multiple permissions for permission filter
-  ([`48104dd`](https://github.com/TimKleindick/general_manager/commit/48104dd8e70ae77a76e0205529717be955c73d22))
+  ([`7e106ae`](https://github.com/TimKleindick/general_manager/commit/7e106aea3e6946fa68df0b2a5d49c72e93d5717e))
 
 - No more default values for page and page_size
-  ([`e05afba`](https://github.com/TimKleindick/general_manager/commit/e05afbaa123b68a66578383453dbe8361bb15fc7))
+  ([`8b29cb6`](https://github.com/TimKleindick/general_manager/commit/8b29cb6a47c56fe564b78119d60e4948324d1c8d))
+
+- Old value handling with operator
+  ([`984597a`](https://github.com/TimKleindick/general_manager/commit/984597ac485633428d87653519843a80850608c8))
 
 - Permissions in sub queries
-  ([`3a7aac7`](https://github.com/TimKleindick/general_manager/commit/3a7aac7339efe254c0bc8976eece9ee98a792a87))
+  ([`2830910`](https://github.com/TimKleindick/general_manager/commit/2830910be6ff9a26e374006a2cbc968ef113590f))
 
 - Prototype update to use new possibilities
-  ([`4171f1b`](https://github.com/TimKleindick/general_manager/commit/4171f1b5c7e0fed3a1d20797a7d4bba7476ee1c7))
+  ([`7293211`](https://github.com/TimKleindick/general_manager/commit/7293211816dcd8b76fa56ae8607129bcc38e6be3))
 
 - Remove contact information
-  ([`cd41d15`](https://github.com/TimKleindick/general_manager/commit/cd41d15192f896bb91742c27465f89893f2bef82))
+  ([`f77688a`](https://github.com/TimKleindick/general_manager/commit/f77688ac4e9055614e77f122a091420b4af1182a))
+
+- Remove required, editable, defaultValue from MeasurementType
+  ([`76b8098`](https://github.com/TimKleindick/general_manager/commit/76b80983c780223171ca0346f60e1fa769832e83))
+
+- Reset thread-local storage in tests and adjust cache timeout for better isolation
+  ([`292441c`](https://github.com/TimKleindick/general_manager/commit/292441cd079273e17cfbdf506a633cb5b51565c2))
 
 - Rule with type hints
-  ([`907352b`](https://github.com/TimKleindick/general_manager/commit/907352b05235996e75ac0425999893f488cb65f5))
+  ([`c6ff34b`](https://github.com/TimKleindick/general_manager/commit/c6ff34bb400a778810fe3e2a2f88aad6de3e7499))
+
+- Store dependecies of inner functions even with cache hit of inner function
+  ([`3d7690b`](https://github.com/TimKleindick/general_manager/commit/3d7690bf8abe4824118482947f161e8b8f4efd33))
 
 - Test runner
-  ([`2d7db29`](https://github.com/TimKleindick/general_manager/commit/2d7db2908c067c2d02538685cf7672edffebefe1))
+  ([`24a9af5`](https://github.com/TimKleindick/general_manager/commit/24a9af5a200be95c8877971959570c82470ebb82))
 
 - Type annotations
-  ([`38b54df`](https://github.com/TimKleindick/general_manager/commit/38b54df3bc70f45b9ec4310f1163a175261bec72))
+  ([`4d388ba`](https://github.com/TimKleindick/general_manager/commit/4d388ba76f69648e9dd0fc5db3d4f87b448731fd))
 
 - Type annotations
-  ([`02698a2`](https://github.com/TimKleindick/general_manager/commit/02698a25ef51e6b5d3eba0b22899d2086fbbb0a6))
+  ([`33ca414`](https://github.com/TimKleindick/general_manager/commit/33ca4143d2209ef3cd81d06fc8ee5a7cf3ffde43))
 
 - Type hint adjusts
-  ([`8a7b690`](https://github.com/TimKleindick/general_manager/commit/8a7b6907fd7cf672a011736a93ec3ee99a40c2ef))
+  ([`0bf885a`](https://github.com/TimKleindick/general_manager/commit/0bf885a0fee4e3a18f84fe80a56136d97424742d))
 
 - Type hints
-  ([`aaf7dd7`](https://github.com/TimKleindick/general_manager/commit/aaf7dd7e56e9f2f635148600a89d9ffc1a59d862))
+  ([`ab97a75`](https://github.com/TimKleindick/general_manager/commit/ab97a7555b930ca4dae17181df68919626c1f91a))
+
+- Typehint for filter/exclude in databaseInterface
+  ([`2b8382b`](https://github.com/TimKleindick/general_manager/commit/2b8382bb0fd48fad9fbdb563fc3f26bd975c565d))
+
+- Update cache key generation to use qualified name instead of function name
+  ([`13794f3`](https://github.com/TimKleindick/general_manager/commit/13794f3724a171797937ac39e9119ab4ec6d44f3))
+
+- Update error message for lock acquisition and improve undefined value handling
+  ([`b6de49b`](https://github.com/TimKleindick/general_manager/commit/b6de49b3ddb71d38d683a7860580c9c641d5e39b))
+
+- Update error messages for sum, max, and min functions to include parentheses
+  ([`5e26d3d`](https://github.com/TimKleindick/general_manager/commit/5e26d3d0b2d702a5c4df3b40c5205c04e65f5647))
+
+### Continuous Integration
+
+- Add webfactory/ssh-agent@v0.5.4
+  ([`c47ddee`](https://github.com/TimKleindick/general_manager/commit/c47ddee10af1a35e3ecfd699520d8434971c3710))
+
+- Add build and twine to action
+  ([`4b58015`](https://github.com/TimKleindick/general_manager/commit/4b5801595a993a08c09e4c44c17720819a1351c0))
+
+- Add permissions for contents in test job
+  ([`264fbb4`](https://github.com/TimKleindick/general_manager/commit/264fbb46f56796405de6484e086a78434d2a2fdd))
+
+- Add SSH key for repository checkout in GitHub Actions workflow
+  ([`37f3381`](https://github.com/TimKleindick/general_manager/commit/37f3381121bfd75b0e9c446898e305beafd4314f))
+
+- Change build command location into pyproject
+  ([`9cc2442`](https://github.com/TimKleindick/general_manager/commit/9cc24422c6d107fdb1630d479cbeb6b47ed29a8e))
+
+- Manal build process
+  ([`9532b76`](https://github.com/TimKleindick/general_manager/commit/9532b76bea1095ab25e5019ef459c0de1304f17f))
+
+- Release only when version change is detected
+  ([`3ca6d69`](https://github.com/TimKleindick/general_manager/commit/3ca6d69f0fb86c8e2e4e1552df89f9c5299c3469))
+
+- Remove whitespaces
+  ([`81231b7`](https://github.com/TimKleindick/general_manager/commit/81231b7671f1aa0ce52c2bde1a989eea0e9b617d))
+
+- Update github action workflow for automatic version sync
+  ([`568874e`](https://github.com/TimKleindick/general_manager/commit/568874e03f9ed32f2bcf95d0f865870c390acc13))
+
+- Update to github action, added automatic versioning
+  ([`fa24d1c`](https://github.com/TimKleindick/general_manager/commit/fa24d1c46a5547fce4deafaae590d52fb08328c7))
 
 ### Features
 
 - __or__ operation for GeneralManager
-  ([`8a74100`](https://github.com/TimKleindick/general_manager/commit/8a74100583d38e5ea3fb9f191b9f64a7ffe9d2fb))
+  ([`74253ae`](https://github.com/TimKleindick/general_manager/commit/74253aebd40df195aa0a85b2ce61ca70bdcbe496))
 
 - __repr__ for calculation bucket
-  ([`5271990`](https://github.com/TimKleindick/general_manager/commit/5271990737b082d4ea0acd8279055c36259fb11b))
+  ([`14e01a6`](https://github.com/TimKleindick/general_manager/commit/14e01a63e56d1a1ffd668882d75897e6f182231f))
 
 - Add editable to measurementField
-  ([`a1b5ffa`](https://github.com/TimKleindick/general_manager/commit/a1b5ffa6a52d2d28995718e7479a42903cb96f42))
+  ([`f71b1ab`](https://github.com/TimKleindick/general_manager/commit/f71b1abd9fb4ce57093b1a4748af73603acf6c98))
 
 - Add is_required, is_editable and default to getAttributeType
-  ([`fbecfec`](https://github.com/TimKleindick/general_manager/commit/fbecfec1346292a3edd391ca43910c4405d32bd4))
+  ([`4e64b30`](https://github.com/TimKleindick/general_manager/commit/4e64b30c962067e523f35c62ad0fb30d861fe9b9))
 
 - first step towards automatic mutation creation
 
+- Add magnitude and unit properties to Measurement class
+  ([`ba0fa9b`](https://github.com/TimKleindick/general_manager/commit/ba0fa9bcf6ef29ec8f43a08ffa32adcf19b05b78))
+
+- Add new lazy loading functions and corresponding tests for date, time, integer, decimal, boolean,
+  and faker attributes
+  ([`13c0309`](https://github.com/TimKleindick/general_manager/commit/13c0309ecfb186718e134fa8ead48182a78cd4ba))
+
 - Add requirements.txt
-  ([`e560323`](https://github.com/TimKleindick/general_manager/commit/e560323e425267461f52fd4ba9482840dc3868f9))
+  ([`cf1e0ce`](https://github.com/TimKleindick/general_manager/commit/cf1e0ce3035ceb1d6565127832f2176fe0ea0c42))
 
 - Add support for not GeneralManager Foreignkeys
-  ([`0783cbc`](https://github.com/TimKleindick/general_manager/commit/0783cbcb6137f97f4bb702577938eb7daeb3c28b))
+  ([`8b2aeba`](https://github.com/TimKleindick/general_manager/commit/8b2aebab7b28d90d75e8231572785e7eb96b187f))
 
 - Add tests for managerBasedPermission
-  ([`f95b8cf`](https://github.com/TimKleindick/general_manager/commit/f95b8cf25e74d257359e22da874cad58553b0e55))
+  ([`bf77ea9`](https://github.com/TimKleindick/general_manager/commit/bf77ea9b3760ca08fad226994c0b0191f934efba))
 
 - Auto redirect to /graphql url
-  ([`ec180a8`](https://github.com/TimKleindick/general_manager/commit/ec180a81ad4687fc9f6bbdcbb3557abadcef0229))
+  ([`ea8742e`](https://github.com/TimKleindick/general_manager/commit/ea8742e6d2375a40508955fb201cc46ecdbd9fcd))
 
 - Base permission tests
-  ([`5951ca2`](https://github.com/TimKleindick/general_manager/commit/5951ca210745a7a41906a5b62b5bd3fa8fe97baa))
+  ([`d150702`](https://github.com/TimKleindick/general_manager/commit/d150702edad83c73f04b0e208b196aa34a9894f0))
 
 - Create auto mutations for every generalManagerClass
-  ([`375cfd9`](https://github.com/TimKleindick/general_manager/commit/375cfd9b5a62affa3b24c3f349e5ac16190a514b))
+  ([`4cf0a1e`](https://github.com/TimKleindick/general_manager/commit/4cf0a1e8d116020a21c43d2b465d795f9c69ffee))
 
 - Default graphql mutations for manager class project
-  ([`d18c456`](https://github.com/TimKleindick/general_manager/commit/d18c456e3cf7b362403b4513839488eacfab0e83))
+  ([`fc51422`](https://github.com/TimKleindick/general_manager/commit/fc51422a804c08ea0ea68afcd68d87e7a8324a0c))
 
 - Dependency based cache invalidation
-  ([`e4aec34`](https://github.com/TimKleindick/general_manager/commit/e4aec34dce69e8f65213304cd1cca87581f0d579))
+  ([`841d0ea`](https://github.com/TimKleindick/general_manager/commit/841d0ea4c9d7279fa186657a2b19d8a53a48f1dd))
 
 - Enable __based_on__ permissions
-  ([`228a740`](https://github.com/TimKleindick/general_manager/commit/228a740e1bcc640d6cbcd6add24f7290394680ba))
+  ([`587eae1`](https://github.com/TimKleindick/general_manager/commit/587eae1aef6e0f181f3617e212531b5f8c7fbfe1))
 
 - Enable Object Input Types for schema
-  ([`d9527f8`](https://github.com/TimKleindick/general_manager/commit/d9527f8e9f6e11b2accae2ae0d89a7c9f4c87e81))
+  ([`e09cad8`](https://github.com/TimKleindick/general_manager/commit/e09cad8ce89d8bcf04eac884827fb12d50f29bf7))
 
 - filter and exclude method get better hints in schema
 
 - Enable pagignation
-  ([`cc719ad`](https://github.com/TimKleindick/general_manager/commit/cc719adbcf226c48e03f73659488a22c180d74bd))
+  ([`43f678b`](https://github.com/TimKleindick/general_manager/commit/43f678b44a25a5f74b4fc8c354b2200f96bfa982))
 
 - Enable pickling of measurement objects
-  ([`ae67d30`](https://github.com/TimKleindick/general_manager/commit/ae67d30a64e8c9ded4c1b091f06ab5db042a25f5))
+  ([`c5e2b14`](https://github.com/TimKleindick/general_manager/commit/c5e2b14d38a3591f1047f52de968f6120b594163))
 
 - Graphqlmutation decorator to create custom mutations
-  ([`16c7042`](https://github.com/TimKleindick/general_manager/commit/16c7042730477c0e84259d039997fa7f3a22d7bc))
+  ([`19068f1`](https://github.com/TimKleindick/general_manager/commit/19068f12c666f1dadf37c388365507cbda4b0a88))
 
 - Implement __or__ on calculationInterface
-  ([`a412b55`](https://github.com/TimKleindick/general_manager/commit/a412b55c20279eec3df6144231cf68fbd7ba7626))
+  ([`720b0a8`](https://github.com/TimKleindick/general_manager/commit/720b0a880ee7375db88dbba51df31e4dc926dc4d))
 
 - Implement caching decorator and auto use for graphQlProperties
-  ([`7005991`](https://github.com/TimKleindick/general_manager/commit/7005991d29063d0f2bc13fdd492daf54a170db77))
+  ([`8c995c1`](https://github.com/TimKleindick/general_manager/commit/8c995c1509c98b9feb36cd44411df77d953308c8))
+
+- Implement CustomJSONEncoder for serializing datetime and GeneralManager objects
+  ([`c5af723`](https://github.com/TimKleindick/general_manager/commit/c5af723b8b68d4dbcae4bc8989664889c52c3c83))
 
 - Implement group_by for buckets
-  ([`746d554`](https://github.com/TimKleindick/general_manager/commit/746d5541aa487b481339930817663eab54f39ec9))
+  ([`74fd8da`](https://github.com/TimKleindick/general_manager/commit/74fd8daa36dde5ef28bc542b7409f9212979cf5c))
+
+- Implement make_cache_key function for generating cache keys from function arguments
+  ([`a730133`](https://github.com/TimKleindick/general_manager/commit/a730133d46e73996a9198bb5e2abcc852b198713))
 
 - Implement path tracing for generalManager
-  ([`b39dd0c`](https://github.com/TimKleindick/general_manager/commit/b39dd0c9da82a941370d93784448a7c2a001ab19))
+  ([`6967a2c`](https://github.com/TimKleindick/general_manager/commit/6967a2c8e63f1bb00f018cdb838c25ab9cb70f6a))
 
 - Implement sort by
-  ([`b8b36f0`](https://github.com/TimKleindick/general_manager/commit/b8b36f0c8908e03fcf30108d8c1cd1b5732d13fe))
+  ([`84402c6`](https://github.com/TimKleindick/general_manager/commit/84402c607c3abfff28594fe421206a31e15a5e3c))
+
+- Implement sum, max, and min handlers in rule system
+  ([`763d47b`](https://github.com/TimKleindick/general_manager/commit/763d47b1db9f515b60370222d098d4b826790984))
 
 - Is now installable
-  ([`db32177`](https://github.com/TimKleindick/general_manager/commit/db32177e0c438b98fad26f18f71a60968454b6de))
+  ([`7a6463d`](https://github.com/TimKleindick/general_manager/commit/7a6463de1f1158246986e4acbddb6bcf0ae2eb22))
 
 - Permission checks for update/create/deactivate
-  ([`35ccc48`](https://github.com/TimKleindick/general_manager/commit/35ccc48ec342b809dc58617b7a8547bd71df29f6))
+  ([`fba9df0`](https://github.com/TimKleindick/general_manager/commit/fba9df06d207bb4d826aac91fe1ef4ebedab8df0))
 
 - Read permissions for graphql interface
-  ([`c48d6a2`](https://github.com/TimKleindick/general_manager/commit/c48d6a27486c645f3c85313a9995a65b047e4a98))
+  ([`f822eeb`](https://github.com/TimKleindick/general_manager/commit/f822eeb824d94c163fc0f0f8e18a2b8f9769b79e))
 
 - permission_functions with single data check and overall filter method to increase performance -
   define syntax for manager based permissions - add permission data manager to handle change
   requests
 
 - Set cache backend settings
-  ([`f6364d0`](https://github.com/TimKleindick/general_manager/commit/f6364d0566015d553f58dc33bdc20180193ef54e))
+  ([`aa6b935`](https://github.com/TimKleindick/general_manager/commit/aa6b935d2cd4c61aa74d34aba5b90d94259eec07))
 
 - Update to python 3.13
-  ([`3f351b8`](https://github.com/TimKleindick/general_manager/commit/3f351b87681cd9b5841605fac7a838a859c69019))
+  ([`29d6c57`](https://github.com/TimKleindick/general_manager/commit/29d6c572dd74f1b3301efccd6e44522be5ddb5de))
 
 ### Refactoring
 
+- Cachedecorator for better maintainability
+  ([`f392068`](https://github.com/TimKleindick/general_manager/commit/f3920683d7b747a941b4ccea0e3da51336f0ac2a))
+
+- Change test case class from django SimpleTestCase to unittest TestCase
+  ([`24ff48c`](https://github.com/TimKleindick/general_manager/commit/24ff48c138ea0fe573083969ce924b11262f24c3))
+
+- Clean up filterParser.py
+  ([`7650a49`](https://github.com/TimKleindick/general_manager/commit/7650a495c5cdc940c62d08e2956ee4546aeac3df))
+
 - Graphql api
-  ([`a28b109`](https://github.com/TimKleindick/general_manager/commit/a28b109add342e1ae25fba217526e4d8565d7d26))
+  ([`9f18407`](https://github.com/TimKleindick/general_manager/commit/9f184076fb519d82208057c5f2e94214ea7df041))
+
+- Handler for DRY and maintainability
+  ([`7f49a30`](https://github.com/TimKleindick/general_manager/commit/7f49a30c07d019ea550971a4acd1cd30e78508fa))
+
+- Improve datetime handling and random instance creation in factories
+  ([`1c66e58`](https://github.com/TimKleindick/general_manager/commit/1c66e584c67a2bc5420a6a779df772f1b065fec5))
 
 - Move parse filter to auxiliary methods
-  ([`87e66a6`](https://github.com/TimKleindick/general_manager/commit/87e66a68776913acfc432e7dc94c61667fbe81a3))
+  ([`eab0d49`](https://github.com/TimKleindick/general_manager/commit/eab0d49539ba80a94f1b6bde108a9c52a64c36ab))
+
+- Move PathMap and PathTracer classes from cache to auxiliary
+  ([`d53227b`](https://github.com/TimKleindick/general_manager/commit/d53227b18113673fd6b0d1da12fc5b5bdb14ea1b))
+
+- Remove commented steps in cached decorator for cleaner code
+  ([`38b8c23`](https://github.com/TimKleindick/general_manager/commit/38b8c2345bda4f157d6af34681f36c4228286f51))
+
+- Remove duplicate imports and improve DependencyTracker cleanup
+  ([`2bc2326`](https://github.com/TimKleindick/general_manager/commit/2bc23264d0fb8e0800213b8bdbb02b8f2ddc5015))
+
+- Remove getThreshold method and inline threshold calculations for clarity
+  ([`879637e`](https://github.com/TimKleindick/general_manager/commit/879637efe2b82bdf718b4c0cdd0e0d0ef6cd1bc9))
+
+- Remove type ignore comments from _generate, _create, and _build methods
+  ([`3a0b32a`](https://github.com/TimKleindick/general_manager/commit/3a0b32a74484af0202f52ff75c1abf8ae81309f8))
+
+- Remove unnecessary import of general_manager_name in cacheTracker.py
+  ([`33a29b4`](https://github.com/TimKleindick/general_manager/commit/33a29b47781df1de48d31d9b5e71bc43a86be8ab))
+
+- Remove unnecessary TYPE_CHECKING imports in pathMapping.py
+  ([`cd5ad5f`](https://github.com/TimKleindick/general_manager/commit/cd5ad5fc2c0f1060d48f2a13b219ecd0184f3d7d))
+
+- Remove unused import of defaultdict in cacheTracker.py
+  ([`082b7e5`](https://github.com/TimKleindick/general_manager/commit/082b7e5d5a84318b291daffa00f4b68f1c3b1785))
+
+- Remove unused imports and obsolete test
+  ([`386cd08`](https://github.com/TimKleindick/general_manager/commit/386cd0891706b05326a1d16adda846ca094b4fc0))
+
+- Remove unused imports and update docstrings for clarity
+  ([`94ba4f4`](https://github.com/TimKleindick/general_manager/commit/94ba4f43bc8bcd0ce2b5ea43d10da77578ac55cd))
+
+- Rename trackMe method to track in DependencyTracker for consistency
+  ([`5e265e6`](https://github.com/TimKleindick/general_manager/commit/5e265e624e12db67065b2a949b6626a6ae91a02a))
+
+- Simplify setup for CustomJSONEncoderTests by removing unnecessary module patching
+  ([`fb6c0c4`](https://github.com/TimKleindick/general_manager/commit/fb6c0c4600244977515267c8f0ff5506bca739af))
 
 - Strukture to match PEP 420 / PEP 517
-  ([`dbbf170`](https://github.com/TimKleindick/general_manager/commit/dbbf17037b2e472877202e8123b74541fbd5f484))
+  ([`6ac5b90`](https://github.com/TimKleindick/general_manager/commit/6ac5b90f6fd448f6eca5784c3f9edfafdb60c750))
+
+- Update import path for factory methods and add factoryMethods module
+  ([`7d7e75c`](https://github.com/TimKleindick/general_manager/commit/7d7e75cc71a284193ac74ff8799d1791d0808771))
+
+- Update test cases to improve clarity and consistency
+  ([`dd9b0c8`](https://github.com/TimKleindick/general_manager/commit/dd9b0c83b522f42586784b34c288c4ed1af9bcd4))
+
+### Testing
+
+- 100% coverage for input
+  ([`e143c18`](https://github.com/TimKleindick/general_manager/commit/e143c18f32fd6559d7840638a8d9bdb67af4d864))
+
+- Add comprehensive tests for cache decorator functionality
+  ([`2c5c8d7`](https://github.com/TimKleindick/general_manager/commit/2c5c8d7979fbc1734c55b0675b40a93f93202c10))
+
+- Add comprehensive tests for cache management functions
+  ([`4acbc1e`](https://github.com/TimKleindick/general_manager/commit/4acbc1e5fc6a4947f4c28cd7a115770ee5eb4d97))
+
+- Add comprehensive tests for LenHandler, SumHandler, MaxHandler, and MinHandler
+  ([`3a6d54c`](https://github.com/TimKleindick/general_manager/commit/3a6d54ce5a1cdf1f4367106d3033969ce4d2ed00))
+
+- Add comprehensive unit tests for make_cache_key function
+  ([`e59076b`](https://github.com/TimKleindick/general_manager/commit/e59076b87d22a420ebcc46125f353ec58bd715cf))
+
+- Add edge cases for gte/lte/exact
+  ([`f97ff6a`](https://github.com/TimKleindick/general_manager/commit/f97ff6aee8712d89e8a8ffab3151567c51087d6f))
+
+- Add signal handling tests for dataChange decorator
+  ([`63231e5`](https://github.com/TimKleindick/general_manager/commit/63231e5b3fb209b5b160d4382d8e5ab5c389e5fe))
+
+- Add some graphql tests
+  ([`7b2f643`](https://github.com/TimKleindick/general_manager/commit/7b2f6431cfdaa493395c0caa29827aff4db2d95e))
+
+- Add test for make_cache_key with kwargs as args
+  ([`6718e64`](https://github.com/TimKleindick/general_manager/commit/6718e641b72e7ac89e837a0cdbda16b403c688e9))
+
+- Add type ignore comments for evaluate method in TestGetFieldValue and TestRelationFieldValue
+  ([`04990c4`](https://github.com/TimKleindick/general_manager/commit/04990c45c6a06d29dea458f7c54074458979ad27))
+
+- Add unit test for nested cache decorator with inner cache hit
+  ([`f4ba0ed`](https://github.com/TimKleindick/general_manager/commit/f4ba0ede5d9bf1ccaf1b55bb4ff9892dc5644435))
+
+- Add unit tests for acquire and release lock functionality
+  ([`dad2529`](https://github.com/TimKleindick/general_manager/commit/dad252962460a037f03f2d9377c9d941747d3dbf))
+
+- Add unit tests for DependencyTracker functionality
+  ([`f5a9bf4`](https://github.com/TimKleindick/general_manager/commit/f5a9bf4937a96c1a7c4d901aca217e0173bcf4a9))
+
+- Add unit tests for LazyMeasurement, LazyDeltaDate, and LazyProjectName
+  ([`b4c0608`](https://github.com/TimKleindick/general_manager/commit/b4c060893aaf331a481fa18935d753371b98656e))
+
+- Add unit tests for ModelDependencyCollector functionality
+  ([`d01229e`](https://github.com/TimKleindick/general_manager/commit/d01229ef6f5e15060bc8030e0eb8a1c551679757))
+
+- Change TestCase to SimpleTestCase for DependencyTracker tests
+  ([`1af6296`](https://github.com/TimKleindick/general_manager/commit/1af629629c002af8dc21a431bc098641fd3b59bb))
+
+- Enhance test factories with ManyToManyField support and refactor field value retrieval
+  ([`6759589`](https://github.com/TimKleindick/general_manager/commit/675958961a1954acb089cd0cbfeea48de98f9b1e))
+
+- Ensure dummy instance is included in ManyToManyField results only if not empty
+  ([`e597dc7`](https://github.com/TimKleindick/general_manager/commit/e597dc77157f150fb0da96d4361a60fd8b2a9a66))
+
+- Filterparser for full coverage
+  ([`005c4f2`](https://github.com/TimKleindick/general_manager/commit/005c4f29be04416987de1d5e1d06a8f36153e8d6))
+
+- Fix test for removed required, editable, defaultValue
+  ([`5745993`](https://github.com/TimKleindick/general_manager/commit/5745993ece5aa9ee32b0bd94712d2093928d459d))
+
+- Fix test_m2m_without_factory to use correct dummy instance
+  ([`4d37220`](https://github.com/TimKleindick/general_manager/commit/4d372206bf2824f28db927c38b3e7a4241005d29))
+
+- Implement comprehensive tests for get_field_value function across various field types
+  ([`f0a1351`](https://github.com/TimKleindick/general_manager/commit/f0a1351775faeadb3b39f59da7a6afa4f0acbcab))
+
+- Improve error messages for sum, max, and min handlers for clarity and consistency + add edge cases
+  ([`fcaeabc`](https://github.com/TimKleindick/general_manager/commit/fcaeabce911e0a1847706eb98744a564b48213ea))
+
+- Jsonencoder
+  ([`9c68b02`](https://github.com/TimKleindick/general_manager/commit/9c68b02e7c1320630f7a16376443c72b11eb0ae3))
+
+- Nonetozero for full coverage
+  ([`04974e8`](https://github.com/TimKleindick/general_manager/commit/04974e89512507d2af62d3d32d0493301f2e808d))
+
+- Other numeric types for noneToZero
+  ([`cc30d84`](https://github.com/TimKleindick/general_manager/commit/cc30d846dd34d139a7c3b2041415c9d8468212f8))
+
+- Pytest config in vscode
+  ([`c81f376`](https://github.com/TimKleindick/general_manager/commit/c81f37606742347fa673d488c8edfcf987aa2ac4))
+
+- Refactor tests to improve readability and consistency in exception handling
+  ([`52e2a20`](https://github.com/TimKleindick/general_manager/commit/52e2a203b66ad57c39cae4c92d967e513b3cc9a1))
+
+- Rename test for clarity in GenericCacheInvalidationTests
+  ([`9cc2333`](https://github.com/TimKleindick/general_manager/commit/9cc2333bd8ef0a00f7d5b9d69a5dda98eb9ed13e))
+
+- Simplify exception handling in make_cache_key tests using combined context manager
+  ([`d1df6d4`](https://github.com/TimKleindick/general_manager/commit/d1df6d42a2edd838f5251b24e27010aef9395947))
+
+- Update exception type in dependency tracker test
+  ([`a5baa85`](https://github.com/TimKleindick/general_manager/commit/a5baa850f9aaf1e5309aaa3e5ceb7e23a6e8c396))
