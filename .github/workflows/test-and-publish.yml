@@ -14,8 +14,6 @@ jobs:
   test:
     name: 🧪 Run Tests
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -47,6 +45,17 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+
       # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
         name: Semantic Version Release
