@@ -68,6 +68,7 @@ jobs:
         uses: python-semantic-release/python-semantic-release@v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          root_options: "--ignore-token-for-push"
           build: "false"
           git_committer_name:  "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
