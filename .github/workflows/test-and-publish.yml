@@ -49,7 +49,7 @@ jobs:
       - name: 🚪 Start SSH-Agent
         uses: webfactory/ssh-agent@v0.9.1
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
 
       # 2) Checkout via SSH
       - name: Checkout Repository über SSH
@@ -57,7 +57,7 @@ jobs:
         with:
           # SSH statt HTTPS
           repository: TimKleindick/general_manager
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
           # verhindert, dass GITHUB_TOKEN überschreibt
           persist-credentials: false
           fetch-depth: 0
