@@ -63,7 +63,12 @@ jobs:
       - name: Ensure SSH-Remote for push
         run: git remote set-url origin git@github.com:${{ github.repository }}.git
 
-
+      - name: Add GitHub to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "Host github.com\n  StrictHostKeyChecking no\n" >> ~/.ssh/config
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+        
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
