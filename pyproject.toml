@@ -53,21 +53,14 @@ where = [
 ]
 
 [tool.semantic_release]
-allow_zero_version = true
-major_on_zero     = false
-
-# Wo die Version upgedated wird
-version_toml      = ["pyproject.toml:project.version"]
-
-# Auf welchem Branch Releases laufen sollen
-branch            = "main"
-
-# Build- und Upload-Schritte (wie gehabt)
-build_command     = "python -m build"
-upload_to_PyPI    = true
-upload_to_release = true
-ignore_token_for_push = true
+allow_zero_version    = true
+major_on_zero         = false
+version_toml          = ["pyproject.toml:project.version"]
+branch                = "main"
+build_command         = "python -m build"
+upload_to_PyPI        = true
+upload_to_release     = true
 
 [tool.semantic_release.remote]
-# schalte ggf. auf SSH-URL um, wenn du mehrere Remotes hast:
-url = "git@github.com:TimKleindick/general_manager.git"
+url                   = "git@github.com:TimKleindick/general_manager.git"
+ignore_token_for_push = true
