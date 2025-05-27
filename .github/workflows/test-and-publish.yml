@@ -14,6 +14,10 @@ jobs:
   test:
     name: 🧪 Run Tests
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -68,7 +72,6 @@ jobs:
         uses: python-semantic-release/python-semantic-release@v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          ignore_token_for_push: true
           build: "false"
           git_committer_name:  "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
