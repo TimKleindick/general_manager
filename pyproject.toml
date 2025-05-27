@@ -62,5 +62,4 @@ upload_to_PyPI        = true
 upload_to_release     = true
 
 [tool.semantic_release.remote]
-url                   = "git@github.com:TimKleindick/general_manager.git"
 ignore_token_for_push = true
