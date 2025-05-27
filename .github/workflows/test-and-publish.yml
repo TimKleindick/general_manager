@@ -36,6 +36,7 @@ jobs:
         
   release:
     name: 🚀 Release
+    if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
     concurrency:
