@@ -67,3 +67,7 @@ build_command     = "python -m build"
 upload_to_PyPI    = true
 upload_to_release = true
 ignore_token_for_push = true
+
+[tool.semantic_release.remote]
+# schalte ggf. auf SSH-URL um, wenn du mehrere Remotes hast:
+url = "git@github.com:TimKleindick/general_manager.git"
