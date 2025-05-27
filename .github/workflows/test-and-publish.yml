@@ -53,7 +53,13 @@ jobs:
         uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
-
+      
+      - name: Add GitHub to SSH known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+      
       # 2) Checkout via SSH
       - name: Checkout Repository über SSH
         uses: actions/checkout@v4
