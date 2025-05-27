@@ -53,12 +53,7 @@ jobs:
         uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
-      
-      - name: Add GitHub to SSH known_hosts for container
-        run: |
-          mkdir -p $RUNNER_TEMP/_github_home/.ssh
-          ssh-keyscan github.com >> $RUNNER_TEMP/_github_home/.ssh/known_hosts
-      
+
       # 2) Checkout via SSH
       - name: Checkout Repository über SSH
         uses: actions/checkout@v4
@@ -68,6 +63,13 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ github.ref }}  
+      
+      - name: Add GitHub.com to SSH known_hosts
+        run: |
+          mkdir -p $HOME/.ssh
+          chmod 700 $HOME/.ssh
+          ssh-keyscan github.com >> $HOME/.ssh/known_hosts
+          chmod 644 $HOME/.ssh/known_hosts
 
       # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
