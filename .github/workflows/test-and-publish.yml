@@ -54,11 +54,10 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
       
-      - name: Add GitHub to SSH known_hosts
+      - name: Add GitHub to SSH known_hosts for container
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          mkdir -p $RUNNER_TEMP/_github_home/.ssh
+          ssh-keyscan github.com >> $RUNNER_TEMP/_github_home/.ssh/known_hosts
       
       # 2) Checkout via SSH
       - name: Checkout Repository über SSH
