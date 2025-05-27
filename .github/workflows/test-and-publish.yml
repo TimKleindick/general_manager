@@ -57,12 +57,11 @@ jobs:
       - name: Checkout Repository über SSH
         uses: actions/checkout@v4
         with:
-          # SSH statt HTTPS
           repository: TimKleindick/general_manager
           ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
-          # verhindert, dass GITHUB_TOKEN überschreibt
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.ref }}  
 
       # 1) Semantic Release nur zum Bump & Taggen
       - id: semantic_release
