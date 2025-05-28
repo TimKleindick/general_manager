@@ -56,7 +56,10 @@ class Measurement:
 
     @classmethod
     def from_string(cls, value: str) -> Measurement:
-        value, unit = value.split(" ")
+        splitted = value.split(" ")
+        if len(splitted) != 2:
+            raise ValueError("String must be in the format 'value unit'.")
+        value, unit = splitted
         return cls(value, unit)
 
     @staticmethod
@@ -207,7 +210,7 @@ class Measurement:
 
         # Überprüfen, ob `other` ein Measurement-Objekt ist
         if not isinstance(other, Measurement):
-            return NotImplemented
+            raise TypeError("Comparison is only allowed between Measurement instances.")
         try:
             # Convert `other` to the same units as `self`
             other_converted: pint.Quantity = other.quantity.to(self.quantity.units)  # type: ignore
@@ -239,3 +242,6 @@ class Measurement:
 
     def __ge__(self, other: Any) -> bool:
         return self._compare(other, ge)
+
+    def __hash__(self) -> int:
+        return hash((self.quantity.magnitude, str(self.quantity.units)))
