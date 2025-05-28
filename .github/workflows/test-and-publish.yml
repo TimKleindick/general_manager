@@ -84,7 +84,7 @@ jobs:
       - name: Output released version
         #if: ${{ steps.semantic_release.outputs.released == 'true' }}
         run: |
-          echo "Released version: ${{ steps.semantic_release.outputs.new_release_version }}"
+          echo "Released version: ${{ steps.semantic_release.outputs.new_release_git_tag }}"
 
       - id: semantic_changelog
         name: Semantic Changelog
