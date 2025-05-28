@@ -79,9 +79,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          semantic-release changelog
           semantic-release version
-          semantic-release publish
+
+      - name: Output released version
+        if: ${{ steps.semantic_release.outputs.released == 'true' }}
+        run: echo "Released version: ${{ steps.semantic_release.outputs.new_release_version }}"
+
+      - id: semantic_changelog
+        name: Semantic Changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          semantic-release changelog --post-to-release-tag !!VERSION FROM RELEASE
 
       # 4) Build nur, wenn wirklich was released wurde
       - id: build
@@ -89,10 +98,10 @@ jobs:
         name: Build Project
         run: python -m build
 
-      # 5) Upload nur, wenn wirklich was released wurde
-      - name: Publish to PyPI
-        if: ${{ steps.semantic_release.outputs.released == 'true' }}
-        run: twine upload dist/*
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+#      # 5) Upload nur, wenn wirklich was released wurde
+#      - name: Publish to PyPI
+#        if: ${{ steps.semantic_release.outputs.released == 'true' }}
+#        run: twine upload dist/*
+#        env:
+#          TWINE_USERNAME: __token__
+#          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
