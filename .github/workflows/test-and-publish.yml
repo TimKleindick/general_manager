@@ -91,7 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          semantic-release changelog --post-to-release-tag ${{ steps.semantic_release.outputs.new_release_version }}
+          semantic-release changelog --post-to-release-tag ${{ git describe --tags --abbrev=0 }}
 
       # 4) Build nur, wenn wirklich was released wurde
       - id: build
