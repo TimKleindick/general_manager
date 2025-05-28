@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.4.5 (2025-05-28)
+
+### Bug Fixes
+
+- Improve string parsing and comparison error handling in Measurement class
+  ([`53f7543`](https://github.com/TimKleindick/general_manager/commit/53f7543f0bba0d9221f5df6d861dc34c473ba368))
+
+### Testing
+
+- Enhance Measurement class tests for addition, comparison, and pickling
+  ([`c1acda2`](https://github.com/TimKleindick/general_manager/commit/c1acda27c1b36a4c1d98a7f2b55853e651990f52))
+
+
 ## v0.4.4 (2025-05-28)
 
 ### Bug Fixes
