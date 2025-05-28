@@ -45,6 +45,15 @@ class MeasurementTestCase(TestCase):
         result = m1 + m2
         self.assertEqual(str(result), "1.5 kilometer")
 
+        result = m2 + m1  # Commutative property
+        self.assertEqual(str(result), "1500 meter")
+
+        result = 0 + m1
+        self.assertEqual(str(result), "1 kilometer")
+
+        with self.assertRaises(TypeError):
+            _ = 10 + m1  # Adding a number to a Measurement should raise an error
+
     def test_subtraction_different_units_same_dimension(self):
         m1 = Measurement(2, "kilometer")  # 2000 meter
         m2 = Measurement(500, "meter")
@@ -138,3 +147,74 @@ class MeasurementTestCase(TestCase):
 
                     with self.assertRaises(ValueError):
                         result_sub = measurement_1 - measurement_2
+
+    def test_pickleable(self):
+        import pickle
+
+        m = Measurement(10, "meter")
+        m_pickled = pickle.dumps(m)
+        m_unpickled = pickle.loads(m_pickled)
+        self.assertEqual(str(m), str(m_unpickled))
+        self.assertEqual(m.quantity.units, m_unpickled.quantity.units)
+        self.assertEqual(m.quantity.magnitude, m_unpickled.quantity.magnitude)
+
+    def test_equality(self):
+        m1 = Measurement(10, "meter")
+        m2 = Measurement(10, "meter")
+        m3 = Measurement(5, "meter")
+
+        self.assertEqual(m1, m2)
+        self.assertNotEqual(m1, m3)
+        with self.assertRaises(ValueError):
+            _ = m1 == "not a measurement"
+        with self.assertRaises(TypeError):
+            _ = m1 == 10
+        with self.assertRaises(ValueError):
+            _ = m1 == Measurement(10, "second")
+
+    def test_inequality(self):
+        m1 = Measurement(10, "meter")
+        m2 = Measurement(10, "meter")
+        m3 = Measurement(5, "meter")
+
+        self.assertFalse(m1 != m2)
+        self.assertTrue(m1 != m3)
+        with self.assertRaises(ValueError):
+            _ = m1 != "not a measurement"
+        with self.assertRaises(TypeError):
+            _ = m1 != 10
+        with self.assertRaises(ValueError):
+            _ = m1 != Measurement(10, "second")
+
+    def test_comparison(self):
+        m1 = Measurement(10, "meter")
+        m2 = Measurement(10, "meter")
+        m3 = Measurement(5, "meter")
+
+        self.assertTrue(m1 == m2)
+        self.assertFalse(m1 < m2)
+        self.assertFalse(m1 > m2)
+        self.assertTrue(m1 >= m2)
+        self.assertTrue(m1 <= m2)
+
+        self.assertTrue(m1 > m3)
+        self.assertFalse(m1 < m3)
+        self.assertTrue(m1 >= m3)
+        self.assertFalse(m1 <= m3)
+
+        with self.assertRaises(ValueError):
+            _ = m1 < "not a measurement"
+        with self.assertRaises(TypeError):
+            _ = m1 < 10
+        with self.assertRaises(ValueError):
+            _ = m1 < Measurement(10, "second")
+
+    def test_hash(self):
+        m1 = Measurement(10, "meter")
+        m2 = Measurement(10, "meter")
+        m3 = Measurement(5, "meter")
+
+        self.assertEqual(hash(m1), hash(m2))
+        self.assertNotEqual(hash(m1), hash(m3))
+        self.assertNotEqual(hash(m1), hash(Measurement(10, "second")))
+        self.assertNotEqual(hash(m1), hash("not a measurement"))
