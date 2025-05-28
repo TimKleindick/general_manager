@@ -56,6 +56,18 @@ class Measurement:
 
     @classmethod
     def from_string(cls, value: str) -> Measurement:
+        """
+        Creates a Measurement instance from a string in the format 'value unit'.
+        
+        Args:
+            value: A string containing a numeric value and a unit separated by a space (e.g., '10.5 kg').
+        
+        Returns:
+            A Measurement instance representing the parsed value and unit.
+        
+        Raises:
+            ValueError: If the input string does not contain exactly two parts separated by a space.
+        """
         splitted = value.split(" ")
         if len(splitted) != 2:
             raise ValueError("String must be in the format 'value unit'.")
@@ -205,6 +217,25 @@ class Measurement:
         return f"Measurement({self.quantity.magnitude}, '{self.quantity.units}')"
 
     def _compare(self, other: Any, operation: Callable[..., bool]) -> bool:
+        """
+        Compares this Measurement with another using the specified comparison operation.
+        
+        If `other` is a string, it is parsed into a Measurement. Raises a TypeError if
+        `other` is not a Measurement instance. Converts `other` to this instance's unit
+        before applying the comparison. Raises a ValueError if the measurements have
+        incompatible dimensions.
+        
+        Args:
+            other: The object to compare with, either a Measurement or a string in the format "value unit".
+            operation: A callable that takes two magnitudes and returns a boolean result.
+        
+        Returns:
+            The result of the comparison operation.
+        
+        Raises:
+            TypeError: If `other` is not a Measurement instance or a valid string representation.
+            ValueError: If the measurements have different dimensions and cannot be compared.
+        """
         if isinstance(other, str):
             other = Measurement.from_string(other)
 
@@ -241,7 +272,17 @@ class Measurement:
         return self._compare(other, gt)
 
     def __ge__(self, other: Any) -> bool:
+        """
+        Returns True if this measurement is greater than or equal to another measurement.
+        
+        Comparison is performed after converting the other operand to the same unit. Raises a TypeError if the other object is not a Measurement instance or a compatible string, or a ValueError if the units are not compatible.
+        """
         return self._compare(other, ge)
 
     def __hash__(self) -> int:
+        """
+        Returns a hash value based on the magnitude and unit of the measurement.
+        
+        This enables Measurement instances to be used in hash-based collections such as sets and dictionaries.
+        """
         return hash((self.quantity.magnitude, str(self.quantity.units)))
