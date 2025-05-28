@@ -82,7 +82,7 @@ jobs:
           semantic-release version
 
       - name: Output released version
-        if: ${{ steps.semantic_release.outputs.released == 'true' }}
+        #if: ${{ steps.semantic_release.outputs.released == 'true' }}
         run: echo "Released version: ${{ steps.semantic_release.outputs.new_release_version }}"
 
       - id: semantic_changelog
