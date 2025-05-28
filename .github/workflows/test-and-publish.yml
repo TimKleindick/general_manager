@@ -83,14 +83,15 @@ jobs:
 
       - name: Output released version
         #if: ${{ steps.semantic_release.outputs.released == 'true' }}
-        run: echo "Released version: ${{ steps.semantic_release.outputs.new_release_version }}"
+        run: |
+          echo "Released version: ${{ steps.semantic_release.outputs.new_release_version }}"
 
       - id: semantic_changelog
         name: Semantic Changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          semantic-release changelog --post-to-release-tag !!VERSION FROM RELEASE
+          semantic-release changelog --post-to-release-tag ${{ steps.semantic_release.outputs.new_release_version }}
 
       # 4) Build nur, wenn wirklich was released wurde
       - id: build
