@@ -18,7 +18,7 @@ from simple_history.models import HistoricalRecords  # type: ignore
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
 from decimal import Decimal
-from general_manager.factory.factories import AutoFactory
+from general_manager.factory.autoFactory import AutoFactory
 from django.core.exceptions import ValidationError
 from general_manager.interface.baseInterface import (
     InterfaceBase,
@@ -647,10 +647,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     ) -> dict[str, list[Any]]:
         """
         Merges filter definitions by combining existing filter criteria with additional keyword arguments.
-        
+
         Args:
             basis: A dictionary mapping filter keys to lists of values.
-        
+
         Returns:
             A dictionary where each key maps to a list of all values from both the original basis and the new keyword arguments.
         """
@@ -666,7 +666,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
         Returns a new bucket containing manager instances matching the given filter criteria.
-        
+
         Additional filter keyword arguments are merged with existing filters to refine the queryset.
         """
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
@@ -680,10 +680,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
         Returns a new bucket excluding items matching the given filter criteria.
-        
+
         Args:
             **kwargs: Field lookups to exclude from the queryset.
-        
+
         Returns:
             A DatabaseBucket containing items not matching the specified filters.
         """
