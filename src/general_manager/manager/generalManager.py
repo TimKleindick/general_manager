@@ -128,15 +128,20 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
 
     @staticmethod
     def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+        output = {}
         for key, value in kwargs.items():
             if isinstance(value, GeneralManager):
-                kwargs[key] = value.identification
+                output[key] = value.identification
             elif isinstance(value, list):
-                kwargs[key] = [
-                    v.identification for v in value if isinstance(v, GeneralManager)
+                output[key] = [
+                    v.identification if isinstance(v, GeneralManager) else v
+                    for v in value
                 ]
             elif isinstance(value, tuple):
-                kwargs[key] = tuple(
-                    v.identification for v in value if isinstance(v, GeneralManager)
+                output[key] = tuple(
+                    v.identification if isinstance(v, GeneralManager) else v
+                    for v in value
                 )
-        return kwargs if kwargs else None
+            else:
+                output[key] = value
+        return output if output else None
