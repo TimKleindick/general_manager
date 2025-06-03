@@ -177,3 +177,21 @@ class GeneralManagerTestCase(TestCase):
             self.assertEqual(len(self.post_list), 1)
             self.assertEqual(self.post_list[0]["action"], "update")
             self.assertEqual(self.post_list[0]["name"], "New Manager")
+
+    def test_classmethod_deactivate(self):
+        # Test the update class method
+        manager_obj = self.manager()
+        with (
+            patch.object(
+                DummyInterface, "deactivate", return_value={"id": "new_id"}
+            ) as mock_create,
+        ):
+            new_manager = manager_obj.deactivate(creator_id=1)
+            mock_create.assert_called_once_with(creator_id=1, history_comment=None)
+            self.assertIsInstance(new_manager, GeneralManager)
+            self.assertEqual(len(self.pre_list), 1)
+            self.assertEqual(self.pre_list[0]["action"], "deactivate")
+            self.assertEqual(self.pre_list[0]["instance"], manager_obj)
+
+            self.assertEqual(len(self.post_list), 1)
+            self.assertEqual(self.post_list[0]["action"], "deactivate")
