@@ -1,7 +1,7 @@
 from django.test import TransactionTestCase
 from django.db import models, connection
 from general_manager.factory.autoFactory import AutoFactory
-from typing import Any
+from typing import Any, Iterable
 
 
 class DummyInterface:
@@ -55,11 +55,18 @@ class AutoFactoryTestCase(TransactionTestCase):
             schema.create_model(DummyModel)
             schema.create_model(DummyModel2)
 
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        with connection.schema_editor() as schema:
+            schema.delete_model(DummyModel)
+            schema.delete_model(DummyModel2)
+
     def setUp(self) -> None:
         factory_attributes = {}
         factory_attributes["interface"] = DummyInterface
         factory_attributes["Meta"] = type("Meta", (), {"model": DummyModel})
-        self.factory_class = type(f"DummyFactory", (AutoFactory,), factory_attributes)
+        self.factory_class = type("DummyFactory", (AutoFactory,), factory_attributes)
 
         factory_attributes = {}
         factory_attributes["interface"] = DummyInterface
@@ -72,14 +79,14 @@ class AutoFactoryTestCase(TransactionTestCase):
         """
         instance = self.factory_class.create()
         self.assertIsInstance(instance, DummyModel)
-        self.assertIsNotNone(instance.name)
-        self.assertIsNotNone(instance.value)
+        self.assertIsNotNone(instance.name)  # type: ignore
+        self.assertIsNotNone(instance.value)  # type: ignore
 
     def test_generate_multiple_instances(self):
         """
         Test that the factory can generate multiple instances of DummyModel.
         """
-        instances = self.factory_class.create_batch(5)
+        instances: Iterable[DummyModel] = self.factory_class.create_batch(5)
         self.assertEqual(len(instances), 5)
         for instance in instances:
             self.assertIsInstance(instance, DummyModel)
@@ -92,7 +99,9 @@ class AutoFactoryTestCase(TransactionTestCase):
         """
         custom_name = "Custom Name"
         custom_value = 42
-        instance = self.factory_class.create(name=custom_name, value=custom_value)
+        instance: DummyModel = self.factory_class.create(
+            name=custom_name, value=custom_value
+        )
         self.assertEqual(instance.name, custom_name)
         self.assertEqual(instance.value, custom_value)
 
@@ -100,7 +109,7 @@ class AutoFactoryTestCase(TransactionTestCase):
         """
         Test that the factory can build an instance of DummyModel without saving it.
         """
-        instance = self.factory_class.build()
+        instance: DummyModel = self.factory_class.build()
         self.assertIsInstance(instance, DummyModel)
         self.assertIsNone(instance.pk)
         self.assertTrue(hasattr(instance, "name"))
@@ -158,14 +167,21 @@ class AutoFactoryTestCase(TransactionTestCase):
             ]
 
         self.factory_class._adjustmentMethod = custom_generate_function
-        instance = self.factory_class.build()
+        instance: list[DummyModel] = self.factory_class.build()  # type: ignore
         self.assertEqual(len(instance), 101)
         self.assertIsInstance(instance[0], DummyModel)
         self.assertEqual(instance[0].name, "Generated Name")
         self.assertEqual(instance[0].value, 0)
         self.assertEqual(instance[1].name, "Generated Name")
         self.assertEqual(instance[100].value, 10_000)
-        instance = self.factory_class.create()
+        instance: list[DummyModel] = self.factory_class.create()  # type: ignore
+        self.assertEqual(len(instance), 101)
+        self.assertIsInstance(instance[0], DummyModel)
+        self.assertEqual(instance[0].name, "Generated Name")
+        self.assertEqual(instance[0].value, 0)
+        self.assertEqual(instance[1].name, "Generated Name")
+        self.assertEqual(instance[100].value, 10_000)
+        self.assertEqual(DummyModel.objects.count(), 101)
 
     def test_generate_instance_with_generate_function_for_one_entry(self):
         """
@@ -179,7 +195,7 @@ class AutoFactoryTestCase(TransactionTestCase):
             }
 
         self.factory_class._adjustmentMethod = custom_generate_function
-        instance = self.factory_class.create(value=1)
+        instance: DummyModel = self.factory_class.create(value=1)
         self.assertIsInstance(instance, DummyModel)
         self.assertEqual(instance.name, "Generated Name")
         self.assertEqual(instance.value, 1)
@@ -188,9 +204,3 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertIsInstance(instance, DummyModel)
         self.assertEqual(instance.name, "Generated Name")
         self.assertEqual(instance.value, 2)
-
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        with connection.schema_editor() as schema:
-            schema.delete_model(DummyModel)
