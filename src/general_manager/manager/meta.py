@@ -3,13 +3,17 @@ from general_manager.interface.baseInterface import (
     InterfaceBase,
 )
 from django.conf import settings
-from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar
+from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar, Iterable
 
 if TYPE_CHECKING:
     from general_manager.interface.databaseInterface import ReadOnlyInterface
     from general_manager.manager.generalManager import GeneralManager
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+
+
+class _nonExistent:
+    pass
 
 
 class GeneralManagerMeta(type):
@@ -48,7 +52,7 @@ class GeneralManagerMeta(type):
 
     @staticmethod
     def createAtPropertiesForAttributes(
-        attributes: dict[str, Any], new_class: Type[GeneralManager]
+        attributes: Iterable[str], new_class: Type[GeneralManager]
     ):
 
         def desciptorMethod(attr_name: str, new_class: type):
@@ -64,12 +68,21 @@ class GeneralManagerMeta(type):
                 ):
                     if instance is None:
                         return self.new_class.Interface.getFieldType(self.attr_name)
-                    attribute = instance._attributes[attr_name]
+                    attribute = instance._attributes.get(attr_name, _nonExistent)
+                    if attribute is _nonExistent:
+                        raise AttributeError(
+                            f"{self.attr_name} not found in {instance.__class__.__name__}"
+                        )
                     if callable(attribute):
-                        return attribute(instance._interface)
+                        try:
+                            attribute = attribute(instance._interface)
+                        except Exception as e:
+                            raise AttributeError(
+                                f"Error calling attribute {self.attr_name}: {e}"
+                            ) from e
                     return attribute
 
             return Descriptor(attr_name, new_class)
 
-        for attr_name in attributes.keys():
+        for attr_name in attributes:
             setattr(new_class, attr_name, desciptorMethod(attr_name, new_class))
