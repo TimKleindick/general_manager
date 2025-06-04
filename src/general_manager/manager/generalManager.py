@@ -128,6 +128,17 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
 
     @staticmethod
     def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        Converts a dictionary of keyword arguments by replacing any GeneralManager instances with their identifications.
+        
+        For each key-value pair, if the value is a GeneralManager, it is replaced with its identification. Lists and tuples are processed recursively, replacing contained GeneralManager instances with their identifications. Returns a new dictionary with the processed values, or None if the result is empty.
+        
+        Args:
+            kwargs: Dictionary of keyword arguments to process.
+        
+        Returns:
+            A new dictionary with GeneralManager instances replaced by their identifications, or None if the dictionary is empty.
+        """
         output = {}
         for key, value in kwargs.items():
             if isinstance(value, GeneralManager):
