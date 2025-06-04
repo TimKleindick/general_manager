@@ -29,7 +29,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls, strategy: Literal["build", "create"], params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         cls._original_params = params
-        model = getattr(cls._meta, "model")
+        model = cls._meta.model
         if not issubclass(model, models.Model):
             raise ValueError("Model must be a type")
         field_name_list, to_ignore_list = cls.interface.handleCustomFields(model)
@@ -42,9 +42,9 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         special_fields: list[models.Field[Any, Any]] = [
             getattr(model, field_name) for field_name in field_name_list
         ]
-        pre_declations = getattr(cls._meta, "pre_declarations", [])
+        pre_declarations = getattr(cls._meta, "pre_declarations", [])
         post_declarations = getattr(cls._meta, "post_declarations", [])
-        declared_fields: set[str] = set(pre_declations) | set(post_declarations)
+        declared_fields: set[str] = set(pre_declarations) | set(post_declarations)
 
         field_list: list[models.Field[Any, Any] | models.ForeignObjectRel] = [
             *fields,
@@ -83,7 +83,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @classmethod
     def _adjust_kwargs(cls, **kwargs: dict[str, Any]) -> dict[str, Any]:
         # Remove ManyToMany fields from kwargs before object creation
-        model: Type[models.Model] = getattr(cls._meta, "model")
+        model: Type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
         for field_name in m2m_fields:
             kwargs.pop(field_name, None)
@@ -133,7 +133,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     def __createWithGenerateFunc(
         cls, use_creation_method: bool, params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
-        model_cls = getattr(cls._meta, "model")
+        model_cls = cls._meta.model
         if cls._adjustmentMethod is None:
             raise ValueError("generate_func is not defined")
         records = cls._adjustmentMethod(**params)
