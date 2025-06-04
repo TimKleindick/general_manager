@@ -14,7 +14,9 @@ from datetime import date, datetime, time, timezone
 
 def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> object:
     """
-    Returns a suitable value for a given Django model field.
+    Generates an appropriate value for a given Django model field for use in testing or data factories.
+    
+    If the field allows null values, there is a 10% chance of returning None. Handles a wide range of Django field types, including measurement, text, numeric, date/time, boolean, relational, and specialized fields, returning a suitable fake or factory-generated value for each. For relational fields (OneToOneField and ForeignKey), attempts to use a factory if available or selects a random existing instance; raises ValueError if neither is possible. Returns None for unsupported field types.
     """
     if field.null:
         if random.choice([True] + 9 * [False]):

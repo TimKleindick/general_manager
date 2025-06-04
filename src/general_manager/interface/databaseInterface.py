@@ -646,13 +646,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self, basis: dict[str, list[Any]], **kwargs: Any
     ) -> dict[str, list[Any]]:
         """
-        Merges filter definitions by combining existing filter criteria with additional keyword arguments.
-
+        Combines existing filter definitions with additional keyword arguments.
+        
         Args:
-            basis: A dictionary mapping filter keys to lists of values.
-
+            basis: Dictionary mapping filter keys to lists of values. Additional keyword arguments are merged into this dictionary.
+        
         Returns:
-            A dictionary where each key maps to a list of all values from both the original basis and the new keyword arguments.
+            A dictionary where each key maps to a list containing all values from both the original basis and the new keyword arguments.
         """
         kwarg_filter: dict[str, list[Any]] = {}
         for key, value in basis.items():
@@ -665,9 +665,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new bucket containing manager instances matching the given filter criteria.
-
-        Additional filter keyword arguments are merged with existing filters to refine the queryset.
+        Returns a new bucket with manager instances matching the specified filter criteria.
+        
+        Additional filter keyword arguments are merged with any existing filters to further restrict the queryset.
         """
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
         return self.__class__(
@@ -679,13 +679,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new bucket excluding items matching the given filter criteria.
-
-        Args:
-            **kwargs: Field lookups to exclude from the queryset.
-
-        Returns:
-            A DatabaseBucket containing items not matching the specified filters.
+        Returns a new DatabaseBucket excluding items that match the specified criteria.
+        
+        Keyword arguments specify field lookups to exclude from the queryset. The resulting bucket contains only items that do not match these filters.
         """
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
         return self.__class__(

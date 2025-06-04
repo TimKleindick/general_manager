@@ -6,34 +6,68 @@ from general_manager.cache.signals import post_data_change, pre_data_change
 
 class DummyInterface:
     def __init__(self, *args, **kwargs):
+        """
+        Initializes the DummyInterface instance with attributes from keyword arguments.
+        
+        All keyword arguments are set as instance attributes.
+        """
         self.__dict__ = kwargs
 
     @classmethod
     def filter(cls, *args, **kwargs):
+        """
+        Returns an empty list, simulating a filter operation for testing purposes.
+        """
         return []
 
     @classmethod
     def exclude(cls, *args, **kwargs):
+        """
+        Returns an empty list to simulate exclusion of items in the mock interface.
+        """
         return []
 
     @classmethod
     def create(cls, *args, **kwargs):
+        """
+        Creates a new dummy record and returns a dictionary with a fixed ID.
+        
+        Returns:
+            dict: A dictionary containing the key "id" with value "dummy_id".
+        """
         return {"id": "dummy_id"}
 
     def update(self, *args, **kwargs):
+        """
+        Mocks the update operation and returns a fixed identification dictionary.
+        
+        Returns:
+            dict: A dictionary containing a dummy ID.
+        """
         return {"id": "dummy_id"}
 
     def deactivate(self, *args, **kwargs):
+        """
+        Simulates deactivating an object and returns a dummy identification dictionary.
+        """
         return {"id": "dummy_id"}
 
     @property
     def identification(self):
+        """
+        Returns a fixed identification dictionary with a dummy ID.
+        """
         return {"id": "dummy_id"}
 
 
 class GeneralManagerTestCase(TestCase):
     def setUp(self):
         # Set up any necessary data or state before each test
+        """
+        Prepares the test environment before each test method.
+        
+        Initializes the GeneralManager with test attributes and assigns a dummy interface. Connects temporary receivers to pre- and post-data change signals to capture emitted events during tests.
+        """
         self.manager = GeneralManager
         self.manager._attributes = {
             "name": "Test Manager",
@@ -46,11 +80,17 @@ class GeneralManagerTestCase(TestCase):
         self.post_list = []
 
         def temp_post_receiver(sender, **kwargs):
+            """
+            Appends keyword arguments received from a signal to the post_list attribute.
+            """
             self.post_list.append(kwargs)
 
         self.pre_list = []
 
         def temp_pre_receiver(sender, **kwargs):
+            """
+            Temporary signal receiver that appends received keyword arguments to the pre_list.
+            """
             self.pre_list.append(kwargs)
 
         self.post_data_change = temp_post_receiver
@@ -61,12 +101,20 @@ class GeneralManagerTestCase(TestCase):
 
     def tearDown(self):
         # Clean up after each test
+        """
+        Disconnects temporary signal receivers after each test to clean up the test environment.
+        """
         post_data_change.disconnect(self.post_data_change)
         pre_data_change.disconnect(self.pre_data_change)
 
     @patch("general_manager.cache.cacheTracker.DependencyTracker.track")
     def test_initialization(self, mock_track):
         # Test if the manager initializes correctly
+        """
+        Tests that the GeneralManager initializes correctly and tracks dependencies.
+        
+        Verifies that DependencyTracker.track is called with the expected arguments and that the returned object is an instance of GeneralManager.
+        """
         manager = self.manager()
         mock_track.assert_called_once_with(
             "GeneralManager", "identification", "{'id': 'dummy_id'}"
@@ -75,18 +123,28 @@ class GeneralManagerTestCase(TestCase):
 
     def test_str_and_repr(self):
         # Test string representation
+        """
+        Tests that the string and representation methods of GeneralManager return the expected format.
+        """
         manager = self.manager()
         self.assertEqual(str(manager), "GeneralManager(**{'id': 'dummy_id'})")
         self.assertEqual(repr(manager), "GeneralManager(**{'id': 'dummy_id'})")
 
     def test_reduce(self):
         # Test the __reduce__ method
+        """
+        Tests that the __reduce__ method returns the correct tuple for object serialization.
+        """
         manager = self.manager()
         reduced = manager.__reduce__()
         self.assertEqual(reduced, (self.manager, ("dummy_id",)))
 
     def test_or_operator(self):
         # Test the __or__ operator
+        """
+        Tests that the bitwise OR operator combines two GeneralManager instances by invoking
+        the filter method with their IDs and returns a list of manager instances with correct identifications.
+        """
         manager1 = self.manager()
         manager2 = self.manager()
         result = manager1 | manager2
@@ -106,11 +164,19 @@ class GeneralManagerTestCase(TestCase):
 
     def test_identification_property(self):
         # Test the identification property
+        """
+        Tests that the identification property of GeneralManager returns the expected dummy ID dictionary.
+        """
         manager = self.manager()
         self.assertEqual(manager.identification, {"id": "dummy_id"})
 
     def test_iter(self):
         # Test the __iter__ method
+        """
+        Tests that iterating over a GeneralManager instance yields its attributes as key-value pairs.
+        
+        Verifies that the resulting dictionary contains expected keys and values, including 'name', 'version', 'active', and 'id'.
+        """
         manager = self.manager()
         attributes = dict(manager)
         self.assertIn("name", attributes)
@@ -123,6 +189,9 @@ class GeneralManagerTestCase(TestCase):
 
     def test_classmethod_filter(self):
         # Test the filter class method
+        """
+        Tests that the GeneralManager.filter class method delegates to the interface's filter method with the correct arguments and returns its result.
+        """
         with patch.object(DummyInterface, "filter", return_value=[]) as mock_filter:
             result = self.manager.filter(id__in=["dummy_id", 123])
             mock_filter.assert_called_once_with(id__in=["dummy_id", 123])
@@ -130,6 +199,9 @@ class GeneralManagerTestCase(TestCase):
 
     def test_classmethod_exclude(self):
         # Test the exclude class method
+        """
+        Tests that the GeneralManager.exclude class method delegates to the interface's exclude method with the correct arguments and returns the expected result.
+        """
         with patch.object(DummyInterface, "exclude", return_value=[]) as mock_filter:
             result = self.manager.exclude(id__in=("dummy_id", 123))
             mock_filter.assert_called_once_with(id__in=("dummy_id", 123))
@@ -137,6 +209,9 @@ class GeneralManagerTestCase(TestCase):
 
     def test_classmethod_create(self):
         # Test the create class method
+        """
+        Tests that the GeneralManager.create class method calls the interface's create method with correct arguments, returns a GeneralManager instance, and emits pre- and post-data change signals with expected payloads.
+        """
         with (
             patch.object(
                 DummyInterface, "create", return_value={"id": "new_id"}
@@ -157,6 +232,11 @@ class GeneralManagerTestCase(TestCase):
 
     def test_classmethod_update(self):
         # Test the update class method
+        """
+        Tests that the update method of GeneralManager calls the interface's update method
+        with correct arguments, returns a GeneralManager instance, and emits pre- and
+        post-data change signals with expected payloads.
+        """
         manager_obj = self.manager()
         with (
             patch.object(
@@ -178,6 +258,9 @@ class GeneralManagerTestCase(TestCase):
 
     def test_classmethod_deactivate(self):
         # Test the deactivate class method
+        """
+        Tests that the deactivate method calls the interface's deactivate, returns a GeneralManager instance, and emits pre- and post-data change signals with the correct action and instance.
+        """
         manager_obj = self.manager()
         with (
             patch.object(
