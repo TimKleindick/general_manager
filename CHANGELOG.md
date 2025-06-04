@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.4.6 (2025-06-04)
+
+### Bug Fixes
+
+- Pointer error in __parse_identification
+  ([`d6b67c2`](https://github.com/TimKleindick/general_manager/commit/d6b67c2dc1b6f7b8df7542a587434fbea68e4b36))
+
+### Refactoring
+
+- Relocate AutoFacotory to seperate file
+  ([`a970130`](https://github.com/TimKleindick/general_manager/commit/a970130a8674a4fe3ab28e35a9a139847aaa64ed))
+
+- Replace getattr with direct access
+  ([`054f1a9`](https://github.com/TimKleindick/general_manager/commit/054f1a9d50da5165a5ccc261dcc5789dcff69618))
+
+### Testing
+
+- Add AutoFactory test cases
+  ([`a3fd909`](https://github.com/TimKleindick/general_manager/commit/a3fd909b35d39148277dfc4ff6ee20fb6db6df1e))
+
+- Add unit test for GeneralManager deactivate class method
+  ([`2e2a3b5`](https://github.com/TimKleindick/general_manager/commit/2e2a3b53dea752dd3248d85f2931fff855411870))
+
+- Add unit tests for GeneralManager functionality
+  ([`0b9235d`](https://github.com/TimKleindick/general_manager/commit/0b9235dfcd7de29aa0248c32f8c012835512aad3))
+
+- Enhance AutoFactoryTestCase with teardown and type hints
+  ([`958b2c3`](https://github.com/TimKleindick/general_manager/commit/958b2c338c8b2edc88d2991061e654a5f694a4cd))
+
+- Update comments for clarity in GeneralManagerTestCase
+  ([`8f6e0f0`](https://github.com/TimKleindick/general_manager/commit/8f6e0f0c18452f147cfec74662b8508da4e8ed99))
+
+
 ## v0.4.5 (2025-05-28)
 
 ### Bug Fixes
