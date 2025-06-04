@@ -42,7 +42,6 @@ class GeneralManagerTestCase(TestCase):
             "id": "dummy_id",
         }
         self.manager.Interface = DummyInterface  # type: ignore
-        self.manager.Interface
 
         self.post_list = []
 
@@ -91,7 +90,6 @@ class GeneralManagerTestCase(TestCase):
         manager1 = self.manager()
         manager2 = self.manager()
         result = manager1 | manager2
-        print(result)
         with patch.object(
             self.manager, "filter", return_value=[manager1, manager2]
         ) as mock_filter:
@@ -131,7 +129,7 @@ class GeneralManagerTestCase(TestCase):
             self.assertEqual(result, [])
 
     def test_classmethod_exclude(self):
-        # Test the filter class method
+        # Test the exclude class method
         with patch.object(DummyInterface, "exclude", return_value=[]) as mock_filter:
             result = self.manager.exclude(id__in=("dummy_id", 123))
             mock_filter.assert_called_once_with(id__in=("dummy_id", 123))
@@ -179,7 +177,7 @@ class GeneralManagerTestCase(TestCase):
             self.assertEqual(self.post_list[0]["name"], "New Manager")
 
     def test_classmethod_deactivate(self):
-        # Test the update class method
+        # Test the deactivate class method
         manager_obj = self.manager()
         with (
             patch.object(
