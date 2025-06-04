@@ -41,7 +41,7 @@ class GeneralmanagerConfig(AppConfig):
             attributes = general_manager_class.Interface.getAttributes()
             setattr(general_manager_class, "_attributes", attributes)
             GeneralManagerMeta.createAtPropertiesForAttributes(
-                attributes, general_manager_class
+                attributes.keys(), general_manager_class
             )
 
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
