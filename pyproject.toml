@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "GeneralManager"
-version = "0.4.6"
+version = "0.5.0"
 description = "Kurzbeschreibung deines Pakets"
 readme = "README.md"
 authors = [

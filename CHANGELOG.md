@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v0.5.0 (2025-06-05)
+
+### Documentation
+
+- Add arithmetic examples for Measurement
+  ([`16874c4`](https://github.com/TimKleindick/general_manager/commit/16874c4a284f9c4533f5b2a35fdd7df7d5fb439f))
+
+### Features
+
+- Improve error handling in propertie methods
+  ([`3b007ed`](https://github.com/TimKleindick/general_manager/commit/3b007edeb83c60b8fadb57ebe11ce38c56487eec))
+
+### Refactoring
+
+- Remove unused import from test_generalManagerMeta.py
+  ([`0a61bed`](https://github.com/TimKleindick/general_manager/commit/0a61bedd56a15f5fb1037cee08c641bebe8a5658))
+
+### Testing
+
+- Add comprehensive tests for GeneralManager properties
+  ([`97d6677`](https://github.com/TimKleindick/general_manager/commit/97d66771be9159197a5277bc5e614c0345281a55))
+
+- Add tests for GeneralManagerMeta __new__ method
+  ([`3498186`](https://github.com/TimKleindick/general_manager/commit/34981869821611d9fba03d488fa5e3159f2c34f7))
+
+
 ## v0.4.6 (2025-06-04)
 
 ### Bug Fixes
