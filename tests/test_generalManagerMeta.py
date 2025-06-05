@@ -1,5 +1,4 @@
 from django.test import SimpleTestCase, override_settings
-from django.conf import settings
 
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.baseInterface import InterfaceBase
