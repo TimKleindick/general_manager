@@ -1,5 +1,8 @@
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
+from django.conf import settings
+
 from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.interface.baseInterface import InterfaceBase
 
 
 class dummyInterface:
@@ -206,3 +209,374 @@ class TestPropertyInitialization(SimpleTestCase):
         with self.assertRaises(AttributeError) as context:
             getattr(self.dummy_manager1, "test_field")
         self.assertIn("Error calling attribute test_field", str(context.exception))
+
+
+# -----------------------------------------------------------------------------
+# 1. Minimal stub classes for Input and Bucket (if referenced by InterfaceBase)
+# -----------------------------------------------------------------------------
+# These stubs ensure that InterfaceBase logic relying on Input and Bucket
+# does not fail during tests.
+
+
+class Input:
+    def __init__(self, type_, depends_on=(), possible_values=None):
+        self.type = type_
+        self.depends_on = depends_on
+        self.possible_values = possible_values
+
+
+class Bucket(list):
+    pass
+
+
+# -----------------------------------------------------------------------------
+# 2. DummyInterface: minimal implementation of InterfaceBase
+# -----------------------------------------------------------------------------
+class DummyInterface(InterfaceBase):
+    """
+    Minimal subclass of InterfaceBase that:
+    - Defines input_fields as an empty dict so parseInputFieldsToIdentification won’t fail.
+    - Stubs all abstract methods.
+    - Implements handleInterface() to return custom pre/post creation hooks.
+    """
+
+    input_fields: dict[str, Input] = {}  # no required fields # type: ignore
+
+    @classmethod
+    def create(cls, *args, **kwargs):
+        raise NotImplementedError
+
+    def update(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def deactivate(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def getData(self, search_date=None):
+        raise NotImplementedError
+
+    @classmethod
+    def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+        return {}
+
+    @classmethod
+    def getAttributes(cls) -> dict[str, dict]:
+        return {}
+
+    @classmethod
+    def filter(cls, **kwargs):  # type: ignore
+        return Bucket()
+
+    @classmethod
+    def exclude(cls, **kwargs):  # type: ignore
+        return Bucket()
+
+    @classmethod
+    def getFieldType(cls, field_name: str) -> type:
+        return str
+
+    @classmethod
+    def handleInterface(cls):
+        """
+        Returns two functions:
+        - preCreation: modifies attrs before the class is created (adds 'marker').
+        - postCreation: sets a flag on the newly created class.
+        """
+
+        def preCreation(name, attrs, interface):
+            attrs["marker"] = "initialized_by_dummy"
+            return attrs, cls, None
+
+        def postCreation(new_cls, interface_cls, model):
+            new_cls.post_mark = True
+
+        return preCreation, postCreation
+
+
+# -----------------------------------------------------------------------------
+# 3. Test cases for GeneralManagerMeta
+# -----------------------------------------------------------------------------
+class GeneralManagerMetaTests(SimpleTestCase):
+    def setUp(self):
+        # Reset the metaclass’s global lists before each test
+        GeneralManagerMeta.all_classes.clear()
+        GeneralManagerMeta.pending_graphql_interfaces.clear()
+        GeneralManagerMeta.pending_attribute_initialization.clear()
+
+    def test_register_with_valid_interface(self):
+        """
+        1. Define a class that sets Interface = DummyInterface.
+        2. After definition, it should appear in all_classes and pending_attribute_initialization.
+        3. preCreation hook adds 'marker'; postCreation hook sets 'post_mark'.
+        """
+
+        class MyManager(metaclass=GeneralManagerMeta):
+            Interface = DummyInterface
+
+        # a) MyManager should be in all_classes
+        self.assertIn(
+            MyManager,
+            GeneralManagerMeta.all_classes,
+            msg="MyManager should be registered in all_classes.",
+        )
+
+        # b) MyManager should be in pending_attribute_initialization
+        self.assertIn(
+            MyManager,
+            GeneralManagerMeta.pending_attribute_initialization,
+            msg="MyManager should be registered in pending_attribute_initialization.",
+        )
+
+        # c) preCreation hook added the 'marker' attribute
+        self.assertTrue(
+            hasattr(MyManager, "marker") and MyManager.marker == "initialized_by_dummy",  # type: ignore
+            msg="MyManager.marker should be set by the DummyInterface preCreation hook.",
+        )
+
+        # d) postCreation hook set the 'post_mark' attribute to True
+        self.assertTrue(
+            hasattr(MyManager, "post_mark") and MyManager.post_mark is True,  # type: ignore
+            msg="MyManager.post_mark should be True set by the DummyInterface postCreation hook.",
+        )
+
+    def test_invalid_interface_raises_type_error(self):
+        """
+        A class with Interface = object (not a subclass of InterfaceBase)
+        should raise TypeError when defined.
+        """
+        with self.assertRaises(TypeError) as cm:
+
+            class BadManager(metaclass=GeneralManagerMeta):
+                Interface = (
+                    object  # not a valid subclass of InterfaceBase # type: ignore
+                )
+
+        self.assertIn(
+            f"Interface must be a subclass of {InterfaceBase.__name__}",
+            str(cm.exception),
+            msg="Exception message should indicate that InterfaceBase is required.",
+        )
+
+        # The lists should remain empty after the failure
+        self.assertEqual(
+            len(GeneralManagerMeta.all_classes),
+            0,
+            msg="all_classes should remain empty after the failed definition.",
+        )
+        self.assertEqual(
+            len(GeneralManagerMeta.pending_attribute_initialization),
+            0,
+            msg="pending_attribute_initialization should remain empty.",
+        )
+
+    def test_plain_manager_without_interface_does_nothing(self):
+        """
+        A class without an Interface attribute:
+        - should not be added to all_classes
+        - should not be added to pending_attribute_initialization
+        - (when AUTOCREATE_GRAPHQL=False) should not be added to pending_graphql_interfaces
+        """
+        before_all = list(GeneralManagerMeta.all_classes)
+        before_pending_init = list(GeneralManagerMeta.pending_attribute_initialization)
+        before_pending_graphql = list(GeneralManagerMeta.pending_graphql_interfaces)
+
+        class PlainManager(metaclass=GeneralManagerMeta):
+            pass
+
+        # a) all_classes should remain unchanged
+        self.assertEqual(
+            GeneralManagerMeta.all_classes,
+            before_all,
+            msg="all_classes should remain unchanged.",
+        )
+
+        # b) pending_attribute_initialization should remain unchanged
+        self.assertEqual(
+            GeneralManagerMeta.pending_attribute_initialization,
+            before_pending_init,
+            msg="pending_attribute_initialization should remain unchanged.",
+        )
+
+        # c) pending_graphql_interfaces should remain unchanged (AUTOCREATE_GRAPHQL=False by default)
+        self.assertEqual(
+            GeneralManagerMeta.pending_graphql_interfaces,
+            before_pending_graphql,
+            msg="pending_graphql_interfaces should remain unchanged.",
+        )
+
+    @override_settings(AUTOCREATE_GRAPHQL=True)
+    def test_autocreate_graphql_flag_adds_to_pending(self):
+        """
+        When AUTOCREATE_GRAPHQL=True, every created class
+        (with or without Interface) should be added to pending_graphql_interfaces.
+        """
+        GeneralManagerMeta.pending_graphql_interfaces.clear()
+
+        # 1) Class without Interface
+        class GQLManagerPlain(metaclass=GeneralManagerMeta):
+            pass
+
+        self.assertIn(
+            GQLManagerPlain,
+            GeneralManagerMeta.pending_graphql_interfaces,
+            msg="GQLManagerPlain should be in pending_graphql_interfaces when AUTOCREATE_GRAPHQL=True.",
+        )
+
+        # Clear the list again
+        GeneralManagerMeta.pending_graphql_interfaces.clear()
+
+        # 2) Class WITH Interface
+        class GQLManagerWithInterface(metaclass=GeneralManagerMeta):
+            Interface = DummyInterface
+
+        self.assertIn(
+            GQLManagerWithInterface,
+            GeneralManagerMeta.pending_graphql_interfaces,
+            msg="GQLManagerWithInterface should be in pending_graphql_interfaces when AUTOCREATE_GRAPHQL=True.",
+        )
+
+    def test_multiple_classes_register_in_order(self):
+        """
+        Define two different DummyInterface variants, each with its own hooks.
+        Verify that all_classes and pending_attribute_initialization
+        appear in the correct order: [ManagerA, ManagerB],
+        and that each manager has the attributes set by its hooks.
+        """
+
+        # DummyInterfaceA: adds 'fromA' and 'a_post'
+        class DummyInterfaceA(InterfaceBase):
+            input_fields: dict[str, Input] = {}  # type: ignore
+
+            @classmethod
+            def create(cls, *args, **kwargs):
+                raise NotImplementedError
+
+            def update(self, *args, **kwargs):
+                raise NotImplementedError
+
+            def deactivate(self, *args, **kwargs):
+                raise NotImplementedError
+
+            def getData(self, search_date=None):
+                raise NotImplementedError
+
+            @classmethod
+            def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+                return {}
+
+            @classmethod
+            def getAttributes(cls) -> dict[str, dict]:
+                return {}
+
+            @classmethod
+            def filter(cls, **kwargs):  # type: ignore
+                return Bucket()
+
+            @classmethod
+            def exclude(cls, **kwargs):  # type: ignore
+                return Bucket()
+
+            @classmethod
+            def getFieldType(cls, field_name: str) -> type:
+                return str
+
+            @classmethod
+            def handleInterface(cls):
+                def preCreation(name, attrs, interface):
+                    attrs["fromA"] = True
+                    return attrs, cls, None
+
+                def postCreation(new_cls, interface_cls, model):
+                    new_cls.a_post = True
+
+                return preCreation, postCreation
+
+        # DummyInterfaceB: adds 'fromB' and 'b_post'
+        class DummyInterfaceB(InterfaceBase):
+            input_fields: dict[str, Input] = {}  # type: ignore
+
+            @classmethod
+            def create(cls, *args, **kwargs):
+                raise NotImplementedError
+
+            def update(self, *args, **kwargs):
+                raise NotImplementedError
+
+            def deactivate(self, *args, **kwargs):
+                raise NotImplementedError
+
+            def getData(self, search_date=None):
+                raise NotImplementedError
+
+            @classmethod
+            def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+                return {}
+
+            @classmethod
+            def getAttributes(cls) -> dict[str, dict]:
+                return {}
+
+            @classmethod
+            def filter(cls, **kwargs):  # type: ignore
+                return Bucket()
+
+            @classmethod
+            def exclude(cls, **kwargs):  # type: ignore
+                return Bucket()
+
+            @classmethod
+            def getFieldType(cls, field_name: str) -> type:
+                return str
+
+            @classmethod
+            def handleInterface(cls):
+                def preCreation(name, attrs, interface):
+                    attrs["fromB"] = True
+                    return attrs, cls, None
+
+                def postCreation(new_cls, interface_cls, model):
+                    new_cls.b_post = True
+
+                return preCreation, postCreation
+
+        # 1. Define ManagerA with DummyInterfaceA
+        class ManagerA(metaclass=GeneralManagerMeta):
+            Interface = DummyInterfaceA
+
+        # 2. Define ManagerB with DummyInterfaceB
+        class ManagerB(metaclass=GeneralManagerMeta):
+            Interface = DummyInterfaceB
+
+        # a) all_classes must be [ManagerA, ManagerB] in that order
+        self.assertEqual(
+            GeneralManagerMeta.all_classes,
+            [ManagerA, ManagerB],
+            msg="all_classes should be [ManagerA, ManagerB] in this exact order.",
+        )
+
+        # b) pending_attribute_initialization must be [ManagerA, ManagerB] as well
+        self.assertEqual(
+            GeneralManagerMeta.pending_attribute_initialization,
+            [ManagerA, ManagerB],
+            msg="pending_attribute_initialization should be [ManagerA, ManagerB].",
+        )
+
+        # c) ManagerA should have attributes 'fromA' and 'a_post'
+        self.assertTrue(
+            hasattr(ManagerA, "fromA") and ManagerA.fromA is True,  # type: ignore
+            msg="ManagerA should have the attribute 'fromA'.",
+        )
+        self.assertTrue(
+            hasattr(ManagerA, "a_post") and ManagerA.a_post is True,  # type: ignore
+            msg="ManagerA should have the attribute 'a_post'.",
+        )
+
+        # d) ManagerB should have attributes 'fromB' and 'b_post'
+        self.assertTrue(
+            hasattr(ManagerB, "fromB") and ManagerB.fromB is True,  # type: ignore
+            msg="ManagerB should have the attribute 'fromB'.",
+        )
+        self.assertTrue(
+            hasattr(ManagerB, "b_post") and ManagerB.b_post is True,  # type: ignore
+            msg="ManagerB should have the attribute 'b_post'.",
+        )
