@@ -50,7 +50,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
     def __buildGroupedManager(
         self,
         data: Bucket[GeneralManagerType],
-    ) -> list[GroupedManager[GeneralManagerType]]:
+    ) -> list[GroupManager[GeneralManagerType]]:
         """
         This method builds the grouped manager.
         It returns a GroupBucket with the grouped data.
@@ -67,7 +67,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             group_by_value = json.loads(group_by_value)
             grouped_manager_objects = data.filter(**group_by_value)
             groups.append(
-                GroupedManager(
+                GroupManager(
                     self._manager_class, group_by_value, grouped_manager_objects
                 )
             )
@@ -84,7 +84,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             self._basis_data | other._basis_data,
         )
 
-    def __iter__(self) -> Generator[GroupedManager[GeneralManagerType]]:
+    def __iter__(self) -> Generator[GroupManager[GeneralManagerType]]:
         for grouped_manager in self._data:
             yield grouped_manager
 
@@ -104,13 +104,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
             new_basis_data,
         )
 
-    def first(self) -> GroupedManager[GeneralManagerType] | None:
+    def first(self) -> GroupManager[GeneralManagerType] | None:
         try:
             return next(iter(self))
         except StopIteration:
             return None
 
-    def last(self) -> GroupedManager[GeneralManagerType] | None:
+    def last(self) -> GroupManager[GeneralManagerType] | None:
         items = list(self)
         if items:
             return items[-1]
@@ -122,7 +122,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
     def all(self) -> Bucket[GeneralManagerType]:
         return self
 
-    def get(self, **kwargs: Any) -> GroupedManager[GeneralManagerType]:
+    def get(self, **kwargs: Any) -> GroupManager[GeneralManagerType]:
         first_value = self.filter(**kwargs).first()
         if first_value is None:
             raise ValueError(
@@ -132,7 +132,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __getitem__(
         self, item: int | slice
-    ) -> GroupedManager[GeneralManagerType] | GroupBucket[GeneralManagerType]:
+    ) -> GroupManager[GeneralManagerType] | GroupBucket[GeneralManagerType]:
         if isinstance(item, int):
             return self._data[item]
         elif isinstance(item, slice):
@@ -186,7 +186,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
         )
 
 
-class GroupedManager(Generic[GeneralManagerType]):
+class GroupManager(Generic[GeneralManagerType]):
     """
     This class is used to group the data of a GeneralManager.
     It is used to create a new GeneralManager with the grouped data.

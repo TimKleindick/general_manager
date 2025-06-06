@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from general_manager.manager.input import Input
     from general_manager.manager.generalManager import GeneralManager
     from general_manager.manager.meta import GeneralManagerMeta
-    from general_manager.manager.groupManager import GroupedManager, GroupBucket
+    from general_manager.manager.groupManager import GroupManager, GroupBucket
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
@@ -239,7 +239,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def __iter__(
         self,
-    ) -> Generator[GeneralManagerType | GroupedManager[GeneralManagerType]]:
+    ) -> Generator[GeneralManagerType | GroupManager[GeneralManagerType]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -251,11 +251,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         raise NotImplementedError
 
     @abstractmethod
-    def first(self) -> GeneralManagerType | GroupedManager[GeneralManagerType] | None:
+    def first(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
         raise NotImplementedError
 
     @abstractmethod
-    def last(self) -> GeneralManagerType | GroupedManager[GeneralManagerType] | None:
+    def last(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
         raise NotImplementedError
 
     @abstractmethod
@@ -269,7 +269,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def get(
         self, **kwargs: Any
-    ) -> GeneralManagerType | GroupedManager[GeneralManagerType]:
+    ) -> GeneralManagerType | GroupManager[GeneralManagerType]:
         raise NotImplementedError
 
     @abstractmethod
@@ -277,7 +277,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         self, item: int | slice
     ) -> (
         GeneralManagerType
-        | GroupedManager[GeneralManagerType]
+        | GroupManager[GeneralManagerType]
         | Bucket[GeneralManagerType]
     ):
         raise NotImplementedError
