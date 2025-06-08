@@ -52,7 +52,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             arg in self._manager_class.Interface.getAttributes().keys()
             for arg in group_by_keys
         ):
-            raise TypeError(
+            raise ValueError(
                 f"groupBy() argument must be a valid attribute of {self._manager_class.__name__}"
             )
 
