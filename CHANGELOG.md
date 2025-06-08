@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.5.1 (2025-06-08)
+
+### Bug Fixes
+
+- Implement equality check for GroupBucket and update group_by method
+  ([`14b0a0c`](https://github.com/TimKleindick/general_manager/commit/14b0a0c2fa1f6b9c7c8128e5cf7ead62d9d1b372))
+
+- Optimize data aggregation logic in GroupManager for boolean types
+  ([`105e60e`](https://github.com/TimKleindick/general_manager/commit/105e60ed1d4c7784deabe0a65ffab84bf46b6937))
+
+- Remove unused __hash__ method from GroupManager
+  ([`0e9335e`](https://github.com/TimKleindick/general_manager/commit/0e9335e65c65b1c10f2a4e1cfe508ef123a5c471))
+
+- Simplify sorting logic in GroupBucket by removing unnecessary list comprehension
+  ([`0417435`](https://github.com/TimKleindick/general_manager/commit/0417435f68047cf7bbb0cc26bec5272cc5cb6166))
+
+- Sort group_by_values and improve sorting logic in GroupBucket
+  ([`f0fe417`](https://github.com/TimKleindick/general_manager/commit/f0fe417ed83a9f3765116903765151b3e66102d9))
+
+- Update data aggregation in GroupManager to avoid duplicates
+  ([`016d254`](https://github.com/TimKleindick/general_manager/commit/016d254a9a7677eec6ae63a5aa0126fa69bbd1ef))
+
+### Refactoring
+
+- Rename GroupedManager to GroupManager and update references
+  ([`f5e6e50`](https://github.com/TimKleindick/general_manager/commit/f5e6e50d49e03dc2d28e274c01e605ba6e552a44))
+
+### Testing
+
+- Add comprehensive tests for GroupBucket and GroupManager functionality
+  ([`088be38`](https://github.com/TimKleindick/general_manager/commit/088be38023e8c39d2272484bd8926b56f40eecde))
+
+- Clean up imports and improve GroupBucket test assertions
+  ([`cec9f8d`](https://github.com/TimKleindick/general_manager/commit/cec9f8d0d45c8a250f3965f1465c4c7aa71e0850))
+
+- Correct type definition for date in DummyInterface and add setup/teardown for tests
+  ([`81199ca`](https://github.com/TimKleindick/general_manager/commit/81199ca04938cd7255e52eb83f15d0d8b3201f5e))
+
+
 ## v0.5.0 (2025-06-05)
 
 ### Documentation
