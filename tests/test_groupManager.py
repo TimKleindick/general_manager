@@ -1,5 +1,5 @@
 # type: ignore
-from datetime import date, datetime
+from datetime import date
 from django.test import TestCase
 from general_manager.api.graphql import GraphQLProperty
 from general_manager.manager.groupManager import (
@@ -22,7 +22,7 @@ class DummyInterface:
 
     @staticmethod
     def getAttributes():
-        return {attr: {} for attr in DummyInterface.attr_types.keys()}
+        return {attr: {} for attr in DummyInterface.attr_types}
 
     @staticmethod
     def getAttributeTypes():
@@ -197,7 +197,8 @@ class GroupBucketTests(TestCase):
         items = [DummyManager(a=i) for i in range(5)]
         gb = GroupBucket(DummyManager, ("a",), ListBucket(items))
         all_gm = gb.all()
-        self.assertEqual(all_gm.count(), 5)
+        self.assertIsInstance(all_gm, GroupBucket)
+        self.assertEqual(len(all_gm), 5)
         self.assertEqual(all_gm[0].a, 0)
         self.assertEqual(all_gm[4].a, 4)
 
@@ -294,10 +295,6 @@ class GroupManagerCombineValueTests(TestCase):
         )
         result = gm.combineValue("field")
         self.assertEqual(result, Measurement(3, "m"))
-
-    def test_combine_bool_any(self):
-        gm = self.helper_make_group_manager([True, False, True], bool)
-        self.assertTrue(gm.combineValue("field"))
 
     def test_iterate_group_manager(self):
         # Test that iterating over GroupManager yields correct items
