@@ -12,7 +12,7 @@ class DummyInput:
     def __init__(self, type_, depends_on=None, possible_values=None):
         """
         Initializes a DummyInput instance with a type, dependencies, and possible values.
-        
+
         Args:
             type_: The expected type for the input value.
             depends_on: Optional list of field names this input depends on.
@@ -25,10 +25,10 @@ class DummyInput:
     def cast(self, value):
         """
         Returns the input value unchanged.
-        
+
         Args:
             value: The value to be returned.
-        
+
         Returns:
             The same value that was provided as input.
         """
@@ -67,10 +67,10 @@ class TestInterface(InterfaceBase):
     def getData(self, search_date=None):
         """
         Returns the identification associated with this interface instance.
-        
+
         Args:
             search_date: Optional parameter for compatibility; ignored in this implementation.
-        
+
         Returns:
             The identification value of the interface.
         """
@@ -87,24 +87,26 @@ class TestInterface(InterfaceBase):
     def getAttributes(cls):
         """
         Returns an empty dictionary of attributes for the class.
-        
+
         Intended as a stub for subclasses to override with actual attribute definitions.
         """
         return {}
 
     @classmethod
     def filter(cls, **kwargs):
+        """
         Filters items based on provided keyword arguments.
-        
+
         Returns:
             None. This is a stub implementation for testing purposes.
+        """
         return None
 
     @classmethod
     def exclude(cls, **kwargs):
         """
         Stub method for excluding items based on provided criteria.
-        
+
         Returns:
             None
         """
@@ -114,7 +116,7 @@ class TestInterface(InterfaceBase):
     def handleInterface(cls):
         """
         Returns stub handler functions for interface processing.
-        
+
         The first returned function accepts any arguments and returns a tuple of the arguments, an empty dictionary, and None. The second returned function accepts any arguments and returns None.
         """
         return (lambda *args: (args, {}, None), lambda *args: None)
@@ -123,10 +125,10 @@ class TestInterface(InterfaceBase):
     def getFieldType(cls, field_name):
         """
         Returns the type of the specified input field.
-        
+
         Args:
             field_name: The name of the input field.
-        
+
         Returns:
             The type associated with the given input field.
         """
@@ -185,7 +187,7 @@ class InterfaceBaseTests(SimpleTestCase):
         # Passing wrong type for 'a' should raise TypeError
         """
         Tests that providing an incorrect type for an input field raises a TypeError.
-        
+
         Verifies that passing a value of the wrong type for the 'a' field in TestInterface
         results in a TypeError during initialization.
         """
@@ -224,6 +226,7 @@ class InterfaceBaseTests(SimpleTestCase):
         """
         Tests that defining input fields with circular dependencies raises a ValueError.
         """
+
         class Circ(InterfaceBase):
             input_fields = {
                 "a": DummyInput(int, depends_on=["b"]),
@@ -280,7 +283,7 @@ class DummyManager:
         def getAttributes():
             """
             Returns a dictionary of attribute names mapped to None values.
-            
+
             This method provides a fixed set of attribute keys for testing or interface purposes.
             """
             return {"a": None, "b": None, "c": None}
@@ -291,7 +294,7 @@ class DummyBucket(Bucket[int]):
     def __init__(self, manager_class, data=None):
         """
         Initializes a DummyBucket with the given manager class and optional data.
-        
+
         Args:
             manager_class: The manager class associated with this bucket.
             data: Optional iterable of items to populate the bucket. If not provided, the bucket is initialized empty.
@@ -302,7 +305,7 @@ class DummyBucket(Bucket[int]):
     def __or__(self, other):
         """
         Returns a new DummyBucket containing the union of this bucket's data and another DummyBucket or integer.
-        
+
         If `other` is a DummyBucket, combines their data. If `other` is an integer, appends it to this bucket's data.
         """
         if isinstance(other, DummyBucket):
@@ -320,7 +323,7 @@ class DummyBucket(Bucket[int]):
     def filter(self, **kwargs):
         """
         Returns a new DummyBucket with updated filters applied.
-        
+
         The returned bucket contains the same data as the original, but its filters dictionary is updated with the provided keyword arguments.
         """
         new = DummyBucket(self._manager_class, self._data)
@@ -330,10 +333,10 @@ class DummyBucket(Bucket[int]):
     def exclude(self, **kwargs):
         """
         Returns a new DummyBucket with updated exclusion filters applied.
-        
+
         Args:
             **kwargs: Key-value pairs specifying exclusion criteria.
-        
+
         Returns:
             A new DummyBucket instance with the combined excludes.
         """
@@ -369,7 +372,7 @@ class DummyBucket(Bucket[int]):
         # support lookup by 'value'
         """
         Retrieves a single item from the bucket matching the given criteria.
-        
+
         If called with a 'value' keyword argument, returns the unique item equal to that value.
         If called with no arguments, returns the item if the bucket contains exactly one element.
         Raises a ValueError if zero or multiple matches are found.
@@ -387,7 +390,7 @@ class DummyBucket(Bucket[int]):
     def __getitem__(self, item):
         """
         Returns the item at the specified index or a new DummyBucket for a slice.
-        
+
         If a slice is provided, returns a new DummyBucket containing the sliced data.
         """
         if isinstance(item, slice):
@@ -403,7 +406,7 @@ class DummyBucket(Bucket[int]):
     def __contains__(self, item):
         """
         Checks if the specified item is present in the bucket.
-        
+
         Returns:
             True if the item exists in the bucket; otherwise, False.
         """
@@ -412,11 +415,11 @@ class DummyBucket(Bucket[int]):
     def sort(self, key, reverse=False):
         """
         Returns a new DummyBucket with elements sorted.
-        
+
         Args:
             key: Ignored in this implementation.
             reverse: If True, sorts in descending order.
-        
+
         Returns:
             A new DummyBucket containing the sorted elements.
         """
@@ -428,7 +431,7 @@ class BucketTests(SimpleTestCase):
     def setUp(self):
         """
         Initializes test fixtures for bucket tests.
-        
+
         Creates an empty DummyBucket and a DummyBucket populated with integers 3, 1, and 2, both using DummyManager as the manager class.
         """
         self.manager_class = DummyManager
@@ -438,7 +441,7 @@ class BucketTests(SimpleTestCase):
     def test_eq_and_neq(self):
         """
         Tests equality and inequality comparisons between DummyBucket instances.
-        
+
         Verifies that buckets with identical data are equal, while those with different data or types are not.
         """
         b1 = DummyBucket(self.manager_class, [1, 2])
@@ -451,7 +454,7 @@ class BucketTests(SimpleTestCase):
     def test_or_bucket_and_item(self):
         """
         Tests the union operation for DummyBucket instances and integers.
-        
+
         Verifies that using the '|' operator combines the data from two DummyBucket instances or appends an integer to the bucket's data.
         """
         b1 = DummyBucket(self.manager_class, [1])
@@ -499,7 +502,7 @@ class BucketTests(SimpleTestCase):
     def test_get_no_kwargs(self):
         """
         Tests the get() method with no keyword arguments.
-        
+
         Verifies that get() returns the single item when the bucket contains exactly one element, and raises ValueError when called on a bucket with zero or multiple elements.
         """
         single = DummyBucket(self.manager_class, [42])
@@ -510,7 +513,7 @@ class BucketTests(SimpleTestCase):
     def test_get_by_value(self):
         """
         Tests the get() method for retrieving items by value.
-        
+
         Verifies that get(value=...) returns the correct item, raises ValueError when no match is found, and raises ValueError when multiple matches exist.
         """
         b = DummyBucket(self.manager_class, [1, 2, 3])
@@ -531,7 +534,7 @@ class BucketTests(SimpleTestCase):
     def test_getitem_index_and_slice(self):
         """
         Tests that indexing and slicing a DummyBucket return the correct elements and types.
-        
+
         Verifies that indexing returns the expected item and slicing returns a new DummyBucket with the correct subset of data.
         """
         self.assertEqual(self.bucket[1], 1)
@@ -589,7 +592,7 @@ class BucketTests(SimpleTestCase):
         # Valid entries but invalid grouping key 'x'
         """
         Tests that grouping a bucket by an invalid key raises a ValueError.
-        
+
         Verifies that attempting to group by a key not present in the bucket's items results in a ValueError being raised.
         """
         m = DummyManager()
