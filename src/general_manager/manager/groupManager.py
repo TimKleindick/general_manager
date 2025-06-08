@@ -63,7 +63,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             group_by_values.add(json.dumps(group_by_value))
 
         groups = []
-        for group_by_value in group_by_values:
+        for group_by_value in sorted(group_by_values):
             group_by_value = json.loads(group_by_value)
             grouped_manager_objects = data.filter(**group_by_value)
             groups.append(
@@ -162,12 +162,14 @@ class GroupBucket(Bucket[GeneralManagerType]):
         if isinstance(key, str):
             key = (key,)
         if reverse:
-            sorted_data = self._data.sort(
-                key=lambda x: tuple([-getattr(x, k) for k in key])
+            sorted_data = sorted(
+                self._data,
+                key=lambda x: tuple([getattr(x, k) for k in key]),
+                reverse=True,
             )
         else:
-            sorted_data = self._data.sort(
-                key=lambda x: tuple([getattr(x, k) for k in key])
+            sorted_data = sorted(
+                self._data, key=lambda x: tuple([getattr(x, k) for k in key])
             )
 
         new_bucket = GroupBucket(
