@@ -290,7 +290,11 @@ class GroupManager(Generic[GeneralManagerType]):
             for entry in total_data:
                 new_data.update(entry)
         elif issubclass(data_type, str):
-            new_data = " ".join(total_data)
+            temp_data = []
+            for entry in total_data:
+                if entry not in temp_data:
+                    temp_data.append(str(entry))
+            new_data = ", ".join(temp_data)
         elif issubclass(data_type, (int, float, Measurement)):
             new_data = sum(total_data)
         elif issubclass(data_type, (datetime, date, time)):
