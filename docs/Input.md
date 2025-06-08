@@ -1,6 +1,6 @@
 # Input
 
-The `Input` class describes the expected type for a field and optionally defines valid choices and dependencies. It is primarily used in interfaces to configure GraphQL arguments or factory inputs.
+The `Input` class describes the expected type for a field and optionally defines valid choices and dependencies. It is primarily used in interfaces to configure GeneralManager initialization (keyword) arguments.
 
 ## Basic usage
 
