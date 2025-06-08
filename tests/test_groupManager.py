@@ -15,7 +15,7 @@ class DummyInterface:
         "a": {"type": int},
         "b": {"type": str},
         "c": {"type": list},
-        "date": {"type": bool},
+        "date": {"type": date},
         "flag": {"type": bool},
         "items": {"type": dict},
     }
@@ -242,6 +242,12 @@ class GroupBucketTests(TestCase):
 
 
 class GroupManagerCombineValueTests(TestCase):
+    def setUp(self):
+        self.original_attr_types = DummyInterface.attr_types.copy()
+
+    def tearDown(self) -> None:
+        DummyInterface.attr_types = self.original_attr_types
+
     # Parametrized tests for combineValue on various data types
     def helper_make_group_manager(self, values, value_type):
         # Create dummy entries with attribute 'field' set to each value
