@@ -1,50 +1,50 @@
 # GeneralManager
 
-## Überblick
+## Overview
 
-Das GeneralManager-Modul ist ein leistungsstarkes und flexibles Framework, das speziell für die Verwaltung und Verarbeitung von Daten entwickelt wurde. Es bietet eine modulare Struktur, die es Entwicklern ermöglicht, komplexe Geschäftslogiken effizient zu implementieren und zu verwalten. Das Modul ist vollständig in Python geschrieben und nutzt Django als Backend-Framework.
+GeneralManager is a powerful and flexible framework designed for managing and processing data. It provides a modular structure that enables developers to implement complex business logic efficiently. The module is written entirely in Python and uses Django as the backend framework.
 
-## Hauptfunktionen
+## Key Features
 
-### 1. **Datenmanagement**
-- **Flexibilität**: Unterstützt die Verwaltung aller Arten von Daten, nicht nur Projekte und Derivate.
-- **Datenbank-Integration**: Nahtlose Integration mit dem Django ORM für Datenbankoperationen.
-- **Externe Schnittstellen**: Unterstützung für Schnittstellen zu anderen Programmen, wie z. B. Excel-Interfaces.
+### 1. **Data Management**
+- **Flexibility**: Supports managing all kinds of data, not just projects and derivatives.
+- **Database Integration**: Seamless integration with the Django ORM for database operations.
+- **External Interfaces**: Support for interfaces to other programs, such as Excel.
 
-### 2. **Datenmodellierung**
-- **Django-Modelle**: Die Datenstruktur basiert auf Django-Modellen, die durch benutzerdefinierte Felder wie `MeasurementField` erweitert werden.
-- **Regeln und Validierungen**: Definieren Sie Regeln für Datenvalidierungen, z. B. dass das Startdatum eines Projekts vor dem Enddatum liegen muss.
+### 2. **Data Modeling**
+- **Django Models**: The data structure is based on Django models, extended by custom fields like `MeasurementField`.
+- **Rules and Validations**: Define rules for data validation, e.g., ensuring that a project's start date is before its end date.
 
-### 3. **GraphQL-Integration**
-- Automatische Generierung von GraphQL-Schnittstellen für alle Modelle.
-- Unterstützung für benutzerdefinierte Abfragen und Mutationen.
+### 3. **GraphQL Integration**
+- Automatic generation of GraphQL interfaces for all models.
+- Support for custom queries and mutations.
 
-### 4. **Berechtigungssystem**
-- **ManagerBasedPermission**: Ein flexibles Berechtigungssystem, das auf Benutzerrollen und Attributen basiert.
-- Unterstützung für CRUD-Berechtigungen auf Attributebene.
+### 4. **Permission System**
+- **ManagerBasedPermission**: A flexible permission system based on user roles and attributes.
+- Attribute-level CRUD permissions.
 
 ### 5. **Interfaces**
-- **CalculationInterface**: Ermöglicht die Implementierung von Berechnungslogiken.
-- **DatabaseInterface**: Bietet eine standardisierte Schnittstelle für Datenbankoperationen.
-- **ReadOnlyInterface**: Für schreibgeschützte Datenzugriffe.
+- **CalculationInterface**: Allows the implementation of calculation logic.
+- **DatabaseInterface**: Provides a standardized interface for database operations.
+- **ReadOnlyInterface**: For read-only data access.
 
-### 6. **Datenverteilung und Berechnung**
-- **Volumenverteilung**: Automatische Berechnung und Verteilung von Volumen über mehrere Jahre.
-- **Kommerzielle Berechnungen**: Berechnung von Gesamtvolumen, Versandkosten und Einnahmen für Projekte.
+### 6. **Data Distribution and Calculations**
+- **Volume Distribution**: Automatically calculates and distributes volume over multiple years.
+- **Commercial Calculations**: Calculates total volume, shipping costs, and revenue for projects.
 
-## Anwendung
+## Usage
 
 ### Installation
 
-Installieren Sie das Modul über `pip`:
+Install the module via `pip`:
 
 ```bash
 pip install GeneralManager
 ```
 
-### Beispielcode
+### Example Code
 
-Hier ist ein Beispiel, wie Sie einen GeneralManager erstellen und Testdaten (in diesem Fall 10 Projekte) generieren können:
+The following example demonstrates how to create a GeneralManager and generate sample data (in this case 10 projects):
 
 ```python
 from general_manager import GeneralManager
@@ -97,11 +97,11 @@ class Project(GeneralManager):
 Project.Factory.createBatch(10)
 ```
 
-### GraphQL-Integration
+### GraphQL Integration
 
-Das Modul generiert automatisch GraphQL-Schnittstellen für alle Modelle. Sie können Abfragen und Mutationen über die GraphQL-URL ausführen, die in den Django-Einstellungen definiert ist.
+The module automatically generates GraphQL endpoints for all models. You can run queries and mutations through the GraphQL URL defined in your Django settings.
 
-Beispiel für eine GraphQL-Abfrage:
+Example of a GraphQL query:
 
 ```graphql
 query {
@@ -117,26 +117,26 @@ query {
 }
 ```
 
-## Vorteile
+## Benefits
 
-- **Modularität**: Einfach erweiterbar und anpassbar.
-- **Flexibilität**: Unterstützt komplexe Geschäftslogiken und Berechnungen.
-- **Integration**: Nahtlose Integration mit Django und GraphQL.
-- **Berechtigungen**: Fein abgestimmte Berechtigungen für Benutzer und Attribute.
-- **Datenvalidierung**: Automatische Validierung von Daten durch Regeln und Constraints.
-- **Caching**: Automatische Cache-Generierung mit @cached Decorator, um die Leistung zu verbessern.
+- **Modularity**: Easy to extend and adapt.
+- **Flexibility**: Supports complex business logic and calculations.
+- **Integration**: Seamless integration with Django and GraphQL.
+- **Permissions**: Fine-grained permissions for users and attributes.
+- **Data Validation**: Automatic validation of data through rules and constraints.
+- **Caching**: Automatic cache generation with the `@cached` decorator to improve performance.
 
-## Anforderungen
+## Requirements
 
 - Python >= 3.12
 - Django >= 5.2
-- Zusätzliche Abhängigkeiten (siehe `requirements.txt`):
+- Additional dependencies (see `requirements.txt`):
   - `graphene`
   - `numpy`
   - `Pint`
   - `factory_boy`
-  - uvm.
+  - and more.
 
-## Lizenz
+## License
 
-Dieses Projekt steht unter der **Non-Commercial MIT License**. Es darf nur für nicht-kommerzielle Zwecke verwendet werden. Weitere Details finden Sie in der [LICENSE](./LICENSE).
+This project is distributed under the **Non-Commercial MIT License**. It may only be used for non-commercial purposes. For further details see the [LICENSE](./LICENSE) file.
