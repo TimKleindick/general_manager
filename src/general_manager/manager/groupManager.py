@@ -225,11 +225,6 @@ class GroupManager(Generic[GeneralManagerType]):
             and self._group_by_value == other._group_by_value
         )
 
-    def __hash__(self) -> int:
-        return hash(
-            (self._manager_class, frozenset(self._group_by_value.items()), self._data)
-        )
-
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self._manager_class}, {self._group_by_value}, {self._data})"
 
