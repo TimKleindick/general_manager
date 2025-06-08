@@ -8,7 +8,6 @@ from typing import (
     TYPE_CHECKING,
     Generator,
     TypeVar,
-    cast,
 )
 from django.db import models, transaction
 from django.contrib.auth import get_user_model
@@ -647,10 +646,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     ) -> dict[str, list[Any]]:
         """
         Combines existing filter definitions with additional keyword arguments.
-        
+
         Args:
             basis: Dictionary mapping filter keys to lists of values. Additional keyword arguments are merged into this dictionary.
-        
+
         Returns:
             A dictionary where each key maps to a list containing all values from both the original basis and the new keyword arguments.
         """
@@ -666,7 +665,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
         Returns a new bucket with manager instances matching the specified filter criteria.
-        
+
         Additional filter keyword arguments are merged with any existing filters to further restrict the queryset.
         """
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
@@ -680,7 +679,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
         Returns a new DatabaseBucket excluding items that match the specified criteria.
-        
+
         Keyword arguments specify field lookups to exclude from the queryset. The resulting bucket contains only items that do not match these filters.
         """
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
