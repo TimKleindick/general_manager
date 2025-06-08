@@ -173,12 +173,12 @@ class GroupBucket(Bucket[GeneralManagerType]):
         if reverse:
             sorted_data = sorted(
                 self._data,
-                key=lambda x: tuple([getattr(x, k) for k in key]),
+                key=lambda x: tuple(getattr(x, k) for k in key),
                 reverse=True,
             )
         else:
             sorted_data = sorted(
-                self._data, key=lambda x: tuple([getattr(x, k) for k in key])
+                self._data, key=lambda x: tuple(getattr(x, k) for k in key)
             )
 
         new_bucket = GroupBucket(
