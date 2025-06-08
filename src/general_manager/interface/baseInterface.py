@@ -72,7 +72,7 @@ class InterfaceBase(ABC):
     ) -> dict[str, Any]:
         identification = {}
         kwargs = args_to_kwargs(args, self.input_fields.keys(), kwargs)
-        # Prüfe auf fehlende oder unerwartete Argumente
+        # Check for extra arguments
         extra_args = set(kwargs.keys()) - set(self.input_fields.keys())
         if extra_args:
             for extra_arg in extra_args:
@@ -85,7 +85,7 @@ class InterfaceBase(ABC):
         if missing_args:
             raise TypeError(f"Missing required arguments: {', '.join(missing_args)}")
 
-        # Verarbeite Felder unter Berücksichtigung von Abhängigkeiten
+        # process input fields with dependencies
         processed = set()
         while len(processed) < len(self.input_fields):
             progress_made = False
@@ -100,7 +100,7 @@ class InterfaceBase(ABC):
                     processed.add(name)
                     progress_made = True
             if not progress_made:
-                # Zirkuläre Abhängigkeit erkannt
+                # detect circular dependencies
                 unresolved = set(self.input_fields.keys()) - processed
                 raise ValueError(
                     f"Circular dependency detected among inputs: {', '.join(unresolved)}"
@@ -129,7 +129,7 @@ class InterfaceBase(ABC):
                 f"Invalid type for {name}: {type(value)}, expected: {input_field.type}"
             )
         if settings.DEBUG:
-            # Prüfe mögliche Werte
+            # `possible_values` can be a callable or an iterable
             possible_values = input_field.possible_values
             if possible_values is not None:
                 if callable(possible_values):
