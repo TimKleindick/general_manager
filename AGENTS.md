@@ -1,10 +1,11 @@
-Bitte verwende conventionall commits für deine Commits. Hier ist eine kurze Übersicht:
-fix:      Ein Fehler wurde behoben.
-feat:     Eine neue Funktion wurde hinzugefügt.
-test:     Ein Test wurde hinzugefügt.
-docs:     Die Dokumentation wurde aktualisiert.
-refactor: Der Code wurde umstrukturiert, aber es wurden keine neuen Funktionen hinzugefügt oder Fehler behoben.
+Please use conventional commit messages for your commits. Here’s a brief overview:
+fix:      A bug was fixed.
+feat:     A new feature was added.
+test:     A new test was added.
+docs:     Documentation was updated.
+refactor: The code was refactored without adding new features or fixing bugs.
 
-Bitte schreibe Kommentare und Dokumentation in Englisch, um die Verständlichkeit für alle zu gewährleisten. Verwende vollständige Sätze und achte auf korrekte Grammatik und Rechtschreibung. Dies verbessert die Lesbarkeit und Wartbarkeit des Codes erheblich.
+Please write comments and documentation in English to ensure clarity for everyone. Use complete sentences with correct grammar and spelling. This greatly improves code readability and maintainability.
+Please orient your code towards simplicity and clarity. Avoid complex structures unless absolutely necessary. If a piece of code is difficult to understand, consider refactoring it or adding comments to explain its purpose.
 
-Du kannst Tests mit "python -m pytest" ausführen. Stelle sicher, dass alle Tests erfolgreich sind, bevor du Änderungen committest. Füge neue Tests hinzu, wenn du neue Funktionen implementierst oder Fehler behebst.
+You can run tests with "python -m pytest". Ensure that all tests pass before committing changes. Add new tests when implementing new features or fixing bugs.
