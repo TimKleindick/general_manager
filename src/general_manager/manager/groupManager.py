@@ -295,11 +295,11 @@ class GroupManager(Generic[GeneralManagerType]):
                 if entry not in temp_data:
                     temp_data.append(str(entry))
             new_data = ", ".join(temp_data)
+        elif issubclass(data_type, bool):
+            new_data = any(total_data)
         elif issubclass(data_type, (int, float, Measurement)):
             new_data = sum(total_data)
         elif issubclass(data_type, (datetime, date, time)):
             new_data = max(total_data)
-        elif issubclass(data_type, bool):
-            new_data = any(total_data)
 
         return new_data
