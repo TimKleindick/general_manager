@@ -32,6 +32,15 @@ class GroupBucket(Bucket[GeneralManagerType]):
         self._data = self.__buildGroupedManager(data)
         self._basis_data = data
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, self.__class__):
+            return False
+        return (
+            self._data == other._data
+            and self._manager_class == other._manager_class
+            and self._group_by_keys == other._group_by_keys
+        )
+
     def __checkGroupByArguments(self, group_by_keys: tuple[str, ...]) -> None:
         """
         This method checks if the given arguments are valid for the groupBy method.
@@ -184,7 +193,9 @@ class GroupBucket(Bucket[GeneralManagerType]):
         It returns a GroupBucket with the grouped data.
         """
         return GroupBucket(
-            self._manager_class, tuple([*self._group_by_keys, *group_by_keys]), self
+            self._manager_class,
+            tuple([*self._group_by_keys, *group_by_keys]),
+            self._basis_data,
         )
 
 
