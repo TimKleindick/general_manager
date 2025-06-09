@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v0.5.2 (2025-06-09)
+
+### Bug Fixes
+
+- Change exception type from TypeError to ValueError in GroupBucket class
+  ([`26df806`](https://github.com/TimKleindick/general_manager/commit/26df806a241a124ae094f3ab8aeaf77ba7ca3268))
+
+- More efficiency through arg in dict instead of arg in dict.keys()
+  ([`d16200e`](https://github.com/TimKleindick/general_manager/commit/d16200e7d3e7bef3d0454208bbe2805589f04b0d))
+
+### Documentation
+
+- Add AGENTS.md
+  ([`c2760f7`](https://github.com/TimKleindick/general_manager/commit/c2760f7ff382b9fb1151c9d20ca220cd0a6d5ae0))
+
+- Add Input class documentation
+  ([`707aea3`](https://github.com/TimKleindick/general_manager/commit/707aea37554c0559c7ad13bc88b7fb20b7c45d1d))
+
+- Clarify usage of Input class in context of GeneralManager initialization
+  ([`e900175`](https://github.com/TimKleindick/general_manager/commit/e9001759a9c729d3158f3a14a383ac8b5107021b))
+
+- Remove unnecessary blank lines in DatabaseBucket class docstrings
+  ([`67742a2`](https://github.com/TimKleindick/general_manager/commit/67742a29cd6709233f096a870f57207d5fc9270b))
+
+- Translate and update README
+  ([`695dcf7`](https://github.com/TimKleindick/general_manager/commit/695dcf7afc4299ca7a0d1623817173e383161780))
+
+- Update AGENTS.md to use English for clarity and consistency
+  ([`1f038e6`](https://github.com/TimKleindick/general_manager/commit/1f038e68e690070de16bf763f2133e5cadaf63c9))
+
+- Update comments for clarity and consistency in InterfaceBase
+  ([`86dbe7e`](https://github.com/TimKleindick/general_manager/commit/86dbe7e4076a1dbcff71175ef28054df7838ee62))
+
+### Testing
+
+- Add tests for InterfaceBase and Bucket implementations
+  ([`7b7f47d`](https://github.com/TimKleindick/general_manager/commit/7b7f47d51170c3c39b751a5504f82a1695f9b7f2))
+
+- Correct attribute access for _group_by_keys in BucketTests
+  ([`97b5bf3`](https://github.com/TimKleindick/general_manager/commit/97b5bf33bd35f3770acd5fe048cfa5d32754d143))
+
+- Missing """ led to problems
+  ([`2e917b3`](https://github.com/TimKleindick/general_manager/commit/2e917b3cb1f10f4b750668a136ddfbb193678c85))
+
+
 ## v0.5.1 (2025-06-08)
 
 ### Bug Fixes
