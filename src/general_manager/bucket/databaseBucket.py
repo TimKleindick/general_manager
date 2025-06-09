@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import (
     Type,
     Any,
-    TYPE_CHECKING,
     Generator,
     TypeVar,
 )
@@ -12,8 +11,7 @@ from general_manager.interface.baseInterface import (
 )
 from general_manager.bucket.baseBucket import Bucket
 
-if TYPE_CHECKING:
-    from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.generalManager import GeneralManager
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 
@@ -45,8 +43,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self,
         other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType],
     ) -> DatabaseBucket[GeneralManagerType]:
-        from general_manager.manager.generalManager import GeneralManager
-
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(self.filter(id__in=[getattr(other, "id")]))
         if not isinstance(other, self.__class__):
