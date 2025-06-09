@@ -586,7 +586,7 @@ class BucketTests(SimpleTestCase):
         self.assertEqual(grp._manager_class, self.manager_class)
 
         self.assertEqual(grp._manager_class, self.manager_class)
-        self.assertEqual(getattr(grp, "_group_by_keys"), ("a", "b"))
+        self.assertEqual(grp._group_by_keys, ("a", "b"))
 
     def test_group_by_invalid_key(self):
         # Valid entries but invalid grouping key 'x'
