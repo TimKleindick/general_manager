@@ -8,7 +8,6 @@ from typing import (
     TYPE_CHECKING,
     Generator,
     TypeVar,
-    cast,
 )
 from django.db import models, transaction
 from django.contrib.auth import get_user_model
@@ -646,13 +645,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self, basis: dict[str, list[Any]], **kwargs: Any
     ) -> dict[str, list[Any]]:
         """
-        Combines existing filter definitions with additional keyword arguments.
+        Merges filter definitions by appending values from keyword arguments to the corresponding lists in the basis dictionary.
         
         Args:
-            basis: Dictionary mapping filter keys to lists of values. Additional keyword arguments are merged into this dictionary.
+            basis: A dictionary mapping filter keys to lists of values. Existing filter criteria.
+            **kwargs: Additional filter criteria to be merged, where each value is appended to the corresponding key's list.
         
         Returns:
-            A dictionary where each key maps to a list containing all values from both the original basis and the new keyword arguments.
+            A dictionary with keys mapping to lists containing all values from both the original basis and the new keyword arguments.
         """
         kwarg_filter: dict[str, list[Any]] = {}
         for key, value in basis.items():
@@ -665,9 +665,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new bucket with manager instances matching the specified filter criteria.
+        Returns a new bucket containing manager instances matching the given filter criteria.
         
-        Additional filter keyword arguments are merged with any existing filters to further restrict the queryset.
+        Additional filter keyword arguments are merged with existing filters to further restrict the queryset.
         """
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
         return self.__class__(
@@ -679,9 +679,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new DatabaseBucket excluding items that match the specified criteria.
+        Returns a new DatabaseBucket excluding items matching the given criteria.
         
-        Keyword arguments specify field lookups to exclude from the queryset. The resulting bucket contains only items that do not match these filters.
+        Keyword arguments define field lookups to exclude from the queryset. The returned bucket contains only items that do not match these filters.
         """
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
         return self.__class__(

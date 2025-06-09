@@ -84,7 +84,10 @@ class GroupBucketTests(TestCase):
 
     # Test that invalid attribute names raise TypeError
     def test_invalid_group_by_key_raises(self):
-        with self.assertRaises(TypeError):
+        """
+        Tests that creating a GroupBucket with a non-existent attribute name raises a ValueError.
+        """
+        with self.assertRaises(ValueError):
             GroupBucket(DummyManager, ("nonexistent",), ListBucket([]))
 
     # Test grouping logic produces correct number of groups and keys

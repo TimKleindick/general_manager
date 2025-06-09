@@ -43,16 +43,19 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __checkGroupByArguments(self, group_by_keys: tuple[str, ...]) -> None:
         """
-        This method checks if the given arguments are valid for the groupBy method.
-        It raises a TypeError if the arguments are not valid.
+        Validates that all group-by keys are strings and valid attributes of the manager class.
+
+        Raises:
+            TypeError: If any group-by key is not a string.
+            ValueError: If any group-by key is not a valid attribute of the manager class.
         """
         if not all(isinstance(arg, str) for arg in group_by_keys):
             raise TypeError("groupBy() argument must be a string")
         if not all(
-            arg in self._manager_class.Interface.getAttributes().keys()
+            arg in self._manager_class.Interface.getAttributes()
             for arg in group_by_keys
         ):
-            raise TypeError(
+            raise ValueError(
                 f"groupBy() argument must be a valid attribute of {self._manager_class.__name__}"
             )
 
