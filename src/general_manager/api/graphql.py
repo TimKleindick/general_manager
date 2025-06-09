@@ -9,7 +9,8 @@ import json
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.generalManager import GeneralManagerMeta, GeneralManager
 from general_manager.api.property import GraphQLProperty
-from general_manager.interface.baseInterface import InterfaceBase, Bucket
+from general_manager.bucket.baseBucket import Bucket
+from general_manager.interface.baseInterface import InterfaceBase
 
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission

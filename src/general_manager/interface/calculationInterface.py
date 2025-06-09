@@ -4,7 +4,6 @@ from typing import (
     Any,
     Type,
     TYPE_CHECKING,
-    Callable,
     Iterable,
     Union,
     Optional,
@@ -13,7 +12,6 @@ from typing import (
 )
 from general_manager.interface.baseInterface import (
     InterfaceBase,
-    Bucket,
     classPostCreationMethod,
     classPreCreationMethod,
     generalManagerClassName,
@@ -25,12 +23,12 @@ from general_manager.interface.baseInterface import (
     GeneralManagerType,
     AttributeTypedDict,
 )
+from general_manager.bucket.baseBucket import Bucket
 from general_manager.manager.input import Input
 from general_manager.auxiliary.filterParser import parse_filters
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
-    from general_manager.manager.meta import GeneralManagerMeta
 
 
 class CalculationInterface(InterfaceBase):

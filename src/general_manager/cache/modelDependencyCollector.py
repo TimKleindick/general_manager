@@ -1,5 +1,6 @@
 from typing import Generator
-from general_manager.manager.generalManager import GeneralManager, Bucket
+from general_manager.manager.generalManager import GeneralManager
+from general_manager.bucket.baseBucket import Bucket
 from general_manager.cache.dependencyIndex import (
     general_manager_name,
     Dependency,
@@ -13,15 +14,15 @@ class ModelDependencyCollector:
     def collect(obj) -> Generator[tuple[general_manager_name, filter_type, str]]:
         """
         Recursively yields dependency information from objects related to Django models.
-        
+
         Traverses the input object and its nested structures to identify instances of
         GeneralManager and Bucket, yielding tuples that describe their dependencies.
         Yields a tuple of (manager class name, dependency type, dependency value) for
         each dependency found.
-        
+
         Args:
             obj: The object or collection to inspect for model dependencies.
-        
+
         Yields:
             Tuples containing the manager class name, dependency type ("identification",
             "filter", or "exclude"), and the string representation of the dependency value.

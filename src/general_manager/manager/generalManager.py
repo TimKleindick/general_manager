@@ -1,17 +1,18 @@
 from __future__ import annotations
-from typing import Generic, Type, Any, TYPE_CHECKING
+from typing import Generic, Type, Any, TYPE_CHECKING, TypeVar
 from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.interface.baseInterface import (
-    InterfaceBase,
-    Bucket,
-    GeneralManagerType,
-)
+
 from general_manager.api.property import GraphQLProperty
 from general_manager.cache.cacheTracker import DependencyTracker
 from general_manager.cache.signals import dataChange
+from general_manager.bucket.baseBucket import Bucket
 
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission
+    from general_manager.interface.baseInterface import (
+        InterfaceBase,
+    )
+GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 
 
 class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
@@ -130,12 +131,12 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """
         Converts a dictionary of keyword arguments by replacing any GeneralManager instances with their identifications.
-        
+
         For each key-value pair, if the value is a GeneralManager, it is replaced with its identification. Lists and tuples are processed recursively, replacing contained GeneralManager instances with their identifications. Returns a new dictionary with the processed values, or None if the result is empty.
-        
+
         Args:
             kwargs: Dictionary of keyword arguments to process.
-        
+
         Returns:
             A new dictionary with GeneralManager instances replaced by their identifications, or None if the dictionary is empty.
         """

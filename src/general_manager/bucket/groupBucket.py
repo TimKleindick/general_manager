@@ -1,0 +1,196 @@
+from __future__ import annotations
+from typing import (
+    Type,
+    Generator,
+    Any,
+)
+import json
+from general_manager.manager.groupManager import GroupManager
+from general_manager.bucket.baseBucket import (
+    Bucket,
+    GeneralManagerType,
+)
+
+
+class GroupBucket(Bucket[GeneralManagerType]):
+
+    def __init__(
+        self,
+        manager_class: Type[GeneralManagerType],
+        group_by_keys: tuple[str, ...],
+        data: Bucket[GeneralManagerType],
+    ):
+        super().__init__(manager_class)
+        self.__checkGroupByArguments(group_by_keys)
+        self._group_by_keys = group_by_keys
+        self._data = self.__buildGroupedManager(data)
+        self._basis_data = data
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, self.__class__):
+            return False
+        return (
+            self._data == other._data
+            and self._manager_class == other._manager_class
+            and self._group_by_keys == other._group_by_keys
+        )
+
+    def __checkGroupByArguments(self, group_by_keys: tuple[str, ...]) -> None:
+        """
+        Validates that all group-by keys are strings and valid attributes of the manager class.
+
+        Raises:
+            TypeError: If any group-by key is not a string.
+            ValueError: If any group-by key is not a valid attribute of the manager class.
+        """
+        if not all(isinstance(arg, str) for arg in group_by_keys):
+            raise TypeError("groupBy() argument must be a string")
+        if not all(
+            arg in self._manager_class.Interface.getAttributes()
+            for arg in group_by_keys
+        ):
+            raise ValueError(
+                f"groupBy() argument must be a valid attribute of {self._manager_class.__name__}"
+            )
+
+    def __buildGroupedManager(
+        self,
+        data: Bucket[GeneralManagerType],
+    ) -> list[GroupManager[GeneralManagerType]]:
+        """
+        This method builds the grouped manager.
+        It returns a GroupBucket with the grouped data.
+        """
+        group_by_values = set()
+        for entry in data:
+            group_by_value = {}
+            for arg in self._group_by_keys:
+                group_by_value[arg] = getattr(entry, arg)
+            group_by_values.add(json.dumps(group_by_value))
+
+        groups = []
+        for group_by_value in sorted(group_by_values):
+            group_by_value = json.loads(group_by_value)
+            grouped_manager_objects = data.filter(**group_by_value)
+            groups.append(
+                GroupManager(
+                    self._manager_class, group_by_value, grouped_manager_objects
+                )
+            )
+        return groups
+
+    def __or__(self, other: object) -> GroupBucket[GeneralManagerType]:
+        if not isinstance(other, self.__class__):
+            raise ValueError("Cannot combine different bucket types")
+        if self._manager_class != other._manager_class:
+            raise ValueError("Cannot combine different manager classes")
+        return GroupBucket(
+            self._manager_class,
+            self._group_by_keys,
+            self._basis_data | other._basis_data,
+        )
+
+    def __iter__(self) -> Generator[GroupManager[GeneralManagerType]]:
+        for grouped_manager in self._data:
+            yield grouped_manager
+
+    def filter(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
+        new_basis_data = self._basis_data.filter(**kwargs)
+        return GroupBucket(
+            self._manager_class,
+            self._group_by_keys,
+            new_basis_data,
+        )
+
+    def exclude(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
+        new_basis_data = self._basis_data.exclude(**kwargs)
+        return GroupBucket(
+            self._manager_class,
+            self._group_by_keys,
+            new_basis_data,
+        )
+
+    def first(self) -> GroupManager[GeneralManagerType] | None:
+        try:
+            return next(iter(self))
+        except StopIteration:
+            return None
+
+    def last(self) -> GroupManager[GeneralManagerType] | None:
+        items = list(self)
+        if items:
+            return items[-1]
+        return None
+
+    def count(self) -> int:
+        return sum(1 for _ in self)
+
+    def all(self) -> Bucket[GeneralManagerType]:
+        return self
+
+    def get(self, **kwargs: Any) -> GroupManager[GeneralManagerType]:
+        first_value = self.filter(**kwargs).first()
+        if first_value is None:
+            raise ValueError(
+                f"Cannot find {self._manager_class.__name__} with {kwargs}"
+            )
+        return first_value
+
+    def __getitem__(
+        self, item: int | slice
+    ) -> GroupManager[GeneralManagerType] | GroupBucket[GeneralManagerType]:
+        if isinstance(item, int):
+            return self._data[item]
+        elif isinstance(item, slice):
+            new_data = self._data[item]
+            new_base_data = None
+            for manager in new_data:
+                if new_base_data is None:
+                    new_base_data = manager._data
+                else:
+                    new_base_data = new_base_data | manager._data
+            if new_base_data is None:
+                raise ValueError("Cannot slice an empty GroupBucket")
+            return GroupBucket(self._manager_class, self._group_by_keys, new_base_data)
+        raise TypeError(f"Invalid argument type: {type(item)}. Expected int or slice.")
+
+    def __len__(self) -> int:
+        return self.count()
+
+    def __contains__(self, item: GeneralManagerType) -> bool:
+        return item in self._basis_data
+
+    def sort(
+        self,
+        key: tuple[str] | str,
+        reverse: bool = False,
+    ) -> Bucket[GeneralManagerType]:
+        if isinstance(key, str):
+            key = (key,)
+        if reverse:
+            sorted_data = sorted(
+                self._data,
+                key=lambda x: tuple(getattr(x, k) for k in key),
+                reverse=True,
+            )
+        else:
+            sorted_data = sorted(
+                self._data, key=lambda x: tuple(getattr(x, k) for k in key)
+            )
+
+        new_bucket = GroupBucket(
+            self._manager_class, self._group_by_keys, self._basis_data
+        )
+        new_bucket._data = sorted_data
+        return new_bucket
+
+    def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
+        """
+        This method groups the data by the given arguments.
+        It returns a GroupBucket with the grouped data.
+        """
+        return GroupBucket(
+            self._manager_class,
+            tuple([*self._group_by_keys, *group_by_keys]),
+            self._basis_data,
+        )
