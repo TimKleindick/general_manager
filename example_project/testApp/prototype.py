@@ -14,16 +14,9 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 
-# from general_manager.interface import (
-#     DatabaseInterface,
-#     CalculationInterface,
-#     DatabaseBucket,
-# )
 from general_manager.interface.calculationInterface import CalculationInterface
-from general_manager.interface.databaseInterface import (
-    DatabaseBucket,
-    DatabaseInterface,
-)
+from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.bucket.databaseBucket import DatabaseBucket
 from general_manager.manager import GeneralManager, graphQlProperty, Input
 from general_manager.permission import ManagerBasedPermission
 from general_manager.measurement import (

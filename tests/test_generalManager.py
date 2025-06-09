@@ -1,5 +1,6 @@
 from django.test import TestCase
 from general_manager.manager.generalManager import GeneralManager
+from general_manager.bucket.baseBucket import Bucket
 from unittest.mock import patch
 from general_manager.cache.signals import post_data_change, pre_data_change
 
@@ -8,7 +9,7 @@ class DummyInterface:
     def __init__(self, *args, **kwargs):
         """
         Initializes the DummyInterface instance with attributes from keyword arguments.
-        
+
         All keyword arguments are set as instance attributes.
         """
         self.__dict__ = kwargs
@@ -31,7 +32,7 @@ class DummyInterface:
     def create(cls, *args, **kwargs):
         """
         Creates a new dummy record and returns a dictionary with a fixed ID.
-        
+
         Returns:
             dict: A dictionary containing the key "id" with value "dummy_id".
         """
@@ -40,7 +41,7 @@ class DummyInterface:
     def update(self, *args, **kwargs):
         """
         Mocks the update operation and returns a fixed identification dictionary.
-        
+
         Returns:
             dict: A dictionary containing a dummy ID.
         """
@@ -65,7 +66,7 @@ class GeneralManagerTestCase(TestCase):
         # Set up any necessary data or state before each test
         """
         Prepares the test environment before each test method.
-        
+
         Initializes the GeneralManager with test attributes and assigns a dummy interface. Connects temporary receivers to pre- and post-data change signals to capture emitted events during tests.
         """
         self.manager = GeneralManager
@@ -112,7 +113,7 @@ class GeneralManagerTestCase(TestCase):
         # Test if the manager initializes correctly
         """
         Tests that the GeneralManager initializes correctly and tracks dependencies.
-        
+
         Verifies that DependencyTracker.track is called with the expected arguments and that the returned object is an instance of GeneralManager.
         """
         manager = self.manager()
@@ -174,7 +175,7 @@ class GeneralManagerTestCase(TestCase):
         # Test the __iter__ method
         """
         Tests that iterating over a GeneralManager instance yields its attributes as key-value pairs.
-        
+
         Verifies that the resulting dictionary contains expected keys and values, including 'name', 'version', 'active', and 'id'.
         """
         manager = self.manager()

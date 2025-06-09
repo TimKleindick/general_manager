@@ -2,11 +2,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import (
     Type,
-    Generator,
     TYPE_CHECKING,
     Any,
     TypeVar,
-    Generic,
     Iterable,
     ClassVar,
     Callable,
@@ -21,7 +19,7 @@ if TYPE_CHECKING:
     from general_manager.manager.input import Input
     from general_manager.manager.generalManager import GeneralManager
     from general_manager.manager.meta import GeneralManagerMeta
-    from general_manager.manager.groupManager import GroupManager, GroupBucket
+    from general_manager.bucket.baseBucket import Bucket
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
@@ -72,9 +70,9 @@ class InterfaceBase(ABC):
     ) -> dict[str, Any]:
         """
         Parses and validates input arguments into a structured identification dictionary.
-        
+
         Converts positional and keyword arguments into a dictionary keyed by input field names, handling normalization of argument names and checking for unexpected or missing arguments. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for unexpected or missing arguments and a `ValueError` if circular dependencies among input fields are detected.
-        
+
         Returns:
             A dictionary mapping input field names to their validated and cast values.
         """
@@ -133,7 +131,7 @@ class InterfaceBase(ABC):
     ) -> None:
         """
         Validates the type and allowed values of an input field.
-        
+
         Checks that the provided value matches the expected type for the input field and, in debug mode, verifies that the value is among the allowed possible values if specified. Raises a TypeError for invalid types or possible value definitions, and a ValueError if the value is not permitted.
         """
         input_field = self.input_fields[name]
@@ -222,100 +220,3 @@ class InterfaceBase(ABC):
         Returns the type of the field with the given name.
         """
         raise NotImplementedError
-
-
-class Bucket(ABC, Generic[GeneralManagerType]):
-
-    def __init__(self, manager_class: Type[GeneralManagerType]):
-        self._manager_class = manager_class
-        self._data = None
-        self.excludes = {}
-        self.filters = {}
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, self.__class__):
-            return False
-        return self._data == other._data and self._manager_class == other._manager_class
-
-    def __reduce__(self) -> str | tuple[Any, ...]:
-        return (
-            self.__class__,
-            (None, self._manager_class, self.filters, self.excludes),
-        )
-
-    @abstractmethod
-    def __or__(
-        self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]
-    ) -> Bucket[GeneralManagerType]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def __iter__(
-        self,
-    ) -> Generator[GeneralManagerType | GroupManager[GeneralManagerType]]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def filter(self, **kwargs: Any) -> Bucket[GeneralManagerType]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def exclude(self, **kwargs: Any) -> Bucket[GeneralManagerType]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def first(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def last(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def count(self) -> int:
-        raise NotImplementedError
-
-    @abstractmethod
-    def all(self) -> Bucket[GeneralManagerType]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def get(
-        self, **kwargs: Any
-    ) -> GeneralManagerType | GroupManager[GeneralManagerType]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def __getitem__(
-        self, item: int | slice
-    ) -> (
-        GeneralManagerType
-        | GroupManager[GeneralManagerType]
-        | Bucket[GeneralManagerType]
-    ):
-        raise NotImplementedError
-
-    @abstractmethod
-    def __len__(self) -> int:
-        raise NotImplementedError
-
-    @abstractmethod
-    def __contains__(self, item: GeneralManagerType) -> bool:
-        raise NotImplementedError
-
-    @abstractmethod
-    def sort(
-        self,
-        key: tuple[str] | str,
-        reverse: bool = False,
-    ) -> Bucket[GeneralManagerType]:
-        raise NotImplementedError
-
-    def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
-        """
-        This method groups the data by the given arguments.
-        It returns a GroupBucket with the grouped data.
-        """
-        from general_manager.manager.groupManager import GroupBucket
-
-        return GroupBucket(self._manager_class, group_by_keys, self)

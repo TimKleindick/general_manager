@@ -351,7 +351,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
                 )
 
         self.assertIn(
-            f"Interface must be a subclass of {InterfaceBase.__name__}",
+            f"object must be a subclass of InterfaceBase",
             str(cm.exception),
             msg="Exception message should indicate that InterfaceBase is required.",
         )
