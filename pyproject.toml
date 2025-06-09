@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "GeneralManager"
 version = "0.5.2"
-description = "A flexible, Django-based Python framework for modular data management and processing, featuring seamless ORM integration, automatic GraphQL APIs, fine-grained, attribute-level permissions, rule-based data validation, multiple interfaces (database, calculation, read-only), volume and financial calculations, and built-in caching."
+description = "Modular Django-based data management framework with ORM, GraphQL, fine-grained permissions, rule validation, calculations and caching."
 readme = "README.md"
 authors = [{ name = "Tim Kleindick", email = "tkleindick@yahoo.de" }]
 license = "MIT"
