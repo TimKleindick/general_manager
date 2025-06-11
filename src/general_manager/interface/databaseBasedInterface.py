@@ -177,12 +177,8 @@ class DBBasedInterface(InterfaceBase):
                 related_model,
                 "_general_manager_class",
             ):
-                fields[field_name] = {
-                    "type": related_model._general_manager_class,
-                    "is_required": not field.null,
-                    "is_editable": field.editable,
-                    "default": field.default,
-                }
+                related_model = related_model._general_manager_class
+
             elif related_model is not None:
                 fields[field_name] = {
                     "type": related_model,
@@ -200,22 +196,18 @@ class DBBasedInterface(InterfaceBase):
                     field_name = field_call
                 else:
                     raise ValueError("Field name already exists.")
+            field = cls._model._meta.get_field(field_name)
             related_model = cls._model._meta.get_field(field_name).related_model
             if related_model and hasattr(
                 related_model,
                 "_general_manager_class",
             ):
-                fields[f"{field_name}_list"] = {
-                    "type": related_model._general_manager_class,
-                    "is_required": False,
-                    "is_editable": False,
-                    "default": None,
-                }
-            elif related_model is not None:
+                related_model = related_model._general_manager_class
+            if related_model is not None:
                 fields[f"{field_name}_list"] = {
                     "type": related_model,
                     "is_required": False,
-                    "is_editable": False,
+                    "is_editable": bool(field.many_to_many and field.editable),
                     "default": None,
                 }
 
@@ -225,7 +217,7 @@ class DBBasedInterface(InterfaceBase):
         }
 
     @classmethod
-    def getAttributes(cls) -> dict[str, Any]:
+    def getAttributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         field_values: dict[str, Any] = {}
 
         field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
