@@ -1,13 +1,13 @@
 from __future__ import annotations
-from general_manager.interface.baseInterface import (
-    InterfaceBase,
-)
+
 from django.conf import settings
 from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar, Iterable
+from general_manager.interface.baseInterface import InterfaceBase
 
 if TYPE_CHECKING:
-    from general_manager.interface.databaseInterface import ReadOnlyInterface
+    from general_manager.interface.readOnlyInterface import ReadOnlyInterface
     from general_manager.manager.generalManager import GeneralManager
+
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 
@@ -24,6 +24,20 @@ class GeneralManagerMeta(type):
     Interface: type[InterfaceBase]
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
+
+        """
+        Creates a new class, handling interface integration and registration for the general manager framework.
+        
+        If an 'Interface' attribute is present in the class definition, validates and processes it using the interface's pre- and post-creation hooks, then registers the resulting class for attribute initialization and tracking. If the 'AUTOCREATE_GRAPHQL' setting is enabled, also registers the class for pending GraphQL interface creation.
+        
+        Args:
+            name: The name of the class being created.
+            bases: Base classes for the new class.
+            attrs: Attribute dictionary for the new class.
+        
+        Returns:
+            The newly created class, possibly augmented with interface and registration logic.
+        """
         def createNewGeneralManagerClass(
             mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
         ) -> Type[GeneralManager]:
@@ -33,7 +47,7 @@ class GeneralManagerMeta(type):
             interface = attrs.pop("Interface")
             if not issubclass(interface, InterfaceBase):
                 raise TypeError(
-                    f"Interface must be a subclass of {InterfaceBase.__name__}"
+                    f"{interface.__name__} must be a subclass of InterfaceBase"
                 )
             preCreation, postCreation = interface.handleInterface()
             attrs, interface_cls, model = preCreation(name, attrs, interface)

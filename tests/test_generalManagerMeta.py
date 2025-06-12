@@ -340,8 +340,9 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
     def test_invalid_interface_raises_type_error(self):
         """
-        A class with Interface = object (not a subclass of InterfaceBase)
-        should raise TypeError when defined.
+        Verifies that defining a class with an Interface not subclassing InterfaceBase raises a TypeError.
+        
+        Asserts that the exception message indicates the requirement for InterfaceBase and that no classes are registered after the failure.
         """
         with self.assertRaises(TypeError) as cm:
 
@@ -351,7 +352,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
                 )
 
         self.assertIn(
-            f"Interface must be a subclass of {InterfaceBase.__name__}",
+            f"object must be a subclass of InterfaceBase",
             str(cm.exception),
             msg="Exception message should indicate that InterfaceBase is required.",
         )

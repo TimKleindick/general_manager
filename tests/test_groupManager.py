@@ -3,9 +3,9 @@ from datetime import date
 from django.test import TestCase
 from general_manager.api.graphql import GraphQLProperty
 from general_manager.manager.groupManager import (
-    GroupBucket,
     GroupManager,
 )
+from general_manager.bucket.groupBucket import GroupBucket
 from general_manager.measurement import Measurement
 
 
