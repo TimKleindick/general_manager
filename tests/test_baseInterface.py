@@ -63,13 +63,13 @@ class DummyInterface(InterfaceBase):
 
     def getData(self, search_date=None):
         """
-        Returns the identification associated with this interface instance.
-
+        Returns the identification value for this interface instance.
+        
         Args:
-            search_date: Optional parameter for compatibility; ignored in this implementation.
-
+            search_date: Optional parameter for compatibility; ignored.
+        
         Returns:
-            The identification value of the interface.
+            The identification value associated with the interface.
         """
         return self.identification
 
@@ -121,13 +121,13 @@ class DummyInterface(InterfaceBase):
     @classmethod
     def getFieldType(cls, field_name):
         """
-        Returns the type of the specified input field.
-
+        Returns the expected type for a given input field name.
+        
         Args:
-            field_name: The name of the input field.
-
+            field_name: Name of the input field to look up.
+        
         Returns:
-            The type associated with the given input field.
+            The type object associated with the specified input field.
         """
         return DummyInterface.input_fields[field_name].type
 
@@ -136,7 +136,9 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_valid_input_kwargs(self):
         # Normal case: all inputs provided as kwargs
         """
-        Tests that TestInterface correctly initializes when all required inputs are provided as keyword arguments.
+        Tests that DummyInterface initializes correctly when all required inputs are provided as keyword arguments.
+        
+        Verifies that the identification attribute matches the expected values, including nested GeneralManager instances.
         """
         gm = DummyGM({"id": 1})
         inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)
@@ -148,7 +150,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_valid_input_args(self):
         # Positional args instead of kwargs
         """
-        Tests that TestInterface correctly accepts valid positional arguments and assigns them to input fields.
+        Tests that DummyInterface correctly assigns input fields when initialized with valid positional arguments.
         """
         gm = DummyGM({"id": 2})
         inst = DummyInterface(2, "bar", gm, 3, 2)
@@ -157,7 +159,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_missing_required_input(self):
         # Missing 'a' should raise TypeError
         """
-        Tests that omitting a required input field when initializing TestInterface raises a TypeError.
+        Tests that omitting a required input field when initializing DummyInterface raises a TypeError.
         """
         with self.assertRaises(TypeError):
             DummyInterface(b="foo", gm=DummyGM({"id": 3}), vals=1, c=1)
@@ -165,7 +167,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_extra_input(self):
         # Unexpected argument 'extra' raises TypeError
         """
-        Tests that providing an unexpected input argument raises a TypeError.
+        Tests that providing an unexpected input argument to DummyInterface raises a TypeError.
         """
         with self.assertRaises(TypeError):
             DummyInterface(a=1, b="foo", gm=DummyGM({"id": 4}), vals=1, c=1, extra=5)
@@ -173,7 +175,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_extra_input_id_suffix(self):
         # Argument 'gm_id' is remapped to 'gm'
         """
-        Tests that input arguments with an '_id' suffix are remapped to their corresponding field names, overriding previous values.
+        Tests that input arguments with an '_id' suffix override the corresponding input field, ensuring the remapped value is used in identification.
         """
         inst = DummyInterface(
             a=1, b="baz", gm=DummyGM({"id": 5}), vals=1, c=1, gm_id=DummyGM({"id": 6})
@@ -183,10 +185,9 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_type_mismatch(self):
         # Passing wrong type for 'a' should raise TypeError
         """
-        Tests that providing an incorrect type for an input field raises a TypeError.
-
-        Verifies that passing a value of the wrong type for the 'a' field in TestInterface
-        results in a TypeError during initialization.
+        Tests that providing a value of the wrong type for an input field raises a TypeError.
+        
+        This test ensures that initializing DummyInterface with a non-integer value for the 'a' field results in a TypeError.
         """
         with self.assertRaises(TypeError):
             DummyInterface(a="not_int", b="foo", gm=DummyGM({"id": 7}), vals=1, c=1)
@@ -195,7 +196,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_invalid_value_list(self):
         # 'vals' not in allowed [1,2,3] raises ValueError
         """
-        Tests that providing a value for 'vals' outside the allowed list raises a ValueError.
+        Tests that providing a value for the 'vals' input field that is not in its allowed list raises a ValueError.
         """
         with self.assertRaises(ValueError):
             DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
@@ -204,7 +205,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_invalid_value_callable(self):
         # 'c' not in allowed from lambda [a, a+1] raises ValueError
         """
-        Tests that providing a value for 'c' not in the allowed set generated by a callable raises ValueError.
+        Tests that providing an invalid value for input 'c', where allowed values are determined by a callable, raises a ValueError.
         """
         with self.assertRaises(ValueError):
             DummyInterface(a=5, b="foo", gm=DummyGM({"id": 9}), vals=1, c=3)
@@ -213,7 +214,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_possible_values_invalid_type(self):
         # possible_values is invalid type (not iterable/callable)
         """
-        Tests that providing a non-iterable, non-callable value for possible_values raises TypeError.
+        Tests that initializing DummyInterface with a non-iterable, non-callable value for possible_values raises a TypeError.
         """
         with self.assertRaises(TypeError):
             DummyInterface(a=1, b="foo", gm=DummyGM({"id": 10}), vals=1, c=1, x=2)
@@ -221,7 +222,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_circular_dependency(self):
         # Two inputs depending on each other -> ValueError
         """
-        Tests that defining input fields with circular dependencies raises a ValueError.
+        Verifies that initializing an interface with circular input field dependencies raises a ValueError.
         """
 
         class Circ(InterfaceBase):
@@ -263,7 +264,7 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_format_identification_list_and_gm(self):
         # formatIdentification converts nested GeneralManager and lists correctly
         """
-        Tests that formatIdentification correctly converts nested GeneralManager instances and lists to dictionaries within the identification attribute.
+        Tests that formatIdentification recursively converts GeneralManager instances and lists containing them into dictionaries within the identification attribute.
         """
         gm = DummyGM({"id": 11})
         inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)

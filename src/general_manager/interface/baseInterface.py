@@ -70,9 +70,9 @@ class InterfaceBase(ABC):
     ) -> dict[str, Any]:
         """
         Parses and validates input arguments into a structured identification dictionary.
-
-        Converts positional and keyword arguments into a dictionary keyed by input field names, handling normalization of argument names and checking for unexpected or missing arguments. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for unexpected or missing arguments and a `ValueError` if circular dependencies among input fields are detected.
-
+        
+        Converts positional and keyword arguments into a dictionary keyed by input field names, normalizing argument names and ensuring all required fields are present. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for unexpected or missing arguments and a `ValueError` if circular dependencies among input fields are detected.
+        
         Returns:
             A dictionary mapping input field names to their validated and cast values.
         """
@@ -131,8 +131,8 @@ class InterfaceBase(ABC):
     ) -> None:
         """
         Validates the type and allowed values of an input field.
-
-        Checks that the provided value matches the expected type for the input field and, in debug mode, verifies that the value is among the allowed possible values if specified. Raises a TypeError for invalid types or possible value definitions, and a ValueError if the value is not permitted.
+        
+        Ensures that the provided value matches the expected type for the specified input field. In debug mode, also checks that the value is among the allowed possible values if defined, supporting both callables and iterables. Raises a TypeError for invalid types or possible value definitions, and a ValueError if the value is not permitted.
         """
         input_field = self.input_fields[name]
         if not isinstance(value, input_field.type):
@@ -217,6 +217,15 @@ class InterfaceBase(ABC):
     @abstractmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        Returns the type of the field with the given name.
+        Returns the type of the specified input field.
+        
+        Args:
+            field_name: The name of the input field.
+        
+        Returns:
+            The Python type associated with the given field name.
+        
+        Raises:
+            NotImplementedError: This method must be implemented by subclasses.
         """
         raise NotImplementedError

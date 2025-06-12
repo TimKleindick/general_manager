@@ -20,6 +20,11 @@ class ReadOnlyInterface(DBBasedInterface):
 
     @classmethod
     def sync_data(cls) -> None:
+        """
+        Synchronizes the database model with JSON data, ensuring exact correspondence.
+        
+        This method parses JSON data from the parent class and updates the associated Django model so that its records exactly match the JSON content. It creates or updates instances based on unique fields and deletes any database entries not present in the JSON data. Raises a ValueError if required attributes are missing or if the JSON data is invalid.
+        """
         model: Type[models.Model] | None = getattr(cls, "_model", None)
         parent_class = getattr(cls, "_parent_class", None)
         if model is None or parent_class is None:
@@ -74,6 +79,12 @@ class ReadOnlyInterface(DBBasedInterface):
 
     @staticmethod
     def readOnlyPostCreate(func: Callable[..., Any]) -> Callable[..., Any]:
+        """
+        Decorator for post-creation hooks that registers the interface class as read-only.
+        
+        Wraps a function to be called after a class creation event, then appends the interface
+        class to the meta-class's `read_only_classes` list.
+        """
         def wrapper(
             mcs: Type[GeneralManagerMeta],
             new_class: Type[GeneralManager],
@@ -88,12 +99,8 @@ class ReadOnlyInterface(DBBasedInterface):
     @classmethod
     def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
-        This method returns a pre and a post GeneralManager creation method
-        and is called inside the GeneralManagerMeta class to initialize the
-        Interface.
-        The pre creation method is called before the GeneralManager instance
-        is created to modify the kwargs.
-        The post creation method is called after the GeneralManager instance
-        is created to modify the instance and add additional data.
+        Returns pre- and post-creation methods for integrating the interface with a GeneralManager.
+        
+        The pre-creation method modifies keyword arguments before a GeneralManager instance is created. The post-creation method, wrapped with a decorator, modifies the instance after creation to add additional data. These methods are intended for use by the GeneralManagerMeta class during the manager's lifecycle.
         """
         return cls._preCreate, cls.readOnlyPostCreate(cls._postCreate)
