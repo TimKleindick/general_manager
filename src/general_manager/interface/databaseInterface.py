@@ -84,6 +84,19 @@ class DatabaseInterface(DBBasedInterface):
     def __save_with_history(
         cls, instance: GeneralManagerModel, creator_id: int, history_comment: str | None
     ) -> int:
+        """
+        Saves a model instance with validation and optional history tracking.
+        
+        Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within an atomic transaction.
+        
+        Args:
+            instance: The model instance to save.
+            creator_id: The ID of the user making the change.
+            history_comment: Optional comment describing the reason for the change.
+        
+        Returns:
+            The primary key of the saved instance.
+        """
         instance.changed_by_id = creator_id
         instance.full_clean()
         if history_comment:

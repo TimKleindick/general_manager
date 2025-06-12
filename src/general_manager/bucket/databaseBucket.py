@@ -25,6 +25,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         filter_definitions: dict[str, list[Any]] = {},
         exclude_definitions: dict[str, list[Any]] = {},
     ):
+        """
+        Initializes a DatabaseBucket with a queryset, manager class, and optional filter and exclude definitions.
+        
+        If no queryset is provided, constructs one using the manager class and the given filters and excludes. Stores the queryset, manager class, and copies of the filter and exclude definitions for further operations.
+        """
         if data is None:
             data = manager_class.filter(**filter_definitions).exclude(
                 **exclude_definitions
@@ -36,6 +41,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self.excludes = {**exclude_definitions}
 
     def __iter__(self) -> Generator[GeneralManagerType]:
+        """
+        Yields manager instances for each item in the underlying queryset.
+        
+        Iterates over the queryset, returning a new instance of the manager class for each item's primary key.
+        """
         for item in self._data:
             yield self._manager_class(item.pk)
 
@@ -43,6 +53,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self,
         other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType],
     ) -> DatabaseBucket[GeneralManagerType]:
+        """
+        Combines this bucket with another bucket or manager instance using the union operator.
+        
+        If `other` is a manager instance of the same class, creates a bucket containing only that instance and combines it. If `other` is a compatible bucket, returns a new bucket containing the union of both buckets' querysets. Raises a `ValueError` if the types or manager classes are incompatible.
+        
+        Returns:
+            A new `DatabaseBucket` containing the combined items.
+        """
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(
                 self._manager_class.filter(id__in=[other.identification["id"]])
@@ -61,14 +79,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self, basis: dict[str, list[Any]], **kwargs: Any
     ) -> dict[str, list[Any]]:
         """
-        Merges filter definitions by appending values from keyword arguments to the corresponding lists in the basis dictionary.
-
+        Combines existing filter definitions with additional criteria by appending new values to each key's list.
+        
         Args:
-            basis: A dictionary mapping filter keys to lists of values. Existing filter criteria.
-            **kwargs: Additional filter criteria to be merged, where each value is appended to the corresponding key's list.
-
+            basis: Existing filter definitions as a dictionary mapping keys to lists of values.
+            **kwargs: Additional filter criteria to merge, with each value appended to the corresponding key.
+        
         Returns:
-            A dictionary with keys mapping to lists containing all values from both the original basis and the new keyword arguments.
+            A dictionary containing all filter keys with lists of values from both the original and new criteria.
         """
         kwarg_filter: dict[str, list[Any]] = {}
         for key, value in basis.items():
@@ -81,9 +99,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new bucket containing manager instances matching the given filter criteria.
-
-        Additional filter keyword arguments are merged with existing filters to further restrict the queryset.
+        Returns a new bucket with manager instances matching the combined filter criteria.
+        
+        Additional filter arguments are merged with any existing filters to further restrict the queryset, producing a new DatabaseBucket instance.
         """
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
         return self.__class__(
@@ -95,9 +113,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new DatabaseBucket excluding items matching the given criteria.
-
-        Keyword arguments define field lookups to exclude from the queryset. The returned bucket contains only items that do not match these filters.
+        Returns a new DatabaseBucket excluding items that match the specified criteria.
+        
+        Keyword arguments specify field lookups to exclude from the queryset. The resulting bucket contains only items that do not satisfy these exclusion filters.
         """
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
         return self.__class__(
@@ -108,39 +126,83 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
     def first(self) -> GeneralManagerType | None:
+        """
+        Returns the first item in the queryset wrapped in the manager class, or None if the queryset is empty.
+        """
         first_element = self._data.first()
         if first_element is None:
             return None
         return self._manager_class(first_element.pk)
 
     def last(self) -> GeneralManagerType | None:
+        """
+        Returns the last item in the queryset wrapped in the manager class, or None if the queryset is empty.
+        """
         first_element = self._data.last()
         if first_element is None:
             return None
         return self._manager_class(first_element.pk)
 
     def count(self) -> int:
+        """
+        Returns the number of items in the bucket.
+        """
         return self._data.count()
 
     def all(self) -> DatabaseBucket:
+        """
+        Returns a new DatabaseBucket containing all items from the current queryset.
+        """
         return self.__class__(self._data.all(), self._manager_class)
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
+        """
+        Retrieves a single item matching the given criteria and returns it as a manager instance.
+        
+        Args:
+        	**kwargs: Field lookups to identify the item to retrieve.
+        
+        Returns:
+        	A manager instance wrapping the uniquely matched model object.
+        
+        Raises:
+        	Does not handle exceptions; any exceptions raised by the underlying queryset's `get()` method will propagate.
+        """
         element = self._data.get(**kwargs)
         return self._manager_class(element.pk)
 
     def __getitem__(self, item: int | slice) -> GeneralManagerType | DatabaseBucket:
+        """
+        Enables indexing and slicing of the bucket.
+        
+        If an integer index is provided, returns the manager instance for the corresponding item. If a slice is provided, returns a new bucket containing the sliced queryset.
+        """
         if isinstance(item, slice):
             return self.__class__(self._data[item], self._manager_class)
         return self._manager_class(self._data[item].pk)
 
     def __len__(self) -> int:
+        """
+        Returns the number of items in the bucket.
+        """
         return self._data.count()
 
     def __repr__(self) -> str:
+        """
+        Returns a string representation of the bucket, showing the manager class name and the underlying queryset.
+        """
         return f"{self._manager_class.__name__}Bucket ({self._data})"
 
     def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
+        """
+        Checks if a manager instance or model instance is present in the bucket.
+        
+        Args:
+            item: A manager instance or Django model instance to check for membership.
+        
+        Returns:
+            True if the item's primary key exists in the underlying queryset; otherwise, False.
+        """
         from general_manager.manager.generalManager import GeneralManager
 
         if isinstance(item, GeneralManager):
@@ -154,6 +216,16 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         key: tuple[str] | str,
         reverse: bool = False,
     ) -> DatabaseBucket:
+        """
+        Returns a new DatabaseBucket sorted by the specified field or fields.
+        
+        Args:
+            key: A field name or tuple of field names to sort by.
+            reverse: If True, sorts in descending order.
+        
+        Returns:
+            A new DatabaseBucket instance with the sorted queryset.
+        """
         if isinstance(key, str):
             key = (key,)
         if reverse:

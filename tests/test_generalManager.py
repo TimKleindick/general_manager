@@ -8,9 +8,9 @@ from general_manager.cache.signals import post_data_change, pre_data_change
 class DummyInterface:
     def __init__(self, *args, **kwargs):
         """
-        Initializes the DummyInterface instance with attributes from keyword arguments.
-
-        All keyword arguments are set as instance attributes.
+        Initializes the DummyInterface instance by setting attributes from keyword arguments.
+        
+        Each keyword argument is assigned as an instance attribute.
         """
         self.__dict__ = kwargs
 
@@ -32,18 +32,18 @@ class DummyInterface:
     def create(cls, *args, **kwargs):
         """
         Creates a new dummy record and returns a dictionary with a fixed ID.
-
+        
         Returns:
-            dict: A dictionary containing the key "id" with value "dummy_id".
+            dict: A dictionary with the key "id" set to "dummy_id".
         """
         return {"id": "dummy_id"}
 
     def update(self, *args, **kwargs):
         """
-        Mocks the update operation and returns a fixed identification dictionary.
-
+        Simulates an update operation and returns a fixed identification dictionary.
+        
         Returns:
-            dict: A dictionary containing a dummy ID.
+            dict: A dictionary with a dummy ID.
         """
         return {"id": "dummy_id"}
 
@@ -65,9 +65,9 @@ class GeneralManagerTestCase(TestCase):
     def setUp(self):
         # Set up any necessary data or state before each test
         """
-        Prepares the test environment before each test method.
-
-        Initializes the GeneralManager with test attributes and assigns a dummy interface. Connects temporary receivers to pre- and post-data change signals to capture emitted events during tests.
+        Prepares the test environment before each test.
+        
+        Initializes the GeneralManager with test attributes, assigns a dummy interface, and connects temporary receivers to pre- and post-data change signals to capture emitted events.
         """
         self.manager = GeneralManager
         self.manager._attributes = {
@@ -112,9 +112,9 @@ class GeneralManagerTestCase(TestCase):
     def test_initialization(self, mock_track):
         # Test if the manager initializes correctly
         """
-        Tests that the GeneralManager initializes correctly and tracks dependencies.
-
-        Verifies that DependencyTracker.track is called with the expected arguments and that the returned object is an instance of GeneralManager.
+        Tests initialization of GeneralManager and dependency tracking.
+        
+        Asserts that DependencyTracker.track is called with the correct arguments and that the created object is an instance of GeneralManager.
         """
         manager = self.manager()
         mock_track.assert_called_once_with(
@@ -175,8 +175,8 @@ class GeneralManagerTestCase(TestCase):
         # Test the __iter__ method
         """
         Tests that iterating over a GeneralManager instance yields its attributes as key-value pairs.
-
-        Verifies that the resulting dictionary contains expected keys and values, including 'name', 'version', 'active', and 'id'.
+        
+        Asserts that the resulting dictionary includes the expected keys and correct values for 'name', 'version', 'active', and 'id'.
         """
         manager = self.manager()
         attributes = dict(manager)
