@@ -102,7 +102,16 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        This method returns the field type for the given field name.
+        Returns the type of the specified input field.
+        
+        Args:
+            field_name: The name of the input field.
+        
+        Returns:
+            The Python type associated with the input field.
+        
+        Raises:
+            ValueError: If the specified field name does not exist in input_fields.
         """
         input = cls.input_fields.get(field_name)
         if input is None:

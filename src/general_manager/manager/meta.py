@@ -25,6 +25,19 @@ class GeneralManagerMeta(type):
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
 
+        """
+        Creates a new class, handling interface integration and registration for the general manager framework.
+        
+        If an 'Interface' attribute is present in the class definition, validates and processes it using the interface's pre- and post-creation hooks, then registers the resulting class for attribute initialization and tracking. If the 'AUTOCREATE_GRAPHQL' setting is enabled, also registers the class for pending GraphQL interface creation.
+        
+        Args:
+            name: The name of the class being created.
+            bases: Base classes for the new class.
+            attrs: Attribute dictionary for the new class.
+        
+        Returns:
+            The newly created class, possibly augmented with interface and registration logic.
+        """
         def createNewGeneralManagerClass(
             mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
         ) -> Type[GeneralManager]:
