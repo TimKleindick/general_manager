@@ -86,14 +86,14 @@ class DatabaseInterface(DBBasedInterface):
     ) -> int:
         """
         Saves a model instance with validation and optional history tracking.
-        
+
         Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within an atomic transaction.
-        
+
         Args:
             instance: The model instance to save.
             creator_id: The ID of the user making the change.
             history_comment: Optional comment describing the reason for the change.
-        
+
         Returns:
             The primary key of the saved instance.
         """

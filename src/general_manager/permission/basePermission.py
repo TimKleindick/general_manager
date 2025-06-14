@@ -6,12 +6,10 @@ from general_manager.permission.permissionChecks import (
     permission_filter,
 )
 
+from django.contrib.auth.models import AnonymousUser, AbstractUser
+from general_manager.permission.permissionDataManager import PermissionDataManager
 
 if TYPE_CHECKING:
-    from django.contrib.auth.models import AbstractUser, AnonymousUser
-    from general_manager.permission.permissionDataManager import (
-        PermissionDataManager,
-    )
     from general_manager.manager.generalManager import GeneralManager
     from general_manager.manager.meta import GeneralManagerMeta
 
@@ -66,7 +64,7 @@ class BasePermission(ABC):
         request_user = cls.getUserWithId(request_user)
 
         errors = []
-        permission_data = PermissionDataManager[GeneralManager].forUpdate(
+        permission_data = PermissionDataManager.forUpdate(
             base_data=old_manager_instance, update_data=data
         )
         Permission = cls(permission_data, request_user)
@@ -90,7 +88,7 @@ class BasePermission(ABC):
         request_user = cls.getUserWithId(request_user)
 
         errors = []
-        permission_data = PermissionDataManager[GeneralManager](manager_instance)
+        permission_data = PermissionDataManager(manager_instance)
         Permission = cls(permission_data, request_user)
         for key in manager_instance.__dict__.keys():
             is_allowed = Permission.checkPermission("delete", key)
@@ -112,7 +110,7 @@ class BasePermission(ABC):
         """
         from django.contrib.auth.models import User
 
-        if isinstance(user, (AbstractUser, AnonymousUser)):
+        if isinstance(user, (User, AnonymousUser)):
             return user
         try:
             return User.objects.get(id=user)
