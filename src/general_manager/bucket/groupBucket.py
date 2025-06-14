@@ -126,8 +126,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
         Returns:
             A generator yielding GroupManager instances representing each group.
         """
-        for grouped_manager in self._data:
-            yield grouped_manager
+        yield from self._data
 
     def filter(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
         """
