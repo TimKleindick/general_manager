@@ -62,7 +62,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             ValueError: If any group-by key is not a valid attribute of the manager class.
         """
         if not all(isinstance(arg, str) for arg in group_by_keys):
-            raise TypeError("groupBy() argument must be a string")
+            raise TypeError("groupBy() arguments must be a strings")
         if not all(
             arg in self._manager_class.Interface.getAttributes()
             for arg in group_by_keys
@@ -253,7 +253,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def sort(
         self,
-        key: tuple[str] | str,
+        key: tuple[str, ...] | str,
         reverse: bool = False,
     ) -> Bucket[GeneralManagerType]:
         """
