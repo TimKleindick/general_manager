@@ -64,10 +64,10 @@ class DummyInterface(InterfaceBase):
     def getData(self, search_date=None):
         """
         Returns the identification value for this interface instance.
-        
+
         Args:
             search_date: Optional parameter for compatibility; ignored.
-        
+
         Returns:
             The identification value associated with the interface.
         """
@@ -122,14 +122,14 @@ class DummyInterface(InterfaceBase):
     def getFieldType(cls, field_name):
         """
         Returns the expected type for a given input field name.
-        
+
         Args:
             field_name: Name of the input field to look up.
-        
+
         Returns:
             The type object associated with the specified input field.
         """
-        return DummyInterface.input_fields[field_name].type
+        return cls.input_fields[field_name].type
 
 
 class InterfaceBaseTests(SimpleTestCase):
@@ -137,7 +137,7 @@ class InterfaceBaseTests(SimpleTestCase):
         # Normal case: all inputs provided as kwargs
         """
         Tests that DummyInterface initializes correctly when all required inputs are provided as keyword arguments.
-        
+
         Verifies that the identification attribute matches the expected values, including nested GeneralManager instances.
         """
         gm = DummyGM({"id": 1})
@@ -186,7 +186,7 @@ class InterfaceBaseTests(SimpleTestCase):
         # Passing wrong type for 'a' should raise TypeError
         """
         Tests that providing a value of the wrong type for an input field raises a TypeError.
-        
+
         This test ensures that initializing DummyInterface with a non-integer value for the 'a' field results in a TypeError.
         """
         with self.assertRaises(TypeError):
