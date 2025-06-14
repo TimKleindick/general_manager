@@ -110,7 +110,7 @@ class BasePermission(ABC):
         """
         from django.contrib.auth.models import User
 
-        if isinstance(user, (User, AnonymousUser)):
+        if isinstance(user, (AbstractUser, AnonymousUser)):
             return user
         try:
             return User.objects.get(id=user)
