@@ -133,11 +133,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 for comb in combinations[:PRINT_MAX]
             ]
         )
-        sufix = f"]"
+        sufix = "]"
         if len(combinations) > PRINT_MAX:
-            sufix = f", ...]"
+            sufix = ", ...]"
 
-        return f"{prefix}{main}{sufix} "
+        return f"{prefix}{main}{sufix}"
 
     def __repr__(self) -> str:
         """
