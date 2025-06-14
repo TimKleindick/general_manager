@@ -77,7 +77,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self.sort_key,
                 self.reverse,
             ),
+            {"current_combinations": self._current_combinations},
         )
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """
+        Restores the CalculationBucket instance from its pickled state.
+
+        Args:
+            state: A dictionary containing the state of the instance, including current combinations.
+        """
+        self._current_combinations = state.get("current_combinations", None)
 
     def __or__(
         self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]
