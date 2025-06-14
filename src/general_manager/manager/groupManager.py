@@ -39,18 +39,14 @@ class GroupManager(Generic[GeneralManagerType]):
             (
                 self._manager_class,
                 tuple(self._group_by_value.items()),
-                tuple(self._data),
+                frozenset(self._data),
             )
         )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, self.__class__):
             return False
-        return (
-            self._data == other._data
-            and self._manager_class == other._manager_class
-            and self._group_by_value == other._group_by_value
-        )
+        return self.__hash__() == other.__hash__()
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self._manager_class}, {self._group_by_value}, {self._data})"
