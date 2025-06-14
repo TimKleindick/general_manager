@@ -192,6 +192,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             A list of dictionaries, each representing a unique combination of input values that satisfy the current filters, exclusions, and sorting order.
         """
+
+        def key_func(item: dict[str, Any]) -> tuple:
+            return tuple(item[key] for key in sort_key)
+
         if self._current_combinations is None:
             # Implementierung ähnlich wie im InputManager
             sorted_inputs = self.topological_sort_inputs()
@@ -202,7 +206,6 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 sort_key = self.sort_key
                 if isinstance(sort_key, str):
                     sort_key = (sort_key,)
-                key_func = lambda x: (tuple(x[key] for key in sort_key))
                 current_combinations = sorted(
                     current_combinations,
                     key=key_func,
