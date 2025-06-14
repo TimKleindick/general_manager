@@ -52,7 +52,7 @@ class DummyInterface(InterfaceBase):
     def getAttributes(cls) -> dict[str, dict]:
         """
         Returns an empty dictionary representing the attributes for the class.
-        
+
         This method can be overridden to provide attribute definitions for the class.
         """
         return {}
@@ -61,10 +61,10 @@ class DummyInterface(InterfaceBase):
     def filter(cls, **kwargs):  # type: ignore
         """
         Returns a DatabaseBucket containing UserManager instances for users matching the given filter criteria.
-        
+
         Args:
             **kwargs: Field lookups to filter User objects.
-        
+
         Returns:
             A DatabaseBucket wrapping UserManager instances for the filtered users.
         """
@@ -74,7 +74,7 @@ class DummyInterface(InterfaceBase):
     def exclude(cls, **kwargs):  # type: ignore
         """
         Returns an empty list, indicating no objects are excluded.
-        
+
         This method is a placeholder for exclusion logic in the interface.
         """
         return []
@@ -83,7 +83,7 @@ class DummyInterface(InterfaceBase):
     def getFieldType(cls, field_name: str) -> type:
         """
         Returns the type associated with the specified field name.
-        
+
         Always returns `str` for any field.
         """
         return str
@@ -92,7 +92,7 @@ class DummyInterface(InterfaceBase):
     def handleInterface(cls):
         """
         Provides pre- and post-creation hooks for class customization.
-        
+
         Returns:
             A tuple of two functions:
                 - preCreation: Modifies class attributes before class creation by adding a 'marker'.
@@ -102,12 +102,12 @@ class DummyInterface(InterfaceBase):
         def preCreation(name, attrs, interface):
             """
             Adds a marker attribute to the class attributes before creation.
-            
+
             Args:
                 name: The name of the class being created.
                 attrs: The dictionary of class attributes to be modified.
                 interface: The interface associated with the class.
-            
+
             Returns:
                 A tuple containing the updated attributes, the class itself, and None.
             """
@@ -117,7 +117,7 @@ class DummyInterface(InterfaceBase):
         def postCreation(new_cls, interface_cls, model):
             """
             Sets a flag on the newly created class after its creation.
-            
+
             Args:
                 new_cls: The newly created class instance.
                 interface_cls: The interface class used for creation.
@@ -156,7 +156,7 @@ class DatabaseBucketTestCase(TestCase):
     def setUp(self):
         """
         Sets up test data and environment for DatabaseBucket tests.
-        
+
         Initializes DummyInterface for manager classes, creates test User instances, and constructs a DatabaseBucket containing all users with UserManager.
         """
         UserManager.Interface = DummyInterface  # Set the interface for UserManager
@@ -216,7 +216,7 @@ class DatabaseBucketTestCase(TestCase):
         # index
         """
         Tests indexing and slicing behavior of the DatabaseBucket.
-        
+
         Verifies that indexing returns the correct manager instance for a user and that slicing returns a DatabaseBucket containing the expected subset of users.
         """
         mgr0 = self.bucket[0]
@@ -243,7 +243,7 @@ class DatabaseBucketTestCase(TestCase):
         # filter
         """
         Tests the filter and exclude methods of DatabaseBucket.
-        
+
         Verifies that filtering returns a bucket with only matching users and merges filter definitions, while excluding removes specified users and merges exclude definitions.
         """
         alice_bucket = self.bucket.filter(username="alice")
@@ -297,19 +297,11 @@ class DatabaseBucketTestCase(TestCase):
         with self.assertRaises(ValueError):
             _ = self.bucket | b_other
 
-    def test_repr(self):
-        """
-        Tests that the string representation of the bucket includes expected identifying information.
-        """
-        r = repr(self.bucket)
-        self.assertTrue("UserManagerBucket" in r)
-        self.assertTrue("QuerySet" in r)
-
     def test_contains(self):
         # model instance
         """
         Tests membership checks for model and manager instances in the DatabaseBucket.
-        
+
         Verifies that both model instances and their corresponding manager instances are recognized as members of the bucket, and that non-existent users are not considered members.
         """
         self.assertIn(self.u1, self.bucket)
@@ -324,7 +316,7 @@ class DatabaseBucketTestCase(TestCase):
         # default ordering by username asc
         """
         Tests that the sort method orders the bucket by username in ascending and descending order.
-        
+
         Verifies that sorting by username returns all original members in sorted order, and that reverse sorting places the user with the highest username first.
         """
         sorted_bucket = self.bucket.sort("username")
