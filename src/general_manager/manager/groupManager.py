@@ -34,6 +34,15 @@ class GroupManager(Generic[GeneralManagerType]):
         self._data = data
         self._grouped_data: dict[str, Any] = {}
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._manager_class,
+                tuple(self._group_by_value.items()),
+                tuple(self._data),
+            )
+        )
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, self.__class__):
             return False
