@@ -421,7 +421,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
                 True if the instance is among the generated combinations, False otherwise.
         """
-        return item in list(self)
+        return any(item == mgr for mgr in self)
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
         """
