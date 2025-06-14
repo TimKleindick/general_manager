@@ -6,7 +6,6 @@ from typing import (
     get_args,
     cast,
 )
-import json
 from datetime import datetime, date, time
 from general_manager.api.graphql import GraphQLProperty
 from general_manager.measurement import Measurement

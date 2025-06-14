@@ -84,20 +84,18 @@ class GroupBucket(Bucket[GeneralManagerType]):
         Returns:
             A list of GroupManager objects, each corresponding to a unique combination of group-by attribute values found in the data.
         """
-        group_by_values = set()
+        group_by_values: set[tuple[tuple[str, Any], ...]] = set()
         for entry in data:
-            group_by_value = {}
-            for arg in self._group_by_keys:
-                group_by_value[arg] = getattr(entry, arg)
-            group_by_values.add(json.dumps(group_by_value))
+            key = tuple((arg, getattr(entry, arg)) for arg in self._group_by_keys)
+            group_by_values.add(key)
 
         groups = []
         for group_by_value in sorted(group_by_values):
-            group_by_value = json.loads(group_by_value)
-            grouped_manager_objects = data.filter(**group_by_value)
+            group_by_dict = {key: value for key, value in group_by_value}
+            grouped_manager_objects = data.filter(**group_by_dict)
             groups.append(
                 GroupManager(
-                    self._manager_class, group_by_value, grouped_manager_objects
+                    self._manager_class, group_by_dict, grouped_manager_objects
                 )
             )
         return groups
