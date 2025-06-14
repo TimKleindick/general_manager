@@ -258,8 +258,8 @@ class DBBasedInterface(InterfaceBase):
             *cls.__getManyToManyFields(),
             *cls.__getReverseRelations(),
         ]:
-            if field_name in fields.keys():
-                if field_call not in fields.keys():
+            if field_name in fields:
+                if field_call not in fields:
                     field_name = field_call
                 else:
                     raise ValueError("Field name already exists.")
