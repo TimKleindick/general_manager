@@ -404,9 +404,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         items = self.generate_combinations()
         result = items[item]
         if isinstance(result, list):
-            new_bucket = CalculationBucket(self._manager_class)
-            new_bucket.filters = self.filters.copy()
-            new_bucket.excludes = self.excludes.copy()
+            new_bucket = CalculationBucket(
+                self._manager_class,
+                self.filters.copy(),
+                self.excludes.copy(),
+                self.sort_key,
+                self.reverse,
+            )
             new_bucket._current_combinations = result
             return new_bucket
         return self._manager_class(**result)
