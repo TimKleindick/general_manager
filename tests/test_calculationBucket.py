@@ -1,3 +1,4 @@
+# type: ignore
 from django.test import TestCase
 from unittest.mock import patch
 from general_manager.bucket.calculationBucket import CalculationBucket
@@ -148,7 +149,6 @@ class TestCalculationBucket(TestCase):
         bucket._current_combinations = [{"test": 1}]
         first = bucket.first()
         last = bucket.last()
-        print(first, last)
         self.assertIsNotNone(first)
         self.assertEqual(first, last)
 
