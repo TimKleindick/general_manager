@@ -61,7 +61,7 @@ class CalculationInterface(InterfaceBase):
     def _preCreate(
         name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
-        # Felder aus der Interface-Klasse sammeln
+
         input_fields: dict[str, Input[Any]] = {}
         for key, value in vars(interface).items():
             if key.startswith("__"):
@@ -69,7 +69,6 @@ class CalculationInterface(InterfaceBase):
             if isinstance(value, Input):
                 input_fields[key] = value
 
-        # Interface-Typ bestimmen
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(
             interface.__name__, (interface,), {"input_fields": input_fields}
@@ -103,17 +102,17 @@ class CalculationInterface(InterfaceBase):
     def getFieldType(cls, field_name: str) -> type:
         """
         Returns the type of the specified input field.
-        
+
         Args:
             field_name: The name of the input field.
-        
+
         Returns:
             The Python type associated with the input field.
-        
+
         Raises:
             ValueError: If the specified field name does not exist in input_fields.
         """
         input = cls.input_fields.get(field_name)
         if input is None:
-            raise ValueError(f"Field '{field_name}' not found in input fields.")
+            raise KeyError(f"Field '{field_name}' not found in input fields.")
         return input.type
