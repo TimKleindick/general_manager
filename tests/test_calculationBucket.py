@@ -21,7 +21,7 @@ class DummyGeneralManager:
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, DummyGeneralManager):
             return False
-        return value.kwargs == getattr(value, "kwargs", {})
+        return self.kwargs == value.kwargs
 
     def __repr__(self):
         return f"DummyGeneralManager({self.kwargs})"
