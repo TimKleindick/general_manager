@@ -29,7 +29,7 @@ class TestCalculationInterface(TestCase):
     def test_getAttributeTypes(self):
         attribute_types = DummyCalculationInterface.getAttributeTypes()
         self.assertIsInstance(attribute_types, dict)
-        for name, attr in attribute_types.items():
+        for _name, attr in attribute_types.items():
             self.assertIn("type", attr)
             self.assertIn("default", attr)
             self.assertIn("is_editable", attr)
@@ -38,7 +38,7 @@ class TestCalculationInterface(TestCase):
     def test_getAttributes(self):
         attributes = DummyCalculationInterface.getAttributes()
         self.assertIsInstance(attributes, dict)
-        for name, attr in attributes.items():
+        for _name, attr in attributes.items():
             self.assertTrue(callable(attr))
             self.assertIn(attr(self.interface), ("test", 1))
 
