@@ -394,13 +394,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         Returns the number of calculation combinations in the bucket.
         """
-        return sum(1 for _ in self)
+        return self.__len__()
 
     def __len__(self) -> int:
         """
         Returns the number of generated calculation combinations in the bucket.
         """
-        return self.count()
+        return len(self.generate_combinations())
 
     def __getitem__(
         self, item: int | slice
