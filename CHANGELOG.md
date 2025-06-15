@@ -2,6 +2,143 @@
 
 <!-- version list -->
 
+## v0.6.0 (2025-06-15)
+
+### Bug Fixes
+
+- __eq__ for groupBucket
+  ([`0c33798`](https://github.com/TimKleindick/general_manager/commit/0c33798031815dccb3ae373501cf1d0bf7adcd37))
+
+- Add __setstate__ method to restore current combinations in CalculationBucket
+  ([`c2fa8a5`](https://github.com/TimKleindick/general_manager/commit/c2fa8a5064b4bbec4cf3643684f5e80f655e0928))
+
+- Correct error message and type hint in groupBy and sort methods
+  ([`bc19f79`](https://github.com/TimKleindick/general_manager/commit/bc19f79fa93d589368daba6d8d603ed2f39e94ee))
+
+- Correct string formatting in CalculationBucket class
+  ([`4c4b969`](https://github.com/TimKleindick/general_manager/commit/4c4b96986be0c21095f6c24296da36c6d27d3715))
+
+- Enhance CalculationBucket initialization with filters, excludes, sort_key, and reverse parameters
+  ([`98bf9d2`](https://github.com/TimKleindick/general_manager/commit/98bf9d22a83f90e6eefa39d92efeae5291c4d061))
+
+- Optimize equality check in GroupManager by using hash comparison
+  ([`41df94b`](https://github.com/TimKleindick/general_manager/commit/41df94bbe5cc2f0832c774ca6c70bcb351fe86e8))
+
+- Optimize field value checks in DBBasedInterface by removing redundant calls to keys()
+  ([`5447007`](https://github.com/TimKleindick/general_manager/commit/5447007d8512c35e4aa5174c545ccd182bc64720))
+
+- Optimize group value handling in GroupBucket and remove unnecessary JSON serialization
+  ([`e00acdc`](https://github.com/TimKleindick/general_manager/commit/e00acdc2339fac574f21d21edf5dd3c6bcf7db6d))
+
+- Optimize length calculation in CalculationBucket by using generate_combinations directly
+  ([`5976e0a`](https://github.com/TimKleindick/general_manager/commit/5976e0a00510dce77548c051d671611a8f236e2a))
+
+- Optimize membership check in CalculationBucket.__contains__ method
+  ([`a2afb2e`](https://github.com/TimKleindick/general_manager/commit/a2afb2e2a398ee45478972c424b6120603108255))
+
+- Simplify and debug related model handling in DBBasedInterface
+  ([`1f05cfd`](https://github.com/TimKleindick/general_manager/commit/1f05cfd41e6300f91676db658b0b4ebb930c02e7))
+
+- Simplify equality check in GroupManager by removing redundant instance check
+  ([`ed3219c`](https://github.com/TimKleindick/general_manager/commit/ed3219cc7188cd46fe09696bd35b7b418ecc24c3))
+
+- Simplify state retrieval in __setstate__ and iterate over input_fields directly
+  ([`8e56b29`](https://github.com/TimKleindick/general_manager/commit/8e56b2938640d10a828fbb7302490c3cfcb36ae1))
+
+- Slicing in calculationBucket
+  ([`c68739a`](https://github.com/TimKleindick/general_manager/commit/c68739a14e3d45f60b97fce4f60740e1400b00dd))
+
+- Sort group_by_values using string representation for consistent ordering
+  ([`f13022e`](https://github.com/TimKleindick/general_manager/commit/f13022e0af733c755bf82791bed0801b91fd7508))
+
+- Update identification access in DatabaseBucket methods
+  ([`f3bc0cd`](https://github.com/TimKleindick/general_manager/commit/f3bc0cd64b2ad3428eb471565a435c72da0ae2d6))
+
+- Update user type check to use AbstractUser in getUserWithId method
+  ([`3e259e5`](https://github.com/TimKleindick/general_manager/commit/3e259e5f9fe3aa25fb1c6aeb10c3f2f9a2666151))
+
+### Chores
+
+- Update requirements to use base.txt for consistency
+  ([`3584581`](https://github.com/TimKleindick/general_manager/commit/35845817c264892b77beab57f6a1585a0a7f58d6))
+
+### Documentation
+
+- Shorten project description for clarity and conciseness
+  ([`3b87ff7`](https://github.com/TimKleindick/general_manager/commit/3b87ff7e8b8a9c76eef76eaf2905a76426d31ac4))
+
+- Split requirements files to development and production environments
+  ([`7f3ef5f`](https://github.com/TimKleindick/general_manager/commit/7f3ef5f933f86d96dfcb4ff569293b910085a355))
+
+### Features
+
+- Implement __hash__ method in GroupManager for improved object hashing
+  ([`99ffb6e`](https://github.com/TimKleindick/general_manager/commit/99ffb6edfe6448d9840cb1eb157144dbec887565))
+
+### Refactoring
+
+- Clean up imports and simplify PermissionDataManager usage in BasePermission
+  ([`d6bb292`](https://github.com/TimKleindick/general_manager/commit/d6bb292ac386a0214751d15f2a0d66741a3d57b5))
+
+- Lambda to named function for combination generation
+  ([`73bb1a0`](https://github.com/TimKleindick/general_manager/commit/73bb1a01f7545ddb91a749f5e204d1f57e29e8b2))
+
+- Move calculationBucket to own file
+  ([`6e4d441`](https://github.com/TimKleindick/general_manager/commit/6e4d441117b7d019e567849e4840195c76a087da))
+
+- Remove TYPE_CHECKING import and streamline GeneralManager import
+  ([`c3434f5`](https://github.com/TimKleindick/general_manager/commit/c3434f576bb970aaa1d808bea5ed3a7eb80ea859))
+
+- Remove unnecessary blank lines and improve code readability in ReadOnlyInterface
+  ([`618e674`](https://github.com/TimKleindick/general_manager/commit/618e674aa93fe7db15113c52f6ea2b78435b1be3))
+
+- Remove unnecessary blank lines and improve code readability in test_generalManager
+  ([`ae982da`](https://github.com/TimKleindick/general_manager/commit/ae982da52c4e3798d18c721f31ac46730315bd29))
+
+- Remove unnecessary blank lines and improve docstring clarity in DummyInterface and
+  DatabaseBucketTestCase
+  ([`9c40426`](https://github.com/TimKleindick/general_manager/commit/9c40426168fdf3ffaaed644cde46ebbb5036e419))
+
+- Remove unnecessary blank lines and improve docstring formatting in DummyInterface and
+  InterfaceBaseTests
+  ([`f7e856a`](https://github.com/TimKleindick/general_manager/commit/f7e856a05e79ac14ba236f955c9ad33b4e83fd15))
+
+- Remove unnecessary blank lines in DBBasedInterface and related methods
+  ([`2e00b5c`](https://github.com/TimKleindick/general_manager/commit/2e00b5c443c1cc1196d672e5e88924c2da3bf95d))
+
+- Rename TestInterface to DummyInterface for clarity in test cases
+  ([`0789a51`](https://github.com/TimKleindick/general_manager/commit/0789a51007fbf5e4f76baa5a3220b8ff8448df88))
+
+- Simplify field existence checks in DBBasedInterface
+  ([`53b4098`](https://github.com/TimKleindick/general_manager/commit/53b40984f9275c46912eb7111c63f5ce039e9484))
+
+- Simplify generator implementation in GroupBucket.__iter__ method
+  ([`908be9f`](https://github.com/TimKleindick/general_manager/commit/908be9fc26e6f327db543b86c632ac89ea627292))
+
+- Split interface and bucket
+  ([`fe779bf`](https://github.com/TimKleindick/general_manager/commit/fe779bfe8237851a644d652839de9dddc7e88f1b))
+
+- Update filter and exclude definitions to use None as default and improve queryset handling
+  ([`fa229d3`](https://github.com/TimKleindick/general_manager/commit/fa229d328412bf5078147ca83b1a1f50acef0be6))
+
+### Testing
+
+- Add comprehensive tests for DatabaseBasedInterface
+  ([`64fb815`](https://github.com/TimKleindick/general_manager/commit/64fb8150d2f1618781730bc7d5fcfc16769a1031))
+
+- Add DatabaseBucket test case with UserManager integration
+  ([`9ea7c22`](https://github.com/TimKleindick/general_manager/commit/9ea7c2203544beccaf7760f372b0d1d65f016a4f))
+
+- Remove unnecessary blank lines and improve exception message clarity in GeneralManagerMetaTests
+  ([`5594d79`](https://github.com/TimKleindick/general_manager/commit/5594d794def777d203a404d52ab28ca8c0b40937))
+
+- Rename test_possible_values_invalid_type to test_invalid_kwargs for clarity
+  ([`e4b6f45`](https://github.com/TimKleindick/general_manager/commit/e4b6f453667ce656724e5fabb93420ac59d002f5))
+
+- Sorting database bucket
+  ([`80bb51e`](https://github.com/TimKleindick/general_manager/commit/80bb51eb45ee84513225e931569430bb0c249ed4))
+
+
 ## v0.5.2 (2025-06-09)
 
 ### Bug Fixes
