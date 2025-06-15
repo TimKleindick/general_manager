@@ -16,14 +16,28 @@ class DummyGeneralManager:
 
     def __init__(self, **kwargs):
         # Initialize with any keyword arguments, simulating a manager
+        """
+        Initializes the dummy manager with provided keyword arguments.
+        
+        Stores all keyword arguments for later comparison and representation.
+        """
         self.kwargs = kwargs
 
     def __eq__(self, value: object) -> bool:
+        """
+        Checks equality with another DummyGeneralManager based on initialization arguments.
+        
+        Returns:
+            True if the other object is a DummyGeneralManager with identical kwargs; otherwise, False.
+        """
         if not isinstance(value, DummyGeneralManager):
             return False
         return self.kwargs == value.kwargs
 
     def __repr__(self):
+        """
+        Returns a string representation of the DummyGeneralManager instance with its initialization arguments.
+        """
         return f"DummyGeneralManager({self.kwargs})"
 
 
@@ -38,6 +52,11 @@ DummyCalculationInterface._parent_class = DummyGeneralManager
 class TestCalculationBucket(TestCase):
     def test_initialization_defaults(self, mock_parse):
         # Test basic initialization without optional parameters
+        """
+        Tests that CalculationBucket initializes with default values when only the manager class is provided.
+        
+        Verifies that filters, excludes, sort key, and reverse flag are set to their defaults, and that input fields are sourced from the associated interface.
+        """
         bucket = CalculationBucket(manager_class=DummyGeneralManager)
         self.assertIsInstance(bucket, CalculationBucket)
         self.assertEqual(bucket._manager_class, DummyGeneralManager)
@@ -50,6 +69,11 @@ class TestCalculationBucket(TestCase):
 
     def test_initialization_with_filters_and_excludes(self, mock_parse):
         # Filters and excludes passed directly to constructor
+        """
+        Tests that CalculationBucket initializes with provided filter and exclude definitions, sort key, and reverse flag.
+        
+        Verifies that the constructor correctly assigns the given filters, excludes, sort key, and reverse attributes.
+        """
         fdefs = {"f": {"filter_kwargs": {"f": 1}}}
         edefs = {"e": {"filter_kwargs": {"e": 2}}}
         bucket = CalculationBucket(
@@ -66,6 +90,12 @@ class TestCalculationBucket(TestCase):
 
     def test_reduce_and_setstate(self, mock_parse):
         # Test pickling support
+        """
+        Tests that CalculationBucket supports pickling and unpickling via __reduce__ and __setstate__.
+        
+        Verifies that the reduced state includes current combinations and that state restoration
+        correctly sets the internal combinations on a new instance.
+        """
         bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True)
         # Prepopulate state
         bucket._current_combinations = [{"x": 10}]
@@ -81,6 +111,9 @@ class TestCalculationBucket(TestCase):
 
     def test_or_with_same_bucket(self, mock_parse):
         # Combining two buckets of same class should intersect filters/excludes
+        """
+        Tests that combining two CalculationBucket instances with the same manager class using the bitwise OR operator results in a new bucket containing only the filters and excludes that are identical in both buckets.
+        """
         b1 = CalculationBucket(DummyGeneralManager, {"f1": 1}, {"e1": 2})
         b2 = CalculationBucket(
             DummyGeneralManager, {"f1": 1, "f2": 3}, {"e1": 2, "e2": 4}
@@ -92,6 +125,9 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(combined.excludes, {"e1": 2})
 
     def test_or_with_invalid(self, mock_parse):
+        """
+        Tests that combining a CalculationBucket with an incompatible type or a bucket of a different manager class raises a ValueError.
+        """
         b1 = CalculationBucket(DummyGeneralManager)
         # Combining with different type should raise
         with self.assertRaises(ValueError):
@@ -106,6 +142,11 @@ class TestCalculationBucket(TestCase):
             _ = b1 | b2
 
     def test_str_and_repr_formatting(self, mock_parse):
+        """
+        Tests the string and repr formatting of CalculationBucket instances.
+        
+        Verifies that the string representation displays the total count and up to five combinations, using an ellipsis if more exist, and that the repr shows the constructor parameters.
+        """
         bucket = CalculationBucket(DummyGeneralManager)
         # Manually set combinations for string formatting tests
         combos = [{"x": i} for i in range(7)]
@@ -126,6 +167,11 @@ class TestCalculationBucket(TestCase):
         )
 
     def test_all_iter_len_count(self, mock_parse):
+        """
+        Tests that CalculationBucket's all(), iteration, count(), and length methods behave as expected.
+        
+        Verifies that all() returns the bucket itself, iteration yields one manager instance per combination, and both count() and len() return the correct number of combinations.
+        """
         bucket = CalculationBucket(DummyGeneralManager)
         # Set a single empty combination so manager(**{}) works
         bucket._current_combinations = [{}] * 4
@@ -139,6 +185,11 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(len(bucket), 4)
 
     def test_first_last_empty_and_nonempty(self, mock_parse):
+        """
+        Tests the behavior of the `first()` and `last()` methods on a `CalculationBucket`.
+        
+        Verifies that `first()` and `last()` return `None` when the bucket has no combinations, and return the same manager instance when only one combination exists.
+        """
         bucket = CalculationBucket(DummyGeneralManager)
         # Empty combos
         bucket._current_combinations = []
@@ -153,6 +204,9 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(first, last)
 
     def test_getitem_index_and_slice(self, mock_parse):
+        """
+        Tests that indexing a CalculationBucket returns a manager instance and slicing returns a new CalculationBucket with the correct subset of combinations.
+        """
         bucket = CalculationBucket(DummyGeneralManager)
         # Create distinct combos for index and slice
         bucket._current_combinations = [{"i": 1}, {"i": 2}, {"i": 3}]
@@ -166,6 +220,9 @@ class TestCalculationBucket(TestCase):
         self.assertEqual(sliced._current_combinations, [{"i": 1}, {"i": 2}])
 
     def test_sort_returns_new_bucket(self, mock_parse):
+        """
+        Tests that the sort() method returns a new CalculationBucket with updated sort key and reverse flag, leaving the original bucket unchanged.
+        """
         bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2}, None, False)
         sorted_bucket = bucket.sort(key="a", reverse=True)
         self.assertIsInstance(sorted_bucket, CalculationBucket)
@@ -181,6 +238,15 @@ class TestGenerateCombinations(TestCase):
 
     def _make_bucket_with_fields(self, fields):
         # Dynamically create an interface and manager class with given input_fields
+        """
+        Creates a CalculationBucket with dynamically defined input fields.
+        
+        Args:
+            fields: A list of input field definitions to assign to the generated interface.
+        
+        Returns:
+            A CalculationBucket instance using a dynamically created manager and interface with the specified input fields.
+        """
         class DynInterface(CalculationInterface):
             input_fields = fields
 
@@ -192,6 +258,11 @@ class TestGenerateCombinations(TestCase):
 
     def test_basic_cartesian_product(self, mock_parse):
         # Two independent fields produce a Cartesian product
+        """
+        Tests that generate_combinations produces the Cartesian product of independent input fields.
+        
+        Verifies that two fields with independent possible values yield all possible combinations.
+        """
         fields = {
             "num": Input(type=int, possible_values=[1, 2]),
             "char": Input(type=str, possible_values=["a", "b"]),
@@ -210,6 +281,9 @@ class TestGenerateCombinations(TestCase):
 
     def test_empty_possible_values(self, mock_parse):
         # A field with no possible_values yields no combinations
+        """
+        Tests that a field with an empty list of possible values results in no generated combinations.
+        """
         fields = {
             "x": Input(type=int, possible_values=[]),
         }
@@ -221,6 +295,11 @@ class TestGenerateCombinations(TestCase):
 
     def test_dependent_field(self, mock_parse):
         # Field2 depends on field1 and its possible_values is a callable
+        """
+        Tests that a dependent input field with callable possible values generates combinations reflecting the dependency.
+        
+        Verifies that when one field's possible values depend on another field's value, the generated combinations correctly incorporate this relationship.
+        """
         def pv_func(a):
             return [a * 10]
 
@@ -238,6 +317,11 @@ class TestGenerateCombinations(TestCase):
 
     def test_filters_and_excludes(self, mock_parse):
         # Apply filter_funcs to include only even numbers, and exclude a specific value
+        """
+        Tests that filter and exclude functions are correctly applied to input values.
+        
+        Verifies that only even numbers are included and a specific value is excluded from the generated combinations.
+        """
         fields = {
             "n": Input(type=int, possible_values=[1, 2, 3, 4]),
         }
@@ -251,6 +335,11 @@ class TestGenerateCombinations(TestCase):
 
     def test_sort_and_reverse_and_caching(self, mock_parse):
         # Three values, sorted and reversed
+        """
+        Tests that sorting and reversing combinations works as expected and that results are cached.
+        
+        Verifies that combinations are sorted in descending order by the specified key, and that repeated calls to `generate_combinations` return the cached result.
+        """
         fields = {
             "v": Input(type=int, possible_values=[3, 1, 2]),
         }
@@ -273,6 +362,9 @@ class TestGenerateCombinations(TestCase):
 
     def test_invalid_possible_values_type(self, mock_parse):
         # possible_values not iterable or callable should raise TypeError
+        """
+        Tests that a TypeError is raised when a field's possible_values is neither iterable nor callable.
+        """
         fields = {
             "z": Input(type=int, possible_values=123),
         }

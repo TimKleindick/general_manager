@@ -151,15 +151,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __repr__(self) -> str:
         """
-        Returns a string representation of the CalculationBucket.
+        Returns a concise string representation of the CalculationBucket, including the manager class name, filters, excludes, sort key, and sort order.
         """
         return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filters}, {self.excludes}, {self.sort_key}, {self.reverse})"
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
-        Returns a new CalculationBucket with additional filters applied to input combinations.
-
-        Additional filters are merged with existing filters, narrowing the set of valid input configurations.
+        Returns a new CalculationBucket with additional filters applied.
+        
+        Merges the provided filter criteria with existing filters to further restrict valid input combinations.
         """
         filters = self.filters.copy()
         excludes = self.excludes.copy()
@@ -315,18 +315,24 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         excludes: dict[str, dict],
     ) -> List[dict[str, Any]]:
         """
-        Recursively generates all valid input combinations based on sorted input fields, applying filters and exclusions.
-
+        Recursively generates all valid input combinations for the specified input fields, applying filters and exclusions.
+        
         Args:
-            sorted_inputs: List of input field names ordered by dependency.
-            filters: Dictionary mapping input names to filter definitions.
-            excludes: Dictionary mapping input names to exclusion definitions.
-
+            sorted_inputs: Input field names ordered to respect dependency constraints.
+            filters: Mapping of input field names to filter definitions.
+            excludes: Mapping of input field names to exclusion definitions.
+        
         Returns:
-            A list of dictionaries, each representing a valid combination of input values.
+            A list of dictionaries, each representing a valid combination of input values that satisfy all filters and exclusions.
         """
 
         def helper(index, current_combo):
+            """
+            Recursively generates all valid input combinations for calculation inputs.
+            
+            Yields:
+                Dict[str, Any]: A dictionary representing a valid combination of input values, filtered and excluded according to the provided criteria.
+            """
             if index == len(sorted_inputs):
                 yield current_combo.copy()
                 return

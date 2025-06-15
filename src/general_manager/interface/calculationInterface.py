@@ -62,6 +62,14 @@ class CalculationInterface(InterfaceBase):
         name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
 
+        """
+        Prepares attributes and a new interface class before creating a GeneralManager class.
+        
+        Collects all `Input` instances from the provided interface class, sets the interface type in the attributes, dynamically creates a new interface class with these input fields, and adds it to the attributes.
+        
+        Returns:
+            A tuple containing the updated attributes dictionary, the new interface class, and None.
+        """
         input_fields: dict[str, Input[Any]] = {}
         for key, value in vars(interface).items():
             if key.startswith("__"):
@@ -101,16 +109,10 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        Returns the type of the specified input field.
-
-        Args:
-            field_name: The name of the input field.
-
-        Returns:
-            The Python type associated with the input field.
-
+        Returns the Python type of a specified input field.
+        
         Raises:
-            KeyError: If the specified field name does not exist in input_fields.
+            KeyError: If the field name does not exist in input_fields.
         """
         input = cls.input_fields.get(field_name)
         if input is None:
