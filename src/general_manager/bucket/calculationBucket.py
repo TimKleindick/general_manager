@@ -333,24 +333,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             input_name: str = sorted_inputs[index]
             input_field = self.input_fields[input_name]
 
-            # Hole mögliche Werte
             possible_values = self.get_possible_values(
                 input_name, input_field, current_combo
             )
 
-            # Wende die Filter an
             field_filters = filters.get(input_name, {})
             field_excludes = excludes.get(input_name, {})
 
+            # use filter_funcs and exclude_funcs to filter possible values
             if isinstance(possible_values, Bucket):
-                # Wende die Filter- und Exklusionsargumente direkt an
                 filter_kwargs = field_filters.get("filter_kwargs", {})
                 exclude_kwargs = field_excludes.get("filter_kwargs", {})
                 possible_values = possible_values.filter(**filter_kwargs).exclude(
                     **exclude_kwargs
                 )
             else:
-                # Wende die Filterfunktionen an
                 filter_funcs = field_filters.get("filter_funcs", [])
                 for filter_func in filter_funcs:
                     possible_values = filter(filter_func, possible_values)
