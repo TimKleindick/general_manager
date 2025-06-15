@@ -59,11 +59,12 @@ class DatabaseInterface(DBBasedInterface):
         return self.__save_with_history(instance, creator_id, history_comment)
 
     @staticmethod
-    def __checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[Any, Any]):
+    def __checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[str, Any]):
         attributes = vars(model)
         fields = model._meta.get_fields()
         for key in kwargs:
-            if key not in attributes and key not in fields:
+            temp_key = key.split("_id_list")[0]  # Remove '_id_list' suffix
+            if temp_key not in attributes and temp_key not in fields:
                 raise ValueError(f"{key} does not exsist in {model.__name__}")
 
     @staticmethod
