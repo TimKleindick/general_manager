@@ -110,7 +110,7 @@ class CalculationInterface(InterfaceBase):
             The Python type associated with the input field.
 
         Raises:
-            ValueError: If the specified field name does not exist in input_fields.
+            KeyError: If the specified field name does not exist in input_fields.
         """
         input = cls.input_fields.get(field_name)
         if input is None:
