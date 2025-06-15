@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v0.6.1 (2025-06-15)
+
+### Bug Fixes
+
+- Improve __repr__ method in CalculationBucket for clearer output
+  ([`ca9d604`](https://github.com/TimKleindick/general_manager/commit/ca9d604baa251ff52572d419da7a27521667633d))
+
+- Refine filtering logic in CalculationBucket to enhance clarity and functionality
+  ([`fa9f573`](https://github.com/TimKleindick/general_manager/commit/fa9f573e455cd9fbb9792fa8bdb5389aa804ed43))
+
+- Update error handling in getFieldType and clean up comments in _preCreate
+  ([`3083626`](https://github.com/TimKleindick/general_manager/commit/3083626e754d8da40164881e1e71b3b764fa51a0))
+
+- Update exception type in getFieldType method to KeyError for non-existent fields
+  ([`9bec05e`](https://github.com/TimKleindick/general_manager/commit/9bec05ef869d29e590462fff496595a9e9ddce93))
+
+### Testing
+
+- Add comprehensive tests for CalculationBucket functionality and behavior
+  ([`f7ad84c`](https://github.com/TimKleindick/general_manager/commit/f7ad84c9348ae680ab20328d57d6dcced64787e8))
+
+- Add unit tests for CalculationInterface methods and functionality
+  ([`043e09c`](https://github.com/TimKleindick/general_manager/commit/043e09c60de2f43e11e5cda7f1f0e1d670143d0d))
+
+- Correct equality check in DummyGeneralManager to ensure proper comparison
+  ([`b1ec08b`](https://github.com/TimKleindick/general_manager/commit/b1ec08b99184e4b06fd54ac5c093e1585a6f5079))
+
+- Correct formatting in __repr__ method of CalculationBucket for consistency
+  ([`cb6bd94`](https://github.com/TimKleindick/general_manager/commit/cb6bd94dc29b19741c7a94149b91328892eb692c))
+
+- Remove print statement from test_first_last_empty_and_nonempty for cleaner output
+  ([`3f421ce`](https://github.com/TimKleindick/general_manager/commit/3f421ce8fbdc264c501f39b65368a90c7213261d))
+
+- Rename test file to databaseBasedInterface
+  ([`3e61fb1`](https://github.com/TimKleindick/general_manager/commit/3e61fb1e835e75c7f586ecc4fc62e6fa823d524c))
+
+- Update variable name in loops for consistency and clarity
+  ([`1bcf82b`](https://github.com/TimKleindick/general_manager/commit/1bcf82bfddb25ecfee46ab5ccbad2b86fc4c45e8))
+
+
 ## v0.6.0 (2025-06-15)
 
 ### Bug Fixes
