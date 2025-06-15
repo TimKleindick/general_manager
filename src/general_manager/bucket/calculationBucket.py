@@ -151,9 +151,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __repr__(self) -> str:
         """
-        Returns a string representation of the CalculationBucket, showing a preview of its contents.
+        Returns a string representation of the CalculationBucket.
         """
-        return self.__str__()
+        return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filters}, {self.excludes}, {self.sort_key}, {self.reverse})"
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
