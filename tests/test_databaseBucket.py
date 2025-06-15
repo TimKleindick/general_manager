@@ -320,11 +320,13 @@ class DatabaseBucketTestCase(TestCase):
         Verifies that sorting by username returns all original members in sorted order, and that reverse sorting places the user with the highest username first.
         """
         sorted_bucket = self.bucket.sort("username")
-        names = [mgr.identification["id"] for mgr in sorted_bucket]
+        ordered_ids = [mgr.identification["id"] for mgr in sorted_bucket]
         # ensure same members
-        self.assertEqual(
-            sorted([u.id for u in [self.u1, self.u2, self.u3]]), sorted(names)
+        self.assertListEqual(
+            ordered_ids,
+            [self.u1.id, self.u2.id, self.u3.id],  # alice, bob, carol
         )
+
         # reverse ordering
         rev = self.bucket.sort("username", reverse=True)
         # highest username first
