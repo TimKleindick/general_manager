@@ -87,7 +87,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Args:
             state: A dictionary containing the state of the instance, including current combinations.
         """
-        self._current_combinations = state.get("current_combinations", None)
+        self._current_combinations = state.get("current_combinations")
 
     def __or__(
         self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]
@@ -271,7 +271,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             visited.add(node)
             sorted_inputs.append(node)
 
-        for node in self.input_fields.keys():
+        for node in self.input_fields:
             if node not in visited:
                 visit(node, set())
 
