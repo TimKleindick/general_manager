@@ -122,7 +122,7 @@ class TestCalculationBucket(TestCase):
         s3 = repr(bucket)
         self.assertEqual(
             s3,
-            f"CalculationBucket({DummyGeneralManager.__name__}, {"{}"}, {"{}"}, None, False)",
+            f"CalculationBucket({DummyGeneralManager.__name__}, {{}}, {{}}, None, False)",
         )
 
     def test_all_iter_len_count(self, mock_parse):
