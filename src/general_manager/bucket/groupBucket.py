@@ -90,7 +90,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             group_by_values.add(key)
 
         groups = []
-        for group_by_value in sorted(group_by_values):
+        for group_by_value in sorted(group_by_values, key=str):
             group_by_dict = {key: value for key, value in group_by_value}
             grouped_manager_objects = data.filter(**group_by_dict)
             groups.append(
