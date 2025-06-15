@@ -211,10 +211,9 @@ class InterfaceBaseTests(SimpleTestCase):
             DummyInterface(a=5, b="foo", gm=DummyGM({"id": 9}), vals=1, c=3)
 
     @override_settings(DEBUG=True)
-    def test_possible_values_invalid_type(self):
-        # possible_values is invalid type (not iterable/callable)
+    def test_invalid_kwargs(self):
         """
-        Tests that initializing DummyInterface with a non-iterable, non-callable value for possible_values raises a TypeError.
+        Tests that initializing DummyInterface with an invalid kwargs raises a TypeError.
         """
         with self.assertRaises(TypeError):
             DummyInterface(a=1, b="foo", gm=DummyGM({"id": 10}), vals=1, c=1, x=2)
