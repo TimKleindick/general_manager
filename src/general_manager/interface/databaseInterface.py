@@ -18,36 +18,22 @@ class DatabaseInterface(DBBasedInterface):
     def create(
         cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> int:
-        from general_manager.manager.generalManager import GeneralManager
 
-        cls.__checkForInvalidKwargs(cls._model, kwargs=kwargs)
-        kwargs, many_to_many_kwargs = cls.__sortKwargs(cls._model, kwargs)
-        instance = cls._model()
-        for key, value in kwargs.items():
-            if isinstance(value, GeneralManager):
-                value = value.identification["id"]
-                key = f"{key}_id"
-            setattr(instance, key, value)
-        for key, value in many_to_many_kwargs.items():
-            getattr(instance, key).set(value)
-        return cls.__save_with_history(instance, creator_id, history_comment)
+        cls._checkForInvalidKwargs(cls._model, kwargs=kwargs)
+        kwargs, many_to_many_kwargs = cls._sortKwargs(cls._model, kwargs)
+        instance = cls.__setAttrForWrite(cls._model(), kwargs, many_to_many_kwargs)
+        return cls._save_with_history(instance, creator_id, history_comment)
 
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any
     ) -> int:
-        from general_manager.manager.generalManager import GeneralManager
 
-        self.__checkForInvalidKwargs(self._model, kwargs=kwargs)
-        kwargs, many_to_many_kwargs = self.__sortKwargs(self._model, kwargs)
-        instance = self._model.objects.get(pk=self.pk)
-        for key, value in kwargs.items():
-            if isinstance(value, GeneralManager):
-                value = value.identification["id"]
-                key = f"{key}_id"
-            setattr(instance, key, value)
-        for key, value in many_to_many_kwargs.items():
-            getattr(instance, key).set(value)
-        return self.__save_with_history(instance, creator_id, history_comment)
+        self._checkForInvalidKwargs(self._model, kwargs=kwargs)
+        kwargs, many_to_many_kwargs = self._sortKwargs(self._model, kwargs)
+        instance = self.__setAttrForWrite(
+            self._model.objects.get(pk=self.pk), kwargs, many_to_many_kwargs
+        )
+        return self._save_with_history(instance, creator_id, history_comment)
 
     def deactivate(self, creator_id: int, history_comment: str | None = None) -> int:
         instance = self._model.objects.get(pk=self.pk)
@@ -56,10 +42,27 @@ class DatabaseInterface(DBBasedInterface):
             history_comment = f"{history_comment} (deactivated)"
         else:
             history_comment = "Deactivated"
-        return self.__save_with_history(instance, creator_id, history_comment)
+        return self._save_with_history(instance, creator_id, history_comment)
 
     @staticmethod
-    def __checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[str, Any]):
+    def __setAttrForWrite(
+        instance: GeneralManagerModel,
+        kwargs: dict[str, Any],
+        many_to_many_kwargs: dict[str, list[Any]],
+    ) -> GeneralManagerModel:
+        from general_manager.manager.generalManager import GeneralManager
+
+        for key, value in kwargs.items():
+            if isinstance(value, GeneralManager):
+                value = value.identification["id"]
+                key = f"{key}_id"
+            setattr(instance, key, value)
+        for key, value in many_to_many_kwargs.items():
+            getattr(instance, key).set(value)
+        return instance
+
+    @staticmethod
+    def _checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[str, Any]):
         attributes = vars(model)
         fields = model._meta.get_fields()
         for key in kwargs:
@@ -68,10 +71,10 @@ class DatabaseInterface(DBBasedInterface):
                 raise ValueError(f"{key} does not exsist in {model.__name__}")
 
     @staticmethod
-    def __sortKwargs(
+    def _sortKwargs(
         model: Type[models.Model], kwargs: dict[Any, Any]
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
-        many_to_many_fields = model._meta.many_to_many
+        many_to_many_fields = [field.name for field in model._meta.many_to_many]
         many_to_many_kwargs: dict[Any, Any] = {}
         for key, value in kwargs.items():
             many_to_many_key = key.split("_id_list")[0]
@@ -82,7 +85,7 @@ class DatabaseInterface(DBBasedInterface):
 
     @classmethod
     @transaction.atomic
-    def __save_with_history(
+    def _save_with_history(
         cls, instance: GeneralManagerModel, creator_id: int, history_comment: str | None
     ) -> int:
         """
