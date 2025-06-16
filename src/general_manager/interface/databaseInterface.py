@@ -21,8 +21,10 @@ class DatabaseInterface(DBBasedInterface):
 
         cls._checkForInvalidKwargs(cls._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls._sortKwargs(cls._model, kwargs)
-        instance = cls.__setAttrForWrite(cls._model(), kwargs, many_to_many_kwargs)
-        return cls._save_with_history(instance, creator_id, history_comment)
+        instance = cls.__setAttrForWrite(cls._model(), kwargs)
+        pk = cls._save_with_history(instance, creator_id, history_comment)
+        cls.__setManyToManyAttributes(instance, many_to_many_kwargs)
+        return pk
 
     def update(
         self, creator_id: int, history_comment: str | None = None, **kwargs: Any
@@ -30,10 +32,10 @@ class DatabaseInterface(DBBasedInterface):
 
         self._checkForInvalidKwargs(self._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self._sortKwargs(self._model, kwargs)
-        instance = self.__setAttrForWrite(
-            self._model.objects.get(pk=self.pk), kwargs, many_to_many_kwargs
-        )
-        return self._save_with_history(instance, creator_id, history_comment)
+        instance = self.__setAttrForWrite(self._model.objects.get(pk=self.pk), kwargs)
+        pk = self._save_with_history(instance, creator_id, history_comment)
+        self.__setManyToManyAttributes(instance, many_to_many_kwargs)
+        return pk
 
     def deactivate(self, creator_id: int, history_comment: str | None = None) -> int:
         instance = self._model.objects.get(pk=self.pk)
@@ -45,10 +47,31 @@ class DatabaseInterface(DBBasedInterface):
         return self._save_with_history(instance, creator_id, history_comment)
 
     @staticmethod
+    def __setManyToManyAttributes(
+        instance: GeneralManagerModel, many_to_many_kwargs: dict[str, list[Any]]
+    ) -> GeneralManagerModel:
+        """
+        Sets many-to-many attributes for the given instance based on the provided kwargs.
+
+        Args:
+            instance: The model instance to update.
+            many_to_many_kwargs: A dictionary containing many-to-many field names and their corresponding values.
+
+        Returns:
+            The updated model instance.
+        """
+        for key, value in many_to_many_kwargs.items():
+            if not value:
+                continue
+            field_name = key.split("_id_list")[0]
+            getattr(instance, field_name).set(value)
+
+        return instance
+
+    @staticmethod
     def __setAttrForWrite(
         instance: GeneralManagerModel,
         kwargs: dict[str, Any],
-        many_to_many_kwargs: dict[str, list[Any]],
     ) -> GeneralManagerModel:
         from general_manager.manager.generalManager import GeneralManager
 
@@ -57,17 +80,15 @@ class DatabaseInterface(DBBasedInterface):
                 value = value.identification["id"]
                 key = f"{key}_id"
             setattr(instance, key, value)
-        for key, value in many_to_many_kwargs.items():
-            getattr(instance, key).set(value)
         return instance
 
     @staticmethod
     def _checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[str, Any]):
         attributes = vars(model)
-        fields = model._meta.get_fields()
+        field_names = {f.name for f in model._meta.get_fields()}
         for key in kwargs:
             temp_key = key.split("_id_list")[0]  # Remove '_id_list' suffix
-            if temp_key not in attributes and temp_key not in fields:
+            if temp_key not in attributes and temp_key not in field_names:
                 raise ValueError(f"{key} does not exsist in {model.__name__}")
 
     @staticmethod
