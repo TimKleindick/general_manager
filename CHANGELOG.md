@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.6.2 (2025-06-16)
+
+### Bug Fixes
+
+- Enhance create and update methods to handle many-to-many attributes
+  ([`08b07d2`](https://github.com/TimKleindick/general_manager/commit/08b07d2202cc705979135d4176b57afd6e7b0c22))
+
+- Improve handling of many-to-many attributes in _sortKwargs method
+  ([`ef94175`](https://github.com/TimKleindick/general_manager/commit/ef94175d8017abfd7a72550716445d8d65403717))
+
+- Update __checkForInvalidKwargs to handle '_id_list' suffix in keys
+  ([`db81620`](https://github.com/TimKleindick/general_manager/commit/db81620cde0d6b1252de322c7fa10d09956254a1))
+
+### Refactoring
+
+- Streamline create and update methods by consolidating attribute setting logic
+  ([`475ca57`](https://github.com/TimKleindick/general_manager/commit/475ca57694e5e9e8ed7d0f55d17829dd86b6878b))
+
+### Testing
+
+- Add DatabaseInterfaceTestCase with validation and history management
+  ([`b41d432`](https://github.com/TimKleindick/general_manager/commit/b41d43200500682d0182246a87743f4cdef83715))
+
+- Add update method call in test_create_update_and_deactivate to verify reader assignment
+  ([`072d9e8`](https://github.com/TimKleindick/general_manager/commit/072d9e8eba2969e6d77ad8144438271004e8bd58))
+
+
 ## v0.6.1 (2025-06-15)
 
 ### Bug Fixes
