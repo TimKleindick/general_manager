@@ -97,11 +97,10 @@ class DatabaseInterface(DBBasedInterface):
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
         many_to_many_fields = [field.name for field in model._meta.many_to_many]
         many_to_many_kwargs: dict[Any, Any] = {}
-        for key, value in kwargs.items():
+        for key, value in list(kwargs.items()):
             many_to_many_key = key.split("_id_list")[0]
             if many_to_many_key in many_to_many_fields:
-                many_to_many_kwargs[key] = value
-                kwargs.pop(key)
+                many_to_many_kwargs[key] = kwargs.pop(key)
         return kwargs, many_to_many_kwargs
 
     @classmethod
