@@ -7,7 +7,7 @@ from unittest import mock
 
 from general_manager.interface.readOnlyInterface import (
     ReadOnlyInterface,
-    ReadOnlyModel,
+    GeneralManagerBasisModel,
 )
 
 from django.db import models
@@ -274,8 +274,10 @@ class DecoratorTests(SimpleTestCase):
 
         wrapper = ReadOnlyInterface.readOnlyPreCreate(pre_hook)
         result = wrapper("MyName", {"a": 1}, "iface")
-        # der letzte Parameter muss ReadOnlyModel sein
-        self.assertEqual(result, ("MyName", {"a": 1}, "iface", ReadOnlyModel))
+        # der letzte Parameter muss GeneralManagerBasisModel sein
+        self.assertEqual(
+            result, ("MyName", {"a": 1}, "iface", GeneralManagerBasisModel)
+        )
 
     def test_handleInterface_returns_two_callables(self):
         pre, post = ReadOnlyInterface.handleInterface()
