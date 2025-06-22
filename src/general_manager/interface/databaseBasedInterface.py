@@ -440,7 +440,10 @@ class DBBasedInterface(InterfaceBase):
 
     @staticmethod
     def _preCreate(
-        name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
+        name: generalManagerClassName,
+        attrs: attributes,
+        interface: interfaceBaseClass,
+        base_model_class=GeneralManagerModel,
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Felder aus der Interface-Klasse sammeln
         """
@@ -474,7 +477,7 @@ class DBBasedInterface(InterfaceBase):
                 delattr(meta_class, "rules")
 
         # Modell erstellen
-        model = type(name, (GeneralManagerModel,), model_fields)
+        model = type(name, (base_model_class,), model_fields)
         if meta_class and rules:
             setattr(model._meta, "rules", rules)
             # full_clean Methode hinzufügen
