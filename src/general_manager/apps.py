@@ -9,6 +9,11 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty
 from general_manager.api.graphql import GraphQL
+from typing import TYPE_CHECKING
+from django.core.checks import register
+
+if TYPE_CHECKING:
+    from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
 
 class GeneralmanagerConfig(AppConfig):
@@ -34,6 +39,15 @@ class GeneralmanagerConfig(AppConfig):
                         f"{general_manager_class.__name__.lower()}_list",
                         graphQlProperty(func),
                     )
+
+        for general_manager_class in GeneralManagerMeta.read_only_classes:
+            read_only_interface: ReadOnlyInterface = general_manager_class.Interface  # type: ignore
+            register(
+                lambda app_configs, model=read_only_interface._model, manager_class=general_manager_class, **kwargs: read_only_interface.ensureSchemaIsUpToDate(
+                    manager_class, model
+                ),
+                "general_manager",
+            )
 
         for (
             general_manager_class
