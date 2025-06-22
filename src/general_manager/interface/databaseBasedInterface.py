@@ -453,10 +453,16 @@ class DBBasedInterface(InterfaceBase):
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Felder aus der Interface-Klasse sammeln
         """
-        Dynamically creates a Django model, its associated interface class, and a factory class based on the provided interface definition.
-
-        This method extracts fields and meta information from the interface class, constructs a new Django model inheriting from `GeneralManagerModel`, attaches custom validation rules if present, and generates a corresponding interface and factory class. The resulting classes are returned for further use in the general manager framework.
-
+        Dynamically creates a Django model class, its associated interface class, and a factory class based on the provided interface definition.
+        
+        This method extracts fields and meta information from the interface class, constructs a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and generates corresponding interface and factory classes. The resulting classes are returned for integration into the general manager framework.
+        
+        Parameters:
+            name: The name for the dynamically created model class.
+            attrs: The attributes dictionary to be updated with the new interface and factory classes.
+            interface: The interface base class defining the model structure and metadata.
+            base_model_class: The base class to use for the new model (defaults to GeneralManagerModel).
+        
         Returns:
             A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
         """
