@@ -33,12 +33,14 @@ class GeneralmanagerConfig(AppConfig):
 
     def handleReadOnlyInterface(self):
         self.patchReadOnlyInterfaceSync(GeneralManagerMeta.read_only_classes)
+        from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
         for general_manager_class in GeneralManagerMeta.read_only_classes:
             read_only_interface: ReadOnlyInterface = general_manager_class.Interface  # type: ignore
+
             register(
-                lambda app_configs, model=read_only_interface._model, manager_class=general_manager_class, **kwargs: read_only_interface.ensureSchemaIsUpToDate(
+                lambda app_configs, model=read_only_interface._model, manager_class=general_manager_class, **kwargs: ReadOnlyInterface.ensureSchemaIsUpToDate(
                     manager_class, model
                 ),
                 "general_manager",
