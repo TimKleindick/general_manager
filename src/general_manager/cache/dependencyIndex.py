@@ -2,6 +2,7 @@ from __future__ import annotations
 import time
 import ast
 import re
+import logging
 
 from django.core.cache import cache
 from general_manager.cache.signals import post_data_change, pre_data_change
@@ -26,6 +27,8 @@ type dependency_index = dict[
 
 type filter_type = Literal["filter", "exclude", "identification"]
 type Dependency = Tuple[general_manager_name, filter_type, str]
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # CONFIG
@@ -280,7 +283,7 @@ def generic_cache_invalidation(
                 if action == "filter":
                     # Filter: invalidate if new match or old match
                     if new_match or old_match:
-                        print(
+                        logger.info(
                             f"Invalidate cache key {cache_keys} for filter {lookup} with value {val_key}"
                         )
                         for ck in list(cache_keys):
@@ -290,7 +293,7 @@ def generic_cache_invalidation(
                 else:  # action == 'exclude'
                     # Excludes: invalidate only if matches changed
                     if old_match != new_match:
-                        print(
+                        logger.info(
                             f"Invalidate cache key {cache_keys} for exclude {lookup} with value {val_key}"
                         )
                         for ck in list(cache_keys):
