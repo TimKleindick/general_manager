@@ -1,3 +1,4 @@
+# type: ignore
 from types import SimpleNamespace
 from django.test import SimpleTestCase, TestCase
 from django.core.checks import Warning
