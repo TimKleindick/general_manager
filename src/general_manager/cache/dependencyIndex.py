@@ -184,6 +184,11 @@ def generic_cache_invalidation(
     old_relevant_values: dict[str, Any],
     **kwargs,
 ):
+    """
+    Invalidates cached query results related to a model instance when its data changes.
+    
+    This function is intended to be used as a Django signal handler. It compares old and new values of relevant fields on a model instance against registered cache dependencies (filters and excludes). If a change affects any cached queryset result, the corresponding cache keys are invalidated and removed from the dependency index.
+    """
     manager_name = sender.__name__
     idx = get_full_index()
 
