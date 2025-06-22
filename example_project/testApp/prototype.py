@@ -77,7 +77,6 @@ class ProjectType(GeneralManager):
     class Interface(ReadOnlyInterface):
         name = CharField(max_length=50, unique=True)
         description = TextField(null=True, blank=True)
-        test = BooleanField(default=True)
 
 
 class Project(GeneralManager):
