@@ -18,7 +18,7 @@ class _nonExistent:
 
 class GeneralManagerMeta(type):
     all_classes: list[Type[GeneralManager]] = []
-    read_only_classes: list[Type[ReadOnlyInterface]] = []
+    read_only_classes: list[Type[GeneralManager]] = []
     pending_graphql_interfaces: list[Type[GeneralManager]] = []
     pending_attribute_initialization: list[Type[GeneralManager]] = []
     Interface: type[InterfaceBase]
