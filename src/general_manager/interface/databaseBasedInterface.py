@@ -66,12 +66,18 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
     return full_clean
 
 
-class GeneralManagerModel(models.Model):
+class GeneralManagerBasisModel(models.Model):
     _general_manager_class: ClassVar[Type[GeneralManager]]
     is_active = models.BooleanField(default=True)
+    history = HistoricalRecords(inherit=True)
+
+    class Meta:
+        abstract = True
+
+
+class GeneralManagerModel(GeneralManagerBasisModel):
     changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     changed_by_id: int
-    history = HistoricalRecords(inherit=True)
 
     @property
     def _history_user(self) -> AbstractUser:
@@ -90,12 +96,12 @@ class GeneralManagerModel(models.Model):
         """
         self.changed_by = value
 
-    class Meta:
+    class Meta:  # type: ignore
         abstract = True
 
 
 class DBBasedInterface(InterfaceBase):
-    _model: ClassVar[Type[GeneralManagerModel]]
+    _model: Type[GeneralManagerBasisModel]
     input_fields: dict[str, Input] = {"id": Input(int)}
 
     def __init__(
@@ -113,7 +119,7 @@ class DBBasedInterface(InterfaceBase):
         self.pk = self.identification["id"]
         self._instance = self.getData(search_date)
 
-    def getData(self, search_date: datetime | None = None) -> GeneralManagerModel:
+    def getData(self, search_date: datetime | None = None) -> GeneralManagerBasisModel:
         """
         Retrieves the model instance by primary key, optionally as of a specified historical date.
 
@@ -177,8 +183,8 @@ class DBBasedInterface(InterfaceBase):
 
     @classmethod
     def getHistoricalRecord(
-        cls, instance: GeneralManagerModel, search_date: datetime | None = None
-    ) -> GeneralManagerModel:
+        cls, instance: GeneralManagerBasisModel, search_date: datetime | None = None
+    ) -> GeneralManagerBasisModel:
         """
         Retrieves the most recent historical record of a model instance at or before a specified date.
 

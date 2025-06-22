@@ -5,7 +5,7 @@ from typing import Type, Any, Callable, TYPE_CHECKING
 from django.db import models, transaction
 from general_manager.interface.databaseBasedInterface import (
     DBBasedInterface,
-    GeneralManagerModel,
+    GeneralManagerBasisModel,
     classPreCreationMethod,
     classPostCreationMethod,
     generalManagerClassName,
@@ -21,19 +21,13 @@ if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
 
 
-class ReadOnlyModel(models.Model):
-    _general_manager_class: ClassVar[Type[GeneralManager]]
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        abstract = True
-
-
 logger = logging.getLogger(__name__)
 
 
 class ReadOnlyInterface(DBBasedInterface):
     _interface_type = "readonly"
+    _model: Type[GeneralManagerBasisModel]
+    _parent_class: Type[GeneralManager]
 
     @staticmethod
     def getUniqueFields(model: Type[models.Model]) -> set[str]:
@@ -73,8 +67,8 @@ class ReadOnlyInterface(DBBasedInterface):
             )
             return
 
-        model: Type[ReadOnlyModel] = getattr(cls, "_model")
-        parent_class: Type[GeneralManager] = getattr(cls, "_parent_class")
+        model = cls._model
+        parent_class = cls._parent_class
         json_data = getattr(parent_class, "_data", None)
         if json_data is None:
             raise ValueError(
@@ -198,7 +192,7 @@ class ReadOnlyInterface(DBBasedInterface):
         def wrapper(
             new_class: Type[GeneralManager],
             interface_cls: Type[ReadOnlyInterface],
-            model: Type[GeneralManagerModel],
+            model: Type[GeneralManagerBasisModel],
         ):
             from general_manager.manager.meta import GeneralManagerMeta
 
@@ -213,9 +207,11 @@ class ReadOnlyInterface(DBBasedInterface):
             name: generalManagerClassName,
             attrs: attributes,
             interface: interfaceBaseClass,
-            base_model_class=ReadOnlyModel,
+            base_model_class=GeneralManagerBasisModel,
         ):
-            return func(name, attrs, interface, base_model_class=ReadOnlyModel)
+            return func(
+                name, attrs, interface, base_model_class=GeneralManagerBasisModel
+            )
 
         return wrapper
 
