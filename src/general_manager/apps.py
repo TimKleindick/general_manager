@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Type
 from django.core.checks import register
 import logging
 
+
 if TYPE_CHECKING:
     from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
@@ -58,6 +59,7 @@ class GeneralmanagerConfig(AppConfig):
                 for general_manager_class in general_manager_classes:
                     read_only_interface: ReadOnlyInterface = general_manager_class.Interface  # type: ignore
                     read_only_interface.syncData()
+
                 logger.debug("finished syncing ReadOnlyInterface data.")
 
             return original_run_from_argv(self, argv)
@@ -97,7 +99,7 @@ class GeneralmanagerConfig(AppConfig):
                     )
 
     def handleGraphQL(self):
-
+        logger.debug("Starting to create GraphQL interfaces and mutations...")
         for general_manager_class in GeneralManagerMeta.pending_graphql_interfaces:
             GraphQL.createGraphqlInterface(general_manager_class)
             GraphQL.createGraphqlMutation(general_manager_class)
@@ -131,4 +133,3 @@ class GeneralmanagerConfig(AppConfig):
                 GraphQLView.as_view(graphiql=True, schema=schema),
             )
         )
-        logging.debug(f"GraphQL URL '{graph_ql_url}' added to Django settings.")
