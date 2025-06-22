@@ -11,6 +11,7 @@ from django.db.models import (
     ForeignKey,
     CASCADE,
     constraints,
+    BooleanField,
 )
 from django.core.validators import RegexValidator
 
@@ -31,6 +32,52 @@ from general_manager.factory import (
 )
 from general_manager.auxiliary import noneToZero
 from general_manager.api.mutation import graphQlMutation
+from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+
+
+class ProjectType(GeneralManager):
+    name: str
+    description: Optional[str]
+
+    _data = [
+        {
+            "name": "Aquisition Project",
+            "description": "A project that is used to acquire new customers or projects.",
+        },
+        {
+            "name": "Development Project",
+            "description": "A project that is used to develop new products or services.",
+        },
+        {
+            "name": "Research Project",
+            "description": "A project that is used to research new technologies or methods.",
+        },
+        {
+            "name": "Marketing Project",
+            "description": "A project that is used to market products or services.",
+        },
+        {
+            "name": "Sales Project",
+            "description": "A project that is used to sell products or services.",
+        },
+        {
+            "name": "Support Project",
+            "description": "A project that is used to support customers or projects.",
+        },
+        {
+            "name": "Training Project",
+            "description": "A project that is used to train employees or customers.",
+        },
+        {
+            "name": "Consulting Project",
+            "description": "A project that is used to consult customers or projects.",
+        },
+    ]
+
+    class Interface(ReadOnlyInterface):
+        name = CharField(max_length=50, unique=True)
+        description = TextField(null=True, blank=True)
+        test = BooleanField(default=True)
 
 
 class Project(GeneralManager):
