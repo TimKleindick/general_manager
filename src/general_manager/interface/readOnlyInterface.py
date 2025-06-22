@@ -76,7 +76,7 @@ class ReadOnlyInterface(DBBasedInterface):
         model: Type[ReadOnlyModel] = getattr(cls, "_model")
         parent_class: Type[GeneralManager] = getattr(cls, "_parent_class")
         json_data = getattr(parent_class, "_data", None)
-        if not json_data:
+        if json_data is None:
             raise ValueError(
                 f"For ReadOnlyInterface '{parent_class.__name__}' must set '_data'"
             )
