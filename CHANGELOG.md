@@ -2,6 +2,53 @@
 
 <!-- version list -->
 
+## v0.7.0 (2025-06-22)
+
+### Bug Fixes
+
+- Add type ignore comment to test_readOnlyInterface.py
+  ([`089a3b8`](https://github.com/TimKleindick/general_manager/commit/089a3b860361f8d220defa8c81266bc5146e0212))
+
+- Allow customizable base model class in _preCreate method of DBBasedInterface
+  ([`5b58af9`](https://github.com/TimKleindick/general_manager/commit/5b58af95d136f62081cb88a36fa5e26138c97b9b))
+
+- Correct type annotation for read_only_classes in GeneralManagerMeta
+  ([`faa8228`](https://github.com/TimKleindick/general_manager/commit/faa822889d1cdf99f5bfc58313d0dbdfcf946888))
+
+- Enhance ReadOnlyInterface data syncing and improve GraphQL initialization logging
+  ([`c99c2c8`](https://github.com/TimKleindick/general_manager/commit/c99c2c838db60d1d489347c110452e6e8992591f))
+
+- Improve json_data check in ReadOnlyInterface to use None comparison
+  ([`34aecb3`](https://github.com/TimKleindick/general_manager/commit/34aecb397186538cf7283411c61c5dde700cef17))
+
+- Register read-only interface warnings to ensure schema is up to date
+  ([`9ab61e5`](https://github.com/TimKleindick/general_manager/commit/9ab61e5b66646f329c1b4994376918f9a17f9644))
+
+- Replace print statements with logging for cache invalidation
+  ([`b0179b4`](https://github.com/TimKleindick/general_manager/commit/b0179b4f36c6547d4426afb6482d6b19f974750a))
+
+- Sync and warn ReadOnlyInterfaces &, refactor apps.py
+  ([`8f0a2e5`](https://github.com/TimKleindick/general_manager/commit/8f0a2e5b5fb46244110a5d7a7252b9856cd596da))
+
+- Update ReadOnlyInterface import and usage in handleReadOnlyInterface method
+  ([`f76a935`](https://github.com/TimKleindick/general_manager/commit/f76a93563b24e750522d767898d40d268a988b63))
+
+### Features
+
+- Implement readOnlyInterface
+  ([`be4fe48`](https://github.com/TimKleindick/general_manager/commit/be4fe48e9cd1811099e3ff9c1788ff5d759afe98))
+
+### Refactoring
+
+- Replace GeneralManagerModel with GeneralManagerBasisModel in readOnlyInterface and related files
+  ([`85ac212`](https://github.com/TimKleindick/general_manager/commit/85ac2121a34422c4869e69eb64c78d64ae8dc289))
+
+### Testing
+
+- Add comprehensive tests for ReadOnlyInterface functionality
+  ([`8dab67a`](https://github.com/TimKleindick/general_manager/commit/8dab67ae5146952e5dfbd320d4ffc43fa9aaa553))
+
+
 ## v0.6.2 (2025-06-16)
 
 ### Bug Fixes
