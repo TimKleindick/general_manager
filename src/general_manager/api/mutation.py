@@ -5,14 +5,7 @@ import graphene
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.generalManager import GeneralManager
 
-
-def snake_to_pascal(s: str) -> str:
-    return "".join(p.title() for p in s.split("_"))
-
-
-def snake_to_camel(s: str) -> str:
-    parts = s.split("_")
-    return parts[0] + "".join(p.title() for p in parts[1:])
+from general_manager.auxiliary.formatString import snake_to_camel
 
 
 def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = False):
