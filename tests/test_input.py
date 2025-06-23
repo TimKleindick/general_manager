@@ -18,9 +18,10 @@ class TestInput(TestCase):
         # Test with a callable for possible_values
         """
         Tests that initializing Input with a callable possible_values assigns attributes correctly.
-        
+
         Verifies that the type is set, possible_values references the callable, and depends_on is an empty list.
         """
+
         def possible_values_func():
             return [1, 2, 3]
 
@@ -33,7 +34,7 @@ class TestInput(TestCase):
         # Test with a list for depends_on
         """
         Tests that initializing an Input with a list for depends_on sets the attribute correctly.
-        
+
         Verifies that the type is set to int, possible_values is None, and depends_on matches the provided list.
         """
         input_obj = Input(int, depends_on=["input1", "input2"])
@@ -45,7 +46,7 @@ class TestInput(TestCase):
         # Test with a type that doesn't match the possible_values
         """
         Tests initialization of Input with a type that does not match possible_values.
-        
+
         Verifies that the Input object accepts possible_values of a different type than the declared type without validation, and sets attributes accordingly.
         """
         input_obj = Input(str, possible_values=[1, 2, 3])
@@ -57,9 +58,10 @@ class TestInput(TestCase):
         # Test with both callable and list for depends_on
         """
         Tests that an Input can be initialized with a callable for possible_values and a list for depends_on.
-        
+
         Verifies that the type, possible_values, and depends_on attributes are set correctly when both are provided.
         """
+
         def possible_values_func():
             return [1, 2, 3]
 
@@ -74,7 +76,7 @@ class TestInput(TestCase):
         # Test casting a value to the specified type
         """
         Tests that the Input class correctly casts values to integers and raises exceptions for invalid inputs.
-        
+
         Verifies successful casting from strings, integers, and floats to int, and asserts that invalid strings, None, or unsupported types raise ValueError or TypeError.
         """
         input_obj = Input(int)
@@ -93,9 +95,10 @@ class TestInput(TestCase):
         # Test casting with a GeneralManager subclass
         """
         Tests casting to a GeneralManager subclass using the Input class.
-        
+
         Verifies that casting a dictionary or integer to an Input expecting a GeneralManager subclass returns an instance with the correct id attribute. Uses mocking to simulate subclass checks.
         """
+
         class MockGeneralManager:
             def __init__(self, id):
                 self.id = id
@@ -109,11 +112,12 @@ class TestInput(TestCase):
         # Test casting with date
         """
         Tests that the Input class correctly casts values to date objects.
-        
+
         Verifies successful casting from ISO format strings and datetime objects to date,
         and asserts that invalid strings, None, or unsupported types raise exceptions.
         """
         input_obj = Input(date)
+        self.assertEqual(input_obj.cast(date(2023, 10, 1)), date(2023, 10, 1))
         self.assertEqual(input_obj.cast("2023-10-01"), date(2023, 10, 1))
         self.assertEqual(
             input_obj.cast(datetime(2023, 10, 1, 12, 1, 5)), date(2023, 10, 1)
@@ -129,7 +133,7 @@ class TestInput(TestCase):
         # Test casting with datetime
         """
         Tests that the Input class correctly casts values to datetime objects.
-        
+
         Verifies successful casting from ISO format strings and date objects to datetime,
         and asserts that invalid strings, None, or unsupported types raise appropriate exceptions.
         """
@@ -151,7 +155,7 @@ class TestInput(TestCase):
         # Test casting with Measurement
         """
         Tests that the Input class correctly casts values to Measurement instances.
-        
+
         Verifies successful casting from valid measurement strings and Measurement objects, and asserts that invalid strings, None, or unsupported types raise appropriate exceptions.
         """
         input_obj = Input(Measurement)
