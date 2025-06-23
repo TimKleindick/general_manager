@@ -8,14 +8,12 @@ from datetime import date, datetime
 class TestInput(TestCase):
 
     def test_simple_input_initialization(self):
-        # Test with a simple type
         input_obj = Input(int)
         self.assertEqual(input_obj.type, int)
         self.assertIsNone(input_obj.possible_values)
         self.assertEqual(input_obj.depends_on, [])
 
     def test_input_initialization_with_callable_possible_values(self):
-        # Test with a callable for possible_values
         """
         Tests that initializing Input with a callable possible_values assigns attributes correctly.
 
@@ -31,7 +29,6 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.depends_on, [])
 
     def test_input_initialization_with_list_depends_on(self):
-        # Test with a list for depends_on
         """
         Tests that initializing an Input with a list for depends_on sets the attribute correctly.
 
@@ -43,7 +40,6 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.depends_on, ["input1", "input2"])
 
     def test_input_initialization_with_type_not_matching_possible_values(self):
-        # Test with a type that doesn't match the possible_values
         """
         Tests initialization of Input with a type that does not match possible_values.
 
@@ -55,7 +51,6 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.depends_on, [])
 
     def test_input_initialization_with_callable_and_list_depends_on(self):
-        # Test with both callable and list for depends_on
         """
         Tests that an Input can be initialized with a callable for possible_values and a list for depends_on.
 
@@ -73,7 +68,6 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.depends_on, ["input1"])
 
     def test_simple_input_casting(self):
-        # Test casting a value to the specified type
         """
         Tests that the Input class correctly casts values to integers and raises exceptions for invalid inputs.
 
@@ -92,7 +86,6 @@ class TestInput(TestCase):
             input_obj.cast([1, 2, 3])
 
     def test_input_casting_with_general_manager(self):
-        # Test casting with a GeneralManager subclass
         """
         Tests casting to a GeneralManager subclass using the Input class.
 
@@ -109,7 +102,6 @@ class TestInput(TestCase):
             self.assertEqual(input_obj.cast(2).id, 2)
 
     def test_input_casting_with_date(self):
-        # Test casting with date
         """
         Tests that the Input class correctly casts values to date objects.
 
@@ -130,7 +122,6 @@ class TestInput(TestCase):
             input_obj.cast([1, 2, 3])
 
     def test_input_casting_with_datetime(self):
-        # Test casting with datetime
         """
         Tests that the Input class correctly casts values to datetime objects.
 
@@ -152,7 +143,6 @@ class TestInput(TestCase):
             input_obj.cast([1, 2, 3])
 
     def test_input_casting_with_measurement(self):
-        # Test casting with Measurement
         """
         Tests that the Input class correctly casts values to Measurement instances.
 
