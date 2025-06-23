@@ -5,7 +5,6 @@ from decimal import Decimal
 from datetime import date, datetime
 import json
 
-# Eigene Module
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.generalManager import GeneralManagerMeta, GeneralManager
 from general_manager.api.property import GraphQLProperty
@@ -117,14 +116,14 @@ class GraphQL:
         graphene_type_name = f"{generalManagerClass.__name__}Type"
         fields: dict[str, Any] = {}
 
-        # Felder aus dem Interface mappen
+        # Map Attribute Types to Graphene Fields
         for field_name, field_info in interface_cls.getAttributeTypes().items():
             field_type = field_info["type"]
             fields[field_name] = cls._mapFieldToGrapheneRead(field_type, field_name)
             resolver_name = f"resolve_{field_name}"
             fields[resolver_name] = cls._createResolver(field_name, field_type)
 
-        # Zusätzliche GraphQLPropertys verarbeiten
+        # handle GraphQLProperty attributes
         for attr_name, attr_value in generalManagerClass.__dict__.items():
             if isinstance(attr_value, GraphQLProperty):
                 type_hints = get_args(attr_value.graphql_type_hint)
@@ -368,7 +367,7 @@ class GraphQL:
             group_by: list[str] | None = None,
         ) -> Any:
             base_queryset = base_getter(self)
-            # Verwende _manager_class aus dem Attribut falls vorhanden, ansonsten das Fallback
+            # use _manager_class from the attribute if available, otherwise fallback
             manager_class = getattr(
                 base_queryset, "_manager_class", fallback_manager_class
             )
@@ -452,7 +451,7 @@ class GraphQL:
         if not hasattr(cls, "_query_fields"):
             cls._query_fields: dict[str, Any] = {}
 
-        # Resolver und Feld für die Listenabfrage
+        # resolver and field for the list query
         list_field_name = f"{generalManagerClass.__name__.lower()}_list"
         filter_options = cls._createFilterOptions(
             generalManagerClass.__name__.lower(), generalManagerClass
@@ -475,7 +474,7 @@ class GraphQL:
         cls._query_fields[list_field_name] = list_field
         cls._query_fields[f"resolve_{list_field_name}"] = list_resolver
 
-        # Resolver und Feld für die Einzelobjektabfrage
+        # resolver and field for the single item query
         item_field_name = generalManagerClass.__name__.lower()
         identification_fields = {}
         for (
@@ -534,11 +533,11 @@ class GraphQL:
                     default_value=default,
                 )
 
-            # Markierung, damit Dein generate*-Code weiß, was editable ist
+            # mark for generate* code to know what is editable
             setattr(fld, "editable", info["is_editable"])
             fields[name] = fld
 
-        # history_comment bleibt optional ohne Default
+        # history_comment is always optional without a default value
         fields["history_comment"] = graphene.String()
         setattr(fields["history_comment"], "editable", True)
 
