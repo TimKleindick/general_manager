@@ -31,13 +31,13 @@ book = Book.create(
 Updating or deactivating an existing manager works the same way:
 
 ```python
-manager = Book(book_id)
+manager = Book(existing_book_id)
 manager.update(creator_id=user.id, title="Updated")
 manager.deactivate(creator_id=user.id, history_comment="outdated")
 ```
 
 Many-to-many fields are passed using the `<field>_id_list` convention. The interface handles sorting these values and applying them after saving the instance.
 
-## Rules and permissions
+## Rules
 
-`DatabaseInterface` supports rule validation and permission checks. Rules allow you to validate incoming data before it is saved. Permissions restrict which users may perform create, update or delete operations. See [Rule Validation](Rules.md) and the README section on permissions for more details.
+`DatabaseInterface` supports rule validation. Rules allow you to validate incoming data before it is saved. See [Rule Validation](Rules.md) for more details.

@@ -19,13 +19,13 @@ class ProjectSummary(GeneralManager):
     def volume(self) -> int:
         return sum(
             v.volume
-            for v in self.project.derivativevolume_list.filter(date=self.date)
+            for v in self.project.derivative_volume_list.filter(date=self.date)
         )
 ```
 
 `graphQlProperty` turns a method into a read-only attribute and registers it as a resolver for GraphQL queries. The calculation runs lazily when the property is accessed.
 
-To iterate over all possible combinations you can call `all()` or filter by inputs:
+To iterate over all possible combinations you can call `all()`, or filter by inputs:
 
 ```python
 for summary in ProjectSummary.all():

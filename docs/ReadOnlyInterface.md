@@ -18,10 +18,10 @@ class Country(GeneralManager):
         name = CharField(max_length=50)
 ```
 
-During start-up the framework checks that the database schema matches the interface. When the application runs the data is automatically synchronised with the table. New entries are created, changed rows are updated and obsolete ones are deactivated.
+During start-up the framework checks that the database schema matches the interface. When the application runs the data is automatically synchronized with the table. New entries are created, changed rows are updated and obsolete ones are deactivated.
 
 ```python
-# trigger synchronisation manually if needed
+# trigger synchroniation manually if needed
 Country.Interface.syncData()
 ```
 
