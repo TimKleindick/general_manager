@@ -51,6 +51,7 @@ class AttributeTypedDict(TypedDict):
     default: Any
     is_required: bool
     is_editable: bool
+    is_derived: bool
 
 
 class InterfaceBase(ABC):

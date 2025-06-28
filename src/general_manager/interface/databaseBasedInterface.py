@@ -228,6 +228,7 @@ class DBBasedInterface(InterfaceBase):
             field: models.Field = getattr(cls._model, field_name)
             fields[field_name] = {
                 "type": type(field),
+                "is_derived": False,
                 "is_required": not field.null,
                 "is_editable": field.editable,
                 "default": field.default,
@@ -238,6 +239,7 @@ class DBBasedInterface(InterfaceBase):
                 field: models.Field = getattr(cls._model, field_name).field
                 fields[field_name] = {
                     "type": type(field),
+                    "is_derived": False,
                     "is_required": not field.null,
                     "is_editable": field.editable,
                     "default": field.default,
@@ -255,6 +257,7 @@ class DBBasedInterface(InterfaceBase):
             elif related_model is not None:
                 fields[field_name] = {
                     "type": related_model,
+                    "is_derived": False,
                     "is_required": not field.null,
                     "is_editable": field.editable,
                     "default": field.default,
@@ -280,6 +283,7 @@ class DBBasedInterface(InterfaceBase):
                 fields[f"{field_name}_list"] = {
                     "type": related_model,
                     "is_required": False,
+                    "is_derived": not bool(field.many_to_many),
                     "is_editable": bool(field.many_to_many and field.editable),
                     "default": None,
                 }
@@ -454,15 +458,15 @@ class DBBasedInterface(InterfaceBase):
         # Felder aus der Interface-Klasse sammeln
         """
         Dynamically creates a Django model class, its associated interface class, and a factory class based on the provided interface definition.
-        
+
         This method extracts fields and meta information from the interface class, constructs a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and generates corresponding interface and factory classes. The resulting classes are returned for integration into the general manager framework.
-        
+
         Parameters:
             name: The name for the dynamically created model class.
             attrs: The attributes dictionary to be updated with the new interface and factory classes.
             interface: The interface base class defining the model structure and metadata.
             base_model_class: The base class to use for the new model (defaults to GeneralManagerModel).
-        
+
         Returns:
             A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
         """
