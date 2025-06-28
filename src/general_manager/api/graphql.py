@@ -510,6 +510,8 @@ class GraphQL:
         for name, info in interface_cls.getAttributeTypes().items():
             if name in ["changed_by", "created_at", "updated_at"]:
                 continue
+            if info["is_derived"]:
+                continue
 
             typ = info["type"]
             req = info["is_required"]
