@@ -10,6 +10,7 @@ from general_manager.manager.generalManager import GeneralManagerMeta, GeneralMa
 from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.interface.baseInterface import InterfaceBase
+from django.db.models import NOT_PROVIDED
 
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission
@@ -562,26 +563,27 @@ class GraphQL:
             self,
             info: GraphQLResolveInfo,
             **kwargs: dict[str, Any],
-        ) -> GeneralManager:
+        ) -> dict:
             try:
+                kwargs = {
+                    field_name: value
+                    for field_name, value in kwargs.items()
+                    if value is not NOT_PROVIDED
+                }
                 instance = generalManagerClass.create(
                     **kwargs, creator_id=info.context.user.id
                 )
             except Exception as e:
-                return self.__class__(
-                    **{
-                        "success": False,
-                        "errors": [str(e)],
-                        generalManagerClass.__name__: None,
-                    }
-                )
-            return self.__class__(
-                **{
-                    "success": True,
-                    "errors": [],
-                    generalManagerClass.__name__: instance,
+                return {
+                    "success": False,
+                    "errors": [str(e)],
                 }
-            )
+
+            return {
+                "success": True,
+                "errors": [],
+                generalManagerClass.__name__: instance,
+            }
 
         return type(
             f"Create{generalManagerClass.__name__}",
@@ -623,20 +625,17 @@ class GraphQL:
             self,
             info: GraphQLResolveInfo,
             **kwargs: dict[str, Any],
-        ) -> GeneralManager:
+        ) -> dict:
             try:
                 manager_id = kwargs.pop("id", None)
                 instance = generalManagerClass(manager_id).update(
                     creator_id=info.context.user.id, **kwargs
                 )
             except Exception as e:
-                return self.__class__(
-                    **{
-                        "success": False,
-                        "errors": [str(e)],
-                        generalManagerClass.__name__: None,
-                    }
-                )
+                return {
+                    "success": False,
+                    "errors": [str(e)],
+                }
             return self.__class__(
                 **{
                     "success": True,
@@ -685,27 +684,22 @@ class GraphQL:
             self,
             info: GraphQLResolveInfo,
             **kwargs: dict[str, Any],
-        ) -> GeneralManager:
+        ) -> dict:
             try:
                 manager_id = kwargs.pop("id", None)
                 instance = generalManagerClass(manager_id).deactivate(
                     creator_id=info.context.user.id
                 )
             except Exception as e:
-                return self.__class__(
-                    **{
-                        "success": False,
-                        "errors": [str(e)],
-                        generalManagerClass.__name__: None,
-                    }
-                )
-            return self.__class__(
-                **{
-                    "success": True,
-                    "errors": [],
-                    generalManagerClass.__name__: instance,
+                return {
+                    "success": False,
+                    "errors": [str(e)],
                 }
-            )
+            return {
+                "success": True,
+                "errors": [],
+                generalManagerClass.__name__: instance,
+            }
 
         return type(
             f"Delete{generalManagerClass.__name__}",
