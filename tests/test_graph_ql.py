@@ -1,3 +1,5 @@
+# type: ignore
+
 import json
 from decimal import Decimal
 from datetime import date, datetime
@@ -9,6 +11,7 @@ from django.contrib.auth.models import AnonymousUser
 from general_manager.api.graphql import (
     MeasurementType,
     GraphQL,
+    getReadPermissionFilter,
 )
 from general_manager.measurement.measurement import Measurement, ureg
 from general_manager.manager.generalManager import GeneralManager, GeneralManagerMeta
@@ -123,7 +126,7 @@ class GraphQLTests(TestCase):
                 input_fields = {}
 
                 @staticmethod
-                def getAttributeTypes():  # type: ignore
+                def getAttributeTypes():
                     return {"test_field": {"type": str}}
 
             @classmethod
@@ -133,7 +136,7 @@ class GraphQLTests(TestCase):
         mock_interface.getAttributeTypes.return_value = {"test_field": {"type": str}}
         with patch("general_manager.api.graphql.issubclass", return_value=True):
             setattr(TestManager, "test_prop", GraphQLProperty(lambda: 42))
-            GraphQL.createGraphqlInterface(TestManager)  # type: ignore
+            GraphQL.createGraphqlInterface(TestManager)
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_list_resolver_with_invalid_filter_exclude(self):
@@ -153,7 +156,7 @@ class GraphQLTests(TestCase):
                 input_fields = {}
 
                 @staticmethod
-                def getAttributeTypes():  # type: ignore
+                def getAttributeTypes():
                     return {
                         "num_field": {"type": int},
                         "str_field": {"type": str},
@@ -162,7 +165,7 @@ class GraphQLTests(TestCase):
                     }
 
         GraphQL.graphql_filter_type_registry.clear()
-        filter_cls = GraphQL._createFilterOptions("dummy", DummyManager)  # type: ignore
+        filter_cls = GraphQL._createFilterOptions("dummy", DummyManager)
         fields = filter_cls._meta.fields
         self.assertNotIn("gm_field", fields)
         for key in [
@@ -206,10 +209,107 @@ class GraphQLTests(TestCase):
                 input_fields = {}
 
                 @staticmethod
-                def getAttributeTypes():  # type: ignore
+                def getAttributeTypes():
                     return {"num_field": {"type": int}}
 
         GraphQL.graphql_filter_type_registry.clear()
-        first = GraphQL._createFilterOptions("dummy2", DummyManager2)  # type: ignore
-        second = GraphQL._createFilterOptions("dummy2", DummyManager2)  # type: ignore
+        first = GraphQL._createFilterOptions("dummy2", DummyManager2)
+        second = GraphQL._createFilterOptions("dummy2", DummyManager2)
         self.assertIs(first, second)
+
+
+class TestGetReadPermissionFilter(TestCase):
+    def test_get_read_permission_filter(self):
+        class DummyManager:
+            __name__ = "DummyManager"
+
+            class Permission:
+                def __init__(self, *args, **kwargs):
+                    self.args = args
+
+                def getPermissionFilter(self):
+                    return [{"filter": {"num_field__exact": 42}, "exclude": {}}]
+
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+        result = getReadPermissionFilter(DummyManager, info)
+        expected = [({"num_field__exact": 42}, {})]
+        self.assertEqual(result, expected)
+
+
+class TestGrapQlMutation(TestCase):
+    def setUp(self) -> None:
+        class DummyManager:
+            class Interface:
+                input_fields = {}
+
+                @classmethod
+                def create(cls, *args, **kwargs):
+                    pass
+
+                def update(self, *args, **kwargs):
+                    pass
+
+                def deactivate(self, *args, **kwargs):
+                    pass
+
+        class DummyManager2:
+            class Interface(InterfaceBase):
+                def getData(self, search_date: datetime | None = None):
+                    raise NotImplementedError
+
+                @classmethod
+                def getAttributeTypes(cls):
+                    raise NotImplementedError
+
+                @classmethod
+                def getAttributes(cls):
+                    raise NotImplementedError
+
+                @classmethod
+                def filter(cls, **kwargs) -> None:
+                    raise NotImplementedError
+
+                @classmethod
+                def exclude(cls, **kwargs) -> None:
+                    raise NotImplementedError
+
+                @classmethod
+                def handleInterface(
+                    cls,
+                ) -> None:
+                    pass
+
+                @classmethod
+                def getFieldType(cls, field_name: str) -> None:
+                    pass
+
+        self.manager = DummyManager
+        self.manager2 = DummyManager2
+        GraphQL._mutations = {}
+
+    @patch("general_manager.api.graphql.GraphQL.generateCreateMutationClass")
+    @patch("general_manager.api.graphql.GraphQL.generateUpdateMutationClass")
+    @patch("general_manager.api.graphql.GraphQL.generateDeleteMutationClass")
+    def test_createGraphqlMutation(
+        self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
+    ):
+        GraphQL.createGraphqlMutation(self.manager)
+        mock_create.assert_called_once()
+        mock_update.assert_called_once()
+        mock_delete.assert_called_once()
+        self.assertEqual(
+            list(GraphQL._mutations.keys()),
+            ["createDummyManager", "updateDummyManager", "deleteDummyManager"],
+        )
+
+    @patch("general_manager.api.graphql.GraphQL.generateCreateMutationClass")
+    @patch("general_manager.api.graphql.GraphQL.generateUpdateMutationClass")
+    @patch("general_manager.api.graphql.GraphQL.generateDeleteMutationClass")
+    def test_createGraphqlMutation_with_undefined_create_update_delete(
+        self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
+    ):
+        GraphQL.createGraphqlMutation(self.manager2)
+        mock_create.assert_not_called()
+        mock_update.assert_not_called()
+        mock_delete.assert_not_called()
