@@ -313,3 +313,233 @@ class TestGrapQlMutation(TestCase):
         mock_create.assert_not_called()
         mock_update.assert_not_called()
         mock_delete.assert_not_called()
+
+    def test_createWriteFields(self):
+        class DummyInterface:
+            @staticmethod
+            def getAttributeTypes():
+                return {
+                    "field1": {
+                        "type": str,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": "default_value",
+                        "is_editable": True,
+                    },
+                    "field2": {
+                        "type": int,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": False,
+                    },
+                    "created_at": {
+                        "type": datetime,
+                        "is_required": False,
+                        "is_derived": True,
+                        "default": None,
+                        "is_editable": False,
+                    },
+                    "derived_field": {
+                        "type": str,
+                        "is_required": False,
+                        "is_derived": True,
+                        "default": None,
+                        "is_editable": False,
+                    },
+                }
+
+        fields = GraphQL.createWriteFields(DummyInterface)
+        self.assertIn("field1", fields)
+        self.assertIn("field2", fields)
+        self.assertIsInstance(fields["field1"], graphene.String)
+        self.assertIsInstance(fields["field2"], graphene.Int)
+        self.assertNotIn("created_at", fields)
+        self.assertNotIn("derived_field", fields)
+
+    def test_createWriteFields_with_manager(self):
+        class DummyInterface:
+            @staticmethod
+            def getAttributeTypes():
+                return {
+                    "manager": {
+                        "type": GeneralManager,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": "default_value",
+                        "is_editable": True,
+                    },
+                    "manager_list": {
+                        "type": GeneralManager,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": False,
+                    },
+                }
+
+        fields = GraphQL.createWriteFields(DummyInterface)
+        self.assertIn("manager", fields)
+        self.assertIn("manager_list", fields)
+        self.assertIsInstance(fields["manager"], graphene.ID)
+        self.assertIsInstance(fields["manager_list"], graphene.List)
+
+    def test_generateCreateMutationClass(self):
+
+        class DummyManager:
+            def __init__(self, *args, **kwargs):
+                self.field1 = kwargs.get("field1")
+
+            class Interface(InterfaceBase):
+                input_fields = {}
+
+                @classmethod
+                def getAttributeTypes(cls):
+                    return {
+                        "field1": {
+                            "type": str,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": "test123",
+                        }
+                    }
+
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return DummyManager(**kwargs)
+
+        default_return_values = {
+            "success": graphene.Boolean(),
+            "errors": graphene.List(graphene.String),
+            "instance": graphene.Field(DummyManager),
+        }
+        mutation_class = GraphQL.generateCreateMutationClass(
+            DummyManager, default_return_values
+        )
+        self.assertTrue(issubclass(mutation_class, graphene.Mutation))
+        self.assertIn("field1", mutation_class._meta.arguments)
+        self.assertIsInstance(mutation_class._meta.arguments["field1"], graphene.String)
+        self.assertEqual(
+            mutation_class._meta.arguments["field1"].kwargs["default_value"],
+            "test123",
+        )
+        self.assertIn("success", mutation_class._meta.fields)
+        self.assertIn("errors", mutation_class._meta.fields)
+        self.assertIn("instance", mutation_class._meta.fields)
+
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        mutation_result: dict = mutation_class.mutate(None, info, field1="test_value")
+        self.assertTrue(mutation_result["success"])
+        self.assertIsInstance(mutation_result["DummyManager"], DummyManager)
+        self.assertEqual(mutation_result["DummyManager"].field1, "test_value")
+
+        info = None
+        mutation_result = mutation_class.mutate(None, info, field1="test_value")
+        self.assertFalse(mutation_result["success"])
+        self.assertIsInstance(mutation_result["errors"], list)
+
+    def test_generateUpdateMutationClass(self):
+        class DummyManager:
+            def __init__(self, *args, **kwargs):
+                self.field1 = kwargs.get("field1")
+
+            class Interface(InterfaceBase):
+                input_fields = {}
+
+                @classmethod
+                def getAttributeTypes(cls):
+                    return {
+                        "field1": {
+                            "type": str,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": "test123",
+                        }
+                    }
+
+            @classmethod
+            def update(cls, *args, **kwargs):
+                return DummyManager(**kwargs)
+
+        default_return_values = {
+            "success": graphene.Boolean(),
+            "errors": graphene.List(graphene.String),
+            "instance": graphene.Field(DummyManager),
+        }
+        mutation_class = GraphQL.generateUpdateMutationClass(
+            DummyManager, default_return_values
+        )
+        self.assertTrue(issubclass(mutation_class, graphene.Mutation))
+        self.assertIn("field1", mutation_class._meta.arguments)
+        self.assertIsInstance(mutation_class._meta.arguments["field1"], graphene.String)
+        self.assertEqual(
+            mutation_class._meta.arguments["field1"].kwargs["default_value"],
+            "test123",
+        )
+        self.assertIn("success", mutation_class._meta.fields)
+        self.assertIn("errors", mutation_class._meta.fields)
+        self.assertIn("instance", mutation_class._meta.fields)
+
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        mutation_result: dict = mutation_class.mutate(None, info, field1="test_value")
+        self.assertTrue(mutation_result["success"])
+        self.assertIsInstance(mutation_result["DummyManager"], DummyManager)
+        self.assertEqual(mutation_result["DummyManager"].field1, "test_value")
+
+        info = None
+        mutation_result = mutation_class.mutate(None, info, field1="test_value")
+        self.assertFalse(mutation_result["success"])
+        self.assertIsInstance(mutation_result["errors"], list)
+
+    def test_generateDeleteMutationClass(self):
+        class DummyManager:
+            def __init__(self, *args, **kwargs):
+                self.field1 = kwargs.get("field1")
+
+            class Interface(InterfaceBase):
+                input_fields = {"id": None}
+
+                @classmethod
+                def getAttributeTypes(cls):
+                    return {
+                        "id": {
+                            "type": int,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": "test123",
+                        }
+                    }
+
+            @classmethod
+            def deactivate(cls, *args, **kwargs):
+                return True
+
+        default_return_values = {
+            "success": graphene.Boolean(),
+            "errors": graphene.List(graphene.String),
+        }
+        mutation_class = GraphQL.generateDeleteMutationClass(
+            DummyManager, default_return_values
+        )
+        self.assertTrue(issubclass(mutation_class, graphene.Mutation))
+        self.assertIn("success", mutation_class._meta.fields)
+        self.assertIn("errors", mutation_class._meta.fields)
+
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        mutation_result: dict = mutation_class.mutate(None, info, id=1)
+        self.assertTrue(mutation_result["success"])
+        self.assertIsInstance(mutation_result["errors"], list)
+
+        info = None
+        mutation_result = mutation_class.mutate(None, info)
+        self.assertFalse(mutation_result["success"])
+        self.assertIsInstance(mutation_result["errors"], list)
