@@ -77,7 +77,10 @@ class GeneralManagerModel(GeneralManagerBasisModel):
     @property
     def _history_user(self) -> AbstractUser | None:
         """
-        Returns the user who last modified this model instance.
+        Gets the user who last modified this model instance, or None if not set.
+        
+        Returns:
+            AbstractUser | None: The user who last changed the instance, or None if unavailable.
         """
         return self.changed_by
 
@@ -109,9 +112,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         **kwargs: dict[str, Any],
     ):
         """
-        Initializes the interface instance and loads the corresponding model record.
-
-        If a `search_date` is provided, retrieves the historical record as of that date; otherwise, loads the current record.
+        Initialize the interface instance and load the associated model record.
+        
+        If `search_date` is provided, retrieves the historical record as of that date; otherwise, loads the current record.
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
@@ -198,9 +201,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
-        Returns a dictionary mapping attribute names to their type information and metadata.
-
-        The returned dictionary includes all model fields, custom fields, foreign keys, many-to-many, and reverse relation fields. Each entry provides the Python type (translated from Django field types when possible), whether the field is required, editable, and its default value. For related models that have a general manager class, the type is set to that class.
+        Return a dictionary mapping attribute names to metadata describing their type and properties.
+        
+        The returned dictionary includes all model fields, custom fields, foreign keys, many-to-many, and reverse relation fields. For each attribute, the metadata includes its Python type (translated from Django field types when possible), whether it is required, editable, derived, and its default value. For related models with a general manager class, the type is set to that class.
+         
+        Returns:
+            dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
         """
         TRANSLATION: dict[Type[models.Field[Any, Any]], type] = {
             models.fields.BigAutoField: int,
@@ -455,18 +461,18 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Felder aus der Interface-Klasse sammeln
         """
-        Dynamically creates a Django model class, its associated interface class, and a factory class based on the provided interface definition.
-
-        This method extracts fields and meta information from the interface class, constructs a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and generates corresponding interface and factory classes. The resulting classes are returned for integration into the general manager framework.
-
+        Dynamically creates a Django model class, its associated interface class, and a factory class from an interface definition.
+        
+        This method extracts fields and meta information from the provided interface class, constructs a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and generates corresponding interface and factory classes. The resulting classes are returned for integration into the general manager framework.
+        
         Parameters:
             name: The name for the dynamically created model class.
             attrs: The attributes dictionary to be updated with the new interface and factory classes.
             interface: The interface base class defining the model structure and metadata.
             base_model_class: The base class to use for the new model (defaults to GeneralManagerModel).
-
+        
         Returns:
-            A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
+            tuple: A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
         """
         model_fields: dict[str, Any] = {}
         meta_class = None

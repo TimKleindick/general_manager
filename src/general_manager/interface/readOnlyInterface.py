@@ -31,9 +31,9 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @staticmethod
     def getUniqueFields(model: Type[models.Model]) -> set[str]:
         """
-        Return the set of field names that uniquely identify instances of the given Django model.
-
-        Considers fields marked as unique (excluding "id"), unique_together constraints, and UniqueConstraint definitions.
+        Return a set of field names that uniquely identify instances of the specified Django model.
+        
+        Considers fields marked as unique (excluding "id"), as well as fields defined in `unique_together` and `UniqueConstraint` constraints.
         """
         opts = model._meta
         unique_fields: set[str] = set()
@@ -56,9 +56,9 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @classmethod
     def syncData(cls) -> None:
         """
-        Synchronizes the associated Django model with the JSON data from the parent class, ensuring records match exactly.
-
-        Parses the JSON data, creates or updates model instances based on unique fields, and marks as inactive any database records not present in the JSON data. Raises a ValueError if required attributes are missing, if the JSON data is invalid, or if no unique fields are defined.
+        Synchronizes the associated Django model with JSON data from the parent class, ensuring the database records match the provided data exactly.
+        
+        Parses the JSON data, creates or updates model instances based on unique fields, and deactivates any database records not present in the JSON data. Raises a ValueError if required attributes are missing, if the JSON data is invalid, or if no unique fields are defined.
         """
         if cls.ensureSchemaIsUpToDate(cls._parent_class, cls._model):
             logger.warning(
@@ -137,23 +137,19 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         new_manager_class: Type[GeneralManager], model: Type[models.Model]
     ) -> list[Warning]:
         """
-        Checks whether the database schema for the given model matches the model definition.
-
-        Parameters:
-            new_manager_class (Type[GeneralManager]): The manager class associated with the model.
-            model (Type[models.Model]): The Django model to check.
-
+        Check if the database schema for a Django model matches its model definition.
+        
         Returns:
-            list[Warning]: A list of Django Warning objects describing schema issues, or an empty list if the schema is up to date.
+            A list of Django Warning objects describing schema issues, such as missing tables or column mismatches. Returns an empty list if the schema is up to date.
         """
 
         def table_exists(table_name: str) -> bool:
             """
-            Check if a database table with the given name exists.
-
+            Determine whether a database table with the specified name exists.
+            
             Parameters:
-                table_name (str): The name of the database table to check.
-
+                table_name (str): Name of the database table to check.
+            
             Returns:
                 bool: True if the table exists, False otherwise.
             """
@@ -165,11 +161,12 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             model: Type[models.Model], table: str
         ) -> tuple[list[str], list[str]]:
             """
-            Compare a Django model's fields to the columns of a database table.
-
+            Compares the fields of a Django model to the columns of a specified database table.
+            
             Returns:
-                missing (list[str]): Columns defined in the model but missing from the database table.
-                extra (list[str]): Columns present in the database table but not defined in the model.
+                A tuple containing two lists:
+                    - The first list contains column names defined in the model but missing from the database table.
+                    - The second list contains column names present in the database table but not defined in the model.
             """
             with connection.cursor() as cursor:
                 desc = connection.introspection.get_table_description(cursor, table)
@@ -206,8 +203,8 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     def readOnlyPostCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for post-creation hooks that registers a new manager class as read-only.
-
-        After executing the wrapped post-creation function, this decorator appends the newly created manager class to the `read_only_classes` list in the meta-class, marking it as a read-only interface.
+        
+        After the wrapped post-creation function is executed, the newly created manager class is added to the meta-class's list of read-only classes, marking it as a read-only interface.
         """
 
         def wrapper(
@@ -216,12 +213,9 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             model: Type[GeneralManagerBasisModel],
         ):
             """
-            Registers the newly created class as a read-only class after invoking the wrapped post-creation function.
-
-            Parameters:
-                new_class (Type[GeneralManager]): The newly created manager class to register.
-                interface_cls (Type[ReadOnlyInterface]): The associated read-only interface class.
-                model (Type[GeneralManagerModel]): The model class associated with the manager.
+            Registers a newly created manager class as read-only after executing the wrapped post-creation function.
+            
+            This function appends the new manager class to the list of read-only classes in the meta system, ensuring it is recognized as a read-only interface.
             """
             from general_manager.manager.meta import GeneralManagerMeta
 
@@ -233,9 +227,9 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @staticmethod
     def readOnlyPreCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         """
-        Decorator for pre-creation hook functions to ensure the base model class is set to ReadOnlyModel.
-
-        Wraps a pre-creation function, injecting ReadOnlyModel as the base model class argument before the GeneralManager instance is created.
+        Decorator for pre-creation hook functions that ensures the base model class is set to `GeneralManagerBasisModel`.
+        
+        Wraps a pre-creation function, injecting `GeneralManagerBasisModel` as the `base_model_class` argument before the manager class is created.
         """
 
         def wrapper(
@@ -244,6 +238,17 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             interface: interfaceBaseClass,
             base_model_class=GeneralManagerBasisModel,
         ):
+            """
+            Wraps a function to ensure the `base_model_class` argument is set to `GeneralManagerBasisModel` before invocation.
+            
+            Parameters:
+                name: The name of the manager class being created.
+                attrs: Attributes for the manager class.
+                interface: The interface base class to use.
+            
+            Returns:
+                The result of calling the wrapped function with `base_model_class` set to `GeneralManagerBasisModel`.
+            """
             return func(
                 name, attrs, interface, base_model_class=GeneralManagerBasisModel
             )
@@ -253,12 +258,14 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @classmethod
     def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
-        Return the pre- and post-creation hook methods for integrating this interface with a GeneralManager.
-
-        The returned tuple contains the pre-creation method, which injects the base model class, and the post-creation method, which registers the class as read-only. These hooks are intended for use by GeneralManagerMeta during the manager class lifecycle.
-
+        Return the pre- and post-creation hook methods for integrating the interface with a manager meta-class system.
+        
+        The returned tuple includes:
+        - A pre-creation method that ensures the base model class is set for read-only operation.
+        - A post-creation method that registers the manager class as read-only.
+        
         Returns:
-            tuple: A pair of methods for pre- and post-creation processing.
+            tuple: The pre-creation and post-creation hook methods for manager class lifecycle integration.
         """
         return cls.readOnlyPreCreate(cls._preCreate), cls.readOnlyPostCreate(
             cls._postCreate

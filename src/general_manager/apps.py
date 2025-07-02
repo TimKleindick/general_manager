@@ -29,9 +29,9 @@ class GeneralmanagerConfig(AppConfig):
 
     def ready(self):
         """
-        Initializes the general_manager app when Django starts.
-
-        Sets up read-only interface synchronization and schema validation, initializes general manager class attributes and connections, and conditionally configures the GraphQL schema and endpoint based on settings.
+        Initializes the general_manager app on Django startup.
+        
+        Sets up read-only interface synchronization and schema validation, initializes general manager class attributes and interconnections, and configures the GraphQL schema and endpoint if enabled in settings.
         """
         self.handleReadOnlyInterface()
         self.initializeGeneralManagerClasses()
@@ -40,9 +40,9 @@ class GeneralmanagerConfig(AppConfig):
 
     def handleReadOnlyInterface(self):
         """
-        Sets up synchronization and schema validation for all registered read-only interfaces.
-
-        This method patches Django's management command execution to ensure read-only interfaces are synchronized during server runs. It also registers system checks for each read-only interface to validate that their schemas are up to date.
+        Configures synchronization and schema validation for all registered read-only interfaces.
+        
+        This method ensures that read-only interfaces are synchronized before Django management commands execute and registers system checks to validate that each read-only interface's schema remains current.
         """
         self.patchReadOnlyInterfaceSync(GeneralManagerMeta.read_only_classes)
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -65,9 +65,9 @@ class GeneralmanagerConfig(AppConfig):
         general_manager_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
     ):
         """
-        Monkey-patches Django's management command runner to synchronize read-only interface data before executing commands.
-
-        This ensures that for each provided general manager class, its associated read-only interface's `syncData` method is called before running management commands, except during autoreload subprocesses for `runserver`.
+        Monkey-patches Django's management command runner to synchronize data for all provided read-only interfaces before executing management commands.
+        
+        For each general manager class, its associated read-only interface's `syncData` method is called prior to command execution, except during autoreload subprocesses of `runserver`.
         """
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
@@ -76,9 +76,13 @@ class GeneralmanagerConfig(AppConfig):
         def run_from_argv_with_sync(self, argv):
             # Ensure syncData is only called at real run of runserver
             """
-            Runs the management command and synchronizes read-only interface data before execution when appropriate.
-
-            Synchronization occurs for all registered read-only interfaces unless the command is 'runserver' in an autoreload subprocess.
+            Executes a Django management command, synchronizing all registered read-only interfaces before execution unless running an autoreload subprocess of 'runserver'.
+            
+            Parameters:
+                argv (list): Command-line arguments for the management command.
+            
+            Returns:
+                The result of the original management command execution.
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
             command = argv[1] if len(argv) > 1 else None
@@ -98,9 +102,9 @@ class GeneralmanagerConfig(AppConfig):
 
     def initializeGeneralManagerClasses(self):
         """
-        Initializes attributes and interconnections for all GeneralManager classes.
-
-        For each pending GeneralManager class, sets up its attributes and creates property accessors. Then, for all GeneralManager classes, connects input fields referencing other GeneralManager subclasses by dynamically adding GraphQL properties to enable filtered access to related objects.
+        Initializes attributes and sets up dynamic relationships for all registered GeneralManager classes.
+        
+        For each pending GeneralManager class, assigns its interface attributes and creates property accessors. Then, for all GeneralManager classes, dynamically connects input fields that reference other GeneralManager subclasses by adding GraphQL properties to enable filtered access to related objects.
         """
         logger.debug("Initializing GeneralManager classes...")
 
@@ -160,9 +164,10 @@ class GeneralmanagerConfig(AppConfig):
 
     def addGraphqlUrl(self, schema):
         """
-        Dynamically adds a GraphQL endpoint to the Django URL configuration using the provided schema.
-
-        Raises an exception if the ROOT_URLCONF setting is not defined.
+        Dynamically appends a GraphQL endpoint to the Django URL configuration using the given schema.
+        
+        Raises:
+            Exception: If the ROOT_URLCONF setting is not defined in Django settings.
         """
         logging.debug("Adding GraphQL URL to Django settings...")
         root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
