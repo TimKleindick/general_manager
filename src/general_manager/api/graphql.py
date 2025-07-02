@@ -638,13 +638,11 @@ class GraphQL:
                     "success": False,
                     "errors": [str(e)],
                 }
-            return self.__class__(
-                **{
-                    "success": True,
-                    "errors": [],
-                    generalManagerClass.__name__: instance,
-                }
-            )
+            return {
+                "success": True,
+                "errors": [],
+                generalManagerClass.__name__: instance,
+            }
 
         return type(
             f"Create{generalManagerClass.__name__}",
