@@ -121,6 +121,9 @@ class GraphQLTests(TestCase):
 
     @patch("general_manager.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):
+        """
+        Tests that a GraphQL interface is created and registered for a manager class with a GraphQLProperty attribute.
+        """
         class TestManager:
             class Interface(InterfaceBase):
                 input_fields = {}
@@ -140,6 +143,11 @@ class GraphQLTests(TestCase):
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_list_resolver_with_invalid_filter_exclude(self):
+        """
+        Test that the list resolver returns the original queryset when filter or exclude parameters are invalid JSON.
+        
+        Ensures that if JSON decoding fails for filter or exclude arguments, the resolver does not apply any filtering and returns the unmodified queryset.
+        """
         mock_instance = MagicMock()
         mock_qs = MagicMock()
         mock_instance.abc_list = mock_qs
@@ -149,6 +157,9 @@ class GraphQLTests(TestCase):
             self.assertEqual(result, mock_qs)
 
     def test_create_filter_options_measurement_fields(self):
+        """
+        Tests that filter options for numeric, string, and measurement fields are correctly generated, and that fields of type GeneralManager are excluded from the filter options.
+        """
         class DummyManager:
             __name__ = "DummyManager"
 
@@ -202,6 +213,11 @@ class GraphQLTests(TestCase):
             self.assertIn(key, fields)
 
     def test_create_filter_options_registry_cache(self):
+        """
+        Test that the filter options registry caches filter input types for a manager class.
+        
+        Ensures that repeated calls to `_createFilterOptions` with the same name and manager class return the same cached filter input type instance.
+        """
         class DummyManager2:
             __name__ = "DummyManager2"
 
@@ -220,6 +236,9 @@ class GraphQLTests(TestCase):
 
 class TestGetReadPermissionFilter(TestCase):
     def test_get_read_permission_filter(self):
+        """
+        Tests that getReadPermissionFilter returns the correct filter and exclude dictionaries from a manager's permission class.
+        """
         class DummyManager:
             __name__ = "DummyManager"
 
@@ -239,6 +258,11 @@ class TestGetReadPermissionFilter(TestCase):
 
 class TestGrapQlMutation(TestCase):
     def setUp(self) -> None:
+        """
+        Set up dummy manager classes and reset GraphQL mutation registry for mutation-related tests.
+        
+        Defines two dummy manager classes with interface methods to simulate different mutation capabilities and assigns them to instance attributes. Also clears the GraphQL mutation registry to ensure a clean test environment.
+        """
         class DummyManager:
             class Interface:
                 input_fields = {}
@@ -256,32 +280,61 @@ class TestGrapQlMutation(TestCase):
         class DummyManager2:
             class Interface(InterfaceBase):
                 def getData(self, search_date: datetime | None = None):
+                    """
+                    Raises a NotImplementedError to indicate that data retrieval is not implemented.
+                    
+                    Parameters:
+                        search_date (datetime, optional): An optional date to filter or specify the data retrieval context.
+                    """
                     raise NotImplementedError
 
                 @classmethod
                 def getAttributeTypes(cls):
+                    """
+                    Raises a NotImplementedError to indicate that subclasses must implement this method to return attribute type information.
+                    """
                     raise NotImplementedError
 
                 @classmethod
                 def getAttributes(cls):
+                    """
+                    Raises a NotImplementedError to indicate that subclasses must implement the getAttributes method.
+                    """
                     raise NotImplementedError
 
                 @classmethod
                 def filter(cls, **kwargs) -> None:
+                    """
+                    Raises a NotImplementedError to indicate that the filter method must be implemented by subclasses.
+                    """
                     raise NotImplementedError
 
                 @classmethod
                 def exclude(cls, **kwargs) -> None:
+                    """
+                    Raises a NotImplementedError to indicate that the exclude operation is not implemented for this class.
+                    """
                     raise NotImplementedError
 
                 @classmethod
                 def handleInterface(
                     cls,
                 ) -> None:
+                    """
+                    Handles the interface setup or registration for the class.
+                    
+                    This method is intended to be called on a class to perform necessary interface-related initialization or configuration. It does not return a value.
+                    """
                     pass
 
                 @classmethod
                 def getFieldType(cls, field_name: str) -> None:
+                    """
+                    Placeholder method for retrieving the type of a specified field on the class.
+                    
+                    Parameters:
+                        field_name (str): The name of the field whose type is to be retrieved.
+                    """
                     pass
 
         self.manager = DummyManager
@@ -294,6 +347,9 @@ class TestGrapQlMutation(TestCase):
     def test_createGraphqlMutation(
         self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
     ):
+        """
+        Tests that GraphQL.createGraphqlMutation generates and registers create, update, and delete mutation classes for a manager with the corresponding methods, and that the mutation generation methods are called exactly once.
+        """
         GraphQL.createGraphqlMutation(self.manager)
         mock_create.assert_called_once()
         mock_update.assert_called_once()
@@ -309,12 +365,20 @@ class TestGrapQlMutation(TestCase):
     def test_createGraphqlMutation_with_undefined_create_update_delete(
         self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
     ):
+        """
+        Test that no mutation classes are generated when the manager lacks create, update, and delete methods.
+        
+        Ensures that the mutation generation functions are not called for a manager class without the required interface methods.
+        """
         GraphQL.createGraphqlMutation(self.manager2)
         mock_create.assert_not_called()
         mock_update.assert_not_called()
         mock_delete.assert_not_called()
 
     def test_createWriteFields(self):
+        """
+        Tests that `GraphQL.createWriteFields` generates input fields for editable, non-derived attributes of an interface, mapping types correctly and excluding derived fields.
+        """
         class DummyInterface:
             @staticmethod
             def getAttributeTypes():
@@ -358,6 +422,9 @@ class TestGrapQlMutation(TestCase):
         self.assertNotIn("derived_field", fields)
 
     def test_createWriteFields_with_manager(self):
+        """
+        Tests that `GraphQL.createWriteFields` correctly generates input fields for attributes of type `GeneralManager`, mapping single instances to `graphene.ID` and lists to `graphene.List`.
+        """
         class DummyInterface:
             @staticmethod
             def getAttributeTypes():
@@ -386,6 +453,16 @@ class TestGrapQlMutation(TestCase):
 
     def test_generateCreateMutationClass(self):
 
+        """
+        Tests that the create mutation class generated by GraphQL correctly defines arguments, default values, and mutation behavior.
+        
+        Verifies that the mutation class:
+        - Inherits from `graphene.Mutation`.
+        - Includes the expected arguments and fields.
+        - Applies default values from the interface.
+        - Returns a successful result and instance when provided with valid input and context.
+        - Returns failure and error messages when context is missing.
+        """
         class DummyManager:
             def __init__(self, *args, **kwargs):
                 self.field1 = kwargs.get("field1")
@@ -442,6 +519,16 @@ class TestGrapQlMutation(TestCase):
         self.assertIsInstance(mutation_result["errors"], list)
 
     def test_generateUpdateMutationClass(self):
+        """
+        Tests that the update mutation class generated by GraphQL correctly defines arguments, default values, and mutation behavior.
+        
+        Verifies that the mutation class:
+        - Inherits from `graphene.Mutation`.
+        - Includes the expected arguments and fields.
+        - Applies default values from the interface.
+        - Returns a successful result and updated instance when provided with valid input and context.
+        - Returns failure and error messages when context is missing.
+        """
         class DummyManager:
             def __init__(self, *args, **kwargs):
                 self.field1 = kwargs.get("field1")
@@ -498,6 +585,15 @@ class TestGrapQlMutation(TestCase):
         self.assertIsInstance(mutation_result["errors"], list)
 
     def test_generateDeleteMutationClass(self):
+        """
+        Tests that the delete mutation class generated by GraphQL correctly defines required fields, arguments, and mutation behavior.
+        
+        Verifies that the mutation class:
+        - Is a subclass of `graphene.Mutation`.
+        - Includes `success` and `errors` fields.
+        - Calls the manager's `deactivate` method and returns a success flag and error list.
+        - Handles missing context by returning failure and an error list.
+        """
         class DummyManager:
             def __init__(self, *args, **kwargs):
                 self.field1 = kwargs.get("field1")

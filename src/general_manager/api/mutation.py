@@ -10,8 +10,16 @@ from general_manager.auxiliary.formatString import snake_to_camel
 
 def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = False):
     """
-    Decorator to generate a graphene.Mutation from a function and register it.
-    :param auth_required: if True, enforces that info.context.user is authenticated.
+    Decorator that transforms a function into a GraphQL mutation class and registers it for use in a Graphene-based API.
+    
+    The decorated function must have type hints for all parameters (except `info`) and a return annotation. The decorator dynamically generates a mutation class with arguments and output fields based on the function's signature and return type. It also enforces authentication if `auth_required` is set to True, returning an error if the user is not authenticated.
+    
+    Parameters:
+        needs_role (Optional[str]): Reserved for future use to specify a required user role.
+        auth_required (bool): If True, the mutation requires an authenticated user.
+    
+    Returns:
+        Callable: A decorator that registers the mutation and returns the original function.
     """
 
     def decorator(fn):

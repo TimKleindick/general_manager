@@ -19,6 +19,18 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         cls, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> int:
 
+        """
+        Create a new model instance with the provided attributes and optional history tracking.
+        
+        Validates input attributes, separates and sets many-to-many relationships, saves the instance with optional creator and history comment, and returns the primary key of the created instance.
+        
+        Parameters:
+            creator_id (int | None): The ID of the user creating the instance, or None if not applicable.
+            history_comment (str | None): Optional comment to record in the instance's history.
+        
+        Returns:
+            int: The primary key of the newly created instance.
+        """
         cls._checkForInvalidKwargs(cls._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls._sortKwargs(cls._model, kwargs)
         instance = cls.__setAttrForWrite(cls._model(), kwargs)
@@ -30,6 +42,16 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         self, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> int:
 
+        """
+        Update the current model instance with new attribute values and many-to-many relationships, saving changes with optional history tracking.
+        
+        Parameters:
+            creator_id (int | None): The ID of the user making the update, or None if not specified.
+            history_comment (str | None): An optional comment describing the reason for the update.
+        
+        Returns:
+            int: The primary key of the updated instance.
+        """
         self._checkForInvalidKwargs(self._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self._sortKwargs(self._model, kwargs)
         instance = self.__setAttrForWrite(self._model.objects.get(pk=self.pk), kwargs)
@@ -40,6 +62,16 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     def deactivate(
         self, creator_id: int | None, history_comment: str | None = None
     ) -> int:
+        """
+        Deactivate the current model instance by setting its `is_active` flag to `False` and recording the change with an optional history comment.
+        
+        Parameters:
+            creator_id (int | None): The ID of the user performing the deactivation, or None if not specified.
+            history_comment (str | None): An optional comment to include in the instance's history log.
+        
+        Returns:
+            int: The primary key of the deactivated instance.
+        """
         instance = self._model.objects.get(pk=self.pk)
         instance.is_active = False
         if history_comment:
@@ -114,15 +146,10 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         history_comment: str | None,
     ) -> int:
         """
-        Saves a model instance with validation and optional history tracking.
-
-        Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within an atomic transaction.
-
-        Args:
-            instance: The model instance to save.
-            creator_id: The ID of the user making the change.
-            history_comment: Optional comment describing the reason for the change.
-
+        Atomically saves a model instance with validation and optional history comment.
+        
+        Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within a database transaction.
+        
         Returns:
             The primary key of the saved instance.
         """

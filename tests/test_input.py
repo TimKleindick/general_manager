@@ -8,6 +8,9 @@ from datetime import date, datetime
 class TestInput(TestCase):
 
     def test_simple_input_initialization(self):
+        """
+        Test that initializing an Input with a type sets the type attribute, leaves possible_values as None, and depends_on as an empty list.
+        """
         input_obj = Input(int)
         self.assertEqual(input_obj.type, int)
         self.assertIsNone(input_obj.possible_values)
@@ -15,12 +18,18 @@ class TestInput(TestCase):
 
     def test_input_initialization_with_callable_possible_values(self):
         """
-        Tests that initializing Input with a callable possible_values assigns attributes correctly.
-
-        Verifies that the type is set, possible_values references the callable, and depends_on is an empty list.
+        Test initialization of Input with a callable for possible_values.
+        
+        Ensures that the type is set to int, possible_values references the provided callable, and depends_on is an empty list.
         """
 
         def possible_values_func():
+            """
+            Return a list of possible values for input, specifically the integers 1, 2, and 3.
+            
+            Returns:
+                list: A list containing the integers 1, 2, and 3.
+            """
             return [1, 2, 3]
 
         input_obj = Input(int, possible_values=possible_values_func)
@@ -30,9 +39,7 @@ class TestInput(TestCase):
 
     def test_input_initialization_with_list_depends_on(self):
         """
-        Tests that initializing an Input with a list for depends_on sets the attribute correctly.
-
-        Verifies that the type is set to int, possible_values is None, and depends_on matches the provided list.
+        Verify that initializing an Input with a list for depends_on sets the type to int, possible_values to None, and depends_on to the provided list.
         """
         input_obj = Input(int, depends_on=["input1", "input2"])
         self.assertEqual(input_obj.type, int)
@@ -41,9 +48,9 @@ class TestInput(TestCase):
 
     def test_input_initialization_with_type_not_matching_possible_values(self):
         """
-        Tests initialization of Input with a type that does not match possible_values.
-
-        Verifies that the Input object accepts possible_values of a different type than the declared type without validation, and sets attributes accordingly.
+        Test that Input accepts possible_values of a different type than its declared type without validation.
+        
+        Verifies that the Input object sets the type and possible_values attributes as provided, even when their types do not match.
         """
         input_obj = Input(str, possible_values=[1, 2, 3])
         self.assertEqual(input_obj.type, str)
@@ -52,12 +59,18 @@ class TestInput(TestCase):
 
     def test_input_initialization_with_callable_and_list_depends_on(self):
         """
-        Tests that an Input can be initialized with a callable for possible_values and a list for depends_on.
-
-        Verifies that the type, possible_values, and depends_on attributes are set correctly when both are provided.
+        Test initialization of Input with both a callable for possible_values and a list for depends_on.
+        
+        Verifies that the type, possible_values, and depends_on attributes are correctly assigned when both are provided during Input initialization.
         """
 
         def possible_values_func():
+            """
+            Return a list of possible values for input, specifically the integers 1, 2, and 3.
+            
+            Returns:
+                list: A list containing the integers 1, 2, and 3.
+            """
             return [1, 2, 3]
 
         input_obj = Input(
@@ -69,9 +82,9 @@ class TestInput(TestCase):
 
     def test_simple_input_casting(self):
         """
-        Tests that the Input class correctly casts values to integers and raises exceptions for invalid inputs.
-
-        Verifies successful casting from strings, integers, and floats to int, and asserts that invalid strings, None, or unsupported types raise ValueError or TypeError.
+        Test that the Input class casts values to integers and raises exceptions for invalid inputs.
+        
+        Casts valid string, integer, and float inputs to int, and ensures that invalid strings, None, or unsupported types raise ValueError or TypeError.
         """
         input_obj = Input(int)
         self.assertEqual(input_obj.cast("123"), 123)
@@ -87,13 +100,19 @@ class TestInput(TestCase):
 
     def test_input_casting_with_general_manager(self):
         """
-        Tests casting to a GeneralManager subclass using the Input class.
-
-        Verifies that casting a dictionary or integer to an Input expecting a GeneralManager subclass returns an instance with the correct id attribute. Uses mocking to simulate subclass checks.
+        Test that Input correctly casts values to a GeneralManager subclass.
+        
+        Casts a dictionary or integer to an Input configured for a GeneralManager subclass and verifies the resulting instance has the expected `id` attribute. Uses mocking to simulate subclass checks.
         """
 
         class MockGeneralManager:
             def __init__(self, id):
+                """
+                Initialize an instance with the specified identifier.
+                
+                Parameters:
+                	id: The identifier to assign to the instance.
+                """
                 self.id = id
 
         with patch("general_manager.manager.input.issubclass", return_value=True):
@@ -103,10 +122,9 @@ class TestInput(TestCase):
 
     def test_input_casting_with_date(self):
         """
-        Tests that the Input class correctly casts values to date objects.
-
-        Verifies successful casting from ISO format strings and datetime objects to date,
-        and asserts that invalid strings, None, or unsupported types raise exceptions.
+        Test that the Input class casts values to date objects and raises exceptions for invalid inputs.
+        
+        Casts ISO format strings, date, and datetime objects to date. Asserts that invalid strings, None, or unsupported types raise ValueError or TypeError.
         """
         input_obj = Input(date)
         self.assertEqual(input_obj.cast(date(2023, 10, 1)), date(2023, 10, 1))
@@ -123,10 +141,9 @@ class TestInput(TestCase):
 
     def test_input_casting_with_datetime(self):
         """
-        Tests that the Input class correctly casts values to datetime objects.
-
-        Verifies successful casting from ISO format strings and date objects to datetime,
-        and asserts that invalid strings, None, or unsupported types raise appropriate exceptions.
+        Tests that the Input class casts values to datetime objects.
+        
+        Casts ISO format strings and date objects to datetime, and verifies that invalid strings, None, or unsupported types raise exceptions.
         """
         input_obj = Input(datetime)
         self.assertEqual(
@@ -144,9 +161,9 @@ class TestInput(TestCase):
 
     def test_input_casting_with_measurement(self):
         """
-        Tests that the Input class correctly casts values to Measurement instances.
-
-        Verifies successful casting from valid measurement strings and Measurement objects, and asserts that invalid strings, None, or unsupported types raise appropriate exceptions.
+        Test that the Input class casts values to Measurement instances or raises exceptions for invalid input.
+        
+        Casts valid measurement strings and Measurement objects to Measurement instances. Raises ValueError for invalid strings and TypeError for None or unsupported types.
         """
         input_obj = Input(Measurement)
         self.assertEqual(input_obj.cast("1.0 m"), Measurement(1.0, "m"))

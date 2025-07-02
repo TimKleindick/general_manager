@@ -9,6 +9,11 @@ from general_manager.auxiliary.formatString import (
 
 class FormatStringTests(SimpleTestCase):
     def test_snake_to_pascal(self):
+        """
+        Test that snake_case strings are correctly converted to PascalCase by the snake_to_pascal function.
+        
+        Covers typical multi-word cases, single words, empty strings, and sequences of single characters.
+        """
         self.assertEqual(snake_to_pascal("test_string"), "TestString")
         self.assertEqual(snake_to_pascal("another_test_case"), "AnotherTestCase")
         self.assertEqual(snake_to_pascal("singleword"), "Singleword")
@@ -17,6 +22,9 @@ class FormatStringTests(SimpleTestCase):
         self.assertEqual(snake_to_pascal("a"), "A")
 
     def test_snake_to_camel(self):
+        """
+        Test that `snake_to_camel` correctly converts snake_case strings to camelCase, including edge cases such as empty strings and single-character segments.
+        """
         self.assertEqual(snake_to_camel("test_string"), "testString")
         self.assertEqual(snake_to_camel("another_test_case"), "anotherTestCase")
         self.assertEqual(snake_to_camel("singleword"), "singleword")
@@ -26,6 +34,11 @@ class FormatStringTests(SimpleTestCase):
         self.assertEqual(snake_to_camel("a_b"), "aB")
 
     def test_pascal_to_snake(self):
+        """
+        Test that the pascal_to_snake function correctly converts PascalCase strings to snake_case.
+        
+        Covers typical multi-word inputs, single words, empty strings, acronyms, and single-character cases.
+        """
         self.assertEqual(pascal_to_snake("TestString"), "test_string")
         self.assertEqual(pascal_to_snake("AnotherTestCase"), "another_test_case")
         self.assertEqual(pascal_to_snake("Singleword"), "singleword")
@@ -34,6 +47,11 @@ class FormatStringTests(SimpleTestCase):
         self.assertEqual(pascal_to_snake("A"), "a")
 
     def test_camel_to_snake(self):
+        """
+        Test that the `camel_to_snake` function correctly converts camelCase strings to snake_case.
+        
+        Verifies conversion for typical camelCase inputs, single words, empty strings, and edge cases with acronyms or single characters.
+        """
         self.assertEqual(camel_to_snake("testString"), "test_string")
         self.assertEqual(camel_to_snake("anotherTestCase"), "another_test_case")
         self.assertEqual(camel_to_snake("singleword"), "singleword")
