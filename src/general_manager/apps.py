@@ -1,3 +1,4 @@
+from __future__ import annotations
 from django.apps import AppConfig
 import graphene
 import os
@@ -10,9 +11,10 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty
 from general_manager.api.graphql import GraphQL
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING, Type, Any, cast
 from django.core.checks import register
 import logging
+from django.core.management.base import BaseCommand
 
 
 if TYPE_CHECKING:
@@ -28,7 +30,7 @@ class GeneralmanagerConfig(AppConfig):
     def ready(self):
         """
         Initializes the general_manager app when Django starts.
-        
+
         Sets up read-only interface synchronization and schema validation, initializes general manager class attributes and connections, and conditionally configures the GraphQL schema and endpoint based on settings.
         """
         self.handleReadOnlyInterface()
@@ -39,7 +41,7 @@ class GeneralmanagerConfig(AppConfig):
     def handleReadOnlyInterface(self):
         """
         Sets up synchronization and schema validation for all registered read-only interfaces.
-        
+
         This method patches Django's management command execution to ensure read-only interfaces are synchronized during server runs. It also registers system checks for each read-only interface to validate that their schemas are up to date.
         """
         self.patchReadOnlyInterfaceSync(GeneralManagerMeta.read_only_classes)
@@ -47,7 +49,9 @@ class GeneralmanagerConfig(AppConfig):
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
         for general_manager_class in GeneralManagerMeta.read_only_classes:
-            read_only_interface: ReadOnlyInterface = general_manager_class.Interface  # type: ignore
+            read_only_interface = cast(
+                Type[ReadOnlyInterface], general_manager_class.Interface
+            )
 
             register(
                 lambda app_configs, model=read_only_interface._model, manager_class=general_manager_class, **kwargs: ReadOnlyInterface.ensureSchemaIsUpToDate(
@@ -57,13 +61,15 @@ class GeneralmanagerConfig(AppConfig):
             )
 
     @staticmethod
-    def patchReadOnlyInterfaceSync(general_manager_classes: list[Type[GeneralManager]]):
+    def patchReadOnlyInterfaceSync(
+        general_manager_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
+    ):
         """
         Monkey-patches Django's management command runner to synchronize read-only interface data before executing commands.
-        
+
         This ensures that for each provided general manager class, its associated read-only interface's `syncData` method is called before running management commands, except during autoreload subprocesses for `runserver`.
         """
-        from django.core.management.base import BaseCommand
+        from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
         original_run_from_argv = BaseCommand.run_from_argv
 
@@ -71,7 +77,7 @@ class GeneralmanagerConfig(AppConfig):
             # Ensure syncData is only called at real run of runserver
             """
             Runs the management command and synchronizes read-only interface data before execution when appropriate.
-            
+
             Synchronization occurs for all registered read-only interfaces unless the command is 'runserver' in an autoreload subprocess.
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
@@ -79,7 +85,9 @@ class GeneralmanagerConfig(AppConfig):
             if command != "runserver" or run_main:
                 logger.debug("start syncing ReadOnlyInterface data...")
                 for general_manager_class in general_manager_classes:
-                    read_only_interface: ReadOnlyInterface = general_manager_class.Interface  # type: ignore
+                    read_only_interface = cast(
+                        Type[ReadOnlyInterface], general_manager_class.Interface
+                    )
                     read_only_interface.syncData()
 
                 logger.debug("finished syncing ReadOnlyInterface data.")
@@ -91,7 +99,7 @@ class GeneralmanagerConfig(AppConfig):
     def initializeGeneralManagerClasses(self):
         """
         Initializes attributes and interconnections for all GeneralManager classes.
-        
+
         For each pending GeneralManager class, sets up its attributes and creates property accessors. Then, for all GeneralManager classes, connects input fields referencing other GeneralManager subclasses by dynamically adding GraphQL properties to enable filtered access to related objects.
         """
         logger.debug("Initializing GeneralManager classes...")
@@ -153,7 +161,7 @@ class GeneralmanagerConfig(AppConfig):
     def addGraphqlUrl(self, schema):
         """
         Dynamically adds a GraphQL endpoint to the Django URL configuration using the provided schema.
-        
+
         Raises an exception if the ROOT_URLCONF setting is not defined.
         """
         logging.debug("Adding GraphQL URL to Django settings...")

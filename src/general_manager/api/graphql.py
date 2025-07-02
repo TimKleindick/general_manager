@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
 
 
-class MeasurementType(graphene.ObjectType):  # type: ignore
+class MeasurementType(graphene.ObjectType):
     value = graphene.Float()
     unit = graphene.String()
 

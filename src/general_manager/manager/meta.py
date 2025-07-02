@@ -18,26 +18,26 @@ class _nonExistent:
 
 class GeneralManagerMeta(type):
     all_classes: list[Type[GeneralManager]] = []
-    read_only_classes: list[Type[GeneralManager]] = []
+    read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]] = []
     pending_graphql_interfaces: list[Type[GeneralManager]] = []
     pending_attribute_initialization: list[Type[GeneralManager]] = []
     Interface: type[InterfaceBase]
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
-
         """
         Creates a new class, handling interface integration and registration for the general manager framework.
-        
+
         If an 'Interface' attribute is present in the class definition, validates and processes it using the interface's pre- and post-creation hooks, then registers the resulting class for attribute initialization and tracking. If the 'AUTOCREATE_GRAPHQL' setting is enabled, also registers the class for pending GraphQL interface creation.
-        
+
         Args:
             name: The name of the class being created.
             bases: Base classes for the new class.
             attrs: Attribute dictionary for the new class.
-        
+
         Returns:
             The newly created class, possibly augmented with interface and registration logic.
         """
+
         def createNewGeneralManagerClass(
             mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
         ) -> Type[GeneralManager]:
@@ -77,7 +77,7 @@ class GeneralManagerMeta(type):
 
                 def __get__(
                     self,
-                    instance: GeneralManager[GeneralManagerType] | None,
+                    instance: GeneralManager[GeneralManagerType, InterfaceBase] | None,
                     owner: type | None = None,
                 ):
                     if instance is None:

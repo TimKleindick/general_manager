@@ -13,10 +13,13 @@ if TYPE_CHECKING:
         InterfaceBase,
     )
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+InterfaceType = TypeVar("InterfaceType", bound="InterfaceBase", covariant=True)
 
 
-class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
-    Interface: Type[InterfaceBase]
+class GeneralManager(
+    Generic[GeneralManagerType, InterfaceType], metaclass=GeneralManagerMeta
+):
+    Interface: Type[InterfaceType]
     _attributes: dict[str, Any]
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -36,7 +39,11 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
         return (self.__class__, tuple(self.__id.values()))
 
     def __or__(
-        self, other: GeneralManager[GeneralManagerType] | Bucket[GeneralManagerType]
+        self,
+        other: (
+            GeneralManager[GeneralManagerType, InterfaceType]
+            | Bucket[GeneralManagerType]
+        ),
     ) -> Bucket[GeneralManagerType]:
         if isinstance(other, Bucket):
             return other | self
@@ -67,7 +74,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
         history_comment: str | None = None,
         ignore_permission: bool = False,
         **kwargs: dict[str, Any],
-    ) -> GeneralManager[GeneralManagerType]:
+    ) -> GeneralManager[GeneralManagerType, InterfaceType]:
         Permission: Type[BasePermission] | None = getattr(cls, "Permission", None)
         if Permission is not None and not ignore_permission:
             Permission.checkCreatePermission(kwargs, cls, creator_id)
@@ -83,7 +90,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
         history_comment: str | None = None,
         ignore_permission: bool = False,
         **kwargs: dict[str, Any],
-    ) -> GeneralManager[GeneralManagerType]:
+    ) -> GeneralManager[GeneralManagerType, InterfaceType]:
         Permission: Type[BasePermission] | None = getattr(self, "Permission", None)
         if Permission is not None and not ignore_permission:
             Permission.checkUpdatePermission(kwargs, self, creator_id)
@@ -100,7 +107,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
         creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
-    ) -> GeneralManager[GeneralManagerType]:
+    ) -> GeneralManager[GeneralManagerType, InterfaceType]:
         Permission: Type[BasePermission] | None = getattr(self, "Permission", None)
         if Permission is not None and not ignore_permission:
             Permission.checkDeletePermission(self, creator_id)
