@@ -25,22 +25,23 @@ class GeneralManagerMeta(type):
 
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         """
-        Creates a new class, handling interface integration and registration for the general manager framework.
-
-        If an 'Interface' attribute is present in the class definition, validates and processes it using the interface's pre- and post-creation hooks, then registers the resulting class for attribute initialization and tracking. If the 'AUTOCREATE_GRAPHQL' setting is enabled, also registers the class for pending GraphQL interface creation.
-
-        Args:
-            name: The name of the class being created.
-            bases: Base classes for the new class.
-            attrs: Attribute dictionary for the new class.
-
+        Create a new class using the metaclass, integrating interface hooks and registering the class for attribute initialization and tracking.
+        
+        If the class definition includes an 'Interface' attribute, validates it as a subclass of `InterfaceBase`, applies pre- and post-creation hooks from the interface, and registers the resulting class for attribute initialization and management. If the `AUTOCREATE_GRAPHQL` setting is enabled, also registers the class for pending GraphQL interface creation.
+        
         Returns:
-            The newly created class, possibly augmented with interface and registration logic.
+            The newly created class, potentially augmented with interface integration and registration logic.
         """
 
         def createNewGeneralManagerClass(
             mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
         ) -> Type[GeneralManager]:
+            """
+            Create a new general manager class using the standard metaclass instantiation process.
+            
+            Returns:
+                The newly created general manager class.
+            """
             return super().__new__(mcs, name, bases, attrs)
 
         if "Interface" in attrs:
@@ -69,6 +70,11 @@ class GeneralManagerMeta(type):
         attributes: Iterable[str], new_class: Type[GeneralManager]
     ):
 
+        """
+        Dynamically assigns property descriptors to a class for the specified attribute names.
+        
+        For each attribute name, creates a descriptor that retrieves the value from an instance's `_attributes` dictionary. If accessed on the class, returns the field type from the class's interface. If the attribute is callable, it is invoked with the instance's interface. Raises `AttributeError` if the attribute is missing or if an error occurs during callable invocation.
+        """
         def desciptorMethod(attr_name: str, new_class: type):
             class Descriptor(Generic[GeneralManagerType]):
                 def __init__(self, attr_name: str, new_class: Type[GeneralManager]):

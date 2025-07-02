@@ -18,12 +18,12 @@ class Input(Generic[INPUT_TYPE]):
         depends_on: Optional[List[str]] = None,
     ):
         """
-        Initializes an Input instance with type information, possible values, and dependencies.
-
-        Args:
-            type: The expected type for the input value.
-            possible_values: An optional iterable or callable that defines allowed values.
-            depends_on: An optional list of dependency names. If not provided and possible_values is callable, dependencies are inferred from its parameters.
+        Create an Input specification with type information, allowed values, and dependency metadata.
+        
+        Parameters:
+            type: The expected Python type for the input value.
+            possible_values: Optional; an iterable of allowed values or a callable returning allowed values.
+            depends_on: Optional; a list of dependency names. If not provided and possible_values is callable, dependencies are inferred from the callable's parameter names.
         """
         self.type = type
         self.possible_values = possible_values
@@ -42,15 +42,10 @@ class Input(Generic[INPUT_TYPE]):
 
     def cast(self, value: Any) -> Any:
         """
-        Casts the input value to the type specified by this Input instance.
-
-        Handles special cases for date, datetime, GeneralManager subclasses, and Measurement types.
-        If the value is already of the target type, it is returned unchanged. Otherwise, attempts to
-        convert or construct the value as appropriate for the target type.
-
-        Args:
-            value: The value to be cast or converted.
-
+        Converts the input value to the type specified by this Input instance, handling special cases for dates, datetimes, GeneralManager subclasses, and Measurement types.
+        
+        If the value is already of the target type, it is returned unchanged. For date and datetime types, string and cross-type conversions are supported. For GeneralManager subclasses, instances are constructed from a dictionary or an ID. For Measurement, string values are parsed accordingly. Otherwise, the value is cast using the target type's constructor.
+        
         Returns:
             The value converted to the target type, or an instance of the target type.
         """
