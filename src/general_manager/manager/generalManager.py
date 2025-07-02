@@ -63,7 +63,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @dataChange
     def create(
         cls,
-        creator_id: int,
+        creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
         **kwargs: dict[str, Any],
@@ -79,7 +79,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @dataChange
     def update(
         self,
-        creator_id: int,
+        creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
         **kwargs: dict[str, Any],
@@ -97,7 +97,7 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     @dataChange
     def deactivate(
         self,
-        creator_id: int,
+        creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
     ) -> GeneralManager[GeneralManagerType]:
@@ -131,12 +131,12 @@ class GeneralManager(Generic[GeneralManagerType], metaclass=GeneralManagerMeta):
     def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """
         Processes a dictionary by replacing GeneralManager instances with their identifications.
-        
+
         For each key-value pair, replaces any GeneralManager instance with its identification. Lists and tuples are processed recursively, substituting contained GeneralManager instances with their identifications. Returns None if the resulting dictionary is empty.
-        
+
         Args:
             kwargs: Dictionary to process.
-        
+
         Returns:
             A new dictionary with GeneralManager instances replaced by their identifications, or None if empty.
         """

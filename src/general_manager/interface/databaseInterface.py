@@ -11,12 +11,12 @@ from general_manager.interface.databaseBasedInterface import (
 )
 
 
-class DatabaseInterface(DBBasedInterface):
+class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     _interface_type = "database"
 
     @classmethod
     def create(
-        cls, creator_id: int, history_comment: str | None = None, **kwargs: Any
+        cls, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> int:
 
         cls._checkForInvalidKwargs(cls._model, kwargs=kwargs)
@@ -27,7 +27,7 @@ class DatabaseInterface(DBBasedInterface):
         return pk
 
     def update(
-        self, creator_id: int, history_comment: str | None = None, **kwargs: Any
+        self, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> int:
 
         self._checkForInvalidKwargs(self._model, kwargs=kwargs)
@@ -37,7 +37,9 @@ class DatabaseInterface(DBBasedInterface):
         self.__setManyToManyAttributes(instance, many_to_many_kwargs)
         return pk
 
-    def deactivate(self, creator_id: int, history_comment: str | None = None) -> int:
+    def deactivate(
+        self, creator_id: int | None, history_comment: str | None = None
+    ) -> int:
         instance = self._model.objects.get(pk=self.pk)
         instance.is_active = False
         if history_comment:
@@ -106,7 +108,10 @@ class DatabaseInterface(DBBasedInterface):
     @classmethod
     @transaction.atomic
     def _save_with_history(
-        cls, instance: GeneralManagerModel, creator_id: int, history_comment: str | None
+        cls,
+        instance: GeneralManagerModel,
+        creator_id: int | None,
+        history_comment: str | None,
     ) -> int:
         """
         Saves a model instance with validation and optional history tracking.

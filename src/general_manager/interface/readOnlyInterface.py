@@ -24,16 +24,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ReadOnlyInterface(DBBasedInterface):
+class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     _interface_type = "readonly"
-    _model: Type[GeneralManagerBasisModel]
     _parent_class: Type[GeneralManager]
 
     @staticmethod
     def getUniqueFields(model: Type[models.Model]) -> set[str]:
         """
         Return the set of field names that uniquely identify instances of the given Django model.
-        
+
         Considers fields marked as unique (excluding "id"), unique_together constraints, and UniqueConstraint definitions.
         """
         opts = model._meta
@@ -58,7 +57,7 @@ class ReadOnlyInterface(DBBasedInterface):
     def syncData(cls) -> None:
         """
         Synchronizes the associated Django model with the JSON data from the parent class, ensuring records match exactly.
-        
+
         Parses the JSON data, creates or updates model instances based on unique fields, and marks as inactive any database records not present in the JSON data. Raises a ValueError if required attributes are missing, if the JSON data is invalid, or if no unique fields are defined.
         """
         if cls.ensureSchemaIsUpToDate(cls._parent_class, cls._model):
@@ -139,11 +138,11 @@ class ReadOnlyInterface(DBBasedInterface):
     ) -> list[Warning]:
         """
         Checks whether the database schema for the given model matches the model definition.
-        
+
         Parameters:
             new_manager_class (Type[GeneralManager]): The manager class associated with the model.
             model (Type[models.Model]): The Django model to check.
-        
+
         Returns:
             list[Warning]: A list of Django Warning objects describing schema issues, or an empty list if the schema is up to date.
         """
@@ -151,10 +150,10 @@ class ReadOnlyInterface(DBBasedInterface):
         def table_exists(table_name: str) -> bool:
             """
             Check if a database table with the given name exists.
-            
+
             Parameters:
                 table_name (str): The name of the database table to check.
-            
+
             Returns:
                 bool: True if the table exists, False otherwise.
             """
@@ -167,7 +166,7 @@ class ReadOnlyInterface(DBBasedInterface):
         ) -> tuple[list[str], list[str]]:
             """
             Compare a Django model's fields to the columns of a database table.
-            
+
             Returns:
                 missing (list[str]): Columns defined in the model but missing from the database table.
                 extra (list[str]): Columns present in the database table but not defined in the model.
@@ -207,7 +206,7 @@ class ReadOnlyInterface(DBBasedInterface):
     def readOnlyPostCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for post-creation hooks that registers a new manager class as read-only.
-        
+
         After executing the wrapped post-creation function, this decorator appends the newly created manager class to the `read_only_classes` list in the meta-class, marking it as a read-only interface.
         """
 
@@ -218,7 +217,7 @@ class ReadOnlyInterface(DBBasedInterface):
         ):
             """
             Registers the newly created class as a read-only class after invoking the wrapped post-creation function.
-            
+
             Parameters:
                 new_class (Type[GeneralManager]): The newly created manager class to register.
                 interface_cls (Type[ReadOnlyInterface]): The associated read-only interface class.
@@ -235,9 +234,10 @@ class ReadOnlyInterface(DBBasedInterface):
     def readOnlyPreCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for pre-creation hook functions to ensure the base model class is set to ReadOnlyModel.
-        
+
         Wraps a pre-creation function, injecting ReadOnlyModel as the base model class argument before the GeneralManager instance is created.
         """
+
         def wrapper(
             name: generalManagerClassName,
             attrs: attributes,
@@ -254,9 +254,9 @@ class ReadOnlyInterface(DBBasedInterface):
     def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         Return the pre- and post-creation hook methods for integrating this interface with a GeneralManager.
-        
+
         The returned tuple contains the pre-creation method, which injects the base model class, and the post-creation method, which registers the class as read-only. These hooks are intended for use by GeneralManagerMeta during the manager class lifecycle.
-        
+
         Returns:
             tuple: A pair of methods for pre- and post-creation processing.
         """

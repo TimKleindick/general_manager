@@ -1,12 +1,5 @@
 from __future__ import annotations
-from typing import (
-    Type,
-    ClassVar,
-    Any,
-    Callable,
-    TYPE_CHECKING,
-    TypeVar,
-)
+from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar, Generic
 from django.db import models
 from django.conf import settings
 from datetime import datetime, timedelta
@@ -76,11 +69,13 @@ class GeneralManagerBasisModel(models.Model):
 
 
 class GeneralManagerModel(GeneralManagerBasisModel):
-    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
-    changed_by_id: int
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
+    )
+    changed_by_id: int | None
 
     @property
-    def _history_user(self) -> AbstractUser:
+    def _history_user(self) -> AbstractUser | None:
         """
         Returns the user who last modified this model instance.
         """
@@ -100,8 +95,11 @@ class GeneralManagerModel(GeneralManagerBasisModel):
         abstract = True
 
 
-class DBBasedInterface(InterfaceBase):
-    _model: Type[GeneralManagerBasisModel]
+MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
+
+
+class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
+    _model: Type[MODEL_TYPE]
     input_fields: dict[str, Input] = {"id": Input(int)}
 
     def __init__(
