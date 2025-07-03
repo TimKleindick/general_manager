@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v0.8.0 (2025-07-03)
+
+### Bug Fixes
+
+- Add is_derived attribute to interface fields and update GraphQL filtering logic
+  ([`999fcbe`](https://github.com/TimKleindick/general_manager/commit/999fcbe67950c726b295a1c3b8726d594b4c74c8))
+
+- Input cast function for date type with date value
+  ([`12cb5d4`](https://github.com/TimKleindick/general_manager/commit/12cb5d406ccdc947fe262d14403b3573572004df))
+
+- Remove type ignore
+  ([`13262eb`](https://github.com/TimKleindick/general_manager/commit/13262eb6cbbf77837f2fbb470112c4fc5b39d7ed))
+
+- Return from automatic mutations
+  ([`876c34e`](https://github.com/TimKleindick/general_manager/commit/876c34ef7bd6a204543f02e55e3e9bce55a5e12d))
+
+- Simplify return statement in GraphQL mutation handling
+  ([`8245980`](https://github.com/TimKleindick/general_manager/commit/8245980b229e00a9de8cfa70e04b15f53276d69b))
+
+- Typos
+  ([`efe6dea`](https://github.com/TimKleindick/general_manager/commit/efe6deafd415c0ba03e599ca5406744e5166bf01))
+
+### Documentation
+
+- Update calculation interface example
+  ([`a19a794`](https://github.com/TimKleindick/general_manager/commit/a19a794eb59c9e6e47f57c81432f494b6a50c0c7))
+
+### Features
+
+- Add string format utility functions and corresponding tests
+  ([`29b7447`](https://github.com/TimKleindick/general_manager/commit/29b7447d6cce8c8b46b9304a21c6243d995c42be))
+
+- Allow creator to be undefined
+  ([`2d6d698`](https://github.com/TimKleindick/general_manager/commit/2d6d698f7d5c4b6fc5a67fdb9db1d814a4958e4d))
+
+### Refactoring
+
+- Remove redundant comments from test cases in TestInput
+  ([`909fc3e`](https://github.com/TimKleindick/general_manager/commit/909fc3ec7830ae00b173401df4ad126c554b4743))
+
+### Testing
+
+- Remove type ignores and add test for getReadPermissionFilter
+  ([`c8896a7`](https://github.com/TimKleindick/general_manager/commit/c8896a716b07fcc816484a848f6b8484ade25f85))
+
+- Test GraphQL default mutations
+  ([`1fe5646`](https://github.com/TimKleindick/general_manager/commit/1fe5646855e4a0f01e6858d0521ad5a67ad2e62d))
+
+
 ## v0.7.0 (2025-06-22)
 
 ### Bug Fixes
