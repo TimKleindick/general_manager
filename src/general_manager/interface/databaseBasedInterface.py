@@ -23,6 +23,11 @@ from general_manager.interface.baseInterface import (
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.databaseBucket import DatabaseBucket
+from general_manager.interface.models import (
+    GeneralManagerBasisModel,
+    GeneralManagerModel,
+    getFullCleanMethode,
+)
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
@@ -30,72 +35,6 @@ if TYPE_CHECKING:
     from general_manager.rule.rule import Rule
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
-
-
-def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
-    """
-    Generates a custom `full_clean` method for a Django model that combines standard validation with additional rule-based checks.
-
-    The returned method first performs Django's built-in model validation, then evaluates any custom rules defined in the model's `_meta.rules` attribute. If any validation or rule fails, a `ValidationError` is raised containing all collected errors.
-    """
-
-    def full_clean(self: models.Model, *args: Any, **kwargs: Any):
-        errors: dict[str, Any] = {}
-        try:
-            super(model, self).full_clean(*args, **kwargs)  # type: ignore
-        except ValidationError as e:
-            errors.update(e.message_dict)
-
-        rules: list[Rule] = getattr(self._meta, "rules")
-        for rule in rules:
-            if not rule.evaluate(self):
-                error_message = rule.getErrorMessage()
-                if error_message:
-                    errors.update(error_message)
-
-        if errors:
-            raise ValidationError(errors)
-
-    return full_clean
-
-
-class GeneralManagerBasisModel(models.Model):
-    _general_manager_class: ClassVar[Type[GeneralManager]]
-    is_active = models.BooleanField(default=True)
-    history = HistoricalRecords(inherit=True)
-
-    class Meta:
-        abstract = True
-
-
-class GeneralManagerModel(GeneralManagerBasisModel):
-    changed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
-    )
-    changed_by_id: int | None
-
-    @property
-    def _history_user(self) -> AbstractUser | None:
-        """
-        Gets the user who last modified this model instance, or None if not set.
-        
-        Returns:
-            AbstractUser | None: The user who last changed the instance, or None if unavailable.
-        """
-        return self.changed_by
-
-    @_history_user.setter
-    def _history_user(self, value: AbstractUser) -> None:
-        """
-        Sets the user responsible for the latest change to the model instance.
-
-        Args:
-            value: The user to associate with the change.
-        """
-        self.changed_by = value
-
-    class Meta:  # type: ignore
-        abstract = True
 
 
 MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
@@ -113,7 +52,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     ):
         """
         Initialize the interface instance and load the associated model record.
-        
+
         If `search_date` is provided, retrieves the historical record as of that date; otherwise, loads the current record.
         """
         super().__init__(*args, **kwargs)
@@ -202,9 +141,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
         Return a dictionary mapping attribute names to metadata describing their type and properties.
-        
+
         The returned dictionary includes all model fields, custom fields, foreign keys, many-to-many, and reverse relation fields. For each attribute, the metadata includes its Python type (translated from Django field types when possible), whether it is required, editable, derived, and its default value. For related models with a general manager class, the type is set to that class.
-         
+
         Returns:
             dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
         """
@@ -462,15 +401,15 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         # Felder aus der Interface-Klasse sammeln
         """
         Dynamically creates a Django model class, its associated interface class, and a factory class from an interface definition.
-        
+
         This method extracts fields and meta information from the provided interface class, constructs a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and generates corresponding interface and factory classes. The resulting classes are returned for integration into the general manager framework.
-        
+
         Parameters:
             name: The name for the dynamically created model class.
             attrs: The attributes dictionary to be updated with the new interface and factory classes.
             interface: The interface base class defining the model structure and metadata.
             base_model_class: The base class to use for the new model (defaults to GeneralManagerModel).
-        
+
         Returns:
             tuple: A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
         """
