@@ -30,7 +30,7 @@ class GeneralmanagerConfig(AppConfig):
     def ready(self):
         """
         Initializes the general_manager app on Django startup.
-        
+
         Sets up read-only interface synchronization and schema validation, initializes general manager class attributes and interconnections, and configures the GraphQL schema and endpoint if enabled in settings.
         """
         self.handleReadOnlyInterface()
@@ -41,7 +41,7 @@ class GeneralmanagerConfig(AppConfig):
     def handleReadOnlyInterface(self):
         """
         Configures synchronization and schema validation for all registered read-only interfaces.
-        
+
         This method ensures that read-only interfaces are synchronized before Django management commands execute and registers system checks to validate that each read-only interface's schema remains current.
         """
         self.patchReadOnlyInterfaceSync(GeneralManagerMeta.read_only_classes)
@@ -66,7 +66,7 @@ class GeneralmanagerConfig(AppConfig):
     ):
         """
         Monkey-patches Django's management command runner to synchronize data for all provided read-only interfaces before executing management commands.
-        
+
         For each general manager class, its associated read-only interface's `syncData` method is called prior to command execution, except during autoreload subprocesses of `runserver`.
         """
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -77,10 +77,10 @@ class GeneralmanagerConfig(AppConfig):
             # Ensure syncData is only called at real run of runserver
             """
             Executes a Django management command, synchronizing all registered read-only interfaces before execution unless running an autoreload subprocess of 'runserver'.
-            
+
             Parameters:
                 argv (list): Command-line arguments for the management command.
-            
+
             Returns:
                 The result of the original management command execution.
             """
@@ -103,7 +103,7 @@ class GeneralmanagerConfig(AppConfig):
     def initializeGeneralManagerClasses(self):
         """
         Initializes attributes and sets up dynamic relationships for all registered GeneralManager classes.
-        
+
         For each pending GeneralManager class, assigns its interface attributes and creates property accessors. Then, for all GeneralManager classes, dynamically connects input fields that reference other GeneralManager subclasses by adding GraphQL properties to enable filtered access to related objects.
         """
         logger.debug("Initializing GeneralManager classes...")
@@ -165,13 +165,13 @@ class GeneralmanagerConfig(AppConfig):
     def addGraphqlUrl(self, schema):
         """
         Dynamically appends a GraphQL endpoint to the Django URL configuration using the given schema.
-        
+
         Raises:
             Exception: If the ROOT_URLCONF setting is not defined in Django settings.
         """
         logging.debug("Adding GraphQL URL to Django settings...")
         root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
-        graph_ql_url = getattr(settings, "GRAPHQL_URL", "graphql/")
+        graph_ql_url = getattr(settings, "GRAPHQL_URL", "graphql")
         if not root_url_conf_path:
             raise Exception("ROOT_URLCONF not found in settings")
         urlconf = import_module(root_url_conf_path)
