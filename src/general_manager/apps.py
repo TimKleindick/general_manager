@@ -38,13 +38,16 @@ class GeneralmanagerConfig(AppConfig):
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             self.handleGraphQL()
 
-    def handleReadOnlyInterface(self):
+    @staticmethod
+    def handleReadOnlyInterface():
         """
         Configures synchronization and schema validation for all registered read-only interfaces.
 
         This method ensures that read-only interfaces are synchronized before Django management commands execute and registers system checks to validate that each read-only interface's schema remains current.
         """
-        self.patchReadOnlyInterfaceSync(GeneralManagerMeta.read_only_classes)
+        GeneralmanagerConfig.patchReadOnlyInterfaceSync(
+            GeneralManagerMeta.read_only_classes
+        )
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
@@ -100,7 +103,8 @@ class GeneralmanagerConfig(AppConfig):
 
         BaseCommand.run_from_argv = run_from_argv_with_sync
 
-    def initializeGeneralManagerClasses(self):
+    @staticmethod
+    def initializeGeneralManagerClasses():
         """
         Initializes attributes and sets up dynamic relationships for all registered GeneralManager classes.
 
@@ -137,7 +141,8 @@ class GeneralmanagerConfig(AppConfig):
                         graphQlProperty(func),
                     )
 
-    def handleGraphQL(self):
+    @staticmethod
+    def handleGraphQL():
         """
         Sets up GraphQL interfaces, mutations, and schema for all pending general manager classes, and adds the GraphQL endpoint to the Django URL configuration.
         """
@@ -160,9 +165,10 @@ class GeneralmanagerConfig(AppConfig):
             query=GraphQL._query_class,
             mutation=GraphQL._mutation_class,
         )
-        self.addGraphqlUrl(schema)
+        GeneralmanagerConfig.addGraphqlUrl(schema)
 
-    def addGraphqlUrl(self, schema):
+    @staticmethod
+    def addGraphqlUrl(schema):
         """
         Dynamically appends a GraphQL endpoint to the Django URL configuration using the given schema.
 
