@@ -111,7 +111,13 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             if isinstance(value, GeneralManager):
                 value = value.identification["id"]
                 key = f"{key}_id"
-            setattr(instance, key, value)
+            try:
+                setattr(instance, key, value)
+            except (ValueError, TypeError) as e:
+                if isinstance(e, ValueError):
+                    raise ValueError(f"Invalid value for {key}: {value}")
+                if isinstance(e, TypeError):
+                    raise TypeError(f"Type error for {key}: {e}")
         return instance
 
     @staticmethod
