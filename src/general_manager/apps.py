@@ -33,25 +33,28 @@ class GeneralmanagerConfig(AppConfig):
 
         Sets up read-only interface synchronization and schema validation, initializes general manager class attributes and interconnections, and configures the GraphQL schema and endpoint if enabled in settings.
         """
-        self.handleReadOnlyInterface()
-        self.initializeGeneralManagerClasses()
+        self.handleReadOnlyInterface(GeneralManagerMeta.read_only_classes)
+        self.initializeGeneralManagerClasses(
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.all_classes,
+        )
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
-            self.handleGraphQL()
+            self.handleGraphQL(GeneralManagerMeta.pending_graphql_interfaces)
 
     @staticmethod
-    def handleReadOnlyInterface():
+    def handleReadOnlyInterface(
+        read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
+    ):
         """
         Configures synchronization and schema validation for all registered read-only interfaces.
 
         This method ensures that read-only interfaces are synchronized before Django management commands execute and registers system checks to validate that each read-only interface's schema remains current.
         """
-        GeneralmanagerConfig.patchReadOnlyInterfaceSync(
-            GeneralManagerMeta.read_only_classes
-        )
+        GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
-        for general_manager_class in GeneralManagerMeta.read_only_classes:
+        for general_manager_class in read_only_classes:
             read_only_interface = cast(
                 Type[ReadOnlyInterface], general_manager_class.Interface
             )
@@ -104,7 +107,10 @@ class GeneralmanagerConfig(AppConfig):
         BaseCommand.run_from_argv = run_from_argv_with_sync
 
     @staticmethod
-    def initializeGeneralManagerClasses():
+    def initializeGeneralManagerClasses(
+        pending_attribute_initialization: list[Type[GeneralManager]],
+        all_classes: list[Type[GeneralManager]],
+    ):
         """
         Initializes attributes and sets up dynamic relationships for all registered GeneralManager classes.
 
@@ -113,9 +119,7 @@ class GeneralmanagerConfig(AppConfig):
         logger.debug("Initializing GeneralManager classes...")
 
         logger.debug("starting to create attributes for GeneralManager classes...")
-        for (
-            general_manager_class
-        ) in GeneralManagerMeta.pending_attribute_initialization:
+        for general_manager_class in pending_attribute_initialization:
             attributes = general_manager_class.Interface.getAttributes()
             setattr(general_manager_class, "_attributes", attributes)
             GeneralManagerMeta.createAtPropertiesForAttributes(
@@ -123,7 +127,7 @@ class GeneralmanagerConfig(AppConfig):
             )
 
         logger.debug("starting to connect inputs to other general manager classes...")
-        for general_manager_class in GeneralManagerMeta.all_classes:
+        for general_manager_class in all_classes:
             attributes = getattr(general_manager_class.Interface, "input_fields", {})
             for attribute_name, attribute in attributes.items():
                 if isinstance(attribute, Input) and issubclass(
@@ -142,12 +146,14 @@ class GeneralmanagerConfig(AppConfig):
                     )
 
     @staticmethod
-    def handleGraphQL():
+    def handleGraphQL(
+        pending_graphql_interfaces: list[Type[GeneralManager]],
+    ):
         """
         Sets up GraphQL interfaces, mutations, and schema for all pending general manager classes, and adds the GraphQL endpoint to the Django URL configuration.
         """
         logger.debug("Starting to create GraphQL interfaces and mutations...")
-        for general_manager_class in GeneralManagerMeta.pending_graphql_interfaces:
+        for general_manager_class in pending_graphql_interfaces:
             GraphQL.createGraphqlInterface(general_manager_class)
             GraphQL.createGraphqlMutation(general_manager_class)
 
