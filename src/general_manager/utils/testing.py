@@ -10,6 +10,11 @@ from general_manager.api.graphql import GraphQL
 
 
 def _default_graphql_url_clear():
+    """
+    Removes the first URL pattern for the GraphQL view from the project's root URL configuration.
+    
+    This function searches the root URL patterns for a pattern whose callback is a `GraphQLView` and removes it, effectively clearing the default GraphQL endpoint from the URL configuration.
+    """
     urlconf = import_module(settings.ROOT_URLCONF)
     for pattern in urlconf.urlpatterns:
         if (
@@ -28,11 +33,21 @@ class GMTestCaseMeta(type):
     """
 
     def __new__(mcs, name, bases, attrs):
+        """
+        Creates a new test case class with a customized setUpClass that prepares the database schema and GraphQL environment for GeneralManager integration tests.
+        
+        The generated setUpClass method resets GraphQL class registries, invokes any user-defined setUpClass, clears default GraphQL URL patterns, creates missing database tables for specified GeneralManager classes and their history models, initializes GeneralManager and GraphQL configurations, and finally calls the original GraphQLTransactionTestCase setUpClass.
+        """
         user_setup = attrs.get("setUpClass")
         # MERKE dir das echte GraphQLTransactionTestCase.setUpClass
         base_setup = GraphQLTransactionTestCase.setUpClass
 
         def wrapped_setUpClass(cls):
+            """
+            Performs comprehensive setup for a test case class, initializing GraphQL and GeneralManager environments and ensuring required database tables exist.
+            
+            This method resets internal GraphQL registries, invokes any user-defined setup, removes default GraphQL URL patterns, creates missing database tables for models and their history associated with specified GeneralManager classes, initializes GeneralManager and GraphQL configurations, and finally calls the base test case setup.
+            """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
             GraphQL._mutations = {}

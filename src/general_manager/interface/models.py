@@ -16,12 +16,23 @@ modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
     """
-    Generates a custom `full_clean` method for a Django model that combines standard validation with additional rule-based checks.
-
-    The returned method first performs Django's built-in model validation, then evaluates any custom rules defined in the model's `_meta.rules` attribute. If any validation or rule fails, a `ValidationError` is raised containing all collected errors.
+    Return a custom `full_clean` method for a Django model that performs both standard validation and additional rule-based checks.
+    
+    The generated method first applies Django's built-in model validation, then evaluates custom rules defined in the model's `_meta.rules` attribute. If any validation or rule fails, it raises a `ValidationError` containing all collected errors.
+    
+    Parameters:
+        model (Type[models.Model]): The Django model class for which to generate the custom `full_clean` method.
+    
+    Returns:
+        Callable[..., None]: A `full_clean` method that can be assigned to the model class.
     """
 
     def full_clean(self: models.Model, *args: Any, **kwargs: Any):
+        """
+        Performs full validation on the model instance, including both standard Django validation and custom rule-based checks.
+        
+        Aggregates errors from Django's built-in validation and any additional rules defined in the model's `_meta.rules` attribute. Raises a `ValidationError` containing all collected errors if any validation or rule check fails.
+        """
         errors: dict[str, Any] = {}
         try:
             super(model, self).full_clean(*args, **kwargs)  # type: ignore
@@ -59,20 +70,17 @@ class GeneralManagerModel(GeneralManagerBasisModel):
     @property
     def _history_user(self) -> AbstractUser | None:
         """
-        Gets the user who last modified this model instance, or None if not set.
-
-        Returns:
-            AbstractUser | None: The user who last changed the instance, or None if unavailable.
+        Returns the user who last modified this model instance, or None if no user is set.
         """
         return self.changed_by
 
     @_history_user.setter
     def _history_user(self, value: AbstractUser) -> None:
         """
-        Sets the user responsible for the latest change to the model instance.
-
-        Args:
-            value: The user to associate with the change.
+        Set the user responsible for the most recent change to the model instance.
+        
+        Parameters:
+            value (AbstractUser): The user to associate with the latest modification.
         """
         self.changed_by = value
 
