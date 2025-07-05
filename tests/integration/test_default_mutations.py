@@ -113,3 +113,17 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         self.assertIsNone(data["number"])
         self.assertEqual(data["budget"]["value"], 2000)
         self.assertEqual(data["budget"]["unit"], "EUR")
+
+    def test_create_project_with_invalid_budget(self):
+        variables = {
+            "name": "Test Project",
+            "number": 42,
+            "budget": "invalid amount",
+        }
+
+        response = self.query(self.create_mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertFalse(data["createTestProject"]["success"])
+        self.assertIn("budget", data["createTestProject"]["errors"][0])
