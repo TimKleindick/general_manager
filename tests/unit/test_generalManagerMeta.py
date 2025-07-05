@@ -340,9 +340,9 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
     def test_invalid_interface_raises_type_error(self):
         """
-        Verifies that defining a class with an Interface not subclassing InterfaceBase raises a TypeError.
-
-        Asserts that the exception message indicates the requirement for InterfaceBase and that no classes are registered after the failure.
+        Test that defining a class with an Interface not subclassing InterfaceBase raises a TypeError.
+        
+        Asserts that the exception message specifies the InterfaceBase requirement and that no classes are registered after the failed definition.
         """
         with self.assertRaises(TypeError) as cm:
 
@@ -372,10 +372,9 @@ class GeneralManagerMetaTests(SimpleTestCase):
     @override_settings(AUTOCREATE_GRAPHQL=None)
     def test_plain_manager_without_interface_does_nothing(self):
         """
-        A class without an Interface attribute:
-        - should not be added to all_classes
-        - should not be added to pending_attribute_initialization
-        - (when AUTOCREATE_GRAPHQL=False) should not be added to pending_graphql_interfaces
+        Verifies that defining a class without an Interface attribute does not alter GeneralManagerMeta registration lists.
+        
+        Ensures that such a class is not added to `all_classes` or `pending_attribute_initialization`.
         """
         before_all = list(GeneralManagerMeta.all_classes)
         before_pending_init = list(GeneralManagerMeta.pending_attribute_initialization)
@@ -401,8 +400,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
     @override_settings(AUTOCREATE_GRAPHQL=True)
     def test_autocreate_graphql_flag_adds_to_pending(self):
         """
-        When AUTOCREATE_GRAPHQL=True, every created class
-        (with or without Interface) should be added to pending_graphql_interfaces.
+        Tests that when AUTOCREATE_GRAPHQL is set to True, any class created with GeneralManagerMeta—regardless of whether it defines an Interface—is added to the pending_graphql_interfaces list.
         """
         GeneralManagerMeta.pending_graphql_interfaces.clear()
 
