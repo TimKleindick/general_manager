@@ -26,9 +26,9 @@ class GeneralManagerMeta(type):
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         """
         Create a new class using the metaclass, integrating interface hooks and registering the class for attribute initialization and tracking.
-        
+
         If the class definition includes an 'Interface' attribute, validates it as a subclass of `InterfaceBase`, applies pre- and post-creation hooks from the interface, and registers the resulting class for attribute initialization and management. If the `AUTOCREATE_GRAPHQL` setting is enabled, also registers the class for pending GraphQL interface creation.
-        
+
         Returns:
             The newly created class, potentially augmented with interface integration and registration logic.
         """
@@ -38,7 +38,7 @@ class GeneralManagerMeta(type):
         ) -> Type[GeneralManager]:
             """
             Create a new general manager class using the standard metaclass instantiation process.
-            
+
             Returns:
                 The newly created general manager class.
             """
@@ -60,8 +60,7 @@ class GeneralManagerMeta(type):
         else:
             new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
 
-        if getattr(settings, "AUTOCREATE_GRAPHQL", False):
-            mcs.pending_graphql_interfaces.append(new_class)
+        mcs.pending_graphql_interfaces.append(new_class)
 
         return new_class
 
@@ -69,12 +68,12 @@ class GeneralManagerMeta(type):
     def createAtPropertiesForAttributes(
         attributes: Iterable[str], new_class: Type[GeneralManager]
     ):
-
         """
         Dynamically assigns property descriptors to a class for the specified attribute names.
-        
+
         For each attribute name, creates a descriptor that retrieves the value from an instance's `_attributes` dictionary. If accessed on the class, returns the field type from the class's interface. If the attribute is callable, it is invoked with the instance's interface. Raises `AttributeError` if the attribute is missing or if an error occurs during callable invocation.
         """
+
         def desciptorMethod(attr_name: str, new_class: type):
             class Descriptor(Generic[GeneralManagerType]):
                 def __init__(self, attr_name: str, new_class: Type[GeneralManager]):
