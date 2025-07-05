@@ -369,6 +369,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
             msg="pending_attribute_initialization should remain empty.",
         )
 
+    @override_settings(AUTOCREATE_GRAPHQL=None)
     def test_plain_manager_without_interface_does_nothing(self):
         """
         A class without an Interface attribute:
