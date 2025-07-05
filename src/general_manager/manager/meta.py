@@ -59,8 +59,8 @@ class GeneralManagerMeta(type):
 
         else:
             new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
-
-        mcs.pending_graphql_interfaces.append(new_class)
+        if getattr(settings, "AUTOCREATE_GRAPHQL", False):
+            mcs.pending_graphql_interfaces.append(new_class)
 
         return new_class
 
