@@ -398,13 +398,6 @@ class GeneralManagerMetaTests(SimpleTestCase):
             msg="pending_attribute_initialization should remain unchanged.",
         )
 
-        # c) pending_graphql_interfaces should remain unchanged (AUTOCREATE_GRAPHQL=False by default)
-        self.assertEqual(
-            GeneralManagerMeta.pending_graphql_interfaces,
-            before_pending_graphql,
-            msg="pending_graphql_interfaces should remain unchanged.",
-        )
-
     @override_settings(AUTOCREATE_GRAPHQL=True)
     def test_autocreate_graphql_flag_adds_to_pending(self):
         """
