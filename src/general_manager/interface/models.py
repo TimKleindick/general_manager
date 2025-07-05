@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar, Generic
+from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar
 from django.db import models
 from django.conf import settings
 from simple_history.models import HistoricalRecords  # type: ignore
