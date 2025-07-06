@@ -96,7 +96,10 @@ class Measurement:
         splitted = value.split(" ")
         if len(splitted) == 1:
             # If only one part, assume it's a dimensionless value
-            return cls(Decimal(splitted[0]), "dimensionless")
+            try:
+                return cls(Decimal(splitted[0]), "dimensionless")
+            except InvalidOperation:
+                raise ValueError("Invalid value for dimensionless measurement.")
         if len(splitted) != 2:
             raise ValueError("String must be in the format 'value unit'.")
         value, unit = splitted
