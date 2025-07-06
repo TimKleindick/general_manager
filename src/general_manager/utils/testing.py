@@ -7,12 +7,39 @@ from typing import cast
 from django.db import models
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.api.graphql import GraphQL
+from django.apps import apps as global_apps
+
+
+_original_get_app = global_apps.get_containing_app_config
+
+
+def createFallbackGetApp(fallback_app: str):
+    """
+    Creates a fallback function for getting the app config, which returns the specified fallback app if the original lookup fails.
+
+    Parameters:
+        fallback_app (str): The name of the app to return if the original lookup fails.
+
+    Returns:
+        function: A function that attempts to get the app config for a given object name, falling back to the specified app if not found.
+    """
+
+    def _fallback_get_app(object_name: str):
+        cfg = _original_get_app(object_name)
+        if cfg is not None:
+            return cfg
+        try:
+            return global_apps.get_app_config(fallback_app)
+        except LookupError:
+            return None
+
+    return _fallback_get_app
 
 
 def _default_graphql_url_clear():
     """
     Removes the first URL pattern for the GraphQL view from the project's root URL configuration.
-    
+
     This function searches the root URL patterns for a pattern whose callback is a `GraphQLView` and removes it, effectively clearing the default GraphQL endpoint from the URL configuration.
     """
     urlconf = import_module(settings.ROOT_URLCONF)
@@ -35,17 +62,18 @@ class GMTestCaseMeta(type):
     def __new__(mcs, name, bases, attrs):
         """
         Creates a new test case class with a customized setUpClass that prepares the database schema and GraphQL environment for GeneralManager integration tests.
-        
+
         The generated setUpClass method resets GraphQL class registries, invokes any user-defined setUpClass, clears default GraphQL URL patterns, creates missing database tables for specified GeneralManager classes and their history models, initializes GeneralManager and GraphQL configurations, and finally calls the original GraphQLTransactionTestCase setUpClass.
         """
         user_setup = attrs.get("setUpClass")
+        fallback_app = attrs.get("fallback_app", "general_manager")
         # MERKE dir das echte GraphQLTransactionTestCase.setUpClass
         base_setup = GraphQLTransactionTestCase.setUpClass
 
         def wrapped_setUpClass(cls):
             """
             Performs comprehensive setup for a test case class, initializing GraphQL and GeneralManager environments and ensuring required database tables exist.
-            
+
             This method resets internal GraphQL registries, invokes any user-defined setup, removes default GraphQL URL patterns, creates missing database tables for models and their history associated with specified GeneralManager classes, initializes GeneralManager and GraphQL configurations, and finally calls the base test case setup.
             """
             GraphQL._query_class = None
@@ -54,6 +82,11 @@ class GMTestCaseMeta(type):
             GraphQL._query_fields = {}
             GraphQL.graphql_type_registry = {}
             GraphQL.graphql_filter_type_registry = {}
+
+            if fallback_app is not None:
+                global_apps.get_containing_app_config = createFallbackGetApp(
+                    fallback_app
+                )
 
             # 1) user-defined setUpClass (if any)
             if user_setup:
@@ -88,3 +121,4 @@ class GeneralManagerTransactionTestCase(
 ):
     general_manager_classes: list[type[GeneralManager]] = []
     read_only_classes: list[type[GeneralManager]] = []
+    fallback_app: str | None = "general_manager"
