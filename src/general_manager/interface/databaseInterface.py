@@ -9,6 +9,7 @@ from general_manager.interface.databaseBasedInterface import (
     DBBasedInterface,
     GeneralManagerModel,
 )
+from django.db.models import NOT_PROVIDED
 
 
 class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
@@ -111,6 +112,8 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             if isinstance(value, GeneralManager):
                 value = value.identification["id"]
                 key = f"{key}_id"
+            if value is NOT_PROVIDED:
+                continue
             try:
                 setattr(instance, key, value)
             except ValueError as e:
