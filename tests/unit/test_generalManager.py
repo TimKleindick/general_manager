@@ -66,9 +66,9 @@ class GeneralManagerTestCase(TestCase):
     def setUp(self):
         # Set up any necessary data or state before each test
         """
-        Prepares the test environment before each test.
-
-        Initializes the GeneralManager with test attributes, assigns a dummy interface, and connects temporary receivers to pre- and post-data change signals to capture emitted events.
+        Sets up the test environment before each test case.
+        
+        Initializes the GeneralManager class with test attributes, assigns a dummy interface and permission, creates a test user, and connects temporary signal receivers to capture pre- and post-data change events.
         """
         self.manager = GeneralManager
         self.manager._attributes = {
@@ -86,7 +86,7 @@ class GeneralManagerTestCase(TestCase):
 
         def temp_post_receiver(sender, **kwargs):
             """
-            Appends keyword arguments received from a signal to the post_list attribute.
+            Appends the keyword arguments from a received signal to the test case's post_list for later verification.
             """
             self.post_list.append(kwargs)
 

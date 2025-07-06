@@ -25,9 +25,9 @@ class GeneralManager(
 
     def __init__(self, *args: Any, **kwargs: Any):
         """
-        Initialize the manager by creating an interface instance with the provided arguments and storing its identification.
-
-        The identification is registered with the dependency tracker for tracking purposes.
+        Initialize the manager by instantiating the underlying interface with the given arguments and storing its identification.
+        
+        Registers the identification with the dependency tracker.
         """
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
@@ -55,10 +55,10 @@ class GeneralManager(
         ),
     ) -> Bucket[GeneralManagerType]:
         """
-        Combine this manager with another manager of the same class or a Bucket using the union operator.
-
-        If combined with a Bucket, returns the union of the Bucket and this manager. If combined with another manager of the same class, returns a Bucket containing both instances. Raises a TypeError for unsupported types.
-
+        Return a Bucket representing the union of this manager with another manager of the same class or with a Bucket.
+        
+        If `other` is a Bucket, returns the union of the Bucket and this manager. If `other` is a manager of the same class, returns a Bucket containing both managers. Raises a TypeError if `other` is of an unsupported type.
+        
         Returns:
             Bucket[GeneralManagerType]: A Bucket containing the union of the involved managers.
         """
@@ -93,17 +93,17 @@ class GeneralManager(
         **kwargs: dict[str, Any],
     ) -> GeneralManager[GeneralManagerType, InterfaceType]:
         """
-        Creates a new managed object using the underlying interface and returns a corresponding manager instance.
-
-        Performs a permission check if a `Permission` class is defined and permission checks are not ignored. Passes all provided arguments to the interface's `create` method.
-
+        Creates and returns a new manager instance for an object created via the underlying interface.
+        
+        Performs a creation permission check unless `ignore_permission` is True. All additional keyword arguments are passed to the interface's `create` method.
+        
         Parameters:
-            creator_id (int | None): Optional identifier for the creator of the object.
+            creator_id (int | None): Optional ID of the user creating the object.
             history_comment (str | None): Optional comment for audit or history tracking.
-            ignore_permission (bool): If True, skips the permission check.
-
+            ignore_permission (bool): If True, skips the creation permission check.
+        
         Returns:
-            GeneralManager[GeneralManagerType, InterfaceType]: A new manager instance for the created object.
+            GeneralManager[GeneralManagerType, InterfaceType]: Manager instance for the newly created object.
         """
         if not ignore_permission:
             cls.Permission.checkCreatePermission(kwargs, cls, creator_id)
@@ -121,16 +121,16 @@ class GeneralManager(
         **kwargs: dict[str, Any],
     ) -> GeneralManager[GeneralManagerType, InterfaceType]:
         """
-        Update the underlying interface object with new data and return a new manager instance.
-
+        Updates the managed interface object with the provided fields and returns a new manager instance reflecting the changes.
+        
         Parameters:
-            creator_id (int | None): Optional identifier for the user performing the update.
+            creator_id (int | None): Identifier of the user performing the update, if applicable.
             history_comment (str | None): Optional comment describing the update.
             ignore_permission (bool): If True, skips permission checks.
-            **kwargs: Additional fields to update on the interface object.
-
+            **kwargs: Fields to update on the interface object.
+        
         Returns:
-            GeneralManager[GeneralManagerType, InterfaceType]: A new manager instance reflecting the updated object.
+            GeneralManager[GeneralManagerType, InterfaceType]: A new manager instance representing the updated object.
         """
         if not ignore_permission:
             self.Permission.checkUpdatePermission(kwargs, self, creator_id)
@@ -149,15 +149,15 @@ class GeneralManager(
         ignore_permission: bool = False,
     ) -> GeneralManager[GeneralManagerType, InterfaceType]:
         """
-        Deactivates the underlying interface object and returns a new manager instance.
-
+        Deactivate the managed object and return a new manager instance representing its deactivated state.
+        
         Parameters:
-            creator_id (int | None): Optional identifier for the user performing the deactivation.
-            history_comment (str | None): Optional comment describing the reason for deactivation.
+            creator_id (int | None): Identifier of the user performing the deactivation, if applicable.
+            history_comment (str | None): Optional comment explaining the deactivation.
             ignore_permission (bool): If True, skips permission checks.
-
+        
         Returns:
-            GeneralManager[GeneralManagerType, InterfaceType]: A new instance representing the deactivated object.
+            GeneralManager[GeneralManagerType, InterfaceType]: New manager instance for the deactivated object.
         """
         if not ignore_permission:
             self.Permission.checkDeletePermission(self, creator_id)
@@ -187,15 +187,15 @@ class GeneralManager(
     @staticmethod
     def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """
-        Return a dictionary with all GeneralManager instances in the input replaced by their identification dictionaries.
-
-        For each key-value pair in the input, any GeneralManager instance is replaced by its identification. Lists and tuples are processed recursively, substituting contained GeneralManager instances with their identifications. Returns None if the resulting dictionary is empty.
-
+        Return a dictionary where all GeneralManager instances in the input are replaced by their identification dictionaries.
+        
+        Recursively processes lists and tuples, substituting any contained GeneralManager instances with their identifications. Returns None if the resulting dictionary is empty.
+        
         Parameters:
-            kwargs (dict[str, Any]): Dictionary to process.
-
+            kwargs (dict[str, Any]): Input dictionary to process.
+        
         Returns:
-            dict[str, Any] | None: Processed dictionary with identifications, or None if empty.
+            dict[str, Any] | None: Dictionary with identifications substituted, or None if the result is empty.
         """
         output = {}
         for key, value in kwargs.items():

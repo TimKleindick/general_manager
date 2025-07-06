@@ -15,9 +15,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Defines a dynamic `TestProject` model with required `name`, optional `number`, and `budget` fields for use in integration tests.
+        
+        The `budget` field uses a measurement with EUR as the base unit. Registers the model for use in test cases.
         """
 
         class TestProject(GeneralManager):
@@ -60,9 +60,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
     def test_create_project(self):
         """
-        Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
-
-        Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
+        Test creation of a TestProject instance via GraphQL mutation with all fields provided.
+        
+        Verifies that the mutation succeeds, the returned data matches the input, and the created database record has correct values and is attributed to the logged-in user.
         """
         variables = {
             "name": "Test Project",
@@ -117,9 +117,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
     def test_create_project_without_number(self):
         """
-        Test that a TestProject can be created without specifying the optional 'number' field.
-
-        Verifies that omitting the 'number' field in the create mutation results in a successful creation, with 'number' set to None and other fields correctly populated in the response.
+        Test creating a TestProject without the optional 'number' field.
+        
+        Ensures that omitting 'number' in the create mutation succeeds, with 'number' set to None and other fields correctly populated in the response.
         """
         variables = {
             "name": "Test Project",
@@ -140,6 +140,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(data["budget"]["unit"], "EUR")
 
     def test_create_project_with_invalid_budget(self):
+        """
+        Test that creating a project with an invalid budget value fails and returns an appropriate error for the budget field.
+        """
         variables = {
             "name": "Test Project",
             "number": 42,
@@ -159,9 +162,9 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Defines two dynamic `TestProject` models with specified fields for integration testing.
+        
+        `TestProject` includes required and optional fields for name, number, and budget. `TestProject2` is similar but allows public creation via a custom permission class. Both models are registered for use in test cases.
         """
 
         class TestProject(GeneralManager):
@@ -195,7 +198,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for creating a TestProject instance.
+        Prepares GraphQL mutation strings for creating TestProject and TestProject2 instances in tests.
         """
         self.create_mutation = """
         mutation CreateProject($name: String!, $number: Int, $budget: String) {
@@ -233,9 +236,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
     def test_create_project_without_loggin(self):
         """
-        Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
-
-        Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
+        Tests that creating a TestProject instance via GraphQL mutation without logging in fails with a permission denied error.
         """
         variables = {
             "name": "Test Project",
@@ -255,9 +256,9 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
     def test_create_project_without_loggin_and_public_permissions(self):
         """
-        Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
-
-        Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
+        Test creation of a TestProject2 instance via GraphQL mutation without login when public create permission is enabled.
+        
+        Verifies that the mutation succeeds, the returned data matches the input, and the created database record has correct field values with `changed_by` set to None.
         """
         variables = {
             "name": "Test Project",
@@ -290,9 +291,9 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Defines a dynamic `TestProject` model with required `name`, optional non-editable `number`, and `budget` fields for use in integration tests.
+        
+        Registers the model on the test class for use in update mutation test cases.
         """
 
         class TestProject(GeneralManager):
@@ -311,7 +312,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for updating a TestProject instance.
+        Prepares the test case by creating and logging in a test user, initializing a TestProject instance, and defining the GraphQL mutation for updating a project.
         """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="geheim")
@@ -343,8 +344,9 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
     def test_update_project(self):
         """
-        Tests successful update of a TestProject instance via GraphQL mutation with all fields.
-        Verifies that the mutation response indicates success, the returned data matches the updated values, and the updated database record has the correct field values and is attributed to the test user.
+        Test updating a TestProject instance via GraphQL mutation and verify that all updated fields are correctly persisted.
+        
+        Ensures the mutation succeeds, the response data reflects the new values, the non-editable `number` field remains unchanged, and the database record is updated with the correct user attribution.
         """
         variables = {
             "id": self.project.id,
@@ -372,7 +374,9 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
     def test_update_project_without_budget(self):
         """
-        Tests that updating a TestProject instance without changing the budget field results in a successful update and the budget remains unchanged.
+        Verify that updating a TestProject instance without specifying the budget field succeeds and leaves the budget unchanged.
+        
+        Ensures that only the provided fields are updated, while omitted fields retain their previous values.
         """
         update_mutation = """
             mutation UpdateProject($id: Int!, $name: String) {
@@ -421,9 +425,9 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Defines a dynamic `TestProject` model with required `name`, optional `number`, and `budget` fields for use in integration tests.
+        
+        The `budget` field uses a measurement with EUR as the base unit. Registers the model for use in test cases.
         """
 
         class TestProject(GeneralManager):
@@ -442,7 +446,7 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for deactivating a TestProject instance.
+        Prepares the test case by creating and logging in a test user, initializing a TestProject instance, and defining the GraphQL mutation for deactivating the project.
         """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="geheim")
@@ -474,8 +478,7 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
 
     def test_deactivate_project(self):
         """
-        Tests successful deactivation of a TestProject instance via GraphQL mutation.
-        Verifies that the mutation response indicates success, the returned data matches the deactivated values, and the deactivated database record has the correct field values and is attributed to the test user.
+        Test that a TestProject instance can be deactivated via GraphQL mutation and that the response and database reflect the correct deactivation state and attribution to the test user.
         """
         variables = {
             "id": self.project.id,

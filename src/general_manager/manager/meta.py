@@ -26,9 +26,9 @@ class GeneralManagerMeta(type):
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         """
         Creates a new class using the metaclass, integrating interface hooks and registering the class for attribute initialization and tracking.
-
-        If the class definition includes an `Interface` attribute, validates it as a subclass of `InterfaceBase`, applies pre- and post-creation hooks from the interface, and registers the resulting class for attribute initialization and management. Regardless of interface presence, the new class is tracked for pending GraphQL interface creation.
-
+        
+        If the class defines an `Interface` attribute, validates it as a subclass of `InterfaceBase`, applies pre- and post-creation hooks from the interface, and registers the resulting class for attribute initialization and management. All created classes are tracked for pending GraphQL interface creation if enabled in settings.
+        
         Returns:
             The newly created class, potentially augmented with interface integration and registration logic.
         """
@@ -37,8 +37,8 @@ class GeneralManagerMeta(type):
             mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
         ) -> Type[GeneralManager]:
             """
-            Create a new GeneralManager class using the standard metaclass instantiation process.
-
+            Create a new GeneralManager subclass using the standard metaclass instantiation process.
+            
             Returns:
                 The newly created GeneralManager subclass.
             """
@@ -70,24 +70,35 @@ class GeneralManagerMeta(type):
         attributes: Iterable[str], new_class: Type[GeneralManager]
     ):
         """
-        Dynamically assigns property descriptors to a class for each specified attribute name.
-
-        For each attribute, creates a descriptor that:
+        Dynamically assigns property descriptors to a class for each attribute name, enabling interface-aware attribute access.
+        
+        For each attribute, creates a property that:
         - Returns the field type from the class's interface when accessed on the class.
         - Retrieves the value from the instance's `_attributes` dictionary when accessed on an instance.
-        - Invokes the attribute with the instance's interface if it is callable.
+        - If the attribute value is callable, invokes it with the instance's interface.
         - Raises `AttributeError` if the attribute is missing or if an error occurs during callable invocation.
+        
+        Parameters:
+            attributes (Iterable[str]): Names of attributes for which to create property descriptors.
+            new_class (Type[GeneralManager]): The class to which the properties will be added.
         """
 
         def desciptorMethod(attr_name: str, new_class: type):
             """
-            Creates a property descriptor for an attribute, enabling dynamic access and callable resolution.
-
-            When accessed on the class, returns the field type from the associated interface. When accessed on an instance, retrieves the attribute value from the instance's `_attributes` dictionary, invoking it with the instance's interface if the value is callable. Raises `AttributeError` if the attribute is missing or if a callable attribute raises an exception.
+            Create a property descriptor for dynamic attribute access on a class.
+            
+            When accessed on the class, returns the field type from the associated interface. When accessed on an instance, retrieves the attribute value from the instance's `_attributes` dictionary; if the value is callable, it is invoked with the instance's interface. Raises `AttributeError` if the attribute is missing or if a callable attribute raises an exception.
             """
 
             class Descriptor(Generic[GeneralManagerType]):
                 def __init__(self, attr_name: str, new_class: Type[GeneralManager]):
+                    """
+                    Initialize the descriptor with the attribute name and the class to which it will be attached.
+                    
+                    Parameters:
+                        attr_name (str): The name of the attribute for which the descriptor is created.
+                        new_class (Type[GeneralManager]): The class that will receive the dynamically assigned property.
+                    """
                     self.attr_name = attr_name
                     self.new_class = new_class
 

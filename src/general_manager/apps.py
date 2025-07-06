@@ -29,9 +29,9 @@ class GeneralmanagerConfig(AppConfig):
 
     def ready(self):
         """
-        Performs initialization tasks for the general_manager app when Django starts.
-
-        Sets up synchronization and schema validation for read-only interfaces, initializes attributes and property accessors for general manager classes, and configures the GraphQL schema and endpoint if enabled in settings.
+        Initializes the general_manager app on Django startup.
+        
+        Configures synchronization and schema validation for read-only interfaces, initializes attributes and dynamic relationships for GeneralManager classes, and sets up the GraphQL schema and endpoint if enabled in settings.
         """
         self.handleReadOnlyInterface(GeneralManagerMeta.read_only_classes)
         self.initializeGeneralManagerClasses(
@@ -46,9 +46,9 @@ class GeneralmanagerConfig(AppConfig):
         read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
     ):
         """
-        Configures synchronization and schema validation for the provided read-only interface classes.
-
-        Ensures that each read-only interface is synchronized before Django management commands run, and registers system checks to validate that their schemas are up to date.
+        Configures synchronization and schema validation for a list of read-only GeneralManager interface classes.
+        
+        Ensures each read-only interface is synchronized before Django management commands execute, and registers system checks to validate that their schemas remain current.
         """
         GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -72,8 +72,8 @@ class GeneralmanagerConfig(AppConfig):
     ):
         """
         Monkey-patches Django's management command runner to synchronize all provided read-only interfaces before executing any management command, except during autoreload subprocesses of 'runserver'.
-
-        For each class in `general_manager_classes`, the associated read-only interface's `syncData` method is called prior to command execution, ensuring data consistency before management operations.
+        
+        For each class in `general_manager_classes`, the associated read-only interface's `syncData` method is called prior to command execution to ensure data consistency.
         """
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
@@ -83,10 +83,10 @@ class GeneralmanagerConfig(AppConfig):
             # Ensure syncData is only called at real run of runserver
             """
             Executes a Django management command, synchronizing all registered read-only interfaces before execution unless running in an autoreload subprocess of 'runserver'.
-
+            
             Parameters:
                 argv (list): Command-line arguments for the management command.
-
+            
             Returns:
                 The result of the original management command execution.
             """
@@ -112,9 +112,9 @@ class GeneralmanagerConfig(AppConfig):
         all_classes: list[Type[GeneralManager]],
     ):
         """
-        Initializes attributes and establishes dynamic relationships for GeneralManager classes.
-
-        For each class pending attribute initialization, assigns interface attributes and creates property accessors. Then, for all registered GeneralManager classes, connects input fields referencing other GeneralManager subclasses by adding GraphQL properties to enable filtered access to related objects.
+        Initializes attributes and dynamic relationships for GeneralManager classes.
+        
+        For each class pending attribute initialization, assigns interface attributes and creates property accessors. For all registered GeneralManager classes, establishes GraphQL properties on related classes to enable filtered access to associated objects. Also validates or assigns permission classes for each GeneralManager class.
         """
         logger.debug("Initializing GeneralManager classes...")
 
@@ -152,7 +152,7 @@ class GeneralmanagerConfig(AppConfig):
         pending_graphql_interfaces: list[Type[GeneralManager]],
     ):
         """
-        Creates GraphQL interfaces and mutations for the provided general manager classes, builds the GraphQL schema, and registers the GraphQL endpoint in the Django URL configuration.
+        Generates GraphQL interfaces and mutations for the specified GeneralManager classes, constructs the GraphQL schema, and registers the GraphQL endpoint in the Django URL configuration.
         """
         logger.debug("Starting to create GraphQL interfaces and mutations...")
         for general_manager_class in pending_graphql_interfaces:
@@ -178,11 +178,11 @@ class GeneralmanagerConfig(AppConfig):
     @staticmethod
     def addGraphqlUrl(schema):
         """
-        Adds a GraphQL endpoint to the Django URL configuration using the provided schema.
-
+        Add a GraphQL endpoint to the Django URL configuration using the specified schema.
+        
         Parameters:
-            schema: The GraphQL schema to use for the endpoint.
-
+            schema: The GraphQL schema to be served at the endpoint.
+        
         Raises:
             Exception: If the ROOT_URLCONF setting is not defined in Django settings.
         """
@@ -202,8 +202,9 @@ class GeneralmanagerConfig(AppConfig):
     @staticmethod
     def checkPermissionClass(general_manager_class: Type[GeneralManager]):
         """
-        Checks if the class has a Permission attribute and if it is a subclass of BasePermission.
-        If so, it sets the Permission attribute on the class.
+        Validates or assigns the `Permission` attribute for a GeneralManager subclass.
+        
+        If the class defines a `Permission` attribute, ensures it is a subclass of `BasePermission`. If not defined, assigns the default `ManagerBasedPermission`. Raises a `TypeError` if the existing `Permission` is not a valid subclass.
         """
         from general_manager.permission.basePermission import BasePermission
         from general_manager.permission.managerBasedPermission import (

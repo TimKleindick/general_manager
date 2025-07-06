@@ -106,6 +106,20 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance: GeneralManagerModel,
         kwargs: dict[str, Any],
     ) -> GeneralManagerModel:
+        """
+        Set regular attributes on a Django model instance, converting GeneralManager objects to their ID and skipping attributes with NOT_PROVIDED values.
+        
+        Parameters:
+            instance (GeneralManagerModel): The model instance to update.
+            kwargs (dict[str, Any]): Attribute names and values to set on the instance.
+        
+        Returns:
+            GeneralManagerModel: The updated model instance with new attribute values applied.
+        
+        Raises:
+            ValueError: If an attribute value is invalid for the given field.
+            TypeError: If a type mismatch occurs during attribute assignment.
+        """
         from general_manager.manager.generalManager import GeneralManager
 
         for key, value in kwargs.items():
@@ -152,12 +166,12 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         history_comment: str | None,
     ) -> int:
         """
-        Atomically saves a model instance with validation and optional history comment.
-
-        Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within a database transaction.
-
+        Atomically saves a model instance with validation and an optional history comment.
+        
+        Sets the `changed_by_id` field, validates the instance, saves it within a database transaction, and applies a history comment if provided.
+        
         Returns:
-            The primary key of the saved instance.
+            int: The primary key of the saved instance.
         """
         instance.changed_by_id = creator_id
         instance.full_clean()
