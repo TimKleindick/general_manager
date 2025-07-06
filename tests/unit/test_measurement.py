@@ -41,9 +41,9 @@ class MeasurementTestCase(TestCase):
 
     def test_addition_different_units_same_dimension(self):
         """
-        Tests addition of `Measurement` instances with different units of the same physical dimension.
-
-        Verifies correct unit conversion and commutativity when adding measurements with compatible units (e.g., kilometers and meters). Asserts that adding zero to a `Measurement` returns the measurement unchanged, and that adding a plain number raises a `TypeError`.
+        Test addition of `Measurement` instances with different units of the same physical dimension.
+        
+        Verifies that addition correctly handles unit conversion and is commutative. Also checks that adding zero returns the original measurement and that adding a plain number raises a `TypeError`.
         """
         m1 = Measurement(1, "kilometer")  # 1000 meter
         m2 = Measurement(500, "meter")
@@ -122,9 +122,9 @@ class MeasurementTestCase(TestCase):
 
     def test_random_measurements(self):
         """
-        Tests addition and subtraction of randomly generated Measurement instances with various units.
-
-        Randomly generates pairs of Measurement objects with physical or currency units and verifies correct arithmetic behavior. Ensures that operations with matching units succeed, while operations between incompatible units or between currency and physical units raise appropriate exceptions.
+        Tests arithmetic operations between randomly generated Measurement instances with various units.
+        
+        Randomly generates pairs of Measurement objects using both physical and currency units, performing addition and subtraction. Verifies that operations succeed when units match, and that appropriate exceptions are raised for incompatible units or when mixing currency and physical units.
         """
         units = ["meter", "second", "kilogram", "liter", "EUR", "USD"]
         for _ in range(100):
@@ -193,9 +193,9 @@ class MeasurementTestCase(TestCase):
 
     def test_inequality(self):
         """
-        Tests inequality comparisons between Measurement instances.
-
-        Verifies that measurements with identical values and units are considered equal, while those with different values are not. Ensures that comparing a Measurement to an incompatible type or to a measurement with a different unit raises the appropriate exception.
+        Test inequality comparisons between Measurement instances.
+        
+        Ensures that measurements with the same value and unit are considered equal, while those with different values or incompatible units are not. Also verifies that comparing a Measurement to an incompatible type raises the appropriate exception.
         """
         m1 = Measurement(10, "meter")
         m2 = Measurement(10, "meter")
@@ -212,9 +212,9 @@ class MeasurementTestCase(TestCase):
 
     def test_comparison(self):
         """
-        Tests relational comparison operators for Measurement instances.
-
-        Verifies correct behavior of equality and ordering comparisons between Measurement objects with the same and different values and units. Ensures that comparing with incompatible types or units raises appropriate exceptions.
+        Test relational comparison operators for Measurement instances.
+        
+        Verifies correct behavior of equality and ordering comparisons between Measurement objects with matching and differing values and units. Ensures that comparisons with incompatible types or units raise the appropriate exceptions.
         """
         m1 = Measurement(10, "meter")
         m2 = Measurement(10, "meter")
@@ -240,7 +240,7 @@ class MeasurementTestCase(TestCase):
 
     def test_hash(self):
         """
-        Tests that Measurement instances with equal values and units have equal hashes, and that differing values, units, or types produce different hashes.
+        Verify that Measurement instances with identical values and units produce the same hash, while differing values, units, or types yield different hashes.
         """
         m1 = Measurement(10, "meter")
         m2 = Measurement(10, "meter")
@@ -253,9 +253,9 @@ class MeasurementTestCase(TestCase):
 
     def test_percentage_values(self):
         """
-        Tests handling of percentage values in Measurement instances.
-
-        Verifies that percentage values are correctly initialized, converted, and compared, ensuring that they behave as expected in arithmetic operations and comparisons.
+        Test the handling of percentage units in Measurement instances.
+        
+        Verifies correct initialization, string representation, arithmetic operations (addition and subtraction), and conversion between percentage and unitless values.
         """
         m1 = Measurement(50, "%")
         m2 = Measurement(25, "percent")
