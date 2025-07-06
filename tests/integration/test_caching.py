@@ -12,6 +12,15 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
     @classmethod
     def setUpClass(cls):
+        """
+        Set up test manager classes for project and commercials with computed budget properties.
+        
+        Defines and assigns two `GeneralManager` subclasses for use in caching tests:
+        - `TestProjectForCommercials`: Represents a project with name, number, budget, and actual costs.
+        - `TestCommercials`: References a project and exposes computed properties for budget left, budget used (as percent), and over-budget status.
+        
+        Stores references to these classes as class attributes for use in test methods.
+        """
         super().setUpClass()
 
         class TestProjectForCommercials(GeneralManager):
@@ -47,14 +56,28 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
             @graphQlProperty
             def budget_left(self) -> Measurement:
+                """
+                Returns the remaining budget for the project as a Measurement.
+                
+                Calculates the difference between the project's budget and its actual costs.
+                """
                 return self.project.budget - self.project.actual_costs
 
             @graphQlProperty
             def budget_used(self) -> Measurement:
+                """
+                Return the percentage of the project's budget that has been used.
+                
+                Returns:
+                    Measurement: The ratio of actual costs to budget, expressed as a percentage.
+                """
                 return (self.project.actual_costs / self.project.budget).to("percent")
 
             @graphQlProperty
             def is_over_budget(self) -> bool:
+                """
+                Return True if the project's actual costs exceed its budget, otherwise False.
+                """
                 return self.project.actual_costs > self.project.budget
 
         cls.TestProject = TestProjectForCommercials
@@ -62,6 +85,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [TestProjectForCommercials, TestCommercials]
 
     def setUp(self) -> None:
+        """
+        Creates three test project instances with predefined budgets and actual costs for use in caching tests.
+        """
         super().setUp()
 
         self.project1 = self.TestProject.create(
@@ -84,6 +110,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         )
 
     def test_budget_left(self):
+        """
+        Tests that the `budget_left` property on `TestCommercials` instances returns the correct value and verifies caching behavior by asserting cache misses on first access and cache hits on subsequent accesses.
+        """
         commercials1 = self.TestCommercials(project=self.project1)
         commercials2 = self.TestCommercials(project=self.project2)
         commercials3 = self.TestCommercials(project=self.project3)
@@ -100,6 +129,11 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             self.assertCacheHit()
 
     def test_caching_each_attribute_individually(self):
+        """
+        Test that each computed property on TestCommercials is cached independently.
+        
+        Verifies that accessing the `budget_used` property on different TestCommercials instances results in cache misses on first access and cache hits on subsequent accesses. Also checks that accessing `budget_left` after `budget_used` results in a cache miss, confirming that caching is per attribute.
+        """
         commercials1 = self.TestCommercials(project=self.project1)
         commercials2 = self.TestCommercials(project=self.project2)
         commercials3 = self.TestCommercials(project=self.project3)
