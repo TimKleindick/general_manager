@@ -69,6 +69,9 @@ class Measurement:
             ValueError: If the input string does not contain exactly two parts separated by a space.
         """
         splitted = value.split(" ")
+        if len(splitted) == 1:
+            # If only one part, assume it's a dimensionless value
+            return cls(Decimal(splitted[0]), "dimensionless")
         if len(splitted) != 2:
             raise ValueError("String must be in the format 'value unit'.")
         value, unit = splitted
