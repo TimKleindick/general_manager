@@ -7,18 +7,19 @@ from general_manager.measurement.measurementField import MeasurementField
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
 )
+from general_manager.permission.managerBasedPermission import ManagerBasedPermission
 
 
 class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
     @classmethod
     def setUpClass(cls):
-
         """
         Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-        
+
         The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
         """
+
         class TestProject(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=100)
@@ -60,7 +61,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
     def test_create_project(self):
         """
         Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
-        
+
         Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
         """
         variables = {
@@ -117,7 +118,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
     def test_create_project_without_number(self):
         """
         Test that a TestProject can be created without specifying the optional 'number' field.
-        
+
         Verifies that omitting the 'number' field in the create mutation results in a successful creation, with 'number' set to None and other fields correctly populated in the response.
         """
         variables = {
@@ -151,3 +152,134 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         data = response.get("data", {})
         self.assertFalse(data["createTestProject"]["success"])
         self.assertIn("budget", data["createTestProject"]["errors"][0])
+
+
+class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        """
+        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
+
+        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        """
+
+        class TestProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+                number = IntegerField(null=True, blank=True)
+                budget = MeasurementField(
+                    base_unit="EUR",
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class TestProject2(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+                number = IntegerField(null=True, blank=True)
+                budget = MeasurementField(
+                    base_unit="EUR",
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+            class Permission(ManagerBasedPermission):
+                __create__ = ["public"]
+
+        cls.TestProject = TestProject
+        cls.TestProject2 = TestProject2
+        cls.general_manager_classes = [TestProject, TestProject2]
+
+    def setUp(self):
+        """
+        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for creating a TestProject instance.
+        """
+        self.create_mutation = """
+        mutation CreateProject($name: String!, $number: Int, $budget: String) {
+            createTestProject(name: $name, number: $number, budget: $budget) {
+                TestProject {
+                    name
+                    number
+                    budget {
+                        value
+                        unit
+                    }
+                }
+                errors
+                success
+            }
+        }
+        """
+
+        self.create_mutation2 = """
+        mutation CreateProject($name: String!, $number: Int, $budget: String) {
+            createTestProject2(name: $name, number: $number, budget: $budget) {
+                TestProject2 {
+                    name
+                    number
+                    budget {
+                        value
+                        unit
+                    }
+                }
+                errors
+                success
+            }
+        }
+        """
+
+    def test_create_project_without_loggin(self):
+        """
+        Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
+
+        Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
+        """
+        variables = {
+            "name": "Test Project",
+            "number": 42,
+            "budget": "2000 EUR",
+        }
+
+        response = self.query(self.create_mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertFalse(data["createTestProject"]["success"])
+        self.assertIn(
+            "Permission denied",
+            data["createTestProject"]["errors"][0],
+        )
+
+    def test_create_project_without_loggin_and_public_permissions(self):
+        """
+        Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
+
+        Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
+        """
+        variables = {
+            "name": "Test Project",
+            "number": 42,
+            "budget": "2000 EUR",
+        }
+
+        response = self.query(self.create_mutation2, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertTrue(data["createTestProject2"]["success"])
+
+        data = data["createTestProject2"]["TestProject2"]
+        self.assertEqual(data["name"], "Test Project")
+        self.assertEqual(data["number"], 42)
+        self.assertEqual(data["budget"]["value"], 2000)
+        self.assertEqual(data["budget"]["unit"], "EUR")
+
+        self.assertEqual(len(self.TestProject2.all()), 1)
+        project = self.TestProject2.all().first()
+        self.assertEqual(project.name, "Test Project")
+        self.assertEqual(project.number, 42)
+        self.assertEqual(project.budget, "2000 EUR")
+        self.assertEqual(project.changed_by, None)
