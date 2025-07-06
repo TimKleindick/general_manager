@@ -340,6 +340,22 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             }
         }
         """
+        self.update_mutation_without_budget = """
+            mutation UpdateProject($id: Int!, $name: String) {
+                updateTestProject(id: $id, name: $name) {
+                    TestProject {
+                        name
+                        number
+                        budget {
+                            value
+                            unit
+                        }
+                    }
+                    errors
+                    success
+                }
+            }
+            """
 
     def test_update_project(self):
         """
@@ -374,29 +390,13 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         """
         Tests that updating a TestProject instance without changing the budget field results in a successful update and the budget remains unchanged.
         """
-        update_mutation = """
-            mutation UpdateProject($id: Int!, $name: String) {
-                updateTestProject(id: $id, name: $name) {
-                    TestProject {
-                        name
-                        number
-                        budget {
-                            value
-                            unit
-                        }
-                    }
-                    errors
-                    success
-                }
-            }
-            """
 
         variables = {
             "id": self.project.id,
             "name": "Updated Project Without Budget",
         }
 
-        response = self.query(update_mutation, variables=variables)
+        response = self.query(self.update_mutation_without_budget, variables=variables)
         self.assertResponseNoErrors(response)
         response = response.json()
         data = response.get("data", {})
