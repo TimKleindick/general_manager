@@ -19,6 +19,7 @@ from general_manager.utils.filterParser import parse_filters
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
+    from general_manager.interface.calculationInterface import CalculationInterface
 
 
 class CalculationBucket(Bucket[GeneralManagerType]):
@@ -90,7 +91,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._current_combinations = state.get("current_combinations")
 
     def __or__(
-        self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]
+        self,
+        other: (
+            Bucket[GeneralManagerType]
+            | GeneralManager[GeneralManagerType, CalculationInterface]
+        ),
     ) -> CalculationBucket[GeneralManagerType]:
         """
         Combines this CalculationBucket with another bucket or manager of the same type.
