@@ -207,7 +207,7 @@ class Measurement:
             )
         if self.is_currency() and other.is_currency():
             # Both are currencies
-            if self.unit != other.quantity.units:
+            if self.unit != other.unit:
                 raise ValueError(
                     "Subtraction between different currencies is not allowed."
                 )
