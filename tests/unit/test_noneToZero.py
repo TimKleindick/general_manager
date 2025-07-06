@@ -1,5 +1,5 @@
 from django.test import SimpleTestCase
-from general_manager.auxiliary.noneToZero import noneToZero
+from general_manager.utils.noneToZero import noneToZero
 from general_manager.measurement import Measurement
 
 

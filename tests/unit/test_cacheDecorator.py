@@ -2,7 +2,7 @@ from django.test import SimpleTestCase
 from django.core.cache import cache
 from unittest import mock
 from general_manager.cache.cacheDecorator import cached, DependencyTracker
-from general_manager.auxiliary.makeCacheKey import make_cache_key
+from general_manager.utils.makeCacheKey import make_cache_key
 import pickle
 import time
 from contextlib import suppress

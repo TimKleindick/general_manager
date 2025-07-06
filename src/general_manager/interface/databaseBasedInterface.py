@@ -52,7 +52,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     ):
         """
         Initialize the interface and load the associated model instance.
-        
+
         If `search_date` is provided, loads the historical record as of that date; otherwise, loads the current record.
         """
         super().__init__(*args, **kwargs)
@@ -141,9 +141,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
         Return a dictionary mapping attribute names to metadata describing their types and properties.
-        
+
         The dictionary includes all model fields, custom fields, foreign keys, many-to-many, and reverse relation fields. For each attribute, the metadata specifies its Python type (translated from Django field types when possible), whether it is required, editable, derived, and its default value. For related models with a general manager class, the type is set to that class.
-        
+
         Returns:
             dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
         """
@@ -309,7 +309,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         model: Type[models.Model] | models.Model,
     ) -> tuple[list[str], list[str]]:
         """
-        Identifies custom fields on a model and their associated auxiliary fields to ignore.
+        Identifies custom fields on a model and their associated utils fields to ignore.
 
         Returns:
             A tuple containing a list of custom field names and a list of related field names
@@ -401,15 +401,15 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         # Felder aus der Interface-Klasse sammeln
         """
         Dynamically generates a Django model class, its associated interface class, and a factory class from an interface definition.
-        
+
         This method collects fields and metadata from the provided interface class, creates a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and constructs corresponding interface and factory classes. The updated attributes dictionary, the new interface class, and the newly created model class are returned for integration into the general manager framework.
-        
+
         Parameters:
             name: The name for the dynamically created model class.
             attrs: The attributes dictionary to be updated with the new interface and factory classes.
             interface: The interface base class defining the model structure and metadata.
             base_model_class: The base class to use for the new model (defaults to GeneralManagerModel).
-        
+
         Returns:
             tuple: A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
         """

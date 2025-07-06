@@ -13,7 +13,7 @@ from typing import (
 from datetime import datetime
 from django.conf import settings
 from django.db.models import Model
-from general_manager.auxiliary import args_to_kwargs
+from general_manager.utils import args_to_kwargs
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input

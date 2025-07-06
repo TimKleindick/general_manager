@@ -30,7 +30,7 @@ from general_manager.factory import (
     LazyDeltaDate,
     LazyProjectName,
 )
-from general_manager.auxiliary import noneToZero
+from general_manager.utils import noneToZero
 from general_manager.api.mutation import graphQlMutation
 from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 

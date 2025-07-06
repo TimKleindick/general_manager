@@ -1,5 +1,5 @@
 from django.test import SimpleTestCase
-from general_manager.auxiliary.formatString import (
+from general_manager.utils.formatString import (
     snake_to_camel,
     snake_to_pascal,
     camel_to_snake,
@@ -11,7 +11,7 @@ class FormatStringTests(SimpleTestCase):
     def test_snake_to_pascal(self):
         """
         Test that snake_case strings are correctly converted to PascalCase by the snake_to_pascal function.
-        
+
         Covers typical multi-word cases, single words, empty strings, and sequences of single characters.
         """
         self.assertEqual(snake_to_pascal("test_string"), "TestString")
@@ -36,7 +36,7 @@ class FormatStringTests(SimpleTestCase):
     def test_pascal_to_snake(self):
         """
         Test that the pascal_to_snake function correctly converts PascalCase strings to snake_case.
-        
+
         Covers typical multi-word inputs, single words, empty strings, acronyms, and single-character cases.
         """
         self.assertEqual(pascal_to_snake("TestString"), "test_string")
@@ -49,7 +49,7 @@ class FormatStringTests(SimpleTestCase):
     def test_camel_to_snake(self):
         """
         Test that the `camel_to_snake` function correctly converts camelCase strings to snake_case.
-        
+
         Verifies conversion for typical camelCase inputs, single words, empty strings, and edge cases with acronyms or single characters.
         """
         self.assertEqual(camel_to_snake("testString"), "test_string")

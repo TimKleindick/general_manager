@@ -1,5 +1,5 @@
 from django.test import TestCase
-from general_manager.auxiliary.filterParser import (
+from general_manager.utils.filterParser import (
     parse_filters,
     create_filter_function,
     apply_lookup,
@@ -87,9 +87,7 @@ class TestFilterParser(TestCase):
         }
         mock_manager = MagicMock()
         mock_manager.id = 1
-        with patch(
-            "general_manager.auxiliary.filterParser.issubclass", return_value=True
-        ):
+        with patch("general_manager.utils.filterParser.issubclass", return_value=True):
 
             filters = parse_filters({"manager__exact": mock_manager}, possible_values)
             self.assertEqual(len(filters), 1)

@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 # Ensure the custom encoder module path is correct
-from general_manager.auxiliary import jsonEncoder
+from general_manager.utils import jsonEncoder
 
 
 class FakeGeneralManager:

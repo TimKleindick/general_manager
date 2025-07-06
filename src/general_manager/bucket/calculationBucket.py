@@ -15,7 +15,7 @@ from general_manager.interface.baseInterface import (
 )
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.manager.input import Input
-from general_manager.auxiliary.filterParser import parse_filters
+from general_manager.utils.filterParser import parse_filters
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
@@ -158,7 +158,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
         Returns a new CalculationBucket with additional filters applied.
-        
+
         Merges the provided filter criteria with existing filters to further restrict valid input combinations.
         """
         filters = self.filters.copy()
@@ -316,12 +316,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     ) -> List[dict[str, Any]]:
         """
         Recursively generates all valid input combinations for the specified input fields, applying filters and exclusions.
-        
+
         Args:
             sorted_inputs: Input field names ordered to respect dependency constraints.
             filters: Mapping of input field names to filter definitions.
             excludes: Mapping of input field names to exclusion definitions.
-        
+
         Returns:
             A list of dictionaries, each representing a valid combination of input values that satisfy all filters and exclusions.
         """
@@ -329,7 +329,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         def helper(index, current_combo):
             """
             Recursively generates all valid input combinations for calculation inputs.
-            
+
             Yields:
                 Dict[str, Any]: A dictionary representing a valid combination of input values, filtered and excluded according to the provided criteria.
             """

@@ -4,7 +4,7 @@ from django.core.cache import cache as django_cache
 from general_manager.cache.cacheTracker import DependencyTracker
 from general_manager.cache.dependencyIndex import record_dependencies, Dependency
 from general_manager.cache.modelDependencyCollector import ModelDependencyCollector
-from general_manager.auxiliary.makeCacheKey import make_cache_key
+from general_manager.utils.makeCacheKey import make_cache_key
 
 
 class CacheBackend(Protocol):
