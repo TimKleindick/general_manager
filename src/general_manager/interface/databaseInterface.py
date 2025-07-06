@@ -161,8 +161,8 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         """
         instance.changed_by_id = creator_id
         instance.full_clean()
+        instance.save()
         if history_comment:
             update_change_reason(instance, history_comment)
-        instance.save()
 
         return instance.pk
