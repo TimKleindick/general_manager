@@ -274,3 +274,27 @@ class MeasurementTestCase(TestCase):
 
         m3 = Measurement(100, "")
         self.assertEqual(str(m3.to("%")), "10000 percent")
+
+    def test_dimensionless_values(self):
+        """
+        Tests handling of dimensionless values in Measurement instances.
+
+        Verifies that dimensionless values are correctly initialized, converted, and compared, ensuring they behave as expected in arithmetic operations and comparisons.
+        """
+        m1 = Measurement(1, "dimensionless")
+        m2 = Measurement(2, "dimensionless")
+
+        self.assertEqual(str(m1), "1")
+        self.assertEqual(str(m2), "2")
+
+        result_add = m1 + m2
+        self.assertEqual(str(result_add), "3")
+
+        result_sub = m1 - m2
+        self.assertEqual(str(result_sub), "-1")
+
+        m3 = Measurement(100, "")
+        m4 = Measurement.from_string("100")
+        self.assertEqual(str(m3), "100")
+        self.assertEqual(str(m4), "100")
+        self.assertEqual(m3, m4)
