@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.10.0 (2025-07-06)
+
+### Bug Fixes
+
+- Access Permission attribute directly from general_manager_class
+  ([`256f97f`](https://github.com/TimKleindick/general_manager/commit/256f97f8b8179719fde4e17779c585dd86cdff3c))
+
+- Save instance first, then update change reson
+  ([`608eac7`](https://github.com/TimKleindick/general_manager/commit/608eac7b4349dc8fd3972ac93bc8fab6655d155e))
+
+- Test_create_project_without_login docstring
+  ([`423caec`](https://github.com/TimKleindick/general_manager/commit/423caec9f0fdc73af6ffa94676309c80c953fd7a))
+
+- Test_create_project_without_login_and_public_permissions docstring
+  ([`a9c2801`](https://github.com/TimKleindick/general_manager/commit/a9c2801d6f895a7f65b43386cbf56f274bf09451))
+
+- Update mutation with not every key filled
+  ([`196af3e`](https://github.com/TimKleindick/general_manager/commit/196af3ec1a60247dfdd2f47c7bbe521d07de928c))
+
+### Features
+
+- Add default permissions to general manager
+  ([`529ce87`](https://github.com/TimKleindick/general_manager/commit/529ce87764f72e27703ccda6df14e1b23251dfc3))
+
+### Refactoring
+
+- Auxiliary to utils folder
+  ([`97d03a0`](https://github.com/TimKleindick/general_manager/commit/97d03a06f41637701cbb5d0bfc63d259981829f7))
+
+- Move update mutation to setUp for consistency
+  ([`f295d51`](https://github.com/TimKleindick/general_manager/commit/f295d51fe9f21f7d79747e4fbcfa5c2369ed2f2e))
+
+### Testing
+
+- Fix generalManager tests for default permissions
+  ([`0179a89`](https://github.com/TimKleindick/general_manager/commit/0179a8922232052448e14c741174ab2c279f7dcc))
+
+- Implement delete mutation for TestProject with validation checks
+  ([`20f2135`](https://github.com/TimKleindick/general_manager/commit/20f2135c1bb132ce9ee789e34ff3422980bcec8a))
+
+
 ## v0.9.1 (2025-07-06)
 
 ### Bug Fixes
