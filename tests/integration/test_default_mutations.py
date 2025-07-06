@@ -253,11 +253,11 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
             data["createTestProject"]["errors"][0],
         )
 
-    def test_create_project_without_loggin_and_public_permissions(self):
+    def test_create_project_without_login_and_public_permissions(self):
         """
-        Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
+        Tests successful creation of a TestProject2 instance without login when public permissions are enabled.
 
-        Verifies that the mutation response indicates success, the returned data matches the input values, and the created database record has the correct field values and is attributed to the test user.
+        Verifies that the mutation succeeds without authentication due to public create permissions, with the created record having changed_by set to None.
         """
         variables = {
             "name": "Test Project",
