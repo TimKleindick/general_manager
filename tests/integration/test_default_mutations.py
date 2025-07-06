@@ -408,3 +408,91 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         # Budget should remain unchanged
         self.assertEqual(data["budget"]["value"], 1000)
         self.assertEqual(data["budget"]["unit"], "EUR")
+
+        updated_project = self.TestProject(self.project.id)
+        self.assertEqual(updated_project.name, "Updated Project Without Budget")
+        self.assertEqual(updated_project.number, 1)
+        self.assertEqual(updated_project.budget, "1000 EUR")
+        self.assertEqual(updated_project.changed_by, self.user)
+
+
+class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        """
+        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
+
+        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        """
+
+        class TestProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+                number = IntegerField(null=True, blank=True)
+                budget = MeasurementField(
+                    base_unit="EUR",
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.TestProject = TestProject
+        cls.general_manager_classes = [TestProject]
+
+    def setUp(self):
+        """
+        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for deactivating a TestProject instance.
+        """
+        User = get_user_model()
+        self.user = User.objects.create_user(username="tester", password="geheim")
+        self.client.force_login(self.user)
+
+        self.project = self.TestProject.create(
+            name="Project to Deactivate",
+            number=1,
+            budget="1000 EUR",
+            creator_id=self.user.id,
+        )
+
+        self.deactivate_mutation = """
+        mutation DeactivateProject($id: Int!) {
+            deleteTestProject(id: $id) {
+                TestProject {
+                    name
+                    number
+                    budget {
+                        value
+                        unit
+                    }
+                }
+                errors
+                success
+            }
+        }
+        """
+
+    def test_deactivate_project(self):
+        """
+        Tests successful deactivation of a TestProject instance via GraphQL mutation.
+        Verifies that the mutation response indicates success, the returned data matches the deactivated values, and the deactivated database record has the correct field values and is attributed to the test user.
+        """
+        variables = {
+            "id": self.project.id,
+        }
+
+        response = self.query(self.deactivate_mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertTrue(data["deleteTestProject"]["success"])
+
+        data = data["deleteTestProject"]["TestProject"]
+        self.assertEqual(data["name"], "Project to Deactivate")
+        self.assertEqual(data["number"], 1)
+        self.assertEqual(data["budget"]["value"], 1000)
+        self.assertEqual(data["budget"]["unit"], "EUR")
+
+        deactivated_project = self.TestProject(self.project.id)
+        self.assertFalse(deactivated_project.is_active)
+        self.assertEqual(deactivated_project.changed_by, self.user)
