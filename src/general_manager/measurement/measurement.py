@@ -167,7 +167,7 @@ class Measurement:
             raise TypeError("Addition is only allowed between Measurement instances.")
         if self.is_currency() and other.is_currency():
             # Both are currencies
-            if self.unit != other.quantity.units:
+            if self.unit != other.unit:
                 raise ValueError(
                     "Addition between different currencies is not allowed."
                 )
