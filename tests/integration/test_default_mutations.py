@@ -234,7 +234,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         }
         """
 
-    def test_create_project_without_loggin(self):
+    def test_create_project_without_login(self):
         """
         Tests that creating a TestProject instance via GraphQL mutation without logging in fails with a permission denied error.
         """
@@ -254,7 +254,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
             data["createTestProject"]["errors"][0],
         )
 
-    def test_create_project_without_loggin_and_public_permissions(self):
+    def test_create_project_without_login_and_public_permissions(self):
         """
         Test creation of a TestProject2 instance via GraphQL mutation without login when public create permission is enabled.
         
@@ -341,6 +341,22 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             }
         }
         """
+        self.update_mutation_without_budget = """
+            mutation UpdateProject($id: Int!, $name: String) {
+                updateTestProject(id: $id, name: $name) {
+                    TestProject {
+                        name
+                        number
+                        budget {
+                            value
+                            unit
+                        }
+                    }
+                    errors
+                    success
+                }
+            }
+            """
 
     def test_update_project(self):
         """
@@ -378,29 +394,13 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         
         Ensures that only the provided fields are updated, while omitted fields retain their previous values.
         """
-        update_mutation = """
-            mutation UpdateProject($id: Int!, $name: String) {
-                updateTestProject(id: $id, name: $name) {
-                    TestProject {
-                        name
-                        number
-                        budget {
-                            value
-                            unit
-                        }
-                    }
-                    errors
-                    success
-                }
-            }
-            """
 
         variables = {
             "id": self.project.id,
             "name": "Updated Project Without Budget",
         }
 
-        response = self.query(update_mutation, variables=variables)
+        response = self.query(self.update_mutation_without_budget, variables=variables)
         self.assertResponseNoErrors(response)
         response = response.json()
         data = response.get("data", {})
