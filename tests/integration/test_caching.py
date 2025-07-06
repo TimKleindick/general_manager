@@ -96,7 +96,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             self.assertTrue(commercials.budget_left)
             self.assertCacheHit()
 
-    def test_budget_used(self):
+    def test_caching_each_attribute_individually(self):
         commercials1 = self.TestCommercials(project=self.project1)
         commercials2 = self.TestCommercials(project=self.project2)
         commercials3 = self.TestCommercials(project=self.project3)
@@ -114,3 +114,5 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         for commercials in self.TestCommercials.all():
             self.assertTrue(commercials.budget_used)
             self.assertCacheHit()
+            self.assertTrue(commercials.budget_left)
+            self.assertCacheMiss()
