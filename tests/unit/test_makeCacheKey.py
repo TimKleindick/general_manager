@@ -1,5 +1,5 @@
 from django.test import SimpleTestCase
-from general_manager.auxiliary.makeCacheKey import make_cache_key
+from general_manager.utils.makeCacheKey import make_cache_key
 
 
 class TestMakeCacheKey(SimpleTestCase):
@@ -8,11 +8,11 @@ class TestMakeCacheKey(SimpleTestCase):
         def sample_function(x, y):
             """
             Returns the sum of two values.
-            
+
             Args:
                 x: The first value to add.
                 y: The second value to add.
-            
+
             Returns:
                 The result of adding x and y.
             """
@@ -31,6 +31,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that different positional arguments produce different cache keys for the same function.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -49,6 +50,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that different keyword arguments produce different cache keys for the same function and positional arguments.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -65,17 +67,18 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that different functions with the same arguments produce different cache keys.
         """
+
         def sample_function1(x, y):
             return x + y
 
         def sample_function2(x, y):
             """
             Multiplies two values and returns the result.
-            
+
             Args:
                 x: The first value to multiply.
                 y: The second value to multiply.
-            
+
             Returns:
                 The product of x and y.
             """
@@ -92,10 +95,11 @@ class TestMakeCacheKey(SimpleTestCase):
     def test_make_cache_key_with_different_module(self):
         """
         Tests that changing a function's module name results in a different cache key.
-        
+
         Verifies that altering the `__module__` attribute of a function causes `make_cache_key`
         to generate distinct keys for otherwise identical function calls.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -113,10 +117,11 @@ class TestMakeCacheKey(SimpleTestCase):
     def test_make_cache_key_with_different_args_order(self):
         """
         Tests that changing the order of positional arguments results in different cache keys.
-        
+
         Verifies that `make_cache_key` produces distinct keys when the same function is called
         with positional arguments in different orders.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -135,6 +140,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key returns a non-None key when called with empty arguments and keyword arguments.
         """
+
         def sample_function():
             return 42
 
@@ -148,6 +154,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key generates a valid cache key when None values are used as arguments and keyword arguments.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -161,6 +168,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key correctly handles arguments and keyword arguments containing special characters.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -174,6 +182,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key generates a valid 64-character key when given large data in keyword arguments.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -188,11 +197,11 @@ class TestMakeCacheKey(SimpleTestCase):
         def sample_function(x, y):
             """
             Returns the sum of two values.
-            
+
             Args:
                 x: The first value to add.
                 y: The second value to add.
-            
+
             Returns:
                 The result of adding x and y.
             """
@@ -208,6 +217,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key can generate a cache key when custom objects are used as arguments and keyword arguments.
         """
+
         class CustomObject:
             def __init__(self, value):
                 self.value = value
@@ -218,11 +228,11 @@ class TestMakeCacheKey(SimpleTestCase):
         def sample_function(x, y):
             """
             Returns the sum of two values.
-            
+
             Args:
                 x: The first value to add.
                 y: The second value to add.
-            
+
             Returns:
                 The result of adding x and y.
             """
@@ -238,17 +248,18 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key can generate a cache key when a function is passed as a keyword argument.
         """
+
         def sample_function(x, y):
             return x + y
 
         def inner_function(a, b):
             """
             Multiplies two values and returns the result.
-            
+
             Args:
                 a: The first value to multiply.
                 b: The second value to multiply.
-            
+
             Returns:
                 The product of a and b.
             """
@@ -264,6 +275,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key can generate a cache key when a lambda function is used as a keyword argument.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -277,13 +289,14 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that make_cache_key can handle generator objects as keyword arguments and returns a valid cache key.
         """
+
         def sample_function(x, y):
             return x + y
 
         def generator_function():
             """
             A generator that yields integers from 0 to 4.
-            
+
             Yields:
                 int: The next integer in the range from 0 to 4.
             """
@@ -299,6 +312,7 @@ class TestMakeCacheKey(SimpleTestCase):
         """
         Tests that functions with the same name but different implementations produce different cache keys.
         """
+
         def create_function():
             def sample_function(x, y):
                 return x + y
@@ -308,10 +322,11 @@ class TestMakeCacheKey(SimpleTestCase):
         def create_function2():
             """
             Creates and returns a sample function that multiplies two values and scales the result by 5.
-            
+
             Returns:
                 A function that takes two arguments and returns their product multiplied by 5.
             """
+
             def sample_function(x, y):
                 return x * y * 5
 
@@ -328,10 +343,11 @@ class TestMakeCacheKey(SimpleTestCase):
     def test_make_cache_key_with_wrong_arg_kwarg_combination(self):
         """
         Tests that make_cache_key raises TypeError for invalid argument and keyword argument combinations.
-        
+
         Verifies that passing mismatched or excessive positional and keyword arguments to make_cache_key
         with a sample function results in a TypeError.
         """
+
         def sample_function(x, y):
             return x + y
 
@@ -354,9 +370,10 @@ class TestMakeCacheKey(SimpleTestCase):
     def test_make_cache_key_with_kwargs_as_args(self):
         """
         Tests that passing arguments as positional or keyword arguments produces the same cache key.
-        
+
         Verifies that `make_cache_key` generates identical keys when function arguments are supplied as positional or as keyword arguments, provided they represent the same function call.
         """
+
         def sample_function(x, y):
             return x + y
 

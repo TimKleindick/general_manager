@@ -1,21 +1,21 @@
 import inspect
 import json
-from general_manager.auxiliary.jsonEncoder import CustomJSONEncoder
+from general_manager.utils.jsonEncoder import CustomJSONEncoder
 from hashlib import sha256
 
 
 def make_cache_key(func, args, kwargs):
     """
     Generates a unique, deterministic cache key for a specific function call.
-    
+
     The key is derived from the function's module, qualified name, and bound arguments,
     serialized to JSON and hashed with SHA-256 to ensure uniqueness for each call signature.
-    
+
     Args:
         func: The target function to be identified.
         args: Positional arguments for the function call.
         kwargs: Keyword arguments for the function call.
-    
+
     Returns:
         A hexadecimal SHA-256 hash string uniquely representing the function call.
     """
