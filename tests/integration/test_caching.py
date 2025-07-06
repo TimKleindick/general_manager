@@ -48,7 +48,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
             @graphQlProperty
             def budget_used(self) -> Measurement:
-                return self.project.actual_costs / self.project.budget * 100
+                return (self.project.actual_costs / self.project.budget).to("percent")
 
             @graphQlProperty
             def is_over_budget(self) -> bool:
@@ -77,7 +77,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             name="Third Project",
             number=3,
             budget=Measurement(1500, "EUR"),
-            actual_costs=Measurement(1600, "EUR"),
+            actual_costs=Measurement(1800, "EUR"),
         )
 
     def test_budget_left(self):
@@ -89,9 +89,28 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertCacheMiss()
         self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
         self.assertCacheMiss()
-        self.assertEqual(commercials3.budget_left, Measurement(-100, "EUR"))
+        self.assertEqual(commercials3.budget_left, Measurement(-300, "EUR"))
         self.assertCacheMiss()
 
         for commercials in self.TestCommercials.all():
             self.assertTrue(commercials.budget_left)
+            self.assertCacheHit()
+
+    def test_budget_used(self):
+        commercials1 = self.TestCommercials(project=self.project1)
+        commercials2 = self.TestCommercials(project=self.project2)
+        commercials3 = self.TestCommercials(project=self.project3)
+
+        self.assertEqual(commercials1.budget_used, Measurement(20, "percent"))
+        self.assertCacheMiss()
+        self.assertEqual(commercials2.budget_used, Measurement(25, "percent"))
+        self.assertCacheMiss()
+        self.assertEqual(
+            commercials3.budget_used,
+            Measurement(120, "percent"),
+        )
+        self.assertCacheMiss()
+
+        for commercials in self.TestCommercials.all():
+            self.assertTrue(commercials.budget_used)
             self.assertCacheHit()
