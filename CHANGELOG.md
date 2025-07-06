@@ -2,6 +2,72 @@
 
 <!-- version list -->
 
+## v0.9.0 (2025-07-06)
+
+### Bug Fixes
+
+- Conditionally append new class to pending_graphql_interfaces based on AUTOCREATE_GRAPHQL setting
+  ([`abfdbba`](https://github.com/TimKleindick/general_manager/commit/abfdbba2fbe33d35f83c9384a97d53990d2dd3f7))
+
+- Default graphql url from "/graphql/" to "/graphql"
+  ([`e2c9268`](https://github.com/TimKleindick/general_manager/commit/e2c9268bef177e0d10f60622728a9a6e767520a4))
+
+- Enhance error handling in attribute setting for DatabaseInterface
+  ([`25fa88b`](https://github.com/TimKleindick/general_manager/commit/25fa88b2becc2e84102202e224c89f86c30fd94e))
+
+### Features
+
+- Implement DefaultCreateMutationTest with project creation and validation tests
+  ([`c1b8ae8`](https://github.com/TimKleindick/general_manager/commit/c1b8ae8d3e55c7d7bf27c2b3b141d9c889417ed3))
+
+- Implement GMTestCaseMeta and GeneralManagerTransactionTestCase for enhanced testing capabilities
+  ([`426d509`](https://github.com/TimKleindick/general_manager/commit/426d509ed735b2a5dc8ef726ffda6b78ea31cd21))
+
+### Refactoring
+
+- Clean up whitespace and improve code readability in GeneralManagerMeta
+  ([`60841ea`](https://github.com/TimKleindick/general_manager/commit/60841eac94e365ca6f9be0ba5208e9f409700a5a))
+
+- Convert instance methods to static methods in GeneralmanagerConfig
+  ([`56b2d20`](https://github.com/TimKleindick/general_manager/commit/56b2d20dd498eee6f0230d1064a358037dada626))
+
+- Improve exception chaining
+  ([`bc647f0`](https://github.com/TimKleindick/general_manager/commit/bc647f0b9017321e48e7fc9527f0d40658065daa))
+
+- Pass parameters to handleReadOnlyInterface, initializeGeneralManagerClasses, and handleGraphQL
+  methods for improved clarity and functionality
+  ([`9b4c8d4`](https://github.com/TimKleindick/general_manager/commit/9b4c8d46fef81e363e8f97cac0febd8af6f7d642))
+
+- Remove unused Generic import from models.py
+  ([`948ed5f`](https://github.com/TimKleindick/general_manager/commit/948ed5f73537cbe24e936a1faac4fff4a1e619dc))
+
+- Split basis models and database interface in seperate files
+  ([`5e80e3c`](https://github.com/TimKleindick/general_manager/commit/5e80e3c17a72973ad62269b8cfbf850d754e2325))
+
+- Split tests to unit and integration tests
+  ([`3bcca8b`](https://github.com/TimKleindick/general_manager/commit/3bcca8bd0fc9ce0efd4add5ec74f10aabd7a41da))
+
+### Testing
+
+- Add DefaultCreateMutationTest for creating TestProject with GraphQL mutation
+  ([`e49e91f`](https://github.com/TimKleindick/general_manager/commit/e49e91f22289ee3f3e73b722478168da4c79fb33))
+
+- Add override_settings for AUTOCREATE_GRAPHQL in GeneralManagerMetaTests
+  ([`9a377f1`](https://github.com/TimKleindick/general_manager/commit/9a377f1503751ca1f911dc4b0ddcf2c9f37cde75))
+
+- Add test configuration and URL patterns for session management
+  ([`3d8a852`](https://github.com/TimKleindick/general_manager/commit/3d8a852331cc9d63619ce40ecb8a9d6f1caabf69))
+
+- Add validation for project creation with invalid budget
+  ([`8c2ac52`](https://github.com/TimKleindick/general_manager/commit/8c2ac5267f84a906283f573c8fa2ffca18edb4a2))
+
+- Implement fallback app configuration retrieval in testing utilities
+  ([`7b42a50`](https://github.com/TimKleindick/general_manager/commit/7b42a50c71dade2c4c86bb9572132134aba81b0e))
+
+- Remove redundant assertion for pending_graphql_interfaces in GeneralManagerMetaTests
+  ([`4190013`](https://github.com/TimKleindick/general_manager/commit/41900137769938924197d67591a8ef3fa66722b2))
+
+
 ## v0.8.0 (2025-07-03)
 
 ### Bug Fixes
