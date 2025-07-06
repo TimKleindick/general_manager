@@ -211,7 +211,7 @@ class GeneralmanagerConfig(AppConfig):
         )
 
         if hasattr(general_manager_class, "Permission"):
-            permission = getattr(general_manager_class, "Permission")
+            permission = general_manager_class.Permission
             if not issubclass(permission, BasePermission):
                 raise TypeError(
                     f"{permission.__name__} must be a subclass of BasePermission"
