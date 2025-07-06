@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v0.9.1 (2025-07-06)
+
+### Bug Fixes
+
+- From_string to support dimensionless string values
+  ([`78f57a6`](https://github.com/TimKleindick/general_manager/commit/78f57a6eb5f8073f91bbeed4da8dd174f4ebd30e))
+
+- Handle invalid dimensionless value in from_string method
+  ([`060e374`](https://github.com/TimKleindick/general_manager/commit/060e3743fc75d8b2e0dfa4fee29cc98701060f44))
+
+- Update Measurement class to handle percentage values correctly
+  ([`5605ad2`](https://github.com/TimKleindick/general_manager/commit/5605ad29a5e73dbb44f2bc4f5c2e97c8f0667544))
+
+- Use property unit directly
+  ([`9c5f548`](https://github.com/TimKleindick/general_manager/commit/9c5f548c6d060a2efc2da12a7ec36c03e6526668))
+
+- Use property unit directly
+  ([`2aed194`](https://github.com/TimKleindick/general_manager/commit/2aed194b900b0f16f81a87bd1d31e7be2d3fdd8e))
+
+
 ## v0.9.0 (2025-07-06)
 
 ### Bug Fixes
