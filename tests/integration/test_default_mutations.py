@@ -283,3 +283,128 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         self.assertEqual(project.number, 42)
         self.assertEqual(project.budget, "2000 EUR")
         self.assertEqual(project.changed_by, None)
+
+
+class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        """
+        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
+
+        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        """
+
+        class TestProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+                number = IntegerField(null=True, blank=True, editable=False)
+                budget = MeasurementField(
+                    base_unit="EUR",
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.TestProject = TestProject
+        cls.general_manager_classes = [TestProject]
+
+    def setUp(self):
+        """
+        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for updating a TestProject instance.
+        """
+        User = get_user_model()
+        self.user = User.objects.create_user(username="tester", password="geheim")
+        self.client.force_login(self.user)
+
+        self.project = self.TestProject.create(
+            name="Initial Project",
+            number=1,
+            budget="1000 EUR",
+            creator_id=self.user.id,
+        )
+
+        self.update_mutation = """
+        mutation UpdateProject($id: Int!, $name: String, $budget: String) {
+            updateTestProject(id: $id, name: $name, budget: $budget) {
+                TestProject {
+                    name
+                    number
+                    budget {
+                        value
+                        unit
+                    }
+                }
+                errors
+                success
+            }
+        }
+        """
+
+    def test_update_project(self):
+        """
+        Tests successful update of a TestProject instance via GraphQL mutation with all fields.
+        Verifies that the mutation response indicates success, the returned data matches the updated values, and the updated database record has the correct field values and is attributed to the test user.
+        """
+        variables = {
+            "id": self.project.id,
+            "name": "Updated Project",
+            "budget": "2000 EUR",
+        }
+
+        response = self.query(self.update_mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertTrue(data["updateTestProject"]["success"])
+
+        data = data["updateTestProject"]["TestProject"]
+        self.assertEqual(data["name"], "Updated Project")
+        self.assertEqual(data["number"], 1)  # Number should not change
+        self.assertEqual(data["budget"]["value"], 2000)
+        self.assertEqual(data["budget"]["unit"], "EUR")
+
+        updated_project = self.TestProject(self.project.id)
+        self.assertEqual(updated_project.name, "Updated Project")
+        self.assertEqual(updated_project.number, 1)
+        self.assertEqual(updated_project.budget, "2000 EUR")
+        self.assertEqual(updated_project.changed_by, self.user)
+
+    def test_update_project_without_budget(self):
+        """
+        Tests that updating a TestProject instance without changing the budget field results in a successful update and the budget remains unchanged.
+        """
+        update_mutation = """
+            mutation UpdateProject($id: Int!, $name: String) {
+                updateTestProject(id: $id, name: $name) {
+                    TestProject {
+                        name
+                        number
+                        budget {
+                            value
+                            unit
+                        }
+                    }
+                    errors
+                    success
+                }
+            }
+            """
+
+        variables = {
+            "id": self.project.id,
+            "name": "Updated Project Without Budget",
+        }
+
+        response = self.query(update_mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertTrue(data["updateTestProject"]["success"])
+
+        data = data["updateTestProject"]["TestProject"]
+        self.assertEqual(data["name"], "Updated Project Without Budget")
+        self.assertEqual(data["number"], 1)
+        # Budget should remain unchanged
+        self.assertEqual(data["budget"]["value"], 1000)
+        self.assertEqual(data["budget"]["unit"], "EUR")
