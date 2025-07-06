@@ -1,7 +1,9 @@
 from django.test import TestCase
 from general_manager.manager.generalManager import GeneralManager
+from general_manager.permission.managerBasedPermission import ManagerBasedPermission
 from unittest.mock import patch
 from general_manager.cache.signals import post_data_change, pre_data_change
+from django.contrib.auth import get_user_model
 
 
 class DummyInterface:
@@ -76,8 +78,11 @@ class GeneralManagerTestCase(TestCase):
             "id": "dummy_id",
         }
         self.manager.Interface = DummyInterface  # type: ignore
+        self.manager.Permission = ManagerBasedPermission  # type: ignore
 
         self.post_list = []
+        User = get_user_model()
+        self.user = User.objects.create_user(username="tester", password="geheim")
 
         def temp_post_receiver(sender, **kwargs):
             """
