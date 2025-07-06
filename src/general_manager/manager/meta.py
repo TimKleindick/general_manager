@@ -26,9 +26,9 @@ class GeneralManagerMeta(type):
     def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         """
         Creates a new class using the metaclass, integrating interface hooks and registering the class for attribute initialization and tracking.
-        
+
         If the class definition includes an `Interface` attribute, validates it as a subclass of `InterfaceBase`, applies pre- and post-creation hooks from the interface, and registers the resulting class for attribute initialization and management. Regardless of interface presence, the new class is tracked for pending GraphQL interface creation.
-        
+
         Returns:
             The newly created class, potentially augmented with interface integration and registration logic.
         """
@@ -38,7 +38,7 @@ class GeneralManagerMeta(type):
         ) -> Type[GeneralManager]:
             """
             Create a new GeneralManager class using the standard metaclass instantiation process.
-            
+
             Returns:
                 The newly created GeneralManager subclass.
             """
@@ -59,6 +59,7 @@ class GeneralManagerMeta(type):
 
         else:
             new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
+
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             mcs.pending_graphql_interfaces.append(new_class)
 
@@ -70,7 +71,7 @@ class GeneralManagerMeta(type):
     ):
         """
         Dynamically assigns property descriptors to a class for each specified attribute name.
-        
+
         For each attribute, creates a descriptor that:
         - Returns the field type from the class's interface when accessed on the class.
         - Retrieves the value from the instance's `_attributes` dictionary when accessed on an instance.
@@ -81,9 +82,10 @@ class GeneralManagerMeta(type):
         def desciptorMethod(attr_name: str, new_class: type):
             """
             Creates a property descriptor for an attribute, enabling dynamic access and callable resolution.
-            
+
             When accessed on the class, returns the field type from the associated interface. When accessed on an instance, retrieves the attribute value from the instance's `_attributes` dictionary, invoking it with the instance's interface if the value is callable. Raises `AttributeError` if the attribute is missing or if a callable attribute raises an exception.
             """
+
             class Descriptor(Generic[GeneralManagerType]):
                 def __init__(self, attr_name: str, new_class: Type[GeneralManager]):
                     self.attr_name = attr_name

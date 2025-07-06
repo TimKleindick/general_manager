@@ -30,7 +30,7 @@ class GeneralmanagerConfig(AppConfig):
     def ready(self):
         """
         Performs initialization tasks for the general_manager app when Django starts.
-        
+
         Sets up synchronization and schema validation for read-only interfaces, initializes attributes and property accessors for general manager classes, and configures the GraphQL schema and endpoint if enabled in settings.
         """
         self.handleReadOnlyInterface(GeneralManagerMeta.read_only_classes)
@@ -47,7 +47,7 @@ class GeneralmanagerConfig(AppConfig):
     ):
         """
         Configures synchronization and schema validation for the provided read-only interface classes.
-        
+
         Ensures that each read-only interface is synchronized before Django management commands run, and registers system checks to validate that their schemas are up to date.
         """
         GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
@@ -72,7 +72,7 @@ class GeneralmanagerConfig(AppConfig):
     ):
         """
         Monkey-patches Django's management command runner to synchronize all provided read-only interfaces before executing any management command, except during autoreload subprocesses of 'runserver'.
-        
+
         For each class in `general_manager_classes`, the associated read-only interface's `syncData` method is called prior to command execution, ensuring data consistency before management operations.
         """
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -83,10 +83,10 @@ class GeneralmanagerConfig(AppConfig):
             # Ensure syncData is only called at real run of runserver
             """
             Executes a Django management command, synchronizing all registered read-only interfaces before execution unless running in an autoreload subprocess of 'runserver'.
-            
+
             Parameters:
                 argv (list): Command-line arguments for the management command.
-            
+
             Returns:
                 The result of the original management command execution.
             """
@@ -113,7 +113,7 @@ class GeneralmanagerConfig(AppConfig):
     ):
         """
         Initializes attributes and establishes dynamic relationships for GeneralManager classes.
-        
+
         For each class pending attribute initialization, assigns interface attributes and creates property accessors. Then, for all registered GeneralManager classes, connects input fields referencing other GeneralManager subclasses by adding GraphQL properties to enable filtered access to related objects.
         """
         logger.debug("Initializing GeneralManager classes...")
@@ -144,6 +144,8 @@ class GeneralmanagerConfig(AppConfig):
                         f"{general_manager_class.__name__.lower()}_list",
                         graphQlProperty(func),
                     )
+        for general_manager_class in all_classes:
+            GeneralmanagerConfig.checkPermissionClass(general_manager_class)
 
     @staticmethod
     def handleGraphQL(
@@ -177,10 +179,10 @@ class GeneralmanagerConfig(AppConfig):
     def addGraphqlUrl(schema):
         """
         Adds a GraphQL endpoint to the Django URL configuration using the provided schema.
-        
+
         Parameters:
             schema: The GraphQL schema to use for the endpoint.
-        
+
         Raises:
             Exception: If the ROOT_URLCONF setting is not defined in Django settings.
         """
@@ -196,3 +198,24 @@ class GeneralmanagerConfig(AppConfig):
                 GraphQLView.as_view(graphiql=True, schema=schema),
             )
         )
+
+    @staticmethod
+    def checkPermissionClass(general_manager_class: Type[GeneralManager]):
+        """
+        Checks if the class has a Permission attribute and if it is a subclass of BasePermission.
+        If so, it sets the Permission attribute on the class.
+        """
+        from general_manager.permission.basePermission import BasePermission
+        from general_manager.permission.managerBasedPermission import (
+            ManagerBasedPermission,
+        )
+
+        if hasattr(general_manager_class, "Permission"):
+            permission = getattr(general_manager_class, "Permission")
+            if not issubclass(permission, BasePermission):
+                raise TypeError(
+                    f"{permission.__name__} must be a subclass of BasePermission"
+                )
+            general_manager_class.Permission = permission
+        else:
+            general_manager_class.Permission = ManagerBasedPermission
