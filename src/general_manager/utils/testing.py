@@ -10,6 +10,14 @@ from general_manager.api.graphql import GraphQL
 from django.apps import apps as global_apps
 
 
+from unittest.mock import ANY
+from general_manager.cache.cacheDecorator import _SENTINEL
+
+
+from django.test import override_settings
+from django.core.cache import caches
+from django.core.cache.backends.locmem import LocMemCache
+
 _original_get_app = global_apps.get_containing_app_config
 
 
@@ -97,6 +105,10 @@ class GMTestCaseMeta(type):
             existing = connection.introspection.table_names()
             with connection.schema_editor() as editor:
                 for manager_class in cls.general_manager_classes:
+                    if not hasattr(manager_class, "Interface") or not hasattr(
+                        manager_class.Interface, "_model"
+                    ):
+                        continue
                     model_class = cast(
                         type[models.Model], manager_class.Interface._model  # type: ignore
                     )
@@ -116,9 +128,72 @@ class GMTestCaseMeta(type):
         return super().__new__(mcs, name, bases, attrs)
 
 
+class LoggingCache(LocMemCache):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ops = []
+
+    def get(self, key, default=None, version=None):
+        val = super().get(key, default)
+        self.ops.append(("get", key, val is not _SENTINEL))
+        return val
+
+    def set(self, key, value, timeout=None, version=None):
+        super().set(key, value, timeout)
+        self.ops.append(("set", key))
+
+
+@override_settings(
+    CACHES={
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "test-cache",
+        }
+    }
+)
 class GeneralManagerTransactionTestCase(
     GraphQLTransactionTestCase, metaclass=GMTestCaseMeta
 ):
     general_manager_classes: list[type[GeneralManager]] = []
     read_only_classes: list[type[GeneralManager]] = []
     fallback_app: str | None = "general_manager"
+
+    def setUp(self) -> None:
+        """
+        Initializes the test case by setting up the GeneralManager environment and clearing the cache operations log.
+        """
+        super().setUp()
+        setattr(caches._connections, "default", LoggingCache("test-cache", {}))  # type: ignore
+        self.__resetCacheCounter()
+
+    #
+    def assertCacheMiss(self):
+        ops = getattr(caches["default"], "ops")
+        self.assertIn(
+            ("get", ANY, False),
+            ops,
+            "Cache.get should have been called and found nothing",
+        )
+        self.assertIn(("set", ANY), ops, "Cache.set should have stored the value")
+        self.__resetCacheCounter()
+
+    def assertCacheHit(self):
+        ops = getattr(caches["default"], "ops")
+        self.assertIn(
+            ("get", ANY, True),
+            ops,
+            "Cache.get should have been called and found something",
+        )
+
+        self.assertNotIn(
+            ("set", ANY),
+            ops,
+            "Cache.set should not have stored anything",
+        )
+        self.__resetCacheCounter()
+
+    def __resetCacheCounter(self):
+        """
+        Resets the cache operations log to an empty state.
+        """
+        caches["default"].ops = []  # type: ignore
