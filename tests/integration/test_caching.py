@@ -14,7 +14,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         super().setUpClass()
 
-        class TestProject(GeneralManager):
+        class TestProjectForCommercials(GeneralManager):
             name: str
             number: int | None
             budget: Measurement
@@ -37,10 +37,13 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 __create__ = ["public"]
 
         class TestCommercials(GeneralManager):
-            project: TestProject
+            project: TestProjectForCommercials
 
             class Interface(CalculationInterface):
-                project = Input(TestProject, possible_values=lambda: TestProject.all())
+                project = Input(
+                    TestProjectForCommercials,
+                    possible_values=lambda: TestProjectForCommercials.all(),
+                )
 
             @graphQlProperty
             def budget_left(self) -> Measurement:
@@ -54,9 +57,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def is_over_budget(self) -> bool:
                 return self.project.actual_costs > self.project.budget
 
-        cls.TestProject = TestProject
+        cls.TestProject = TestProjectForCommercials
         cls.TestCommercials = TestCommercials
-        cls.general_manager_classes = [TestProject, TestCommercials]
+        cls.general_manager_classes = [TestProjectForCommercials, TestCommercials]
 
     def setUp(self) -> None:
         super().setUp()
