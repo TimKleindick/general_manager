@@ -56,15 +56,17 @@ def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = Fals
                 required = False
                 # extract inner type
                 ann = [a for a in get_args(ann) if a is not type(None)][0]
+                kwargs["required"] = False
 
             # Resolve list types to List scalar
             if get_origin(ann) is list or get_origin(ann) is List:
                 inner = get_args(ann)[0]
                 field = graphene.List(
-                    GraphQL._mapFieldToGrapheneBaseType(inner)(**kwargs)
+                    GraphQL._mapFieldToGrapheneBaseType(inner),
+                    **kwargs,
                 )
             else:
-                if isinstance(ann, GeneralManager):
+                if inspect.isclass(ann) and issubclass(ann, GeneralManager):
                     field = graphene.ID(**kwargs)
                 else:
                     field = GraphQL._mapFieldToGrapheneBaseType(ann)(**kwargs)
