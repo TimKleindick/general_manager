@@ -101,10 +101,7 @@ def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = Fals
             name = out.__name__
             field_name = name[0].lower() + name[1:]
 
-            if is_named_type:
-                basis_type = out.__value__
-            else:
-                basis_type = out
+            basis_type = out.__value__ if is_named_type else out
 
             outputs[field_name] = GraphQL._mapFieldToGrapheneRead(
                 basis_type, field_name
