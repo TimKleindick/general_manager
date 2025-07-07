@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.10.2 (2025-07-07)
+
+### Bug Fixes
+
+- Support named types
+  ([`219fe62`](https://github.com/TimKleindick/general_manager/commit/219fe627a1dec42e871761a468b1fc83b8327a66))
+
+### Refactoring
+
+- Simplify basis type assignment in graphQlMutation
+  ([`771f3db`](https://github.com/TimKleindick/general_manager/commit/771f3db2530963f72321f84bf83ba3f148704928))
+
+### Testing
+
+- Add mutation decorator tests and integration
+  ([`da1b348`](https://github.com/TimKleindick/general_manager/commit/da1b348ffe29d5523cf75eb3eee8b0cb2319334b))
+
+- Enhance mutation decorator tests with additional cases and error handling
+  ([`fb4c156`](https://github.com/TimKleindick/general_manager/commit/fb4c156f3ed5c1dc6c0bb132bc6425e4e807561a))
+
+
 ## v0.10.1 (2025-07-07)
 
 ### Bug Fixes
