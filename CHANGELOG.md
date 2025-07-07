@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## v0.10.1 (2025-07-07)
+
+### Bug Fixes
+
+- Allow measurement division with currency if equal currency
+  ([`8f7c918`](https://github.com/TimKleindick/general_manager/commit/8f7c9187f6910591705d6a9218faae5267ee0f50))
+
+- Update division logic in Measurement class to clarify currency handling
+  ([`3276941`](https://github.com/TimKleindick/general_manager/commit/3276941af25a1496a9fcdd712159172942b498ce))
+
+### Testing
+
+- Add CachingTestCase
+  ([`d5ccbfb`](https://github.com/TimKleindick/general_manager/commit/d5ccbfba47f1174c4e1b5191e4509a290a9f1d43))
+
+- Correct budget calculations and update test cases for accuracy
+  ([`d625f42`](https://github.com/TimKleindick/general_manager/commit/d625f426b66130e9b73ce9e8419570da01bbdfa6))
+
+- Implement LoggingCache for enhanced cache operation tracking in tests
+  ([`5f4ad85`](https://github.com/TimKleindick/general_manager/commit/5f4ad85f33962fb6ae28316276f4e21de8d42a8e))
+
+- Rename budget used test and verify caching for budget left attribute
+  ([`cbc7a13`](https://github.com/TimKleindick/general_manager/commit/cbc7a13927d36a6694786d6cb0de50e795e93bc3))
+
+- Rename TestProject to TestProjectForCommercials to prevent model registration problems
+  ([`a1631b7`](https://github.com/TimKleindick/general_manager/commit/a1631b78468f2e1bf40ee660e1c264a243bfba30))
+
+
 ## v0.10.0 (2025-07-06)
 
 ### Bug Fixes
