@@ -1,5 +1,4 @@
-import inspect
-from typing import Optional, List
+from typing import Optional, List, LiteralString
 
 import graphene
 from django.test import TestCase
@@ -29,11 +28,11 @@ class DummyInterface(InterfaceBase):
 
     @classmethod
     def filter(cls, **kwargs):
-        pass
+        raise NotImplementedError("This method should be implemented in a subclass")
 
     @classmethod
     def exclude(cls, **kwargs):
-        pass
+        raise NotImplementedError("This method should be implemented in a subclass")
 
     @classmethod
     def handleInterface(cls):
@@ -51,6 +50,9 @@ class DummyInterface(InterfaceBase):
 
 
 class DummyGM(GeneralManager):
+    def __init__(self, name: str):
+        self.name = name
+
     class Interface(DummyInterface):
         pass
 
@@ -63,21 +65,21 @@ class MutationDecoratorTests(TestCase):
         with self.assertRaises(TypeError):
 
             @graphQlMutation()
-            def bad(info, value) -> str:  # type: ignore
+            def bad(info, value) -> str:
                 return "x"
 
     def test_missing_return_annotation(self):
         with self.assertRaises(TypeError):
 
             @graphQlMutation()
-            def bad(info, value: int):  # type: ignore
+            def bad(info, value: int):
                 return "x"
 
     def test_invalid_return_type(self):
         with self.assertRaises(TypeError):
 
             @graphQlMutation()
-            def bad(info, value: int) -> List[str]:  # type: ignore
+            def bad(info, value: int) -> List[str]:
                 return []
 
     def test_optional_argument_defaults(self):
@@ -109,6 +111,26 @@ class MutationDecoratorTests(TestCase):
         self.assertIsInstance(arg, graphene.List)
         self.assertEqual(arg.of_type, graphene.Int)
 
+    def test_mutation_with_multiple_return_types(self):
+        @graphQlMutation()
+        def multi(info, value: int) -> tuple[bool, str]:
+            if value > 0:
+                return True, "Success"
+            else:
+                return False, "Failure"
+
+        mutation = GraphQL._mutations["multi"]
+        self.assertIn("success", mutation._meta.fields)
+        self.assertIn("errors", mutation._meta.fields)
+        self.assertIn("bool", mutation._meta.fields)
+        self.assertIn("str", mutation._meta.fields)
+
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+        res = mutation.mutate(None, Info, value=1)
+        self.assertTrue(res.success)
+        self.assertEqual(res.bool, True)
+        self.assertEqual(res.str, "Success")
+
     def test_mutation_execution_and_auth(self):
         @graphQlMutation(auth_required=True)
         def add(info, a: int, b: int) -> int:
@@ -124,3 +146,15 @@ class MutationDecoratorTests(TestCase):
         res = mutation.mutate(None, InfoNoAuth, a=1, b=2)
         self.assertFalse(res.success)
         self.assertEqual(res.errors[0], "Authentication required")
+
+    def test_mutation_with_manager_return(self):
+        @graphQlMutation()
+        def create_item(info, name: str) -> DummyGM:
+            return DummyGM(name=name)
+
+        mutation = GraphQL._mutations["createItem"]
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+        res = mutation.mutate(None, Info, name="Test Item")
+        self.assertTrue(res.success)
+        self.assertIsInstance(res.dummyGM, DummyGM)
+        self.assertEqual(res.dummyGM.name, "Test Item")
