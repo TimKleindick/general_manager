@@ -1,4 +1,4 @@
-from typing import Optional, List, LiteralString
+from typing import Optional, List
 
 import graphene
 from django.test import TestCase
