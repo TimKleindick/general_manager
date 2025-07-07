@@ -8,6 +8,8 @@ from general_manager.api.graphql import GraphQL
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.baseInterface import InterfaceBase
 
+type test123 = str
+
 
 class DummyInterface(InterfaceBase):
     input_fields = {}
@@ -158,3 +160,15 @@ class MutationDecoratorTests(TestCase):
         self.assertTrue(res.success)
         self.assertIsInstance(res.dummyGM, DummyGM)
         self.assertEqual(res.dummyGM.name, "Test Item")
+
+    def test_mutation_with_custom_types(self):
+        @graphQlMutation()
+        def custom_type(info, value: str) -> test123:
+            return value
+
+        mutation = GraphQL._mutations["customType"]
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+        res = mutation.mutate(None, Info, value="Hello")
+        self.assertTrue(res.success)
+        self.assertIsInstance(res.test123, str)
+        self.assertEqual(res.test123, "Hello")

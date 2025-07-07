@@ -6,6 +6,7 @@ from general_manager.api.graphql import GraphQL
 from general_manager.manager.generalManager import GeneralManager
 
 from general_manager.utils.formatString import snake_to_camel
+from typing import TypeAliasType
 
 
 def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = False):
@@ -91,13 +92,23 @@ def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = Fals
             else [return_ann]
         )
         for out in out_types:
-            if not isinstance(out, type):
+            is_named_type = isinstance(out, TypeAliasType)
+            is_type = isinstance(out, type)
+            if not is_type and not is_named_type:
                 raise TypeError(
                     f"Mutation {fn.__name__} return type {out} is not a type"
                 )
             name = out.__name__
             field_name = name[0].lower() + name[1:]
-            outputs[field_name] = GraphQL._mapFieldToGrapheneRead(out, field_name)
+
+            if is_named_type:
+                basis_type = out.__value__
+            else:
+                basis_type = out
+
+            outputs[field_name] = GraphQL._mapFieldToGrapheneRead(
+                basis_type, field_name
+            )
 
         # Define mutate method
         def _mutate(root, info, **kwargs):
