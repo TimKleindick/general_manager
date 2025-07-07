@@ -1,14 +1,11 @@
 from __future__ import annotations
-from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar, Generic
+from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic
 from django.db import models
-from django.conf import settings
 from datetime import datetime, timedelta
-from simple_history.models import HistoricalRecords  # type: ignore
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
 from decimal import Decimal
 from general_manager.factory.autoFactory import AutoFactory
-from django.core.exceptions import ValidationError
 from general_manager.interface.baseInterface import (
     InterfaceBase,
     classPostCreationMethod,
@@ -30,8 +27,6 @@ from general_manager.interface.models import (
 )
 
 if TYPE_CHECKING:
-    from general_manager.manager.generalManager import GeneralManager
-    from django.contrib.auth.models import AbstractUser
     from general_manager.rule.rule import Rule
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
