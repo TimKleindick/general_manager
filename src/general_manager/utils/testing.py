@@ -9,6 +9,7 @@ from general_manager.manager.generalManager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.graphql import GraphQL
 from django.apps import apps as global_apps
+from contextlib import suppress
 
 
 from unittest.mock import ANY
@@ -71,7 +72,7 @@ class GMTestCaseMeta(type):
     def __new__(mcs, name, bases, attrs):
         """
         Creates a new test case class with a customized setUpClass method for GeneralManager and GraphQL integration tests.
-        
+
         The generated setUpClass ensures the test environment is properly initialized by resetting GraphQL registries, applying any user-defined setup, clearing default GraphQL URL patterns, creating missing database tables for specified GeneralManager models and their history, initializing GeneralManager and GraphQL configurations, and invoking the base GraphQLTransactionTestCase setup.
         """
         user_setup = attrs.get("setUpClass")
@@ -82,7 +83,7 @@ class GMTestCaseMeta(type):
         def wrapped_setUpClass(cls):
             """
             Performs setup for a test case class by resetting GraphQL internals, configuring fallback app lookup, clearing default GraphQL URL patterns, ensuring database tables exist for specified GeneralManager models and their history, initializing GeneralManager and GraphQL configurations, and invoking the base test case setup.
-            
+
             Skips database table creation for any GeneralManager class lacking an `Interface` or `_model` attribute.
             """
             GraphQL._query_class = None
@@ -140,12 +141,12 @@ class LoggingCache(LocMemCache):
     def get(self, key, default=None, version=None):
         """
         Retrieve a value from the cache and log whether it was a cache hit or miss.
-        
+
         Parameters:
             key (str): The cache key to retrieve.
             default: The value to return if the key is not found.
             version: Optional cache version.
-        
+
         Returns:
             The cached value if found; otherwise, the default value.
         """
@@ -156,7 +157,7 @@ class LoggingCache(LocMemCache):
     def set(self, key, value, timeout=None, version=None):
         """
         Store a value in the cache and log the set operation.
-        
+
         Parameters:
             key (str): The cache key to set.
             value (Any): The value to store in the cache.
@@ -214,23 +215,22 @@ class GeneralManagerTransactionTestCase(
                 app_label = model._meta.app_label
                 model_key = model.__name__.lower()
                 global_apps.all_models[app_label].pop(model_key, None)
-                try:
-                    app_config = global_apps.get_app_config(app_label)
+                app_config = global_apps.get_app_config(app_label)
+                with suppress(LookupError):
                     app_config.models.pop(model_key, None)
-                except LookupError:
-                    pass
                 if history_model:
                     hist_key = history_model.model.__name__.lower()
                     global_apps.all_models[app_label].pop(hist_key, None)
-                    try:
+                    with suppress(LookupError):
                         app_config.models.pop(hist_key, None)
-                    except Exception:
-                        pass
+
         global_apps.clear_cache()
 
         # remove classes from metaclass registries
         GeneralManagerMeta.all_classes = [
-            gm for gm in GeneralManagerMeta.all_classes if gm not in cls.general_manager_classes
+            gm
+            for gm in GeneralManagerMeta.all_classes
+            if gm not in cls.general_manager_classes
         ]
         GeneralManagerMeta.pending_graphql_interfaces = [
             gm
@@ -252,7 +252,7 @@ class GeneralManagerTransactionTestCase(
     def assertCacheMiss(self):
         """
         Assert that a cache miss occurred, followed by a cache set operation.
-        
+
         Checks that the cache's `get` method was called and did not find a value, and that the `set` method was subsequently called to store a value. Resets the cache operation log after the assertion.
         """
         ops = getattr(caches["default"], "ops")
@@ -267,7 +267,7 @@ class GeneralManagerTransactionTestCase(
     def assertCacheHit(self):
         """
         Assert that a cache get operation resulted in a cache hit and no cache set operation occurred.
-        
+
         Raises an assertion error if the cache did not return a value for a get operation or if a set operation was performed. Resets the cache operation log after the check.
         """
         ops = getattr(caches["default"], "ops")
