@@ -6,6 +6,7 @@ from django.conf import settings
 from typing import cast
 from django.db import models
 from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.graphql import GraphQL
 from django.apps import apps as global_apps
 
@@ -188,6 +189,64 @@ class GeneralManagerTransactionTestCase(
         super().setUp()
         setattr(caches._connections, "default", LoggingCache("test-cache", {}))  # type: ignore
         self.__resetCacheCounter()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        """Clean up dynamic managers and restore patched globals."""
+        # remove GraphQL URL pattern added during setUpClass
+        _default_graphql_url_clear()
+
+        # drop generated tables and unregister models from Django's app registry
+        existing = connection.introspection.table_names()
+        with connection.schema_editor() as editor:
+            for manager_class in cls.general_manager_classes:
+                interface = getattr(manager_class, "Interface", None)
+                model = getattr(interface, "_model", None)
+                if not model:
+                    continue
+                model = cast(type[models.Model], model)
+                if model._meta.db_table in existing:
+                    editor.delete_model(model)
+                history_model = getattr(model, "history", None)
+                if history_model and history_model.model._meta.db_table in existing:
+                    editor.delete_model(history_model.model)
+
+                app_label = model._meta.app_label
+                model_key = model.__name__.lower()
+                global_apps.all_models[app_label].pop(model_key, None)
+                try:
+                    app_config = global_apps.get_app_config(app_label)
+                    app_config.models.pop(model_key, None)
+                except LookupError:
+                    pass
+                if history_model:
+                    hist_key = history_model.model.__name__.lower()
+                    global_apps.all_models[app_label].pop(hist_key, None)
+                    try:
+                        app_config.models.pop(hist_key, None)
+                    except Exception:
+                        pass
+        global_apps.clear_cache()
+
+        # remove classes from metaclass registries
+        GeneralManagerMeta.all_classes = [
+            gm for gm in GeneralManagerMeta.all_classes if gm not in cls.general_manager_classes
+        ]
+        GeneralManagerMeta.pending_graphql_interfaces = [
+            gm
+            for gm in GeneralManagerMeta.pending_graphql_interfaces
+            if gm not in cls.general_manager_classes
+        ]
+        GeneralManagerMeta.pending_attribute_initialization = [
+            gm
+            for gm in GeneralManagerMeta.pending_attribute_initialization
+            if gm not in cls.general_manager_classes
+        ]
+
+        # reset fallback app lookup
+        global_apps.get_containing_app_config = _original_get_app
+
+        super().tearDownClass()
 
     #
     def assertCacheMiss(self):
