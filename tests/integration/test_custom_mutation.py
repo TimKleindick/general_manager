@@ -49,3 +49,48 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["testMaterial"]["name"], "My Material")
         self.assertEqual(len(self.TestMaterial.all()), 1)
+
+
+class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class TestProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                title = CharField(max_length=100)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.TestProject = TestProject
+        cls.general_manager_classes = [TestProject]
+
+        @graphQlMutation(auth_required=True)
+        def create_project(info, title: str) -> TestProject:
+            return TestProject.create(title=title, creator_id=info.context.user.id)
+
+        cls.create_project = create_project
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="tester", password="secret")
+        self.client.force_login(self.user)
+        self.mutation = """
+        mutation($title: String!) {
+            createProject(title: $title) {
+                testProject {
+                    title
+                }
+                success
+                errors
+            }
+        }
+        """
+
+    def test_create_project(self):
+        variables = {"title": "My Project"}
+        response = self.query(self.mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]["createProject"]
+        self.assertTrue(data["success"])
+        self.assertEqual(data["testProject"]["title"], "My Project")
+        self.assertEqual(len(self.TestProject.all()), 1)
