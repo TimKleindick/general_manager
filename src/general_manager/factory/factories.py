@@ -1,8 +1,8 @@
 from __future__ import annotations
-from typing import Any, cast
+from typing import Any, cast, TYPE_CHECKING
 from factory.declarations import LazyFunction
 from factory.faker import Faker
-import exrex  # type: ignore
+import exrex
 from django.db import models
 from django.core.validators import RegexValidator
 import random
@@ -11,11 +11,16 @@ from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
 from datetime import date, datetime, time, timezone
 
+if TYPE_CHECKING:
+    from general_manager.factory.autoFactory import AutoFactory
 
-def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> object:
+
+def getFieldValue(
+    field: models.Field[Any, Any] | models.ForeignObjectRel,
+) -> object:
     """
     Generates an appropriate value for a given Django model field for use in testing or data factories.
-    
+
     If the field allows null values, there is a 10% chance of returning None. Handles a wide range of Django field types, including measurement, text, numeric, date/time, boolean, relational, and specialized fields, returning a suitable fake or factory-generated value for each. For relational fields (OneToOneField and ForeignKey), attempts to use a factory if available or selects a random existing instance; raises ValueError if neither is possible. Returns None for unsupported field types.
     """
     if field.null:
@@ -62,41 +67,6 @@ def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> ob
         return cast(date, Faker("date_between", start_date="-1y", end_date="today"))
     elif isinstance(field, models.BooleanField):
         return cast(bool, Faker("pybool"))
-    elif isinstance(field, models.OneToOneField):
-        if hasattr(field.related_model, "_general_manager_class"):
-            related_factory = field.related_model._general_manager_class.Factory
-            return related_factory()
-        else:
-            # If no factory exists, pick a random existing instance
-            related_instances = list(field.related_model.objects.all())
-            if related_instances:
-                return LazyFunction(lambda: random.choice(related_instances))
-            else:
-                raise ValueError(
-                    f"No factory found for {field.related_model.__name__} and no instances found"
-                )
-    elif isinstance(field, models.ForeignKey):
-        # Create or get an instance of the related model
-        if hasattr(field.related_model, "_general_manager_class"):
-            create_a_new_instance = random.choice([True, True, False])
-            if not create_a_new_instance:
-                existing_instances = list(field.related_model.objects.all())
-                if existing_instances:
-                    # Pick a random existing instance
-                    return LazyFunction(lambda: random.choice(existing_instances))
-
-            related_factory = field.related_model._general_manager_class.Factory
-            return related_factory()
-
-        else:
-            # If no factory exists, pick a random existing instance
-            related_instances = list(field.related_model.objects.all())
-            if related_instances:
-                return LazyFunction(lambda: random.choice(related_instances))
-            else:
-                raise ValueError(
-                    f"No factory found for {field.related_model.__name__} and no instances found"
-                )
     elif isinstance(field, models.EmailField):
         return cast(str, Faker("email"))
     elif isinstance(field, models.URLField):
@@ -117,11 +87,59 @@ def getFieldValue(field: models.Field[Any, Any] | models.ForeignObjectRel) -> ob
                 break
         if regex:
             # Use exrex to generate a string matching the regex
-            return LazyFunction(lambda: exrex.getone(regex))  # type: ignore
+            return LazyFunction(lambda: exrex.getone(regex))
         else:
             return cast(str, Faker("text", max_nb_chars=max_length))
+    elif isinstance(field, models.OneToOneField):
+        related_model = getRelatedModel(field)
+        if hasattr(related_model, "_general_manager_class"):
+            related_factory = related_model._general_manager_class.Factory  # type: ignore
+            return related_factory()
+        else:
+            # If no factory exists, pick a random existing instance
+            related_instances = list(related_model.objects.all())
+            if related_instances:
+                return LazyFunction(lambda: random.choice(related_instances))
+            else:
+                raise ValueError(
+                    f"No factory found for {related_model.__name__} and no instances found"
+                )
+    elif isinstance(field, models.ForeignKey):
+        related_model = getRelatedModel(field)
+        # Create or get an instance of the related model
+        if hasattr(related_model, "_general_manager_class"):
+            create_a_new_instance = random.choice([True, True, False])
+            if not create_a_new_instance:
+                existing_instances = list(related_model.objects.all())
+                if existing_instances:
+                    # Pick a random existing instance
+                    return LazyFunction(lambda: random.choice(existing_instances))
+
+            related_factory = related_model._general_manager_class.Factory  # type: ignore
+            return related_factory()
+
+        else:
+            # If no factory exists, pick a random existing instance
+            related_instances = list(related_model.objects.all())
+            if related_instances:
+                return LazyFunction(lambda: random.choice(related_instances))
+            else:
+                raise ValueError(
+                    f"No factory found for {related_model.__name__} and no instances found"
+                )
     else:
-        return None  # For unsupported field types
+        return None
+
+
+def getRelatedModel(
+    field: models.ForeignObjectRel | models.Field[Any, Any],
+) -> type[models.Model]:
+    related_model = field.related_model
+    if related_model is None:
+        raise ValueError(f"Field {field.name} does not have a related model defined.")
+    if related_model == "self":
+        related_model = field.model
+    return related_model  # For unsupported field types
 
 
 def getManyToManyFieldValue(
@@ -131,9 +149,10 @@ def getManyToManyFieldValue(
     Returns a list of instances for a ManyToMany field.
     """
     related_factory = None
-    related_instances = list(field.related_model.objects.all())
-    if hasattr(field.related_model, "_general_manager_class"):
-        related_factory = field.related_model._general_manager_class.Factory
+    related_model = getRelatedModel(field)
+    related_instances = list(related_model.objects.all())
+    if hasattr(related_model, "_general_manager_class"):
+        related_factory = related_model._general_manager_class.Factory  # type: ignore
 
     min_required = 0 if field.blank else 1
     number_of_instances = random.randint(min_required, 10)
@@ -158,5 +177,5 @@ def getManyToManyFieldValue(
         return existing_instances
     else:
         raise ValueError(
-            f"No factory found for {field.related_model.__name__} and no instances found"
+            f"No factory found for {related_model.__name__} and no instances found"
         )
