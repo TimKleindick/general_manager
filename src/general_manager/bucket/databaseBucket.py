@@ -1,11 +1,5 @@
 from __future__ import annotations
-from typing import (
-    Type,
-    Any,
-    Generator,
-    TypeVar,
-    TYPE_CHECKING,
-)
+from typing import Type, Any, Generator, TypeVar, TYPE_CHECKING, cast
 from django.db import models
 from general_manager.interface.baseInterface import (
     GeneralManagerType,
@@ -34,12 +28,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         If no queryset is provided, constructs one using the manager class and the given filters and excludes. Stores the queryset, manager class, and copies of the filter and exclude definitions for further operations.
         """
-        if data is None:
-            data = manager_class.Interface._model.objects.filter(
-                **filter_definitions
-            ).exclude(**exclude_definitions)
         self._data = data
-
         self._manager_class = manager_class
         self.filters = {**(filter_definitions or {})}
         self.excludes = {**(exclude_definitions or {})}
@@ -55,10 +44,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __or__(
         self,
-        other: (
-            Bucket[GeneralManagerType]
-            | GeneralManager[GeneralManagerType, DatabaseInterface]
-        ),
+        other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> DatabaseBucket[GeneralManagerType]:
         """
         Combines this bucket with another bucket or manager instance using the union operator.
