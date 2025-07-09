@@ -1,5 +1,5 @@
 from django.dispatch import Signal
-from typing import Callable, TypeVar, ParamSpec
+from typing import Callable, TypeVar, ParamSpec, cast
 
 from functools import wraps
 
@@ -33,11 +33,12 @@ def dataChange(func: Callable[P, R]) -> Callable[P, R]:
             **kwargs,
         )
         old_relevant_values = getattr(instance_before, "_old_values", {})
-        result = (
-            func.__func__(*args, **kwargs)  # type: ignore
-            if isinstance(func, classmethod)
-            else func(*args, **kwargs)
-        )
+        if isinstance(func, classmethod):
+            inner = cast(Callable[P, R], func.__func__)
+            result = inner(*args, **kwargs)
+        else:
+            result = func(*args, **kwargs)
+
         instance = result
 
         post_data_change.send(
