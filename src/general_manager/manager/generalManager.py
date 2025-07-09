@@ -44,12 +44,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         other: Self | Bucket[Self],
     ) -> Bucket[Self]:
         """
-        Combine this manager with another manager of the same class or a Bucket using the union operator.
-
-        If combined with a Bucket, returns the union of the Bucket and this manager. If combined with another manager of the same class, returns a Bucket containing both instances. Raises a TypeError for unsupported types.
-
+        Returns a Bucket containing the union of this manager and another manager of the same class or a Bucket.
+        
+        If `other` is a Bucket, the result is the union of the Bucket and this manager. If `other` is a manager of the same class, the result is a Bucket containing both managers. Raises a TypeError if `other` is not a supported type.
+        
         Returns:
-            Bucket[Self]: A Bucket containing the union of the involved managers.
+            Bucket[Self]: A Bucket containing the combined managers.
         """
         if isinstance(other, Bucket):
             return other | self
@@ -82,17 +82,17 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         **kwargs: Any,
     ) -> Self:
         """
-        Creates a new managed object using the underlying interface and returns a corresponding manager instance.
-
-        Performs a permission check if a `Permission` class is defined and permission checks are not ignored. Passes all provided arguments to the interface's `create` method.
-
+        Create a new managed object via the underlying interface and return a manager instance representing it.
+        
+        Performs a permission check unless `ignore_permission` is True. All additional keyword arguments are passed to the interface's `create` method.
+        
         Parameters:
-            creator_id (int | None): Optional identifier for the creator of the object.
-            history_comment (str | None): Optional comment for audit or history tracking.
-            ignore_permission (bool): If True, skips the permission check.
-
+            creator_id (int | None): Optional ID of the user creating the object.
+            history_comment (str | None): Optional comment for audit or history purposes.
+            ignore_permission (bool): If True, bypasses the permission check.
+        
         Returns:
-            Self: A new manager instance for the created object.
+            Self: Manager instance for the newly created object.
         """
         if not ignore_permission:
             cls.Permission.checkCreatePermission(kwargs, cls, creator_id)
@@ -110,16 +110,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         **kwargs: Any,
     ) -> Self:
         """
-        Update the underlying interface object with new data and return a new manager instance.
-
+        Update the managed object with new data and return a new manager instance reflecting the changes.
+        
         Parameters:
-            creator_id (int | None): Optional identifier for the user performing the update.
+            creator_id (int | None): Identifier of the user performing the update, if applicable.
             history_comment (str | None): Optional comment describing the update.
-            ignore_permission (bool): If True, skips permission checks.
-            **kwargs: Additional fields to update on the interface object.
-
+            ignore_permission (bool): If True, bypasses permission checks.
+            **kwargs: Fields and values to update on the managed object.
+        
         Returns:
-            Self: A new manager instance reflecting the updated object.
+            Self: A new manager instance representing the updated object.
         """
         if not ignore_permission:
             self.Permission.checkUpdatePermission(kwargs, self, creator_id)
@@ -138,15 +138,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ignore_permission: bool = False,
     ) -> Self:
         """
-        Deactivates the underlying interface object and returns a new manager instance.
-
+        Deactivate the managed object and return a new manager instance representing its deactivated state.
+        
         Parameters:
-            creator_id (int | None): Optional identifier for the user performing the deactivation.
-            history_comment (str | None): Optional comment describing the reason for deactivation.
-            ignore_permission (bool): If True, skips permission checks.
-
+            creator_id (int | None): Optional ID of the user performing the deactivation.
+            history_comment (str | None): Optional comment explaining the deactivation.
+            ignore_permission (bool): If True, bypasses permission checks.
+        
         Returns:
-            Self: A new instance representing the deactivated object.
+            Self: A new manager instance for the deactivated object.
         """
         if not ignore_permission:
             self.Permission.checkDeletePermission(self, creator_id)
@@ -157,6 +157,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[Self]:
+        """
+        Return a bucket of managed objects matching the specified filter criteria.
+        
+        Parameters:
+            kwargs: Field lookups used to filter the managed objects.
+        
+        Returns:
+            Bucket[Self]: A collection of manager instances matching the filter conditions.
+        """
         DependencyTracker.track(
             cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}"
         )
@@ -164,6 +173,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[Self]:
+        """
+        Return a bucket of managed objects excluding those that match the specified criteria.
+        
+        Parameters:
+            kwargs: Field-value pairs used to determine which objects to exclude.
+        
+        Returns:
+            Bucket[Self]: A collection of managed objects not matching the exclusion criteria.
+        """
         DependencyTracker.track(
             cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}"
         )
@@ -171,6 +189,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     @classmethod
     def all(cls) -> Bucket[Self]:
+        """
+        Return a bucket containing all managed objects of this class.
+        """
         return cls.Interface.filter()
 
     @staticmethod

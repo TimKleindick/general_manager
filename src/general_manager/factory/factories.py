@@ -19,9 +19,9 @@ def getFieldValue(
     field: models.Field[Any, Any] | models.ForeignObjectRel,
 ) -> object:
     """
-    Generates an appropriate value for a given Django model field for use in testing or data factories.
-
-    If the field allows null values, there is a 10% chance of returning None. Handles a wide range of Django field types, including measurement, text, numeric, date/time, boolean, relational, and specialized fields, returning a suitable fake or factory-generated value for each. For relational fields (OneToOneField and ForeignKey), attempts to use a factory if available or selects a random existing instance; raises ValueError if neither is possible. Returns None for unsupported field types.
+    Generate a suitable fake or factory value for a given Django model field, for use in tests or data factories.
+    
+    Returns a value appropriate for the field type, including support for measurement, text, numeric, date/time, boolean, email, URL, IP address, UUID, duration, and character fields (with regex support). For relational fields (OneToOneField and ForeignKey), attempts to use a related model factory or select a random existing instance; raises ValueError if neither is available. Returns None for unsupported field types or with a 10% chance if the field allows null values.
     """
     if field.null:
         if random.choice([True] + 9 * [False]):
@@ -134,6 +134,12 @@ def getFieldValue(
 def getRelatedModel(
     field: models.ForeignObjectRel | models.Field[Any, Any],
 ) -> type[models.Model]:
+    """
+    Return the related model class for a given Django relational field.
+    
+    Raises:
+        ValueError: If the field does not have a related model defined.
+    """
     related_model = field.related_model
     if related_model is None:
         raise ValueError(f"Field {field.name} does not have a related model defined.")
@@ -146,7 +152,12 @@ def getManyToManyFieldValue(
     field: models.ManyToManyField,
 ) -> list[models.Model]:
     """
-    Returns a list of instances for a ManyToMany field.
+    Generate a list of model instances to associate with a ManyToMany field for testing or factory purposes.
+    
+    If a related model factory is available, creates new instances as needed. Otherwise, selects from existing instances. Raises a ValueError if neither a factory nor existing instances are available.
+    
+    Returns:
+        list[models.Model]: A list of related model instances for the ManyToMany field.
     """
     related_factory = None
     related_model = getRelatedModel(field)
