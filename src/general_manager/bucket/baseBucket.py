@@ -58,10 +58,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def __or__(
         self,
-        other: (
-            Bucket[GeneralManagerType]
-            | GeneralManager[GeneralManagerType, InterfaceBase]
-        ),
+        other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> Bucket[GeneralManagerType]:
         """
         Returns a new bucket representing the union of this bucket and another bucket or manager instance.
