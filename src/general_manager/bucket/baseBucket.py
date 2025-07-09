@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
     from general_manager.manager.groupManager import GroupManager
     from general_manager.bucket.groupBucket import GroupBucket
+    from general_manager.interface.baseInterface import InterfaceBase
 
 
 class Bucket(ABC, Generic[GeneralManagerType]):
@@ -56,7 +57,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
 
     @abstractmethod
     def __or__(
-        self, other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType]
+        self,
+        other: (
+            Bucket[GeneralManagerType]
+            | GeneralManager[GeneralManagerType, InterfaceBase]
+        ),
     ) -> Bucket[GeneralManagerType]:
         """
         Returns a new bucket representing the union of this bucket and another bucket or manager instance.
