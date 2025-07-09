@@ -66,7 +66,7 @@ class InterfaceBase(ABC):
     def parseInputFieldsToIdentification(
         self,
         *args: Any,
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """
         Parses and validates input arguments into a structured identification dictionary.
