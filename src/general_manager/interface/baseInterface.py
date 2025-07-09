@@ -69,12 +69,12 @@ class InterfaceBase(ABC):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
-        Parses and validates input arguments into a structured identification dictionary.
-
-        Converts positional and keyword arguments into a dictionary keyed by input field names, normalizing argument names and ensuring all required fields are present. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for unexpected or missing arguments and a `ValueError` if circular dependencies among input fields are detected.
-
+        Parse and validate input arguments into a dictionary of input field values.
+        
+        Positional and keyword arguments are mapped to input field names, with normalization of argument names (e.g., removing trailing `_id`). Ensures all required fields are present and no unexpected arguments are provided. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for missing or unexpected arguments and a `ValueError` if circular dependencies are detected.
+        
         Returns:
-            A dictionary mapping input field names to their validated and cast values.
+            dict[str, Any]: A dictionary mapping input field names to their validated and cast values.
         """
         identification = {}
         kwargs = args_to_kwargs(args, self.input_fields.keys(), kwargs)

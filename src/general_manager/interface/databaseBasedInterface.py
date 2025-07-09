@@ -46,9 +46,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         **kwargs: Any,
     ):
         """
-        Initialize the interface and load the associated model instance.
-
-        If `search_date` is provided, loads the historical record as of that date; otherwise, loads the current record.
+        Initialize the interface and load the associated model instance by primary key.
+        
+        If a `search_date` is provided, retrieves the historical record as of that date; otherwise, loads the current record.
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
@@ -135,10 +135,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
-        Return a dictionary mapping attribute names to metadata describing their types and properties.
-
-        The dictionary includes all model fields, custom fields, foreign keys, many-to-many, and reverse relation fields. For each attribute, the metadata specifies its Python type (translated from Django field types when possible), whether it is required, editable, derived, and its default value. For related models with a general manager class, the type is set to that class.
-
+        Return a dictionary mapping each attribute name of the model to its type information and metadata.
+        
+        The returned dictionary includes all standard model fields, custom fields, foreign keys, many-to-many, and reverse relation fields, excluding any GenericForeignKey fields. For each attribute, the metadata specifies its Python type (translated from Django field types when possible), whether it is required, editable, derived, and its default value. For related models with a general manager class, the type is set to that class.
+        
         Returns:
             dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
         """
@@ -247,9 +247,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
-        Returns a mapping of attribute names to callables that retrieve their values from a DBBasedInterface instance.
-
-        The returned dictionary includes accessors for custom fields, model fields, foreign keys (optionally returning related interface instances), many-to-many relations, and reverse relations. For related models that have a general manager class, the accessor returns an instance of that class; otherwise, it returns the related object or queryset directly. Raises a ValueError if a field name conflict occurs.
+        Return a dictionary mapping attribute names to callables that retrieve values from a DBBasedInterface instance.
+        
+        The mapping includes accessors for custom fields, standard model fields, foreign keys, many-to-many relations, and reverse relations. For related models with a general manager class, the accessor returns an instance of that class; otherwise, it returns the related object or queryset. Raises a ValueError if a field name conflict is detected.
+         
+        Returns:
+            dict: A dictionary where keys are attribute names and values are callables that extract the corresponding value from a DBBasedInterface instance.
         """
         field_values: dict[str, Any] = {}
 
@@ -335,13 +338,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @staticmethod
     def _getCustomFields(model: Type[models.Model] | models.Model) -> list[str]:
         """
-        Returns a list of custom field names defined directly on the model class.
-
-        Args:
+        Return a list of custom field names defined directly as class attributes on the given Django model.
+        
+        Parameters:
             model: The Django model class or instance to inspect.
-
+        
         Returns:
-            A list of field names that are defined as class attributes on the model, not via Django's meta system.
+            A list of field names for fields declared directly on the model class, excluding those defined via Django's meta system.
         """
         return [
             field.name
@@ -352,9 +355,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def __getModelFields(cls) -> list[str]:
         """
-        Returns a list of model field names that are not many-to-many or related fields.
-
-        Excludes fields representing many-to-many relationships and related models.
+        Return a list of field names for the model that are neither many-to-many nor related fields.
+        
+        Fields representing many-to-many relationships or relations to other models are excluded from the result.
         """
         return [
             field.name
@@ -365,7 +368,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def __getForeignKeyFields(cls) -> list[str]:
         """
-        Returns a list of field names for all foreign key and one-to-one relations on the model.
+        Return a list of field names for all foreign key and one-to-one relations on the model, excluding generic foreign keys.
         """
         return [
             field.name
@@ -376,9 +379,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def __getManyToManyFields(cls) -> list[tuple[str, str]]:
         """
-        Returns a list of tuples containing the names of all many-to-many fields on the model.
-
-        Each tuple consists of the field name repeated twice.
+        Return a list of tuples representing all many-to-many fields on the model.
+        
+        Each tuple contains the field name twice. Fields that are generic foreign keys are excluded.
         """
         return [
             (field.name, field.name)
@@ -389,9 +392,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def __getReverseRelations(cls) -> list[tuple[str, str]]:
         """
-        Returns a list of tuples representing reverse one-to-many relations for the model.
-
-        Each tuple contains the related field's name and its default related accessor name.
+        Return a list of reverse one-to-many relations for the model, excluding generic foreign keys.
+        
+        Each tuple contains the related field's name and its default related accessor name (e.g., `fieldname_set`).
         """
         return [
             (field.name, f"{field.name}_set")
@@ -498,9 +501,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        Returns the type associated with the specified field name.
-
-        If the field is a relation and its related model defines a `_general_manager_class`, that class is returned; otherwise, returns the Django field type.
+        Return the type associated with a given model field name.
+        
+        If the field is a relation and its related model has a `_general_manager_class` attribute, that class is returned; otherwise, returns the Django field type.
         """
         field = cls._model._meta.get_field(field_name)
         if (

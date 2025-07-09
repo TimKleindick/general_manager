@@ -150,6 +150,16 @@ class Derivative(GeneralManager):
 
 
 def generate_volume_distribution(years: int, total_volume: float) -> list[float]:
+    """
+    Generate a yearly volume distribution with a random peak year and normalize it to a specified total volume.
+    
+    Parameters:
+        years (int): Number of years over which to distribute the volume.
+        total_volume (float): The total volume to be distributed across all years.
+    
+    Returns:
+        list[float]: A list of yearly volumes summing to total_volume.
+    """
     peak_year = random.randint(1, years // 3)
     volumes = np.zeros(years)
     for year in range(peak_year):
@@ -166,6 +176,12 @@ def generate_volume_distribution(years: int, total_volume: float) -> list[float]
 
 def generateVolume(**kwargs: Any) -> list[dict[str, Any]]:
 
+    """
+    Generates a list of derivative volume records distributed across the years of a project's duration.
+    
+    Returns:
+        A list of dictionaries, each containing the provided keyword arguments merged with a specific year (`date`) and the corresponding generated `volume`. Returns an empty list if required data is missing from the derivative or its project.
+    """
     derivative = kwargs["derivative"]
     total_volume = getattr(derivative, "estimated_volume")
     project = getattr(derivative, "project")
