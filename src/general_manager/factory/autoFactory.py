@@ -50,6 +50,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             field
             for field in model._meta.get_fields()
             if field.name not in to_ignore_list
+            and not isinstance(field, GenericForeignKey)
         ]
         special_fields: list[models.Field[Any, Any]] = [
             getattr(model, field_name) for field_name in field_name_list
@@ -58,9 +59,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         post_declarations = getattr(cls._meta, "post_declarations", [])
         declared_fields: set[str] = set(pre_declarations) | set(post_declarations)
 
-        field_list: list[
-            models.Field[Any, Any] | models.ForeignObjectRel | GenericForeignKey
-        ] = [
+        field_list: list[models.Field[Any, Any] | models.ForeignObjectRel] = [
             *fields,
             *special_fields,
         ]
@@ -74,7 +73,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         obj: list[models.Model] | models.Model = super()._generate(strategy, params)
         if isinstance(obj, list):
-            for item in obj:  # type: ignore
+            for item in obj:
                 if not isinstance(item, models.Model):
                     raise ValueError("Model must be a type")
                 cls._handleManyToManyFieldsAfterCreation(item, params)
@@ -100,7 +99,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 getattr(obj, field.name).set(m2m_values)
 
     @classmethod
-    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+    def _adjust_kwargs(cls, **kwargs: dict[str, Any]) -> dict[str, Any]:
         # Remove ManyToMany fields from kwargs before object creation
         """
         Removes many-to-many field entries from keyword arguments before model instance creation.
@@ -116,7 +115,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _create(
-        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: Any
+        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         """
         Creates and saves a Django model instance or instances, applying optional adjustment logic.
@@ -136,7 +135,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _build(
-        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: Any
+        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         """
         Constructs an unsaved instance or list of instances of the given Django model class.
@@ -152,7 +151,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _modelCreation(
-        cls, model_class: Type[models.Model], **kwargs: Any
+        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
     ) -> models.Model:
         """
         Creates and saves a Django model instance with the provided field values.
@@ -171,7 +170,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _modelBuilding(
-        cls, model_class: Type[models.Model], **kwargs: Any
+        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
     ) -> models.Model:
         """
         Constructs an unsaved instance of the specified Django model with provided field values.
