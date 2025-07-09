@@ -1,19 +1,23 @@
 from django.dispatch import Signal
-from typing import Callable, Any
+from typing import Callable, TypeVar, ParamSpec
+
 from functools import wraps
 
 post_data_change = Signal()
 
 pre_data_change = Signal()
 
+P = ParamSpec("P")
+R = TypeVar("R")
 
-def dataChange(func: Callable[..., Any]) -> Callable:
+
+def dataChange(func: Callable[P, R]) -> Callable[P, R]:
     """
     Signal to indicate that data has changed.
     """
 
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         action = func.__name__
         if func.__name__ == "create":
             sender = args[0]
@@ -30,7 +34,7 @@ def dataChange(func: Callable[..., Any]) -> Callable:
         )
         old_relevant_values = getattr(instance_before, "_old_values", {})
         result = (
-            func.__func__(*args, **kwargs)
+            func.__func__(*args, **kwargs)  # type: ignore
             if isinstance(func, classmethod)
             else func(*args, **kwargs)
         )
