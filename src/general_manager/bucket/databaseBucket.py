@@ -202,7 +202,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return item.identification.get("id", None) in self._data.values_list(
                 "pk", flat=True
             )
-        return item in self._data
+        return item.pk in self._data.values_list("pk", flat=True)
 
     def sort(
         self,
