@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Type, Callable, Union, Any, TypeVar, Literal
 from django.db import models
 from factory.django import DjangoModelFactory
 from general_manager.factory.factories import getFieldValue, getManyToManyFieldValue
-
+from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
     from general_manager.interface.databaseInterface import (
@@ -30,13 +30,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     ) -> models.Model | list[models.Model]:
         """
         Generates and populates a Django model instance or list of instances with automatic field value assignment.
-        
+
         Automatically assigns values to unset model fields, including handling custom and special fields, and processes many-to-many relationships after instance creation or building. Raises a ValueError if the model is not a subclass of Django's Model.
-        
+
         Args:
             strategy: Specifies whether to build (unsaved) or create (saved) the instance(s).
             params: Field values to use for instance generation; missing fields are auto-filled.
-        
+
         Returns:
             A single model instance or a list of model instances, depending on the input parameters and strategy.
         """
@@ -58,7 +58,9 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         post_declarations = getattr(cls._meta, "post_declarations", [])
         declared_fields: set[str] = set(pre_declarations) | set(post_declarations)
 
-        field_list: list[models.Field[Any, Any] | models.ForeignObjectRel] = [
+        field_list: list[
+            models.Field[Any, Any] | models.ForeignObjectRel | GenericForeignKey
+        ] = [
             *fields,
             *special_fields,
         ]
@@ -86,7 +88,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     ) -> None:
         """
         Sets many-to-many field values on a Django model instance after creation.
-        
+
         For each many-to-many field, assigns related objects from the provided attributes if available; otherwise, generates values using `getManyToManyFieldValue`. The related objects are set using the Django ORM's `set` method.
         """
         for field in obj._meta.many_to_many:
@@ -98,11 +100,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 getattr(obj, field.name).set(m2m_values)
 
     @classmethod
-    def _adjust_kwargs(cls, **kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
         # Remove ManyToMany fields from kwargs before object creation
         """
         Removes many-to-many field entries from keyword arguments before model instance creation.
-        
+
         Returns:
             The keyword arguments dictionary with many-to-many fields removed.
         """
@@ -114,16 +116,16 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _create(
-        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: Any
     ) -> models.Model | list[models.Model]:
         """
         Creates and saves a Django model instance or instances, applying optional adjustment logic.
-        
+
         If an adjustment method is defined, it is used to generate or modify field values before creation. Otherwise, the model is instantiated and saved with the provided attributes.
-        
+
         Args:
             model_class: The Django model class to instantiate.
-        
+
         Returns:
             A saved model instance or a list of instances.
         """
@@ -134,11 +136,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _build(
-        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: Any
     ) -> models.Model | list[models.Model]:
         """
         Constructs an unsaved instance or list of instances of the given Django model class.
-        
+
         If an adjustment method is defined, it is used to generate or modify field values before building the instance(s). Many-to-many fields are removed from the keyword arguments prior to instantiation.
         """
         kwargs = cls._adjust_kwargs(**kwargs)
@@ -150,13 +152,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _modelCreation(
-        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], **kwargs: Any
     ) -> models.Model:
         """
         Creates and saves a Django model instance with the provided field values.
-        
+
         Initializes the model, assigns attributes from keyword arguments, validates the instance using `full_clean()`, and saves it to the database.
-        
+
         Returns:
             The saved Django model instance.
         """
@@ -169,15 +171,15 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _modelBuilding(
-        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], **kwargs: Any
     ) -> models.Model:
         """
         Constructs an unsaved instance of the specified Django model with provided field values.
-        
+
         Args:
             model_class: The Django model class to instantiate.
             **kwargs: Field values to set on the model instance.
-        
+
         Returns:
             An unsaved Django model instance with attributes set from kwargs.
         """
@@ -192,17 +194,17 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     ) -> models.Model | list[models.Model]:
         """
         Generates one or more model instances using the adjustment method for field values.
-        
+
         If the adjustment method returns a single dictionary, creates or builds a single model instance.
         If it returns a list of dictionaries, creates or builds multiple instances accordingly.
-        
+
         Args:
             use_creation_method: If True, saves instances to the database; otherwise, builds unsaved instances.
             params: Parameters to pass to the adjustment method for generating field values.
-        
+
         Returns:
             A single model instance or a list of model instances, depending on the adjustment method's output.
-        
+
         Raises:
             ValueError: If the adjustment method is not defined.
         """
