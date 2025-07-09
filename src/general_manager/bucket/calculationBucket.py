@@ -92,10 +92,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __or__(
         self,
-        other: (
-            Bucket[GeneralManagerType]
-            | GeneralManager[GeneralManagerType, CalculationInterface]
-        ),
+        other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> CalculationBucket[GeneralManagerType]:
         """
         Combines this CalculationBucket with another bucket or manager of the same type.
