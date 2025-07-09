@@ -164,7 +164,7 @@ def generate_volume_distribution(years: int, total_volume: float) -> list[float]
     return cast(list[float], volumes.tolist())
 
 
-def generateVolume(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+def generateVolume(**kwargs: Any) -> list[dict[str, Any]]:
 
     derivative = kwargs["derivative"]
     total_volume = getattr(derivative, "estimated_volume")
