@@ -18,7 +18,7 @@ class _nonExistent:
 
 class GeneralManagerMeta(type):
     all_classes: list[Type[GeneralManager]] = []
-    read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]] = []
+    read_only_classes: list[Type[GeneralManager]] = []
     pending_graphql_interfaces: list[Type[GeneralManager]] = []
     pending_attribute_initialization: list[Type[GeneralManager]] = []
     Interface: type[InterfaceBase]
@@ -93,7 +93,7 @@ class GeneralManagerMeta(type):
 
                 def __get__(
                     self,
-                    instance: GeneralManager[GeneralManagerType, InterfaceBase] | None,
+                    instance: GeneralManagerType | None,
                     owner: type | None = None,
                 ):
                     if instance is None:

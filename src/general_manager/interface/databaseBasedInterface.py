@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic
+from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic, cast
 from django.db import models
 from datetime import datetime, timedelta
 from general_manager.measurement.measurement import Measurement
@@ -25,12 +25,12 @@ from general_manager.interface.models import (
     GeneralManagerModel,
     getFullCleanMethode,
 )
+from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
     from general_manager.rule.rule import Rule
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
-
 
 MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
 
@@ -43,7 +43,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         self,
         *args: list[Any],
         search_date: datetime | None = None,
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ):
         """
         Initialize the interface and load the associated model instance.
@@ -163,7 +163,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         fields: dict[str, AttributeTypedDict] = {}
         field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
         for field_name in field_name_list:
-            field: models.Field = getattr(cls._model, field_name)
+            field = cast(models.Field, getattr(cls._model, field_name))
             fields[field_name] = {
                 "type": type(field),
                 "is_derived": False,
@@ -174,7 +174,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
         for field_name in cls.__getModelFields():
             if field_name not in to_ignore_list:
-                field: models.Field = getattr(cls._model, field_name).field
+                field = cast(models.Field, getattr(cls._model, field_name).field)
                 fields[field_name] = {
                     "type": type(field),
                     "is_derived": False,
@@ -185,20 +185,27 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
         for field_name in cls.__getForeignKeyFields():
             field = cls._model._meta.get_field(field_name)
+            if isinstance(field, GenericForeignKey):
+                continue
             related_model = field.related_model
+            if related_model == "self":
+                related_model = cls._model
             if related_model and hasattr(
                 related_model,
                 "_general_manager_class",
             ):
-                related_model = related_model._general_manager_class
+                related_model = related_model._general_manager_class  # type: ignore
 
             elif related_model is not None:
+                default = None
+                if hasattr(field, "default"):
+                    default = field.default  # type: ignore
                 fields[field_name] = {
                     "type": related_model,
                     "is_derived": False,
                     "is_required": not field.null,
                     "is_editable": field.editable,
-                    "default": field.default,
+                    "default": default,
                 }
 
         for field_name, field_call in [
@@ -212,11 +219,17 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                     raise ValueError("Field name already exists.")
             field = cls._model._meta.get_field(field_name)
             related_model = cls._model._meta.get_field(field_name).related_model
+            if related_model == "self":
+                related_model = cls._model
+            if isinstance(field, GenericForeignKey):
+                continue
+
             if related_model and hasattr(
                 related_model,
                 "_general_manager_class",
             ):
-                related_model = related_model._general_manager_class
+                related_model = related_model._general_manager_class  # type: ignore
+
             if related_model is not None:
                 fields[f"{field_name}_list"] = {
                     "type": related_model,
@@ -258,7 +271,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 related_model,
                 "_general_manager_class",
             ):
-                generalManagerClass = related_model._general_manager_class
+                generalManagerClass = related_model._general_manager_class  # type: ignore
                 field_values[f"{field_name}"] = (
                     lambda self, field_name=field_name, manager_class=generalManagerClass: manager_class(
                         getattr(self._instance, field_name).pk
@@ -337,7 +350,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getModelFields(cls):
+    def __getModelFields(cls) -> list[str]:
         """
         Returns a list of model field names that are not many-to-many or related fields.
 
@@ -350,7 +363,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getForeignKeyFields(cls):
+    def __getForeignKeyFields(cls) -> list[str]:
         """
         Returns a list of field names for all foreign key and one-to-one relations on the model.
         """
@@ -361,7 +374,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getManyToManyFields(cls):
+    def __getManyToManyFields(cls) -> list[tuple[str, str]]:
         """
         Returns a list of tuples containing the names of all many-to-many fields on the model.
 
@@ -374,7 +387,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getReverseRelations(cls):
+    def __getReverseRelations(cls) -> list[tuple[str, str]]:
         """
         Returns a list of tuples representing reverse one-to-many relations for the model.
 
@@ -490,6 +503,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         If the field is a relation and its related model defines a `_general_manager_class`, that class is returned; otherwise, returns the Django field type.
         """
         field = cls._model._meta.get_field(field_name)
-        if field.is_relation and field.related_model:
-            return field.related_model._general_manager_class
+        if (
+            field.is_relation
+            and field.related_model
+            and hasattr(field.related_model, "_general_manager_class")
+        ):
+            return field.related_model._general_manager_class  # type: ignore
         return type(field)

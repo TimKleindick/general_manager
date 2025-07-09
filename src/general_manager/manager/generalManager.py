@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Generic, Type, Any, TYPE_CHECKING, TypeVar
+from typing import Generic, Type, Any, TYPE_CHECKING, TypeVar, Self
 from general_manager.manager.meta import GeneralManagerMeta
 
 from general_manager.api.property import GraphQLProperty
@@ -9,17 +9,9 @@ from general_manager.bucket.baseBucket import Bucket
 
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission
-    from general_manager.interface.baseInterface import (
-        InterfaceBase,
-    )
-GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
-InterfaceType = TypeVar("InterfaceType", bound="InterfaceBase", covariant=True)
 
 
-class GeneralManager(
-    Generic[GeneralManagerType, InterfaceType], metaclass=GeneralManagerMeta
-):
-    Interface: Type[InterfaceType]
+class GeneralManager(metaclass=GeneralManagerMeta):
     Permission: Type[BasePermission]
     _attributes: dict[str, Any]
 
@@ -49,18 +41,15 @@ class GeneralManager(
 
     def __or__(
         self,
-        other: (
-            GeneralManager[GeneralManagerType, InterfaceType]
-            | Bucket[GeneralManagerType]
-        ),
-    ) -> Bucket[GeneralManagerType]:
+        other: Self | Bucket[Self],
+    ) -> Bucket[Self]:
         """
         Combine this manager with another manager of the same class or a Bucket using the union operator.
 
         If combined with a Bucket, returns the union of the Bucket and this manager. If combined with another manager of the same class, returns a Bucket containing both instances. Raises a TypeError for unsupported types.
 
         Returns:
-            Bucket[GeneralManagerType]: A Bucket containing the union of the involved managers.
+            Bucket[Self]: A Bucket containing the union of the involved managers.
         """
         if isinstance(other, Bucket):
             return other | self
@@ -90,8 +79,8 @@ class GeneralManager(
         creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
-        **kwargs: dict[str, Any],
-    ) -> GeneralManager[GeneralManagerType, InterfaceType]:
+        **kwargs: Any,
+    ) -> Self:
         """
         Creates a new managed object using the underlying interface and returns a corresponding manager instance.
 
@@ -103,7 +92,7 @@ class GeneralManager(
             ignore_permission (bool): If True, skips the permission check.
 
         Returns:
-            GeneralManager[GeneralManagerType, InterfaceType]: A new manager instance for the created object.
+            Self: A new manager instance for the created object.
         """
         if not ignore_permission:
             cls.Permission.checkCreatePermission(kwargs, cls, creator_id)
@@ -118,8 +107,8 @@ class GeneralManager(
         creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
-        **kwargs: dict[str, Any],
-    ) -> GeneralManager[GeneralManagerType, InterfaceType]:
+        **kwargs: Any,
+    ) -> Self:
         """
         Update the underlying interface object with new data and return a new manager instance.
 
@@ -130,7 +119,7 @@ class GeneralManager(
             **kwargs: Additional fields to update on the interface object.
 
         Returns:
-            GeneralManager[GeneralManagerType, InterfaceType]: A new manager instance reflecting the updated object.
+            Self: A new manager instance reflecting the updated object.
         """
         if not ignore_permission:
             self.Permission.checkUpdatePermission(kwargs, self, creator_id)
@@ -147,7 +136,7 @@ class GeneralManager(
         creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
-    ) -> GeneralManager[GeneralManagerType, InterfaceType]:
+    ) -> Self:
         """
         Deactivates the underlying interface object and returns a new manager instance.
 
@@ -157,7 +146,7 @@ class GeneralManager(
             ignore_permission (bool): If True, skips permission checks.
 
         Returns:
-            GeneralManager[GeneralManagerType, InterfaceType]: A new instance representing the deactivated object.
+            Self: A new instance representing the deactivated object.
         """
         if not ignore_permission:
             self.Permission.checkDeletePermission(self, creator_id)
@@ -167,21 +156,21 @@ class GeneralManager(
         return self.__class__(**self.identification)
 
     @classmethod
-    def filter(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
+    def filter(cls, **kwargs: Any) -> Bucket[Self]:
         DependencyTracker.track(
             cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}"
         )
         return cls.Interface.filter(**kwargs)
 
     @classmethod
-    def exclude(cls, **kwargs: Any) -> Bucket[GeneralManagerType]:
+    def exclude(cls, **kwargs: Any) -> Bucket[Self]:
         DependencyTracker.track(
             cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}"
         )
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
-    def all(cls) -> Bucket[GeneralManagerType]:
+    def all(cls) -> Bucket[Self]:
         return cls.Interface.filter()
 
     @staticmethod
