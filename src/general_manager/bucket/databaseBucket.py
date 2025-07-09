@@ -4,6 +4,7 @@ from typing import (
     Any,
     Generator,
     TypeVar,
+    TYPE_CHECKING,
 )
 from django.db import models
 from general_manager.interface.baseInterface import (
@@ -14,6 +15,9 @@ from general_manager.bucket.baseBucket import Bucket
 from general_manager.manager.generalManager import GeneralManager
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
+
+if TYPE_CHECKING:
+    from general_manager.interface.databaseInterface import DatabaseInterface
 
 
 class DatabaseBucket(Bucket[GeneralManagerType]):
@@ -40,7 +44,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self.filters = {**(filter_definitions or {})}
         self.excludes = {**(exclude_definitions or {})}
 
-    def __iter__(self) -> Generator[GeneralManagerType]:
+    def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
         Yields manager instances for each item in the underlying queryset.
 
@@ -51,7 +55,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __or__(
         self,
-        other: Bucket[GeneralManagerType] | GeneralManager[GeneralManagerType],
+        other: (
+            Bucket[GeneralManagerType]
+            | GeneralManager[GeneralManagerType, DatabaseInterface]
+        ),
     ) -> DatabaseBucket[GeneralManagerType]:
         """
         Combines this bucket with another bucket or manager instance using the union operator.

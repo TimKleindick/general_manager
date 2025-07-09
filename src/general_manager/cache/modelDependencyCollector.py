@@ -11,15 +11,17 @@ from general_manager.cache.dependencyIndex import (
 class ModelDependencyCollector:
 
     @staticmethod
-    def collect(obj) -> Generator[tuple[general_manager_name, filter_type, str]]:
+    def collect(
+        obj,
+    ) -> Generator[tuple[general_manager_name, filter_type, str], None, None]:
         """
         Recursively extracts dependency information from Django model-related objects.
-        
+
         Inspects the input object and its nested structures to identify instances of GeneralManager and Bucket, yielding a tuple for each dependency found. Each tuple contains the manager class name, the dependency type ("identification", "filter", or "exclude"), and the string representation of the dependency value.
-        
+
         Args:
             obj: The object or collection to inspect for model dependencies.
-        
+
         Yields:
             Tuples of (manager class name, dependency type, dependency value) for each dependency discovered.
         """

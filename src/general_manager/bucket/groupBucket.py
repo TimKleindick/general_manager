@@ -117,7 +117,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             self._basis_data | other._basis_data,
         )
 
-    def __iter__(self) -> Generator[GroupManager[GeneralManagerType]]:
+    def __iter__(self) -> Generator[GroupManager[GeneralManagerType], None, None]:
         """
         Yields each grouped manager in the current GroupBucket.
 
