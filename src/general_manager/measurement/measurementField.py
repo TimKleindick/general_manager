@@ -19,8 +19,8 @@ class MeasurementField(models.Field):  # type: ignore
         null: bool = False,
         blank: bool = False,
         editable: bool = True,
-        *args: list[Any],
-        **kwargs: dict[str, Any],
+        *args: Any,
+        **kwargs: Any,
     ):
         self.base_unit = base_unit  # E.g., 'meter' for length units
         # Determine the dimensionality of the base unit
@@ -32,20 +32,20 @@ class MeasurementField(models.Field):  # type: ignore
         if blank is True:
             null_blank_kwargs["blank"] = True
         self.editable = editable
-        self.value_field: models.DecimalField[Decimal] = models.DecimalField(
+        self.value_field: models.DecimalField[Any, Decimal] = models.DecimalField(
             max_digits=30,
             decimal_places=10,
             db_index=True,
             **null_blank_kwargs,
             editable=editable,
         )
-        self.unit_field: models.CharField[str] = models.CharField(
+        self.unit_field: models.CharField[Any, str] = models.CharField(
             max_length=30, **null_blank_kwargs, editable=editable
         )
         super().__init__(null=null, blank=blank, *args, **kwargs)
 
     def contribute_to_class(
-        self, cls: type, name: str, private_only: bool = False, **kwargs: dict[str, Any]
+        self, cls: type, name: str, private_only: bool = False, **kwargs: Any
     ) -> None:
         self.name = name
         self.value_attr = f"{name}_value"
