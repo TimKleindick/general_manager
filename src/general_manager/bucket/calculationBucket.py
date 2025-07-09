@@ -190,7 +190,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         return self
 
-    def __iter__(self) -> Generator[GeneralManagerType]:
+    def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
         Yields manager instances for each valid combination of input parameters.
 
