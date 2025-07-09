@@ -43,7 +43,7 @@ class GeneralmanagerConfig(AppConfig):
 
     @staticmethod
     def handleReadOnlyInterface(
-        read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
+        read_only_classes: list[Type[GeneralManager]],
     ):
         """
         Configures synchronization and schema validation for the provided read-only interface classes.
@@ -68,7 +68,7 @@ class GeneralmanagerConfig(AppConfig):
 
     @staticmethod
     def patchReadOnlyInterfaceSync(
-        general_manager_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
+        general_manager_classes: list[Type[GeneralManager]],
     ):
         """
         Monkey-patches Django's management command runner to synchronize all provided read-only interfaces before executing any management command, except during autoreload subprocesses of 'runserver'.
