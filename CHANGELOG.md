@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.10.3 (2025-07-09)
+
+### Bug Fixes
+
+- Add missing import for InterfaceBase and update type hint for __or__ method
+  ([`42b04de`](https://github.com/TimKleindick/general_manager/commit/42b04de746f6db1015b3f905c241c4336bfe8efc))
+
+- Clean up code formatting and improve exception handling in testing utilities
+  ([`beb9862`](https://github.com/TimKleindick/general_manager/commit/beb986274284ce38d974f2ca681742281370430d))
+
+- Clean up dynamic managers in tests
+  ([`84fdd82`](https://github.com/TimKleindick/general_manager/commit/84fdd824767f079896e9ea5aabac8728d18480cf))
+
+- Update type hints for iterators in bucket classes and model dependency collector
+  ([`5a553af`](https://github.com/TimKleindick/general_manager/commit/5a553af33874c1d2b92c2aaaafc198ea4998bb7e))
+
+### Documentation
+
+- Add guide for graphQlMutation
+  ([`70d2da4`](https://github.com/TimKleindick/general_manager/commit/70d2da4ff96a9c4d02a09bbafd12bae491adf4d0))
+
+### Testing
+
+- Add integration tests for ReadOnlyInterface manager
+  ([`69d4fc4`](https://github.com/TimKleindick/general_manager/commit/69d4fc4577afe2d5ee8ac9b1ff29a89828b8c1c6))
+
+
 ## v0.10.2 (2025-07-07)
 
 ### Bug Fixes
