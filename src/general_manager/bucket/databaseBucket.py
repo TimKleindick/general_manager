@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Type, Any, Generator, TypeVar, TYPE_CHECKING, cast
+from typing import Type, Any, Generator, TypeVar, TYPE_CHECKING
 from django.db import models
 from general_manager.interface.baseInterface import (
     GeneralManagerType,
@@ -25,7 +25,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     ):
         """
         Initialize a DatabaseBucket with a Django queryset, a manager class, and optional filter and exclude definitions.
-        
+
         Parameters:
             data (QuerySet): The Django queryset containing model instances to be managed.
             manager_class (Type[GeneralManagerType]): The manager class used to wrap model instances.
@@ -52,9 +52,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     ) -> DatabaseBucket[GeneralManagerType]:
         """
         Return a new bucket containing the union of this bucket and another bucket or manager instance.
-        
+
         If `other` is a manager instance of the same class, it is converted to a bucket before combining. If `other` is a compatible bucket, the resulting bucket contains all unique items from both. Raises a `ValueError` if the types or manager classes are incompatible.
-        
+
         Returns:
             DatabaseBucket[GeneralManagerType]: A new bucket with the combined items.
         """
@@ -193,7 +193,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
         """
         Determine whether a manager instance or Django model instance is present in the bucket.
-        
+
         Returns:
             True if the item's primary key exists in the underlying queryset; otherwise, False.
         """
@@ -212,11 +212,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     ) -> DatabaseBucket:
         """
         Return a new DatabaseBucket sorted by the specified field or fields.
-        
+
         Parameters:
             key (str or tuple of str): Field name or tuple of field names to sort by.
             reverse (bool): If True, sort in descending order.
-        
+
         Returns:
             DatabaseBucket: A new bucket instance containing the sorted queryset.
         """
