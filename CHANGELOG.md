@@ -2,6 +2,62 @@
 
 <!-- version list -->
 
+## v0.10.5 (2025-07-10)
+
+### Bug Fixes
+
+- Add "is_derived" attribute to input field types and improve docstrings for clarity
+  ([`6252f37`](https://github.com/TimKleindick/general_manager/commit/6252f370432c9e90380e4c0fce5b90be9eff1652))
+
+- Remove unnecessary blank lines and improve variable naming in `getFieldType`
+  ([`3eeb841`](https://github.com/TimKleindick/general_manager/commit/3eeb8410d90c54bfe7f400c66d799b84808e9199))
+
+
+## v0.10.4 (2025-07-10)
+
+### Bug Fixes
+
+- Update __contains__ method to check primary key instead of object instance
+  ([`cfeb1ae`](https://github.com/TimKleindick/general_manager/commit/cfeb1aecd03da082e7290e514c1a2dff4f866807))
+
+### Chores
+
+- Add django-types to development requirements for enhanced type support
+  ([`8bf1aaa`](https://github.com/TimKleindick/general_manager/commit/8bf1aaafb459bc55a0d39386420b7a95262d3b60))
+
+### Refactoring
+
+- Enhance type hints and improve related model retrieval in factories.py
+  ([`739dbd0`](https://github.com/TimKleindick/general_manager/commit/739dbd047597a737ebdd0f31bb26e2b8b3ca06ef))
+
+- Improve type hinting and simplify function call logic in dataChange decorator
+  ([`43efe90`](https://github.com/TimKleindick/general_manager/commit/43efe90ddfafe030d1c96c26765f26c82f747eb9))
+
+- Improve type hinting for value_field and unit_field in MeasurementField for clarity
+  ([`5cc850f`](https://github.com/TimKleindick/general_manager/commit/5cc850f7ea3b3cca7f761330fef7719b781f1bf3))
+
+- Remove unnecessary blank lines and improve type hints in AutoFactory class
+  ([`7649d4e`](https://github.com/TimKleindick/general_manager/commit/7649d4e3e73d5089b69557fef792a71f46bb85b4))
+
+- Remove unnecessary blank lines in GraphQL class methods for improved readability
+  ([`728a44c`](https://github.com/TimKleindick/general_manager/commit/728a44c59d83581624e566ea0f438a50e39a4ea6))
+
+- Simplify type hints and improve data handling in DatabaseBucket class
+  ([`600a1cd`](https://github.com/TimKleindick/general_manager/commit/600a1cd6b4fde80677929ea65495227bdb5780d7))
+
+- Simplify type hints in various classes for improved clarity and consistency
+  ([`a12cf10`](https://github.com/TimKleindick/general_manager/commit/a12cf10c34ee8384e57560a3055c88ab44e82211))
+
+- Update type hints for args and kwargs in MeasurementField for improved clarity
+  ([`5c482bf`](https://github.com/TimKleindick/general_manager/commit/5c482bf5ff9a1bd73a7e714249f2ef6521e59345))
+
+- Update type hints for kwargs in AutoFactory methods for improved clarity
+  ([`ba0a5eb`](https://github.com/TimKleindick/general_manager/commit/ba0a5eb54ff09ca642967cffcafc618c9bb3e456))
+
+- Update type hints for kwargs in multiple functions for improved clarity
+  ([`90f14f2`](https://github.com/TimKleindick/general_manager/commit/90f14f278f3b6d718e18999923c87c5def251644))
+
+
 ## v0.10.3 (2025-07-09)
 
 ### Bug Fixes

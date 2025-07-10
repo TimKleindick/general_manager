@@ -18,7 +18,7 @@ class _nonExistent:
 
 class GeneralManagerMeta(type):
     all_classes: list[Type[GeneralManager]] = []
-    read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]] = []
+    read_only_classes: list[Type[GeneralManager]] = []
     pending_graphql_interfaces: list[Type[GeneralManager]] = []
     pending_attribute_initialization: list[Type[GeneralManager]] = []
     Interface: type[InterfaceBase]
@@ -70,20 +70,24 @@ class GeneralManagerMeta(type):
         attributes: Iterable[str], new_class: Type[GeneralManager]
     ):
         """
-        Dynamically assigns property descriptors to a class for each specified attribute name.
-
-        For each attribute, creates a descriptor that:
-        - Returns the field type from the class's interface when accessed on the class.
+        Dynamically creates and assigns property descriptors to a class for each given attribute name.
+        
+        For each attribute, adds a property to the class that:
+        - Returns the field type from the class's interface when accessed on the class itself.
         - Retrieves the value from the instance's `_attributes` dictionary when accessed on an instance.
-        - Invokes the attribute with the instance's interface if it is callable.
+        - If the attribute value is callable, invokes it with the instance's interface and returns the result.
         - Raises `AttributeError` if the attribute is missing or if an error occurs during callable invocation.
+        
+        Parameters:
+            attributes (Iterable[str]): Names of attributes for which to create property descriptors.
+            new_class (Type[GeneralManager]): The class to which the properties will be added.
         """
 
         def desciptorMethod(attr_name: str, new_class: type):
             """
-            Creates a property descriptor for an attribute, enabling dynamic access and callable resolution.
-
-            When accessed on the class, returns the field type from the associated interface. When accessed on an instance, retrieves the attribute value from the instance's `_attributes` dictionary, invoking it with the instance's interface if the value is callable. Raises `AttributeError` if the attribute is missing or if a callable attribute raises an exception.
+            Create a property descriptor for dynamic attribute access and callable resolution.
+            
+            When accessed on the class, returns the field type from the class's associated interface. When accessed on an instance, retrieves the attribute value from the instance's `_attributes` dictionary; if the value is callable, it is invoked with the instance's interface. Raises `AttributeError` if the attribute is missing or if a callable attribute raises an exception.
             """
 
             class Descriptor(Generic[GeneralManagerType]):
@@ -93,9 +97,14 @@ class GeneralManagerMeta(type):
 
                 def __get__(
                     self,
-                    instance: GeneralManager[GeneralManagerType, InterfaceBase] | None,
+                    instance: GeneralManagerType | None,
                     owner: type | None = None,
                 ):
+                    """
+                    Retrieve the value of a dynamically defined attribute from an instance or its interface.
+                    
+                    When accessed on the class, returns the field type from the associated interface. When accessed on an instance, retrieves the attribute value from the instance's `_attributes` dictionary. If the attribute is callable, it is invoked with the instance's interface. Raises `AttributeError` if the attribute is missing or if a callable attribute raises an exception.
+                    """
                     if instance is None:
                         return self.new_class.Interface.getFieldType(self.attr_name)
                     attribute = instance._attributes.get(attr_name, _nonExistent)

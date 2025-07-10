@@ -1,11 +1,5 @@
 from __future__ import annotations
-from typing import (
-    Type,
-    Any,
-    Generator,
-    TypeVar,
-    TYPE_CHECKING,
-)
+from typing import Type, Any, Generator, TypeVar, TYPE_CHECKING
 from django.db import models
 from general_manager.interface.baseInterface import (
     GeneralManagerType,
@@ -30,16 +24,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         exclude_definitions: dict[str, list[Any]] | None = None,
     ):
         """
-        Initializes a DatabaseBucket with a queryset, manager class, and optional filter and exclude definitions.
+        Initialize a DatabaseBucket with a Django queryset, a manager class, and optional filter and exclude definitions.
 
-        If no queryset is provided, constructs one using the manager class and the given filters and excludes. Stores the queryset, manager class, and copies of the filter and exclude definitions for further operations.
+        Parameters:
+            data (QuerySet): The Django queryset containing model instances to be managed.
+            manager_class (Type[GeneralManagerType]): The manager class used to wrap model instances.
+            filter_definitions (dict[str, list[Any]], optional): Initial filter criteria for the queryset.
+            exclude_definitions (dict[str, list[Any]], optional): Initial exclude criteria for the queryset.
         """
-        if data is None:
-            data = manager_class.Interface._model.objects.filter(
-                **filter_definitions
-            ).exclude(**exclude_definitions)
         self._data = data
-
         self._manager_class = manager_class
         self.filters = {**(filter_definitions or {})}
         self.excludes = {**(exclude_definitions or {})}
@@ -55,18 +48,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __or__(
         self,
-        other: (
-            Bucket[GeneralManagerType]
-            | GeneralManager[GeneralManagerType, DatabaseInterface]
-        ),
+        other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> DatabaseBucket[GeneralManagerType]:
         """
-        Combines this bucket with another bucket or manager instance using the union operator.
+        Return a new bucket containing the union of this bucket and another bucket or manager instance.
 
-        If `other` is a manager instance of the same class, creates a bucket containing only that instance and combines it. If `other` is a compatible bucket, returns a new bucket containing the union of both buckets' querysets. Raises a `ValueError` if the types or manager classes are incompatible.
+        If `other` is a manager instance of the same class, it is converted to a bucket before combining. If `other` is a compatible bucket, the resulting bucket contains all unique items from both. Raises a `ValueError` if the types or manager classes are incompatible.
 
         Returns:
-            A new `DatabaseBucket` containing the combined items.
+            DatabaseBucket[GeneralManagerType]: A new bucket with the combined items.
         """
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(
@@ -202,10 +192,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
         """
-        Checks if a manager instance or model instance is present in the bucket.
-
-        Args:
-            item: A manager instance or Django model instance to check for membership.
+        Determine whether a manager instance or Django model instance is present in the bucket.
 
         Returns:
             True if the item's primary key exists in the underlying queryset; otherwise, False.
@@ -216,7 +203,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return item.identification.get("id", None) in self._data.values_list(
                 "pk", flat=True
             )
-        return item in self._data
+        return item.pk in self._data.values_list("pk", flat=True)
 
     def sort(
         self,
@@ -224,14 +211,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ) -> DatabaseBucket:
         """
-        Returns a new DatabaseBucket sorted by the specified field or fields.
+        Return a new DatabaseBucket sorted by the specified field or fields.
 
-        Args:
-            key: A field name or tuple of field names to sort by.
-            reverse: If True, sorts in descending order.
+        Parameters:
+            key (str or tuple of str): Field name or tuple of field names to sort by.
+            reverse (bool): If True, sort in descending order.
 
         Returns:
-            A new DatabaseBucket instance with the sorted queryset.
+            DatabaseBucket: A new bucket instance containing the sorted queryset.
         """
         if isinstance(key, str):
             key = (key,)

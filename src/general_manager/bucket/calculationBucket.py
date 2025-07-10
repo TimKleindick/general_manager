@@ -92,19 +92,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __or__(
         self,
-        other: (
-            Bucket[GeneralManagerType]
-            | GeneralManager[GeneralManagerType, CalculationInterface]
-        ),
+        other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Combines this CalculationBucket with another bucket or manager of the same type.
-
-        If combined with a manager instance, returns a bucket filtered to that manager's identification.
-        If combined with another CalculationBucket of the same manager class, returns a new bucket with filters and excludes that are present and identical in both.
-
+        Combine this CalculationBucket with another bucket or manager instance of the same manager class.
+        
+        If combined with a manager instance, returns a bucket filtered to that manager's identification. If combined with another CalculationBucket of the same manager class, returns a new bucket containing only the filters and excludes that are present and identical in both buckets.
+        
         Raises:
             ValueError: If the other object is not a CalculationBucket or manager of the same class.
+            
+        Returns:
+            CalculationBucket[GeneralManagerType]: A new CalculationBucket representing the intersection of filters and excludes, or a filtered bucket for the given manager instance.
         """
         from general_manager.manager.generalManager import GeneralManager
 

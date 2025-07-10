@@ -4,3 +4,4 @@ ipython==9.0.2
 pytest==8.4.0
 pytest_django==4.11.1
 pytest_cov==4.1.0
+django-types==0.21.0

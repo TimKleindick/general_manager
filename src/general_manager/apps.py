@@ -43,12 +43,12 @@ class GeneralmanagerConfig(AppConfig):
 
     @staticmethod
     def handleReadOnlyInterface(
-        read_only_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
+        read_only_classes: list[Type[GeneralManager]],
     ):
         """
-        Configures synchronization and schema validation for the provided read-only interface classes.
-
-        Ensures that each read-only interface is synchronized before Django management commands run, and registers system checks to validate that their schemas are up to date.
+        Configures synchronization and schema validation for the given read-only GeneralManager classes.
+        
+        For each provided class, ensures that its data is synchronized before any Django management command executes, and registers a system check to verify that the associated schema remains up to date.
         """
         GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -68,11 +68,11 @@ class GeneralmanagerConfig(AppConfig):
 
     @staticmethod
     def patchReadOnlyInterfaceSync(
-        general_manager_classes: list[Type[GeneralManager[Any, ReadOnlyInterface]]],
+        general_manager_classes: list[Type[GeneralManager]],
     ):
         """
         Monkey-patches Django's management command runner to synchronize all provided read-only interfaces before executing any management command, except during autoreload subprocesses of 'runserver'.
-
+        
         For each class in `general_manager_classes`, the associated read-only interface's `syncData` method is called prior to command execution, ensuring data consistency before management operations.
         """
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface

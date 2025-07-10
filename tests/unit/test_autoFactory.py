@@ -13,15 +13,12 @@ class DummyInterface:
     @classmethod
     def handleCustomFields(cls, model):
         """
-        Returns empty lists for custom field handling.
+        Placeholder method for handling custom fields in a model.
         
-        This method serves as a placeholder for custom field processing logic and is intended to be overridden in a real interface implementation.
-        
-        Args:
-            model: The model class for which custom fields would be handled.
+        Intended to be overridden in subclasses to provide custom field processing logic.
         
         Returns:
-            A tuple of two empty lists.
+            tuple: Two empty lists representing placeholder values for custom field handling.
         """
         return [], []
 
@@ -81,9 +78,9 @@ class AutoFactoryTestCase(TransactionTestCase):
 
     def setUp(self) -> None:
         """
-        Sets up factory classes for dummy models before each test.
+        Initializes dynamic factory classes for DummyModel and DummyModel2 before each test.
         
-        Dynamically creates and assigns factory classes for `DummyModel` and `DummyModel2`, each using `DummyInterface`, to be used in test methods.
+        Creates and assigns factory classes using AutoFactory and DummyInterface for use in test methods.
         """
         factory_attributes = {}
         factory_attributes["interface"] = DummyInterface
@@ -106,9 +103,9 @@ class AutoFactoryTestCase(TransactionTestCase):
 
     def test_generate_multiple_instances(self):
         """
-        Tests that the factory creates a batch of DummyModel instances with populated fields.
+        Test that the factory creates multiple DummyModel instances with populated fields.
         
-        Verifies that calling `create_batch(5)` produces five DummyModel instances, each with non-null `name` and `value` attributes.
+        Verifies that calling `create_batch(5)` returns five DummyModel instances, each with non-null `name` and `value` attributes.
         """
         instances: Iterable[DummyModel] = self.factory_class.create_batch(5)
         self.assertEqual(len(instances), 5)
@@ -131,9 +128,9 @@ class AutoFactoryTestCase(TransactionTestCase):
 
     def test_build_instance(self):
         """
-        Tests that the factory's build method creates a DummyModel instance without saving it to the database.
+        Test that the factory's build method returns a DummyModel instance with populated fields but does not save it to the database.
         
-        Verifies that the instance has non-null 'name' and 'value' fields, no primary key, and that no DummyModel records exist in the database after building.
+        Ensures the built instance has non-null 'name' and 'value' attributes, no primary key, and that the database remains unchanged.
         """
         instance: DummyModel = self.factory_class.build()
         self.assertIsInstance(instance, DummyModel)
@@ -149,9 +146,9 @@ class AutoFactoryTestCase(TransactionTestCase):
 
     def test_generate_instance_with_related_fields(self):
         """
-        Tests that DummyFactory2 can create a DummyModel2 instance with a specified related DummyModel and custom description.
+        Test that the factory creates a DummyModel2 instance with a specified related DummyModel and custom description.
         
-        Verifies that the related ForeignKey field is correctly assigned and the description is set as expected.
+        Ensures the ForeignKey relation and description field are correctly assigned.
         """
         dummy_model_instance = self.factory_class.create()
         instance = self.factory_class2.create(
@@ -182,17 +179,17 @@ class AutoFactoryTestCase(TransactionTestCase):
 
     def test_generate_instance_with_generate_function(self):
         """
-        Tests that the factory can generate multiple instances using a custom generate function that returns a list of dictionaries, verifying correct instance creation, attribute assignment, and database persistence.
+        Test that the factory can generate and persist multiple instances using a custom generate function that returns a list of dictionaries.
+        
+        Verifies that both `build` and `create` methods produce 101 `DummyModel` instances with expected attribute values, and that `create` saves all instances to the database.
         """
 
-        def custom_generate_function(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+        def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
             """
-            Generates a list of dictionaries with sequential squared values.
-            
-            Each dictionary contains a 'name' field set to "Generated Name" and a 'value' field set to the square of its index, for indices 0 through 100.
+            Generate a list of 101 dictionaries with 'name' set to "Generated Name" and 'value' set to the square of each index from 0 to 100.
             
             Returns:
-                A list of 101 dictionaries with 'name' and 'value' keys.
+                list[dict[str, Any]]: A list of dictionaries, each containing 'name' and 'value' keys.
             """
             return [
                 {
@@ -221,14 +218,16 @@ class AutoFactoryTestCase(TransactionTestCase):
 
     def test_generate_instance_with_generate_function_for_one_entry(self):
         """
-        Tests that the factory can generate a single instance using a custom generate function that returns a dictionary, verifying correct assignment of generated and provided field values for both create and build operations.
+        Tests that the factory can generate a single model instance using a custom generate function that returns a dictionary, ensuring both `create` and `build` methods assign generated and provided field values correctly.
         """
 
-        def custom_generate_function(**kwargs: dict[str, Any]) -> dict[str, Any]:
+        def custom_generate_function(**kwargs: Any) -> dict[str, Any]:
             """
-            Generates a dictionary of model field values with a preset name.
+            Generate a dictionary of model field values with the "name" field set to "Generated Name".
             
-            Merges provided keyword arguments with a fixed "name" field set to "Generated Name".
+            Merges any provided keyword arguments with a fixed "name" value.
+            Returns:
+                dict[str, Any]: Dictionary containing the merged field values.
             """
             return {
                 **kwargs,

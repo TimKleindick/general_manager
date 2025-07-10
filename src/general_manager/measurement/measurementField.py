@@ -19,9 +19,20 @@ class MeasurementField(models.Field):  # type: ignore
         null: bool = False,
         blank: bool = False,
         editable: bool = True,
-        *args: list[Any],
-        **kwargs: dict[str, Any],
+        *args: Any,
+        **kwargs: Any,
     ):
+        """
+        Initialize a MeasurementField to store values in a specified base unit and retain the original unit.
+        
+        Parameters:
+            base_unit (str): The canonical unit in which values are stored (e.g., 'meter').
+            null (bool, optional): Whether the field allows NULL values.
+            blank (bool, optional): Whether the field allows blank values.
+            editable (bool, optional): Whether the field is editable in Django admin and forms.
+        
+        The field internally manages a DecimalField for the value (in the base unit) and a CharField for the original unit.
+        """
         self.base_unit = base_unit  # E.g., 'meter' for length units
         # Determine the dimensionality of the base unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
@@ -45,8 +56,13 @@ class MeasurementField(models.Field):  # type: ignore
         super().__init__(null=null, blank=blank, *args, **kwargs)
 
     def contribute_to_class(
-        self, cls: type, name: str, private_only: bool = False, **kwargs: dict[str, Any]
+        self, cls: type, name: str, private_only: bool = False, **kwargs: Any
     ) -> None:
+        """
+        Integrates the MeasurementField into the Django model class, setting up internal fields for value and unit storage.
+        
+        This method assigns unique attribute names for the value and unit fields, attaches them to the model, and sets the descriptor for the custom field on the model class.
+        """
         self.name = name
         self.value_attr = f"{name}_value"
         self.unit_attr = f"{name}_unit"
