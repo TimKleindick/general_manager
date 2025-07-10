@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Generic, Type, Any, TYPE_CHECKING, TypeVar, Self
+from typing import Type, Any, TYPE_CHECKING, Self
 from general_manager.manager.meta import GeneralManagerMeta
 
 from general_manager.api.property import GraphQLProperty
@@ -45,9 +45,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     ) -> Bucket[Self]:
         """
         Returns a Bucket containing the union of this manager and another manager of the same class or a Bucket.
-        
+
         If `other` is a Bucket, the result is the union of the Bucket and this manager. If `other` is a manager of the same class, the result is a Bucket containing both managers. Raises a TypeError if `other` is not a supported type.
-        
+
         Returns:
             Bucket[Self]: A Bucket containing the combined managers.
         """
@@ -83,14 +83,14 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     ) -> Self:
         """
         Create a new managed object via the underlying interface and return a manager instance representing it.
-        
+
         Performs a permission check unless `ignore_permission` is True. All additional keyword arguments are passed to the interface's `create` method.
-        
+
         Parameters:
             creator_id (int | None): Optional ID of the user creating the object.
             history_comment (str | None): Optional comment for audit or history purposes.
             ignore_permission (bool): If True, bypasses the permission check.
-        
+
         Returns:
             Self: Manager instance for the newly created object.
         """
@@ -111,13 +111,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     ) -> Self:
         """
         Update the managed object with new data and return a new manager instance reflecting the changes.
-        
+
         Parameters:
             creator_id (int | None): Identifier of the user performing the update, if applicable.
             history_comment (str | None): Optional comment describing the update.
             ignore_permission (bool): If True, bypasses permission checks.
             **kwargs: Fields and values to update on the managed object.
-        
+
         Returns:
             Self: A new manager instance representing the updated object.
         """
@@ -139,12 +139,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     ) -> Self:
         """
         Deactivate the managed object and return a new manager instance representing its deactivated state.
-        
+
         Parameters:
             creator_id (int | None): Optional ID of the user performing the deactivation.
             history_comment (str | None): Optional comment explaining the deactivation.
             ignore_permission (bool): If True, bypasses permission checks.
-        
+
         Returns:
             Self: A new manager instance for the deactivated object.
         """
@@ -159,10 +159,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     def filter(cls, **kwargs: Any) -> Bucket[Self]:
         """
         Return a bucket of managed objects matching the specified filter criteria.
-        
+
         Parameters:
             kwargs: Field lookups used to filter the managed objects.
-        
+
         Returns:
             Bucket[Self]: A collection of manager instances matching the filter conditions.
         """
@@ -175,10 +175,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     def exclude(cls, **kwargs: Any) -> Bucket[Self]:
         """
         Return a bucket of managed objects excluding those that match the specified criteria.
-        
+
         Parameters:
             kwargs: Field-value pairs used to determine which objects to exclude.
-        
+
         Returns:
             Bucket[Self]: A collection of managed objects not matching the exclusion criteria.
         """

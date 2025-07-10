@@ -66,13 +66,13 @@ class InterfaceBase(ABC):
     def parseInputFieldsToIdentification(
         self,
         *args: Any,
-        **kwargs: Any,
+        **kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         """
         Parse and validate input arguments into a dictionary of input field values.
-        
+
         Positional and keyword arguments are mapped to input field names, with normalization of argument names (e.g., removing trailing `_id`). Ensures all required fields are present and no unexpected arguments are provided. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for missing or unexpected arguments and a `ValueError` if circular dependencies are detected.
-        
+
         Returns:
             dict[str, Any]: A dictionary mapping input field names to their validated and cast values.
         """
