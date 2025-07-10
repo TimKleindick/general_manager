@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.10.5 (2025-07-10)
+
+### Bug Fixes
+
+- Add "is_derived" attribute to input field types and improve docstrings for clarity
+  ([`6252f37`](https://github.com/TimKleindick/general_manager/commit/6252f370432c9e90380e4c0fce5b90be9eff1652))
+
+- Remove unnecessary blank lines and improve variable naming in `getFieldType`
+  ([`3eeb841`](https://github.com/TimKleindick/general_manager/commit/3eeb8410d90c54bfe7f400c66d799b84808e9199))
+
+
 ## v0.10.4 (2025-07-10)
 
 ### Bug Fixes
