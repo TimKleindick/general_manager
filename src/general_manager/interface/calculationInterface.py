@@ -26,6 +26,11 @@ class CalculationInterface(InterfaceBase):
 
     @classmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
+        """
+        Return a dictionary describing the type and metadata for each input field in the calculation interface.
+        
+        Each entry includes the field's type, default value (`None`), and flags indicating that the field is not editable, is required, and is not derived.
+        """
         return {
             name: {
                 "type": field.type,
@@ -63,12 +68,12 @@ class CalculationInterface(InterfaceBase):
         name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
-        Prepares attributes and a new interface class before creating a GeneralManager class.
-
-        Collects all `Input` instances from the provided interface class, sets the interface type in the attributes, dynamically creates a new interface class with these input fields, and adds it to the attributes.
-
+        Prepare and return updated attributes and a new interface class for GeneralManager creation.
+        
+        Collects all `Input` instances from the provided interface class, sets the interface type in the attributes, dynamically creates a new interface class with an `input_fields` attribute, and adds this class to the attributes dictionary.
+        
         Returns:
-            A tuple containing the updated attributes dictionary, the new interface class, and None.
+            tuple: A tuple containing the updated attributes dictionary, the new interface class, and None.
         """
         input_fields: dict[str, Input[Any]] = {}
         for key, value in vars(interface).items():
@@ -109,10 +114,16 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        Returns the Python type of a specified input field.
-
+        Return the Python type of the specified input field.
+        
+        Parameters:
+            field_name (str): The name of the input field.
+        
+        Returns:
+            type: The Python type associated with the input field.
+        
         Raises:
-            KeyError: If the field name does not exist in input_fields.
+            KeyError: If the specified field name does not exist in input_fields.
         """
         input = cls.input_fields.get(field_name)
         if input is None:
