@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "GeneralManager"
-version = "0.10.5"
+version = "0.10.6"
 description = "Modular Django-based data management framework with ORM, GraphQL, fine-grained permissions, rule validation, calculations and caching."
 readme = "README.md"
 authors = [{ name = "Tim Kleindick", email = "tkleindick@yahoo.de" }]

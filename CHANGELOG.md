@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.10.6 (2025-07-13)
+
+### Bug Fixes
+
+- Correct multiplication check for currency measurements in `Measurement` class
+  ([`95c78ab`](https://github.com/TimKleindick/general_manager/commit/95c78abbbf839db434b68cb8edb0f658f99db639))
+
+- Improve GraphQL interface methods to handle optional return types and clean up code
+  ([`00baa23`](https://github.com/TimKleindick/general_manager/commit/00baa23776f67813447a5d5efe4a285f7080c724))
+
+### Documentation
+
+- Inline example and remove README reference
+  ([`f76582b`](https://github.com/TimKleindick/general_manager/commit/f76582bdd2ff7e6f8ada03293e580a008442f8e7))
+
+### Testing
+
+- Add integration tests for calculation Interface with only one Input
+  ([`2bee3a7`](https://github.com/TimKleindick/general_manager/commit/2bee3a7610df8f26b11fedf302d07688d5c716cd))
+
+- Add tests for arithmetic operations between currency and dimensionless values
+  ([`95c8a6f`](https://github.com/TimKleindick/general_manager/commit/95c8a6f036b768858c92ae1e30a3a3042c10dd17))
+
+
 ## v0.10.5 (2025-07-10)
 
 ### Bug Fixes
