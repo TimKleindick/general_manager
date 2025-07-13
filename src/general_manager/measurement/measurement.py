@@ -239,7 +239,7 @@ class Measurement:
             TypeError: If multiplying two currency measurements or if the operand is neither a Measurement nor a numeric value.
         """
         if isinstance(other, Measurement):
-            if self.is_currency() or other.is_currency():
+            if self.is_currency() and other.is_currency():
                 raise TypeError(
                     "Multiplication between two currency amounts is not allowed."
                 )
