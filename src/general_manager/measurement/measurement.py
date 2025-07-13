@@ -228,15 +228,15 @@ class Measurement:
 
     def __mul__(self, other: Any) -> Measurement:
         """
-        Returns the product of this measurement and another measurement or numeric value.
-
-        Multiplication between two currency measurements is not permitted. When multiplied by another measurement, the result combines their units. When multiplied by a numeric value, the magnitude is scaled and the unit remains unchanged.
-
+        Multiply this measurement by another measurement or a numeric value.
+        
+        Multiplying two currency measurements is not allowed. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
+        
         Returns:
-            Measurement: A new Measurement representing the result.
-
+            Measurement: The result of the multiplication.
+        
         Raises:
-            TypeError: If multiplying two currency measurements or if the operand is neither a Measurement nor a numeric value.
+            TypeError: If both operands are currency measurements, or if the operand is not a Measurement or numeric value.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():

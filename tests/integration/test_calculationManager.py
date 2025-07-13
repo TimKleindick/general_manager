@@ -13,6 +13,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     @classmethod
     def setUpClass(cls):
+        """
+        Initializes test-specific `Employee` and `TaxCalculation` manager classes with their interfaces for use in integration tests.
+        
+        Defines an `Employee` class with database fields for name and salary (in EUR), and a `TaxCalculation` class that references an employee and exposes a calculation property for computing 20% tax on the employee's salary. Assigns these classes to class variables for use in test methods.
+        """
         class Employee(GeneralManager):
             id: int
             name: str
@@ -30,6 +35,12 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
             @graphQlProperty
             def calculate(self) -> Measurement:
+                """
+                Calculates 20% of the associated employee's salary as tax.
+                
+                Returns:
+                    Measurement: The calculated tax amount based on the employee's salary.
+                """
                 return self.employee.salary * 0.2
 
         cls.Employee = Employee
@@ -38,6 +49,9 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [Employee, TaxCalculation]
 
     def setUp(self):
+        """
+        Prepares the test environment by creating and logging in a test user, and defines the GraphQL query for tax calculation.
+        """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="secret")
         self.client.force_login(self.user)
@@ -53,6 +67,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         """
 
     def test_calculate_tax(self):
+        """
+        Tests the tax calculation GraphQL mutation for an employee.
+        
+        Creates an employee with a specified salary, executes the tax calculation mutation, and verifies that the calculated tax value and unit in the response are correct.
+        """
         employee = self.Employee.create(
             name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
         )
