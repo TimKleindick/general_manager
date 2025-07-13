@@ -102,9 +102,9 @@ class GraphQL:
     @classmethod
     def createGraphqlInterface(cls, generalManagerClass: GeneralManagerMeta) -> None:
         """
-        Generates and registers a GraphQL ObjectType for a given GeneralManager class.
-
-        This method maps interface and GraphQLProperty attributes to Graphene fields, creates resolvers for each field, registers the resulting type in the internal registry, and adds corresponding query fields to the schema.
+        Generates and registers a GraphQL ObjectType for the specified GeneralManager class.
+        
+        This method maps interface attributes and GraphQLProperty fields to Graphene fields, creates appropriate resolvers, registers the resulting type in the internal registry, and adds related query fields to the schema.
         """
         interface_cls: InterfaceBase | None = getattr(
             generalManagerClass, "Interface", None
@@ -145,8 +145,10 @@ class GraphQL:
         generalManagerClass: GeneralManagerMeta,
     ) -> type[graphene.Enum] | None:
         """
-        Erzeugt ein Enum für Sortieroptionen basierend auf den Attributstypen der
-        Manager-Klasse.
+        Creates a Graphene Enum type representing sortable fields for a given GeneralManager class.
+        
+        Returns:
+            A Graphene Enum type with options for each sortable attribute, or None if no sortable fields exist.
         """
         sort_options = []
         for (
@@ -176,7 +178,9 @@ class GraphQL:
         field_name: str, field_type: GeneralManagerMeta
     ) -> type[graphene.InputObjectType] | None:
         """
-        Baut dynamisch ein InputObjectType für Filteroptionen auf.
+        Dynamically generates a Graphene InputObjectType for filtering fields of a GeneralManager subclass.
+        
+        Creates filter fields for each attribute based on its type, supporting numeric and string filter options, as well as specialized handling for Measurement attributes. Returns the generated InputObjectType or None if no filter fields are applicable.
         """
         number_options = ["exact", "gt", "gte", "lt", "lte"]
         string_options = [
@@ -230,6 +234,11 @@ class GraphQL:
 
     @staticmethod
     def _mapFieldToGrapheneRead(field_type: type, field_name: str) -> Any:
+        """
+        Maps a Python field type and name to the appropriate Graphene field for GraphQL schema generation.
+        
+        For `Measurement` types, returns a field with an optional `target_unit` argument. For `GeneralManager` subclasses, returns either a list field (with optional filtering, exclusion, sorting, pagination, and grouping arguments if available) or a single field, depending on the field name. For other types, returns the corresponding Graphene scalar field.
+        """
         if issubclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif issubclass(field_type, GeneralManager):
@@ -361,7 +370,14 @@ class GraphQL:
         base_getter: Callable[[Any], Any], fallback_manager_class: type[GeneralManager]
     ) -> Callable[..., Any]:
         """
-        Returns a resolver function for GraphQL list fields that retrieves a queryset, applies permission-based filtering, query filters, sorting, pagination, and optional grouping, and returns the resulting data.
+        Create a resolver function for GraphQL list fields that retrieves and returns a queryset with permission filters, query filters, sorting, pagination, and optional grouping applied.
+        
+        Parameters:
+            base_getter: Function to obtain the base queryset from the parent instance.
+            fallback_manager_class: Manager class to use if the queryset does not specify one.
+        
+        Returns:
+            A resolver function that processes list queries with filtering, sorting, pagination, and grouping.
         """
 
         def resolver(
@@ -376,8 +392,8 @@ class GraphQL:
             group_by: list[str] | None = None,
         ) -> Any:
             """
-            Resolves a list field by returning a queryset filtered by permissions, query parameters, sorting, pagination, and optional grouping.
-
+            Resolves a list field by returning a queryset with permission filters, query filters, sorting, pagination, and optional grouping applied.
+            
             Parameters:
                 filter: Filter criteria as a dictionary or JSON string.
                 exclude: Exclusion criteria as a dictionary or JSON string.
@@ -386,9 +402,9 @@ class GraphQL:
                 page: Page number for pagination.
                 page_size: Number of items per page.
                 group_by: List of field names to group results by.
-
+            
             Returns:
-                A queryset with applied permission filters, filtering, sorting, pagination, and grouping.
+                The resulting queryset after applying permissions, filters, sorting, pagination, and grouping.
             """
             base_queryset = base_getter(self)
             # use _manager_class from the attribute if available, otherwise fallback
@@ -464,9 +480,9 @@ class GraphQL:
         cls, graphene_type: type, generalManagerClass: GeneralManagerMeta
     ) -> None:
         """
-        Adds list and single-item query fields for a GeneralManager-derived class to the GraphQL schema.
-
-        Registers a list query supporting filtering, sorting, pagination, and grouping, as well as a single-item query using identification fields for the specified manager class. The corresponding resolvers are attached to the schema.
+        Add list and single-item query fields for a GeneralManager subclass to the GraphQL schema.
+        
+        Registers a list query field with optional filtering, exclusion, sorting, pagination, and grouping arguments, as well as a single-item query field using identification fields from the manager's interface. Attaches the corresponding resolvers for both queries to the schema.
         """
         if not issubclass(generalManagerClass, GeneralManager):
             raise TypeError(
@@ -536,9 +552,9 @@ class GraphQL:
     def createWriteFields(cls, interface_cls: InterfaceBase) -> dict[str, Any]:
         """
         Generate a dictionary of Graphene input fields for mutations based on the attributes of the provided interface class.
-
-        Skips system-managed fields and derived attributes. For attributes referencing `GeneralManager` subclasses, uses ID or list of IDs as appropriate. Other types are mapped to their corresponding Graphene scalar types. Each field is annotated with an `editable` attribute. Adds an optional `history_comment` field marked as editable.
-
+        
+        Skips system-managed and derived attributes. For attributes referencing `GeneralManager` subclasses, uses an ID or list of IDs as appropriate. Other types are mapped to their corresponding Graphene scalar types. Each field is annotated with an `editable` attribute. An optional `history_comment` field, also marked as editable, is always included.
+        
         Returns:
             dict[str, Any]: Mapping of attribute names to Graphene input fields for mutation arguments.
         """
@@ -590,12 +606,12 @@ class GraphQL:
         default_return_values: dict[str, Any],
     ) -> type[graphene.Mutation] | None:
         """
-        Dynamically generates a Graphene mutation class for creating an instance of the specified GeneralManager subclass.
-
-        The generated mutation class includes a `mutate` method that filters out fields with `NOT_PROVIDED` values, invokes the manager's `create` method with the provided arguments and the current user's ID, and returns a dictionary indicating success, any errors, and the created instance. Returns None if the manager class does not define an interface.
-
+        Dynamically generates a Graphene mutation class for creating an instance of a specified GeneralManager subclass.
+        
+        The generated mutation class filters out fields with `NOT_PROVIDED` values, calls the manager's `create` method with the provided arguments and the current user's ID, and returns a dictionary containing a success flag, any errors, and the created instance. Returns None if the manager class does not define an interface.
+        
         Returns:
-            The generated Graphene mutation class, or None if no interface is defined for the manager class.
+            The generated Graphene mutation class, or None if the manager class does not define an interface.
         """
         interface_cls: InterfaceBase | None = getattr(
             generalManagerClass, "Interface", None
@@ -609,9 +625,9 @@ class GraphQL:
             **kwargs: Any,
         ) -> dict:
             """
-            Creates a new instance of the manager class with the provided arguments.
-
-            Filters out fields with values marked as `NOT_PROVIDED` before creation. Returns a dictionary containing a success flag, a list of errors (if any), and the created instance under a key named after the manager class.
+            Create a new instance of the manager class using the provided arguments.
+            
+            Filters out any fields with values set to `NOT_PROVIDED` before invoking the creation method. Returns a dictionary with a success flag, a list of errors if creation fails, and the created instance keyed by the manager class name.
             """
             try:
                 kwargs = {
@@ -662,10 +678,10 @@ class GraphQL:
         default_return_values: dict[str, Any],
     ) -> type[graphene.Mutation] | None:
         """
-        Generates a GraphQL mutation class for updating instances of a GeneralManager subclass.
-
-        The generated mutation accepts editable fields as arguments, invokes the manager's `update` method with the provided values, and returns a dictionary indicating success, any errors, and the updated instance. Returns None if the manager class does not define an `Interface`.
-
+        Generates a GraphQL mutation class for updating an instance of a GeneralManager subclass.
+        
+        The generated mutation accepts editable fields as arguments, calls the manager's `update` method with the provided values and the current user's ID, and returns a dictionary containing the operation's success status, any error messages, and the updated instance. Returns None if the manager class does not define an `Interface`.
+        
         Returns:
             The generated Graphene mutation class, or None if no interface is defined.
         """
@@ -681,14 +697,14 @@ class GraphQL:
             **kwargs: Any,
         ) -> dict:
             """
-            Performs an update mutation on a GeneralManager instance with the specified fields.
-
+            Updates a GeneralManager instance with the provided fields.
+            
             Parameters:
                 info (GraphQLResolveInfo): The GraphQL resolver context, typically containing user and request information.
                 **kwargs: Fields to update, including the required 'id' of the instance.
-
+            
             Returns:
-                dict: Contains the operation's success status, a list of error messages if any, and the updated instance keyed by its class name.
+                dict: A dictionary with keys 'success' (bool), 'errors' (list of str), and the updated instance keyed by its class name.
             """
             try:
                 manager_id = kwargs.pop("id", None)
@@ -734,9 +750,12 @@ class GraphQL:
         default_return_values: dict[str, Any],
     ) -> type[graphene.Mutation] | None:
         """
-        Generates a GraphQL mutation class for deleting (deactivating) an instance of a GeneralManager subclass.
-
-        The generated mutation accepts input fields defined in the manager's interface, deactivates the specified instance using its ID, and returns a dictionary with the operation's success status, any error messages, and the deactivated instance.
+        Generates a GraphQL mutation class for deactivating (soft-deleting) an instance of a GeneralManager subclass.
+        
+        The generated mutation accepts input fields defined by the manager's interface, deactivates the specified instance using its ID, and returns a dictionary containing the operation's success status, any error messages, and the deactivated instance keyed by the class name.
+        
+        Returns:
+            The generated Graphene mutation class, or None if the manager class does not define an interface.
         """
         interface_cls: InterfaceBase | None = getattr(
             generalManagerClass, "Interface", None
@@ -750,10 +769,13 @@ class GraphQL:
             **kwargs: Any,
         ) -> dict:
             """
-            Deactivates an instance of the specified GeneralManager class and returns the result.
-
+            Deactivates an instance of the specified GeneralManager class and returns the operation result.
+            
             Returns:
-                dict: Contains the operation's success status, a list of error messages if any, and the deactivated instance keyed by the class name.
+                dict: A dictionary with keys:
+                    - "success": Boolean indicating if the operation was successful.
+                    - "errors": List of error messages, empty if successful.
+                    - <ClassName>: The deactivated instance, keyed by the class name.
             """
             try:
                 manager_id = kwargs.pop("id", None)
