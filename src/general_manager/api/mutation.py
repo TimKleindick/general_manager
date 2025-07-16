@@ -1,5 +1,14 @@
 import inspect
-from typing import get_type_hints, Optional, Union, List, Tuple, get_origin, get_args
+from typing import (
+    get_type_hints,
+    Optional,
+    Union,
+    List,
+    Tuple,
+    get_origin,
+    get_args,
+    Type,
+)
 import graphene
 
 from general_manager.api.graphql import GraphQL
@@ -7,9 +16,10 @@ from general_manager.manager.generalManager import GeneralManager
 
 from general_manager.utils.formatString import snake_to_camel
 from typing import TypeAliasType
+from general_manager.permission.mutationPermission import MutationPermission
 
 
-def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = False):
+def graphQlMutation(permission: Optional[Type[MutationPermission]] = None):
     """
     Decorator that transforms a function into a GraphQL mutation class and registers it for use in a Graphene-based API.
 
@@ -109,11 +119,9 @@ def graphQlMutation(needs_role: Optional[str] = None, auth_required: bool = Fals
 
         # Define mutate method
         def _mutate(root, info, **kwargs):
-            # Auth check
-            if auth_required and not getattr(info.context, "user", None):
-                return mutation_class(
-                    **{"success": False, "errors": ["Authentication required"]}
-                )
+
+            if permission:
+                permission.check(kwargs, info.context.user)
             try:
                 result = fn(info, **kwargs)
                 data = {}
