@@ -33,7 +33,7 @@ class MutationPermission:
         attribute_permissions = {}
         for attribute in self.__class__.__dict__:
             if not attribute.startswith("__"):
-                attribute_permissions[attribute] = getattr(self, attribute)
+                attribute_permissions[attribute] = getattr(self.__class__, attribute)
         return attribute_permissions
 
     @classmethod
@@ -59,10 +59,10 @@ class MutationPermission:
 
     def checkPermission(
         self,
-        attriubte: str,
+        attribute: str,
     ) -> bool:
 
-        has_attribute_permissions = attriubte in self.__attribute_permissions
+        has_attribute_permissions = attribute in self.__attribute_permissions
 
         if not has_attribute_permissions:
             last_result = self.__overall_result
@@ -71,7 +71,7 @@ class MutationPermission:
             attribute_permission = True
         else:
             attribute_permission = self.__checkSpecificPermission(
-                self.__attribute_permissions[attriubte]
+                self.__attribute_permissions[attribute]
             )
 
         permission = self.__checkSpecificPermission(self.__mutate__)
