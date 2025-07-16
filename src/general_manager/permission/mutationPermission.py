@@ -1,6 +1,6 @@
 from __future__ import annotations
 from django.contrib.auth.models import AbstractUser, AnonymousUser
-from typing import Any, Dict, Optional, Type
+from typing import Any
 from general_manager.permission.basePermission import BasePermission
 
 from general_manager.permission.permissionDataManager import PermissionDataManager
