@@ -2,11 +2,9 @@ from __future__ import annotations
 from django.contrib.auth.models import AbstractUser, AnonymousUser
 from typing import Any, Dict, Optional, Type
 from general_manager.permission.basePermission import BasePermission
-from general_manager.permission.permissionChecks import (
-    permission_functions,
-    permission_filter,
-)
+
 from general_manager.permission.permissionDataManager import PermissionDataManager
+from general_manager.permission.utils import validatePermissionString
 
 
 class MutationPermission:
@@ -85,32 +83,6 @@ class MutationPermission:
         permissions: list[str],
     ) -> bool:
         for permission in permissions:
-            if self.validatePermissionString(permission):
+            if validatePermissionString(permission, self.data, self.request_user):
                 return True
         return False
-
-    def validatePermissionString(
-        self,
-        permission: str,
-    ) -> bool:
-        # permission can be a combination of multiple permissions
-        # separated by "&" (e.g. "isAuthenticated&isMatchingKeyAccount")
-        # this means that all sub_permissions must be true
-        return all(
-            [
-                self.__validateSinglePermission(sub_permission)
-                for sub_permission in permission.split("&")
-            ]
-        )
-
-    def __validateSinglePermission(
-        self,
-        permission: str,
-    ) -> bool:
-        permission_function, *config = permission.split(":")
-        if permission_function not in permission_functions:
-            raise ValueError(f"Permission {permission} not found")
-
-        return permission_functions[permission_function]["permission_method"](
-            self.data, self.request_user, config
-        )
