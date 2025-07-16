@@ -122,12 +122,14 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
         @graphQlMutation()
         def mark_todo_as_finished(info, id: int) -> ToDo:
             todo = ToDo(id)
-            return todo.update(finished=True, creator_id=info.context.user.id)
+            creator_id = info.context.user.id if info.context.user else None
+            return todo.update(finished=True, creator_id=creator_id)
 
         @graphQlMutation(ResetToDoPermission)
         def reset_todo(info, id: int) -> ToDo:
             todo = ToDo(id)
-            return todo.update(finished=False, creator_id=info.context.user.id)
+            creator_id = info.context.user.id if info.context.user else None
+            return todo.update(finished=False, creator_id=creator_id)
 
     def setUp(self):
         self.mutation = """
