@@ -1,0 +1,116 @@
+from __future__ import annotations
+from django.contrib.auth.models import AbstractUser, AnonymousUser
+from typing import Any, Dict, Optional, Type
+from general_manager.permission.basePermission import BasePermission
+from general_manager.permission.permissionChecks import (
+    permission_functions,
+    permission_filter,
+)
+from general_manager.permission.permissionDataManager import PermissionDataManager
+
+
+class MutationPermission:
+    __mutate__: list[str]
+
+    def __init__(
+        self, data: dict[str, Any], request_user: AbstractUser | AnonymousUser
+    ) -> None:
+        self._data = PermissionDataManager(data)
+        self._request_user = request_user
+        self.__attribute_permissions = self.__getAttributePermissions()
+
+        self.__overall_result: bool | None = None
+
+    @property
+    def data(self) -> PermissionDataManager:
+        return self._data
+
+    @property
+    def request_user(self) -> AbstractUser | AnonymousUser:
+        return self._request_user
+
+    def __getAttributePermissions(
+        self,
+    ) -> dict[str, list[str]]:
+        attribute_permissions = {}
+        for attribute in self.__class__.__dict__:
+            if not attribute.startswith("__"):
+                attribute_permissions[attribute] = getattr(self, attribute)
+        return attribute_permissions
+
+    @classmethod
+    def check(
+        cls,
+        data: dict[str, Any],
+        request_user: AbstractUser | AnonymousUser | Any,
+    ) -> None:
+        """
+        Check if the user has permission to perform the mutation based on the provided data.
+        Raises:
+            PermissionError: If the user does not have permission.
+        """
+        errors = []
+        Permission = cls(data, BasePermission.getUserWithId(request_user))
+        for key in data:
+            if not Permission.checkPermission(key):
+                errors.append(
+                    f"Permission denied for {key} with value {data[key]} for user {request_user}"
+                )
+        if errors:
+            raise PermissionError(f"Permission denied with errors: {errors}")
+
+    def checkPermission(
+        self,
+        attriubte: str,
+    ) -> bool:
+
+        has_attribute_permissions = attriubte in self.__attribute_permissions
+
+        if not has_attribute_permissions:
+            last_result = self.__overall_result
+            if last_result is not None:
+                return last_result
+            attribute_permission = True
+        else:
+            attribute_permission = self.__checkSpecificPermission(
+                self.__attribute_permissions[attriubte]
+            )
+
+        permission = self.__checkSpecificPermission(self.__mutate__)
+        self.__overall_result = permission
+        return permission and attribute_permission
+
+    def __checkSpecificPermission(
+        self,
+        permissions: list[str],
+    ) -> bool:
+        for permission in permissions:
+            if self.validatePermissionString(permission):
+                return True
+        return False
+
+    def validatePermissionString(
+        self,
+        permission: str,
+    ) -> bool:
+        # permission can be a combination of multiple permissions
+        # separated by "&" (e.g. "isAuthenticated&isMatchingKeyAccount")
+        # this means that all sub_permissions must be true
+        return all(
+            [
+                self.__validateSinglePermission(sub_permission)
+                for sub_permission in permission.split("&")
+            ]
+        )
+
+    def __validateSinglePermission(
+        self,
+        permission: str,
+    ) -> bool:
+        permission_function, *config = permission.split(":")
+        if permission_function not in permission_functions:
+            raise ValueError(f"Permission {permission} not found")
+
+        return permission_functions[permission_function]["permission_method"](
+            self.data, self.request_user, config
+        )
