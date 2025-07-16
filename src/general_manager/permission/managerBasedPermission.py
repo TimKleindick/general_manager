@@ -30,8 +30,7 @@ class ManagerBasedPermission(BasePermission):
         request_user: AbstractUser,
     ) -> None:
 
-        self.__instance = instance
-        self.__request_user = request_user
+        super().__init__(instance, request_user)
         self.__attribute_permissions = self.__getAttributePermissions()
         self.__based_on_permission = self.__getBasedOnPermission()
         self.__overall_results: Dict[permission_type, Optional[bool]] = {
@@ -51,7 +50,7 @@ class ManagerBasedPermission(BasePermission):
         basis_object = getattr(self.instance, __based_on__, None)
         if basis_object is None:
             raise ValueError(
-                f"Based on object {__based_on__} not found in instance {self.__instance}"
+                f"Based on object {__based_on__} not found in instance {self.instance}"
             )
         if not isinstance(basis_object, GeneralManager) and not issubclass(
             basis_object, GeneralManager
@@ -70,14 +69,6 @@ class ManagerBasedPermission(BasePermission):
             instance=getattr(self.instance, __based_on__),
             request_user=self.request_user,
         )
-
-    @property
-    def instance(self) -> PermissionDataManager | GeneralManager:
-        return self.__instance
-
-    @property
-    def request_user(self) -> AbstractUser:
-        return self.__request_user
 
     def __getAttributePermissions(
         self,
