@@ -21,7 +21,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         cls.TestMaterial = TestMaterial
         cls.general_manager_classes = [TestMaterial]
 
-        @graphQlMutation()
+        class IsAuthenticated(MutationPermission):
+            __mutate__ = ["isAuthenticated"]
+
+        @graphQlMutation(IsAuthenticated)
         def create_material(info, name: str) -> TestMaterial:
             return TestMaterial.create(name=name, creator_id=info.context.user.id)
 
@@ -66,7 +69,10 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         cls.TestProject = TestProject
         cls.general_manager_classes = [TestProject]
 
-        @graphQlMutation()
+        class IsAuthenticated(MutationPermission):
+            __mutate__ = ["isAuthenticated"]
+
+        @graphQlMutation(IsAuthenticated)
         def create_project(info, title: str) -> TestProject:
             return TestProject.create(title=title, creator_id=info.context.user.id)
 
