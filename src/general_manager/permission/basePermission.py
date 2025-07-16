@@ -8,6 +8,7 @@ from general_manager.permission.permissionChecks import (
 
 from django.contrib.auth.models import AnonymousUser, AbstractUser
 from general_manager.permission.permissionDataManager import PermissionDataManager
+from general_manager.permission.utils import validatePermissionString
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
@@ -153,24 +154,9 @@ class BasePermission(ABC):
         self,
         permission: str,
     ) -> bool:
-        # permission can be a combination of multiple permissions
-        # separated by "&" (e.g. "isAuthenticated&isMatchingKeyAccount")
-        # this means that all sub_permissions must be true
-        return all(
-            [
-                self.__validateSinglePermission(sub_permission)
-                for sub_permission in permission.split("&")
-            ]
-        )
-
-    def __validateSinglePermission(
-        self,
-        permission: str,
-    ) -> bool:
-        permission_function, *config = permission.split(":")
-        if permission_function not in permission_functions:
-            raise ValueError(f"Permission {permission} not found")
-
-        return permission_functions[permission_function]["permission_method"](
-            self.instance, self.request_user, config
-        )
+        """
+        Validates a permission string which can be a combination of multiple permissions
+        separated by "&" (e.g. "isAuthenticated&isMatchingKeyAccount").
+        This means that all sub_permissions must be true.
+        """
+        return validatePermissionString(permission, self.instance, self.request_user)
