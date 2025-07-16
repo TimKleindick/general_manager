@@ -24,10 +24,6 @@ class PermissionDataManager(Generic[GeneralManagerData]):
             self.getData = (
                 lambda name, permission_data=permission_data: permission_data.get(name)
             )
-            if manager is None:
-                raise ValueError(
-                    "Manager must be provided if permission_data is a dict"
-                )
             self._manager = manager
         else:
             raise TypeError(
@@ -48,7 +44,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         return self._permission_data
 
     @property
-    def manager(self) -> type[GeneralManagerData]:
+    def manager(self) -> type[GeneralManagerData] | None:
         return self._manager
 
     def __getattr__(self, name: str) -> Any:
