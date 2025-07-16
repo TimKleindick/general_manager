@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.11.0 (2025-07-16)
+
+### Bug Fixes
+
+- Correct attribute access in __getAttributePermissions and checkPermission methods
+  ([`36b5796`](https://github.com/TimKleindick/general_manager/commit/36b5796e65f677fbe0d2b1a36554bba81ec659e5))
+
+- Remove unused type imports in mutationPermission.py
+  ([`920d5f7`](https://github.com/TimKleindick/general_manager/commit/920d5f782353ec87fbc6664b53e4e73cae3b3ce9))
+
+- Stop enforcing manager requirement for dict permission_data
+  ([`6c1ca1f`](https://github.com/TimKleindick/general_manager/commit/6c1ca1fca5b30ce31055908ab6eacb77f756dbb9))
+
+- User handling
+  ([`4a48d04`](https://github.com/TimKleindick/general_manager/commit/4a48d04f13b3b4678a0da1f7a30dbfe23679dcc6))
+
+### Features
+
+- Implement MutationPermission class for mutation permission handling
+  ([`c39ddf5`](https://github.com/TimKleindick/general_manager/commit/c39ddf51c5b41591b7fea2216e2f9dd0076191d5))
+
+- Update graphQlMutation to use permission parameter and improve authentication handling
+  ([`c7064c7`](https://github.com/TimKleindick/general_manager/commit/c7064c7789ba9691585900783bec504067656b35))
+
+### Refactoring
+
+- Move permission validation logic to utils and simplify permission handling
+  ([`0cce6b1`](https://github.com/TimKleindick/general_manager/commit/0cce6b14d49d0d1d16816b36f28d7d66b75accc8))
+
+- Simplify initialization and improve error messaging in ManagerBasedPermission
+  ([`43a8307`](https://github.com/TimKleindick/general_manager/commit/43a8307259158177a981eb54111160ecea7a7331))
+
+### Testing
+
+- Reset authentication check
+  ([`1c97c0c`](https://github.com/TimKleindick/general_manager/commit/1c97c0c0d20b5b22328c06bd82751eca8b8e82fa))
+
+- Update test cases for mutation permission handling
+  ([`23db748`](https://github.com/TimKleindick/general_manager/commit/23db748055b68740c1ae89f60852671da246f3af))
+
+
 ## v0.10.6 (2025-07-13)
 
 ### Bug Fixes
