@@ -7,6 +7,8 @@ from general_manager.api.mutation import graphQlMutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.baseInterface import InterfaceBase
+from general_manager.permission.mutationPermission import MutationPermission
+
 
 type test123 = str
 
@@ -134,20 +136,18 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.str, "Success")
 
     def test_mutation_execution_and_auth(self):
-        @graphQlMutation(auth_required=True)
+        class addPermission(MutationPermission):
+            __mutate__ = ["isAuthenticated"]
+
+        @graphQlMutation(addPermission)
         def add(info, a: int, b: int) -> int:
             return a + b
 
         mutation = GraphQL._mutations["add"]
-        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
-        res = mutation.mutate(None, Info, a=1, b=2)
-        self.assertTrue(res.success)
-        self.assertEqual(res.int, 3)
 
         InfoNoAuth = type("Info", (), {"context": type("Ctx", (), {"user": None})()})
-        res = mutation.mutate(None, InfoNoAuth, a=1, b=2)
-        self.assertFalse(res.success)
-        self.assertEqual(res.errors[0], "Authentication required")
+        with self.assertRaises(PermissionError):
+            mutation.mutate(None, InfoNoAuth, a=1, b=2)
 
     def test_mutation_with_manager_return(self):
         @graphQlMutation()

@@ -1,9 +1,11 @@
 from django.contrib.auth import get_user_model
-from django.db.models import CharField
+from django.db.models import CharField, BooleanField
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.api.mutation import graphQlMutation
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+from general_manager.permission.mutationPermission import MutationPermission
+from general_manager.permission.managerBasedPermission import ManagerBasedPermission
 
 
 class CustomMutationTest(GeneralManagerTransactionTestCase):
@@ -19,7 +21,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         cls.TestMaterial = TestMaterial
         cls.general_manager_classes = [TestMaterial]
 
-        @graphQlMutation(auth_required=True)
+        @graphQlMutation()
         def create_material(info, name: str) -> TestMaterial:
             return TestMaterial.create(name=name, creator_id=info.context.user.id)
 
@@ -64,7 +66,7 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         cls.TestProject = TestProject
         cls.general_manager_classes = [TestProject]
 
-        @graphQlMutation(auth_required=True)
+        @graphQlMutation()
         def create_project(info, title: str) -> TestProject:
             return TestProject.create(title=title, creator_id=info.context.user.id)
 
@@ -94,3 +96,86 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["testProject"]["title"], "My Project")
         self.assertEqual(len(self.TestProject.all()), 1)
+
+
+class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        class ToDo(GeneralManager):
+            class Interface(DatabaseInterface):
+                headline = CharField(max_length=100)
+                finished = BooleanField(default=False)
+
+            class Permission(ManagerBasedPermission):
+                __read__ = ["public"]
+                __create__ = ["public"]
+                __update__ = ["public"]
+                __delete__ = ["public"]
+
+        cls.ToDo = ToDo
+        cls.general_manager_classes = [ToDo]
+
+        class ResetToDoPermission(MutationPermission):
+            __mutate__ = ["isAuthenticated"]
+
+        @graphQlMutation()
+        def mark_todo_as_finished(info, id: int) -> ToDo:
+            todo = ToDo(id)
+            return todo.update(finished=True, creator_id=info.context.user.id)
+
+        @graphQlMutation(ResetToDoPermission)
+        def reset_todo(info, id: int) -> ToDo:
+            todo = ToDo(id)
+            return todo.update(finished=False, creator_id=info.context.user.id)
+
+    def setUp(self):
+        self.mutation = """
+        mutation($id: Int!) {
+            markTodoAsFinished(id: $id) {
+                toDo {
+                    headline
+                    finished
+                }
+                success
+                errors
+            }
+        }
+        """
+
+    def test_mark_todo_as_finished(self):
+        todo = self.ToDo.create(headline="Test ToDo", finished=False)
+        variables = todo.identification
+        response = self.query(self.mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]["markTodoAsFinished"]
+        self.assertTrue(data["success"])
+        self.assertEqual(data["toDo"]["headline"], "Test ToDo")
+        self.assertTrue(data["toDo"]["finished"])
+
+    def test_reset_todo(self):
+        todo = self.ToDo.create(headline="Test ToDo", finished=True)
+        variables = todo.identification
+        response = self.query(self.mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]["markTodoAsFinished"]
+        self.assertTrue(data["success"])
+        self.assertEqual(data["toDo"]["headline"], "Test ToDo")
+        self.assertTrue(data["toDo"]["finished"])
+
+        reset_mutation = """
+        mutation($id: Int!) {
+            resetTodo(id: $id) {
+                toDo {
+                    headline
+                    finished
+                }
+                success
+                errors
+            }
+        }
+        """
+        response = self.query(reset_mutation, variables=variables)
+        self.assertResponseHasErrors(response)
+        data = response.json()["errors"][0]
+        self.assertIn("Permission denied", data["message"])
