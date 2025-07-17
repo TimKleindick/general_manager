@@ -7,6 +7,10 @@
 A manager class must define the data as a list or JSON string on the `_data` attribute. The interface describes the Django model fields just like `DatabaseInterface`.
 
 ```python
+from django.db.models import CharField
+from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+from general_manager.manager import GeneralManager
+
 class Country(GeneralManager):
     _data = [
         {"code": "US", "name": "United States"},

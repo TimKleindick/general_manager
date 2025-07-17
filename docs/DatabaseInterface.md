@@ -7,6 +7,12 @@
 Define the model fields inside the interface class. Managers inherit automatic CRUD methods from `GeneralManager` that delegate to the interface.
 
 ```python
+from django.contrib.auth.models import User
+from django.db.models import CharField, ForeignKey, ManyToManyField, CASCADE
+
+from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.manager import GeneralManager
+
 class Book(GeneralManager):
     title: str
     author: User
