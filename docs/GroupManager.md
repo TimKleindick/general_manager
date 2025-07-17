@@ -7,6 +7,8 @@
 Call `group_by()` on any bucket to build groups.
 
 ```python
+from yourapp.managers import Project
+
 projects = Project.all()
 project_groups = projects.group_by("start_date")
 ```
@@ -46,6 +48,8 @@ Groups can be combined with `|` to merge their underlying data.
 You can chain `group_by()` to create hierarchical groups:
 
 ```python
+from yourapp.managers import DerivativeVolume
+
 volume_groups = DerivativeVolume.all().group_by("date").group_by("derivative")
 ```
 

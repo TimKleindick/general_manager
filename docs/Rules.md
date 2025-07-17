@@ -7,6 +7,8 @@ The rule system allows you to validate instances of a `GeneralManager` subclass 
 The callable passed to `Rule` can be a lambda or a named function. It must accept a single parameter representing the object under validation and return `True` or `False`.
 
 ```python
+from general_manager.rule import Rule
+
 def check_price(obj):
     return obj.price > 0
 
@@ -29,6 +31,17 @@ snippet taken from the example project demonstrates two rules for the
 `Project` model:
 
 ```python
+from datetime import date
+from typing import cast
+
+from django.core.validators import RegexValidator
+from django.db.models import CharField, constraints
+
+from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.manager import GeneralManager
+from general_manager.measurement import Measurement
+from general_manager.rule import Rule
+
 class Project(GeneralManager):
     ...
 
@@ -58,6 +71,8 @@ A rule may define its own error message using placeholders for the involved
 variables:
 
 ```python
+from general_manager.rule import Rule
+
 rule = Rule(
     lambda x: x.quantity <= x.stock,
     custom_error_message="Ordered quantity ({quantity}) exceeds available stock ({stock}).",
@@ -74,6 +89,8 @@ The third parameter of `Rule` controls how `None` values are handled. When
 attribute is `None`:
 
 ```python
+from general_manager.rule import Rule
+
 rule = Rule(lambda x: x.price > 0, ignore_if_none=True)
 ```
 
@@ -84,6 +101,8 @@ If you want the rule to fail instead, set `ignore_if_none=False`.
 A rule can be evaluated independently of the model framework:
 
 ```python
+from general_manager.rule import Rule
+
 rule = Rule(lambda x: x.age >= 18)
 result = rule.evaluate(user)
 if not result:
