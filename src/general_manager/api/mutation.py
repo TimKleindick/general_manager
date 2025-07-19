@@ -86,10 +86,9 @@ def graphQlMutation(permission: Optional[Type[MutationPermission]] = None):
 
         Arguments = type("Arguments", (), arg_fields)
 
-        # Build output fields: success, errors, + fn return types
+        # Build output fields: success + fn return types
         outputs = {
             "success": graphene.Boolean(required=True),
-            "errors": graphene.List(graphene.String),
         }
         return_ann: type | tuple[type] | None = hints.get("return")
         if return_ann is None:
@@ -126,22 +125,23 @@ def graphQlMutation(permission: Optional[Type[MutationPermission]] = None):
                 result = fn(info, **kwargs)
                 data = {}
                 if isinstance(result, tuple):
-                    # unpack according to outputs ordering after success/errors
+                    # unpack according to outputs ordering after success
                     for (field, _), val in zip(
-                        outputs.items(), [None, None] + list(result)
+                        outputs.items(),
+                        [None, *list(result)],  # None for success field to be set later
                     ):
-                        # skip success/errors
-                        if field in ("success", "errors"):
+                        # skip success
+                        if field == "success":
                             continue
                         data[field] = val
                 else:
-                    only = next(k for k in outputs if k not in ("success", "errors"))
+                    only = next(k for k in outputs if k != "success")
                     data[only] = result
                 data["success"] = True
-                data["errors"] = []
                 return mutation_class(**data)
             except Exception as e:
-                return mutation_class(**{"success": False, "errors": [str(e)]})
+                GraphQL._handleGraphQLError(e)
+                return mutation_class(**{"success": False})
 
         # Assemble class dict
         class_dict = {

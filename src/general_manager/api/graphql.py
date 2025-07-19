@@ -11,6 +11,10 @@ from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.interface.baseInterface import InterfaceBase
 from django.db.models import NOT_PROVIDED
+from django.core.exceptions import ValidationError
+
+from graphql import GraphQLError
+
 
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission
@@ -76,7 +80,6 @@ class GraphQL:
 
         default_return_values = {
             "success": graphene.Boolean(),
-            "errors": graphene.List(graphene.String),
             generalManagerClass.__name__: graphene.Field(
                 lambda: GraphQL.graphql_type_registry[generalManagerClass.__name__]
             ),
@@ -641,7 +644,7 @@ class GraphQL:
         """
         Dynamically generates a Graphene mutation class for creating an instance of a specified GeneralManager subclass.
 
-        The generated mutation class filters out fields with `NOT_PROVIDED` values, calls the manager's `create` method with the provided arguments and the current user's ID, and returns a dictionary containing a success flag, any errors, and the created instance. Returns None if the manager class does not define an interface.
+        The generated mutation class filters out fields with `NOT_PROVIDED` values, calls the manager's `create` method with the provided arguments and the current user's ID, and returns a dictionary containing a success flag and the created instance. Returns None if the manager class does not define an interface.
 
         Returns:
             The generated Graphene mutation class, or None if the manager class does not define an interface.
@@ -660,7 +663,7 @@ class GraphQL:
             """
             Create a new instance of the manager class using the provided arguments.
 
-            Filters out any fields with values set to `NOT_PROVIDED` before invoking the creation method. Returns a dictionary with a success flag, a list of errors if creation fails, and the created instance keyed by the manager class name.
+            Filters out any fields with values set to `NOT_PROVIDED` before invoking the creation method. Returns a dictionary with a success flag and the created instance keyed by the manager class name.
             """
             try:
                 kwargs = {
@@ -672,14 +675,13 @@ class GraphQL:
                     **kwargs, creator_id=info.context.user.id
                 )
             except Exception as e:
+                GraphQL._handleGraphQLError(e)
                 return {
                     "success": False,
-                    "errors": [str(e)],
                 }
 
             return {
                 "success": True,
-                "errors": [],
                 generalManagerClass.__name__: instance,
             }
 
@@ -737,7 +739,7 @@ class GraphQL:
                 **kwargs: Fields to update, including the required 'id' of the instance.
 
             Returns:
-                dict: A dictionary with keys 'success' (bool), 'errors' (list of str), and the updated instance keyed by its class name.
+                dict: A dictionary with keys 'success' (bool) and the updated instance keyed by its class name.
             """
             try:
                 manager_id = kwargs.pop("id", None)
@@ -745,13 +747,13 @@ class GraphQL:
                     creator_id=info.context.user.id, **kwargs
                 )
             except Exception as e:
+                GraphQL._handleGraphQLError(e)
                 return {
                     "success": False,
-                    "errors": [str(e)],
                 }
+
             return {
                 "success": True,
-                "errors": [],
                 generalManagerClass.__name__: instance,
             }
 
@@ -807,7 +809,6 @@ class GraphQL:
             Returns:
                 dict: A dictionary with keys:
                     - "success": Boolean indicating if the operation was successful.
-                    - "errors": List of error messages, empty if successful.
                     - <ClassName>: The deactivated instance, keyed by the class name.
             """
             try:
@@ -816,13 +817,13 @@ class GraphQL:
                     creator_id=info.context.user.id
                 )
             except Exception as e:
+                GraphQL._handleGraphQLError(e)
                 return {
                     "success": False,
-                    "errors": [str(e)],
                 }
+
             return {
                 "success": True,
-                "errors": [],
                 generalManagerClass.__name__: instance,
             }
 
@@ -846,3 +847,30 @@ class GraphQL:
                 "mutate": delete_mutation,
             },
         )
+
+    @staticmethod
+    def _handleGraphQLError(error: Exception) -> None:
+        """
+        Handles GraphQL errors by raising a GraphQLError with the provided exception message.
+        """
+        if isinstance(error, PermissionError):
+            raise GraphQLError(
+                str(error),
+                extensions={
+                    "code": "PERMISSION_DENIED",
+                },
+            )
+        elif isinstance(error, (ValueError, ValidationError)):
+            raise GraphQLError(
+                str(error),
+                extensions={
+                    "code": "BAD_USER_INPUT",
+                },
+            )
+        else:
+            raise GraphQLError(
+                str(error),
+                extensions={
+                    "code": "INTERNAL_SERVER_ERROR",
+                },
+            )
