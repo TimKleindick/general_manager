@@ -15,7 +15,7 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(str(m), "100 USD")
 
     def test_invalid_value_type(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ValueError):
             Measurement("invalid", "meter")
 
     def test_currency_conversion(self):
@@ -42,7 +42,7 @@ class MeasurementTestCase(TestCase):
     def test_addition_different_units_same_dimension(self):
         """
         Test addition of `Measurement` instances with different units of the same physical dimension.
-        
+
         Verifies that addition performs correct unit conversion and is commutative. Also checks that adding zero returns the original measurement and that adding a plain number raises a `TypeError`.
         """
         m1 = Measurement(1, "kilometer")  # 1000 meter
@@ -123,7 +123,7 @@ class MeasurementTestCase(TestCase):
     def test_random_measurements(self):
         """
         Test arithmetic operations between randomly generated Measurement instances with various units.
-        
+
         Randomly generates pairs of Measurement objects using both physical and currency units, performing addition and subtraction. Verifies that operations succeed when units match, and that appropriate exceptions are raised for incompatible units or when mixing currency and physical units.
         """
         units = ["meter", "second", "kilogram", "liter", "EUR", "USD"]
@@ -194,7 +194,7 @@ class MeasurementTestCase(TestCase):
     def test_inequality(self):
         """
         Test inequality comparisons between Measurement instances.
-        
+
         Verifies that measurements with identical values and units are considered equal, while those with different values or incompatible units are not. Also checks that comparing a Measurement to an incompatible type raises a ValueError or TypeError as appropriate.
         """
         m1 = Measurement(10, "meter")
@@ -213,7 +213,7 @@ class MeasurementTestCase(TestCase):
     def test_comparison(self):
         """
         Tests relational comparison operators for Measurement instances.
-        
+
         Verifies correct behavior of equality and ordering comparisons between Measurement objects with the same or different values and units. Ensures that comparisons with incompatible types or units raise the appropriate exceptions.
         """
         m1 = Measurement(10, "meter")
@@ -254,7 +254,7 @@ class MeasurementTestCase(TestCase):
     def test_percentage_values(self):
         """
         Test handling of percentage units in Measurement instances.
-        
+
         Verifies correct initialization, string representation, arithmetic operations, and conversion between percentage and unitless values.
         """
         m1 = Measurement(50, "%")
@@ -278,7 +278,7 @@ class MeasurementTestCase(TestCase):
     def test_dimensionless_values(self):
         """
         Test the initialization, arithmetic operations, and comparisons of dimensionless Measurement instances.
-        
+
         Verifies correct string representation, addition, subtraction, and equality for measurements with dimensionless units or empty unit strings.
         """
         m1 = Measurement(1, "dimensionless")
@@ -302,7 +302,7 @@ class MeasurementTestCase(TestCase):
     def test_calculation_between_currency_and_dimensionless(self):
         """
         Test arithmetic operations between currency and dimensionless Measurement instances.
-        
+
         Verifies that addition and subtraction between currency and dimensionless values raise TypeError, while multiplication and division are allowed and produce correct results.
         """
         m1 = Measurement(100, "EUR")
@@ -324,7 +324,7 @@ class MeasurementTestCase(TestCase):
     def test_calculation_with_other_dimension_and_currency(self):
         """
         Test arithmetic operations between a currency measurement and a measurement with a different physical dimension.
-        
+
         Verifies that addition and subtraction raise a TypeError, while multiplication and division are allowed and produce combined unit expressions.
         """
         m1 = Measurement(100, "EUR")
@@ -345,7 +345,7 @@ class MeasurementTestCase(TestCase):
     def test_conversion_to_dimensionless(self):
         """
         Test conversion of a Measurement with compound units to a dimensionless value.
-        
+
         Verifies that multiplying a currency Measurement by a percentage produces a compound unit, and converting the result back to the original currency yields the expected value.
         """
         m1 = Measurement(100, "EUR")
@@ -358,7 +358,7 @@ class MeasurementTestCase(TestCase):
     def test_conversion_to_complex_units(self):
         """
         Test conversion of a Measurement with compound units to another compatible complex unit.
-        
+
         Verifies that converting a product of two measurements (e.g., currency and length) to a compatible complex unit yields the correct value and unit, and that incompatible conversions raise an error.
         """
         m1 = Measurement(100, "EUR")

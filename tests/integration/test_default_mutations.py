@@ -52,7 +52,6 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
                         unit
                     }
                 }
-                errors
                 success
             }
         }
@@ -147,11 +146,10 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         }
 
         response = self.query(self.create_mutation, variables=variables)
-        self.assertResponseNoErrors(response)
+        self.assertResponseHasErrors(response)
         response = response.json()
-        data = response.get("data", {})
-        self.assertFalse(data["createTestProject"]["success"])
-        self.assertIn("budget", data["createTestProject"]["errors"][0])
+        data = response.get("errors", {})
+        self.assertIn("budget", data[0]["message"])
 
 
 class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
@@ -208,7 +206,6 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
                         unit
                     }
                 }
-                errors
                 success
             }
         }
@@ -225,7 +222,6 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
                         unit
                     }
                 }
-                errors
                 success
             }
         }
@@ -244,14 +240,10 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         }
 
         response = self.query(self.create_mutation, variables=variables)
-        self.assertResponseNoErrors(response)
+        self.assertResponseHasErrors(response)
         response = response.json()
-        data = response.get("data", {})
-        self.assertFalse(data["createTestProject"]["success"])
-        self.assertIn(
-            "Permission denied",
-            data["createTestProject"]["errors"][0],
-        )
+        data = response.get("errors", [])
+        self.assertIn("Permission denied", data[0]["message"])
 
     def test_create_project_without_login_and_public_permissions(self):
         """
@@ -335,7 +327,6 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
                         unit
                     }
                 }
-                errors
                 success
             }
         }
@@ -351,7 +342,6 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
                             unit
                         }
                     }
-                    errors
                     success
                 }
             }
@@ -466,7 +456,6 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
                         unit
                     }
                 }
-                errors
                 success
             }
         }
