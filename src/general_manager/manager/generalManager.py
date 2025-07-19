@@ -58,6 +58,19 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         else:
             raise TypeError(f"Unsupported type for union: {type(other)}")
 
+    def __eq__(
+        self,
+        other: object,
+    ) -> bool:
+        """
+        Check equality based on the identification dictionary.
+
+        Returns True if the other object is a GeneralManager with the same identification, otherwise False.
+        """
+        if not isinstance(other, GeneralManager):
+            return False
+        return self.identification == other.identification
+
     @property
     def identification(self):
         return self.__id

@@ -17,12 +17,12 @@ modelsModel = TypeVar("modelsModel", bound=models.Model)
 def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
     """
     Return a custom `full_clean` method for a Django model that performs both standard validation and additional rule-based checks.
-    
+
     The generated method first applies Django's built-in model validation, then evaluates custom rules defined in the model's `_meta.rules` attribute. If any validation or rule fails, it raises a `ValidationError` containing all collected errors.
-    
+
     Parameters:
         model (Type[models.Model]): The Django model class for which to generate the custom `full_clean` method.
-    
+
     Returns:
         Callable[..., None]: A `full_clean` method that can be assigned to the model class.
     """
@@ -30,7 +30,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
     def full_clean(self: models.Model, *args: Any, **kwargs: Any):
         """
         Performs full validation on the model instance, including both standard Django validation and custom rule-based checks.
-        
+
         Aggregates errors from Django's built-in validation and any additional rules defined in the model's `_meta.rules` attribute. Raises a `ValidationError` containing all collected errors if any validation or rule check fails.
         """
         errors: dict[str, Any] = {}
@@ -41,7 +41,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
 
         rules: list[Rule] = getattr(self._meta, "rules")
         for rule in rules:
-            if not rule.evaluate(self):
+            if rule.evaluate(self) is False:
                 error_message = rule.getErrorMessage()
                 if error_message:
                     errors.update(error_message)
@@ -78,7 +78,7 @@ class GeneralManagerModel(GeneralManagerBasisModel):
     def _history_user(self, value: AbstractUser) -> None:
         """
         Set the user responsible for the most recent change to the model instance.
-        
+
         Parameters:
             value (AbstractUser): The user to associate with the latest modification.
         """
