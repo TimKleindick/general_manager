@@ -41,7 +41,6 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                     name
                 }
                 success
-                errors
             }
         }
         """
@@ -89,7 +88,6 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
                     title
                 }
                 success
-                errors
             }
         }
         """
@@ -146,7 +144,6 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
                     finished
                 }
                 success
-                errors
             }
         }
         """
@@ -179,7 +176,6 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
                     finished
                 }
                 success
-                errors
             }
         }
         """

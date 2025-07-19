@@ -125,7 +125,6 @@ class MutationDecoratorTests(TestCase):
 
         mutation = GraphQL._mutations["multi"]
         self.assertIn("success", mutation._meta.fields)
-        self.assertIn("errors", mutation._meta.fields)
         self.assertIn("bool", mutation._meta.fields)
         self.assertIn("str", mutation._meta.fields)
 
