@@ -187,3 +187,18 @@ class RuleTests(TestCase):
         self.assertFalse(result)
         error_message = rule.getErrorMessage()
         self.assertIsNone(error_message)
+
+    def test_rule_with_none_value(self):
+        """Testet die Rule-Klasse mit None-Werten."""
+        func = lambda x: x.optional_value > 2
+        x = DummyObject(optional_value=None)
+        rule = Rule(func, ignore_if_none=True)
+        result = rule.evaluate(x)
+        self.assertIsNone(result)
+        self.assertIsNone(rule.getErrorMessage())
+
+        y = DummyObject(optional_value=3)
+        rule = Rule(func, ignore_if_none=True)
+        result = rule.evaluate(y)
+        self.assertTrue(result)
+        self.assertIsNone(rule.getErrorMessage())
