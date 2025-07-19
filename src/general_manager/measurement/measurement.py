@@ -35,7 +35,7 @@ class Measurement:
             try:
                 value = Decimal(str(value))
             except Exception:
-                raise TypeError("Value must be a Decimal, float, int or compatible.")
+                raise ValueError("Value must be a Decimal, float, int or compatible.")
         if not isinstance(value, Decimal):
             value = Decimal(str(value))
         self.__quantity = ureg.Quantity(self.formatDecimal(value), unit)
@@ -229,12 +229,12 @@ class Measurement:
     def __mul__(self, other: Any) -> Measurement:
         """
         Multiply this measurement by another measurement or a numeric value.
-        
+
         Multiplying two currency measurements is not allowed. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
-        
+
         Returns:
             Measurement: The result of the multiplication.
-        
+
         Raises:
             TypeError: If both operands are currency measurements, or if the operand is not a Measurement or numeric value.
         """
