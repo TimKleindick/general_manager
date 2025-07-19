@@ -46,8 +46,8 @@ class Project(GeneralManager):
                 constraints.UniqueConstraint(fields=["name", "number"], name="unique_booking")
             ]
             rules = [
-                Rule["Project"](lambda x: cast(date, x.start_date) < cast(date, x.end_date)),
-                Rule["Project"](lambda x: cast(Measurement, x.total_capex) >= "0 EUR"),
+                Rule["Project"](lambda x: x.start_date < x.end_date),
+                Rule["Project"](lambda x: x.total_capex >= "0 EUR"),
             ]
 
         class Factory:
