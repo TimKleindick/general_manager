@@ -8,7 +8,8 @@ Define the model fields inside the interface class. Managers inherit automatic C
 
 ```python
 from django.contrib.auth.models import User
-from django.db.models import CharField, ForeignKey, ManyToManyField, CASCADE
+from django.db.models import CharField, ForeignKey, ManyToManyField
+from django.db import models
 
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.manager import GeneralManager
