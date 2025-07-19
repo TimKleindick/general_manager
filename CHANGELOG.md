@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.11.2 (2025-07-19)
+
+### Bug Fixes
+
+- Differentiate between rule result None and False
+  ([`26cda15`](https://github.com/TimKleindick/general_manager/commit/26cda157ceff549718f288c445bac85067ff17fa))
+
+### Testing
+
+- Add rule tests for handling None values
+  ([`db6a104`](https://github.com/TimKleindick/general_manager/commit/db6a104d37bf222c32d18abdac035325e6c5c9b0))
+
+
 ## v0.11.1 (2025-07-18)
 
 ### Bug Fixes
