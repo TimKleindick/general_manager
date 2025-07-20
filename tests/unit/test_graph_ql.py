@@ -156,7 +156,7 @@ class GraphQLTests(TestCase):
         resolver = GraphQL._createResolver("abc_list", GeneralManager)
         with patch("json.loads", side_effect=ValueError):
             result = resolver(mock_instance, self.info, filter="bad", exclude="bad")
-            self.assertEqual(result, mock_qs)
+            self.assertEqual(result["items"], mock_qs)
 
     def test_create_filter_options_measurement_fields(self):
         """
