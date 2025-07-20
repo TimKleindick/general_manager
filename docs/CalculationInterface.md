@@ -7,6 +7,13 @@
 Declare the required inputs with the `Input` class. Each input defines its type and optional choices or dependencies. The interface provides methods to generate combinations of inputs using a `CalculationBucket`. Calculations are exposed through methods decorated with `@graphQlProperty`.
 
 ```python
+from datetime import date
+
+from general_manager.interface.calculationInterface import CalculationInterface
+from general_manager.manager import GeneralManager, Input, graphQlProperty
+
+from yourapp.managers import Project
+
 class ProjectSummary(GeneralManager):
     project: Project
     date: date
@@ -28,6 +35,8 @@ class ProjectSummary(GeneralManager):
 To iterate over all possible combinations you can call `all()`, or filter by inputs:
 
 ```python
+from yourapp.managers import ProjectSummary
+
 for summary in ProjectSummary.all():
     print(summary.project, summary.date)
 

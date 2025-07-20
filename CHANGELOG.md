@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v0.11.2 (2025-07-19)
+
+### Bug Fixes
+
+- Differentiate between rule result None and False
+  ([`26cda15`](https://github.com/TimKleindick/general_manager/commit/26cda157ceff549718f288c445bac85067ff17fa))
+
+### Testing
+
+- Add rule tests for handling None values
+  ([`db6a104`](https://github.com/TimKleindick/general_manager/commit/db6a104d37bf222c32d18abdac035325e6c5c9b0))
+
+
+## v0.11.1 (2025-07-18)
+
+### Bug Fixes
+
+- Handle none values in foreignkey relations to manager
+  ([`90bd4bd`](https://github.com/TimKleindick/general_manager/commit/90bd4bdb4d181445d361f90137929be3fe7548c7))
+
+- Implement equality check for GeneralManager based on identification
+  ([`ffa41a0`](https://github.com/TimKleindick/general_manager/commit/ffa41a0e667b51dada9fd87a6f384a947be841b6))
+
+### Testing
+
+- Add integration tests for DatabaseManager functionality
+  ([`a768d2c`](https://github.com/TimKleindick/general_manager/commit/a768d2c86ec56890a2be71965c80943b8f96e3f1))
+
+- Refine type annotations and improve code formatting in ReadOnlyIntegrationTest
+  ([`804faaf`](https://github.com/TimKleindick/general_manager/commit/804faaf2ec3f542b0be7ec1205443415e6a8fda0))
+
+
 ## v0.11.0 (2025-07-16)
 
 ### Bug Fixes

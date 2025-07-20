@@ -9,10 +9,22 @@ Install the package with `pip install GeneralManager`. After installation you ca
 ### Example
 
 ```python
-from general_manager import GeneralManager
-from general_manager.interface.database import DatabaseInterface
+from datetime import date
+from typing import Optional, cast
+
+from django.core.validators import RegexValidator
+from django.db.models import CharField, DateField, TextField, constraints
+
+from general_manager.bucket.databaseBucket import DatabaseBucket
+from general_manager.factory import LazyDeltaDate, LazyMeasurement, LazyProjectName
+from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.manager import GeneralManager
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.permission import ManagerBasedPermission
+from general_manager.rule import Rule
+
+# Example derivative manager from your application
+from yourapp.managers import Derivative
 
 class Project(GeneralManager):
     name: str
@@ -31,16 +43,11 @@ class Project(GeneralManager):
 
         class Meta:
             constraints = [
-                constraints.UniqueConstraint(
-                    fields=["name", "number"], name="unique_booking"
-                )
+                constraints.UniqueConstraint(fields=["name", "number"], name="unique_booking")
             ]
-
             rules = [
-                Rule["Project"](
-                    lambda x: cast(date, x.start_date) < cast(date, x.end_date)
-                ),
-                Rule["Project"](lambda x: cast(Measurement, x.total_capex) >= "0 EUR"),
+                Rule["Project"](lambda x: x.start_date < x.end_date),
+                Rule["Project"](lambda x: x.total_capex >= "0 EUR"),
             ]
 
         class Factory:
@@ -58,6 +65,7 @@ class Project(GeneralManager):
 
 Project.Factory.createBatch(10)
 ```
+
 
 ## Manager Basics
 

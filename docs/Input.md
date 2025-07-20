@@ -7,6 +7,11 @@ The `Input` class describes the expected type for a field and optionally defines
 Create an `Input` by passing the target type. You may provide an iterable of possible values or a callable that returns them.
 
 ```python
+from datetime import date
+
+from general_manager.interface.calculationInterface import CalculationInterface
+from general_manager.manager import Input
+
 class MyInterface(CalculationInterface):
     quantity = Input(int)
     color = Input(str, possible_values=["red", "green", "blue"])
@@ -15,6 +20,8 @@ class MyInterface(CalculationInterface):
 When `possible_values` is a callable you can also declare dependencies. They are automatically extracted from the callable signature if not provided explicitly.
 
 ```python
+from yourapp.managers import Project
+
 def allowed_dates(project: Project) -> list[date]:
     return [v.date for v in project.derivativevolume_list]
 
@@ -34,6 +41,8 @@ class ProjectCommercial(CalculationInterface):
 If the value already matches the target type it is returned unchanged.
 
 ```python
+from general_manager.manager import Input
+
 input_obj = Input(int)
 number = input_obj.cast("123")    # returns 123
 ```

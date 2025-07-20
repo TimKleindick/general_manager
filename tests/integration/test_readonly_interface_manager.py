@@ -12,6 +12,8 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
                 {"code": "US", "name": "United States"},
                 {"code": "DE", "name": "Germany"},
             ]
+            code: str
+            name: str
 
             class Interface(ReadOnlyInterface):
                 code = CharField(max_length=2, unique=True)
@@ -26,7 +28,7 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         super().setUp()
-        self.TestCountry.Interface.syncData()
+        self.TestCountry.Interface.syncData()  # type: ignore
 
     def test_sync_populates_database(self):
         countries = self.TestCountry.all()
@@ -36,19 +38,15 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_create_not_allowed(self):
         with self.assertRaises(NotImplementedError):
-            self.TestCountry.create(
-                code="FR", name="France", ignore_permission=True
-            )
+            self.TestCountry.create(code="FR", name="France", ignore_permission=True)
 
     def test_update_not_allowed(self):
         country = self.TestCountry.filter(code="US").first()
         self.assertIsNotNone(country)
         with self.assertRaises(NotImplementedError):
-            country.update(  # type: ignore[arg-type]
-                name="USA", ignore_permission=True
-            )
+            country.update(name="USA", ignore_permission=True)  # type: ignore[arg-type]
 
     def test_filter_returns_correct_item(self):
         country = self.TestCountry.filter(code="DE").first()
         self.assertIsNotNone(country)
-        self.assertEqual(country.name, "Germany")
+        self.assertEqual(country.name, "Germany")  # type: ignore
