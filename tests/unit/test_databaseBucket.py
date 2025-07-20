@@ -5,6 +5,8 @@ from django.contrib.auth.models import User
 from general_manager.bucket.databaseBucket import DatabaseBucket
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.baseInterface import InterfaceBase
+from general_manager.api.property import graphQlProperty
+from django.db.models import functions
 
 
 # Dummy interface class to satisfy GeneralManager requirements
@@ -139,6 +141,14 @@ class UserManager(GeneralManager):
         """
         super().__init__(pk)
 
+    @graphQlProperty(filterable=True, sortable=True, query_annotation=functions.Length("username"))
+    def username_length(self) -> int:
+        return len(User.objects.get(pk=self.identification["id"]).username)
+
+    @graphQlProperty(filterable=True, sortable=True)
+    def negative_length(self) -> int:
+        return -len(User.objects.get(pk=self.identification["id"]).username)
+
 
 class AnotherManager(GeneralManager):
     """
@@ -160,9 +170,8 @@ class DatabaseBucketTestCase(TestCase):
         Initializes DummyInterface for manager classes, creates test User instances, and constructs a DatabaseBucket containing all users with UserManager.
         """
         UserManager.Interface = DummyInterface  # Set the interface for UserManager
-        AnotherManager.Interface = (
-            DummyInterface  # Set the interface for AnotherManager
-        )
+        AnotherManager.Interface = DummyInterface
+        DummyInterface._parent_class = UserManager
         # Create some test users
         self.u1 = User.objects.create(username="alice")
         self.u2 = User.objects.create(username="bob")
@@ -331,3 +340,10 @@ class DatabaseBucketTestCase(TestCase):
         rev = self.bucket.sort("username", reverse=True)
         # highest username first
         self.assertEqual(rev.first().identification["id"], self.u3.id)
+
+    def test_property_filter_and_sort(self):
+        bucket = self.bucket.filter(username_length__gte=4)
+        self.assertEqual(len(bucket), 2)
+        sorted_bucket = bucket.sort("negative_length")
+        first_id = sorted_bucket.first().identification["id"]
+        self.assertIn(first_id, [self.u1.id, self.u3.id])

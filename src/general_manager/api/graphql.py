@@ -164,6 +164,10 @@ class GraphQL:
             else:
                 sort_options.append(field_name)
 
+        for prop_name, prop in generalManagerClass.Interface.getGraphQLProperties().items():
+            if prop.sortable:
+                sort_options.append(prop_name)
+
         if not sort_options:
             return None
 
@@ -221,6 +225,12 @@ class GraphQL:
                         filter_fields[f"{attr_name}__{option}"] = (
                             GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
                         )
+
+        for prop_name, prop in field_type.Interface.getGraphQLProperties().items():
+            if not prop.filterable:
+                continue
+            prop_type = prop.graphql_type_hint or str
+            filter_fields[prop_name] = GraphQL._mapFieldToGrapheneRead(prop_type, prop_name)
         if not filter_fields:
             return None
 

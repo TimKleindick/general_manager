@@ -4,6 +4,7 @@ from django.db import models
 from general_manager.interface.baseInterface import (
     GeneralManagerType,
 )
+from general_manager.utils.filterParser import create_filter_function
 from general_manager.bucket.baseBucket import Bucket
 
 from general_manager.manager.generalManager import GeneralManager
@@ -100,13 +101,46 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         Additional filter arguments are merged with any existing filters to further restrict the queryset, producing a new DatabaseBucket instance.
         """
+        properties = self._manager_class.Interface.getGraphQLProperties()
+        annotations: dict[str, Any] = {}
+        python_filters: list[tuple[str, Any, str]] = []
+        orm_kwargs: dict[str, Any] = {}
+        qs = self._data
+        for k, v in kwargs.items():
+            root = k.split("__")[0]
+            if root in properties:
+                prop = properties[root]
+                if prop.query_annotation is not None:
+                    if callable(prop.query_annotation):
+                        qs = prop.query_annotation(qs)
+                    else:
+                        annotations[root] = prop.query_annotation
+                    orm_kwargs[k] = v
+                else:
+                    python_filters.append((k, v, root))
+            else:
+                orm_kwargs[k] = v
+        if annotations:
+            qs = qs.annotate(**annotations)
+        qs = qs.filter(**orm_kwargs)
+
+        if python_filters:
+            ids: list[int] = []
+            for obj in qs:
+                inst = self._manager_class(obj.pk)
+                keep = True
+                for k, val, root in python_filters:
+                    lookup = k.split("__", 1)[1] if "__" in k else ""
+                    func = create_filter_function(lookup, val)
+                    if not func(getattr(inst, root)):
+                        keep = False
+                        break
+                if keep:
+                    ids.append(obj.pk)
+            qs = qs.filter(pk__in=ids)
+
         merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
-        return self.__class__(
-            self._data.filter(**kwargs),
-            self._manager_class,
-            merged_filter,
-            self.excludes,
-        )
+        return self.__class__(qs, self._manager_class, merged_filter, self.excludes)
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
@@ -114,13 +148,46 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         Keyword arguments specify field lookups to exclude from the queryset. The resulting bucket contains only items that do not satisfy these exclusion filters.
         """
+        properties = self._manager_class.Interface.getGraphQLProperties()
+        annotations: dict[str, Any] = {}
+        python_filters: list[tuple[str, Any, str]] = []
+        orm_kwargs: dict[str, Any] = {}
+        qs = self._data
+        for k, v in kwargs.items():
+            root = k.split("__")[0]
+            if root in properties:
+                prop = properties[root]
+                if prop.query_annotation is not None:
+                    if callable(prop.query_annotation):
+                        qs = prop.query_annotation(qs)
+                    else:
+                        annotations[root] = prop.query_annotation
+                    orm_kwargs[k] = v
+                else:
+                    python_filters.append((k, v, root))
+            else:
+                orm_kwargs[k] = v
+        if annotations:
+            qs = qs.annotate(**annotations)
+        qs = qs.exclude(**orm_kwargs)
+
+        if python_filters:
+            ids: list[int] = []
+            for obj in qs:
+                inst = self._manager_class(obj.pk)
+                keep = True
+                for k, val, root in python_filters:
+                    lookup = k.split("__", 1)[1] if "__" in k else ""
+                    func = create_filter_function(lookup, val)
+                    if func(getattr(inst, root)):
+                        keep = False
+                        break
+                if keep:
+                    ids.append(obj.pk)
+            qs = qs.filter(pk__in=ids)
+
         merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
-        return self.__class__(
-            self._data.exclude(**kwargs),
-            self._manager_class,
-            self.filters,
-            merged_exclude,
-        )
+        return self.__class__(qs, self._manager_class, self.filters, merged_exclude)
 
     def first(self) -> GeneralManagerType | None:
         """
@@ -222,8 +289,47 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         if isinstance(key, str):
             key = (key,)
-        if reverse:
-            sorted_data = self._data.order_by(*[f"-{k}" for k in key])
+        properties = self._manager_class.Interface.getGraphQLProperties()
+        annotations: dict[str, Any] = {}
+        python_keys: list[str] = []
+        qs = self._data
+        for k in key:
+            if k in properties:
+                prop = properties[k]
+                if prop.query_annotation is not None:
+                    if callable(prop.query_annotation):
+                        qs = prop.query_annotation(qs)
+                    else:
+                        annotations[k] = prop.query_annotation
+                else:
+                    python_keys.append(k)
+        if annotations:
+            qs = qs.annotate(**annotations)
+
+        if python_keys:
+            objs = list(qs)
+            def key_func(obj):
+                inst = self._manager_class(obj.pk)
+                values = []
+                for k in key:
+                    if k in properties:
+                        if k in python_keys:
+                            values.append(getattr(inst, k))
+                        else:
+                            values.append(getattr(obj, k))
+                    else:
+                        values.append(getattr(obj, k))
+                return tuple(values)
+
+            objs.sort(key=key_func, reverse=reverse)
+            ordered_ids = [obj.pk for obj in objs]
+            case = models.Case(
+                *[models.When(pk=pk, then=pos) for pos, pk in enumerate(ordered_ids)],
+                output_field=models.IntegerField(),
+            )
+            qs = qs.filter(pk__in=ordered_ids).annotate(_order=case).order_by('_order')
         else:
-            sorted_data = self._data.order_by(*key)
-        return self.__class__(sorted_data, self._manager_class)
+            order_fields = [f"-{k}" if reverse else k for k in key]
+            qs = qs.order_by(*order_fields)
+
+        return self.__class__(qs, self._manager_class)
