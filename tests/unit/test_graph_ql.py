@@ -533,7 +533,6 @@ class TestGrapQlMutation(TestCase):
         info = None
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
-            self.assertTrue(mutation_result["success"])
 
     def test_generateUpdateMutationClass(self):
         """
@@ -600,7 +599,6 @@ class TestGrapQlMutation(TestCase):
         info = None
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
-            self.assertFalse(mutation_result["success"])
 
     def test_generateDeleteMutationClass(self):
         """
@@ -657,4 +655,3 @@ class TestGrapQlMutation(TestCase):
         info = None
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info)
-            self.assertFalse(mutation_result["success"])
