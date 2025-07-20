@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.12.0 (2025-07-20)
+
+### Bug Fixes
+
+- Change TypeError to ValueError for invalid measurement value and clean up multiplication docstring
+  ([`13ba835`](https://github.com/TimKleindick/general_manager/commit/13ba8357076d661de6fa9498e24cc684563712eb))
+
+- Send page information in response header
+  ([`7b0f2a9`](https://github.com/TimKleindick/general_manager/commit/7b0f2a953dc1283f655d36121fbd4d0a8be5d3b8))
+
+- Streamline error handling in GraphQL mutations and remove unused error fields
+  ([`3649e63`](https://github.com/TimKleindick/general_manager/commit/3649e6309868c0c10e8f490140a45911bceab696))
+
+### Documentation
+
+- Update user documentation with runnable examples
+  ([`c109a47`](https://github.com/TimKleindick/general_manager/commit/c109a47a64ab48914b8afd289d5268fca926c6ba))
+
+### Features
+
+- Implement pagination support in GraphQL queries with PageInfo type
+  ([`768042d`](https://github.com/TimKleindick/general_manager/commit/768042d283b2e14a5bd85efd3227d024fa62348e))
+
+### Testing
+
+- Add integration tests for GraphQL query pagination and project list retrieval
+  ([`f944ddb`](https://github.com/TimKleindick/general_manager/commit/f944ddb1a06fb10d9495a63b0c04d17bb7aa4e39))
+
+- Remove assertions for mutation success in GraphQL mutation tests
+  ([`86d3b81`](https://github.com/TimKleindick/general_manager/commit/86d3b811cf0e9ea91af01564fc32d88a1f29ec52))
+
+- Remove unused error fields from mutation tests and update error handling
+  ([`71b9f47`](https://github.com/TimKleindick/general_manager/commit/71b9f47ed52f88ec910e88cf17d48d5860746e08))
+
+- Remove unused import of IntegerField in GraphQL query tests
+  ([`08b89ba`](https://github.com/TimKleindick/general_manager/commit/08b89ba7a10285640c49a4c45ac6c3718ea1d9f5))
+
+- Update assertion in GraphQL resolver test to check for 'items' key in result
+  ([`622ab79`](https://github.com/TimKleindick/general_manager/commit/622ab79c0f85ad34205bbaff2d20d55cfb5db283))
+
+
 ## v0.11.2 (2025-07-19)
 
 ### Bug Fixes
