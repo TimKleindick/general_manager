@@ -116,6 +116,9 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(arg.of_type, graphene.Int)
 
     def test_mutation_with_multiple_return_types(self):
+        """
+        Tests that a GraphQL mutation returning multiple values as a tuple correctly exposes each value as a separate field in the mutation response and that the mutation executes and returns expected results.
+        """
         @graphQlMutation()
         def multi(info, value: int) -> tuple[bool, str]:
             if value > 0:

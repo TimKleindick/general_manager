@@ -31,6 +31,9 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         cls.create_material = create_material
 
     def setUp(self):
+        """
+        Creates and logs in a test user, then defines the GraphQL mutation string for creating a material.
+        """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="secret")
         self.client.force_login(self.user)
@@ -78,6 +81,9 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         cls.create_project = create_project
 
     def setUp(self):
+        """
+        Creates and logs in a test user, then defines a GraphQL mutation string for creating a project.
+        """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="secret")
         self.client.force_login(self.user)
@@ -136,6 +142,9 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
             return todo.update(finished=False, creator_id=creator_id)
 
     def setUp(self):
+        """
+        Prepares the GraphQL mutation string for marking a ToDo item as finished in test cases.
+        """
         self.mutation = """
         mutation($id: Int!) {
             markTodoAsFinished(id: $id) {
@@ -159,6 +168,11 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
         self.assertTrue(data["toDo"]["finished"])
 
     def test_reset_todo(self):
+        """
+        Tests that marking a ToDo as finished succeeds for any user, while resetting a ToDo requires authentication and fails for unauthenticated users.
+        
+        Creates a finished ToDo, verifies the public mutation to mark as finished is idempotent and successful, then attempts to reset the ToDo without authentication and asserts that permission is denied.
+        """
         todo = self.ToDo.create(headline="Test ToDo", finished=True)
         variables = todo.identification
         response = self.query(self.mutation, variables=variables)
