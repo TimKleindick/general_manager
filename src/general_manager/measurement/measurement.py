@@ -22,14 +22,12 @@ for currency in currency_units:
 class Measurement:
     def __init__(self, value: Decimal | float | int | str, unit: str):
         """
-        Create a Measurement with the specified numeric value and unit.
-
-        Parameters:
-            value: The numeric value to associate with the unit. Accepts Decimal, float, int, or a string convertible to Decimal.
-            unit: The unit of measurement as a string.
-
+        Initialize a Measurement with a numeric value and unit.
+        
+        Creates a Measurement instance by converting the provided value to a Decimal and associating it with the specified unit. Accepts numeric types or strings convertible to Decimal.
+        
         Raises:
-            TypeError: If the value cannot be converted to a Decimal.
+            ValueError: If the value cannot be converted to a Decimal.
         """
         if not isinstance(value, (Decimal, float, int)):
             try:
@@ -228,15 +226,15 @@ class Measurement:
 
     def __mul__(self, other: Any) -> Measurement:
         """
-        Multiply this measurement by another measurement or a numeric value.
-
-        Multiplying two currency measurements is not allowed. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
-
+        Multiplies this measurement by another measurement or a numeric value.
+        
+        Multiplication between two currency measurements is not permitted. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
+        
         Returns:
-            Measurement: The result of the multiplication.
-
+            Measurement: A new measurement representing the product.
+        
         Raises:
-            TypeError: If both operands are currency measurements, or if the operand is not a Measurement or numeric value.
+            TypeError: If both operands are currency measurements, or if the operand is neither a Measurement nor a numeric value.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():

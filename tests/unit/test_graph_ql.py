@@ -123,7 +123,7 @@ class GraphQLTests(TestCase):
     @patch("general_manager.interface.baseInterface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):
         """
-        Tests that a GraphQL interface is created and registered for a manager class with a GraphQLProperty attribute.
+        Test that a GraphQL interface is created and registered when a manager class defines a GraphQLProperty attribute.
         """
 
         class TestManager:
@@ -146,9 +146,9 @@ class GraphQLTests(TestCase):
 
     def test_list_resolver_with_invalid_filter_exclude(self):
         """
-        Test that the list resolver returns the original queryset when filter or exclude parameters are invalid JSON.
-
-        Ensures that if JSON decoding fails for filter or exclude arguments, the resolver does not apply any filtering and returns the unmodified queryset.
+        Test that the list resolver returns the original queryset when filter or exclude arguments are invalid JSON.
+        
+        If JSON decoding fails for the filter or exclude parameters, verifies that the resolver returns the unfiltered queryset under the "items" key.
         """
         mock_instance = MagicMock()
         mock_qs = MagicMock()
@@ -160,7 +160,7 @@ class GraphQLTests(TestCase):
 
     def test_create_filter_options_measurement_fields(self):
         """
-        Tests that filter options for numeric, string, and measurement fields are correctly generated, and that fields of type GeneralManager are excluded from the filter options.
+        Test that filter options are generated for numeric, string, and measurement fields, and that fields of type GeneralManager are excluded from the filter options.
         """
 
         class DummyManager:
@@ -217,9 +217,9 @@ class GraphQLTests(TestCase):
 
     def test_create_filter_options_registry_cache(self):
         """
-        Test that the filter options registry caches filter input types for a manager class.
-
-        Ensures that repeated calls to `_createFilterOptions` with the same name and manager class return the same cached filter input type instance.
+        Test that repeated calls to `_createFilterOptions` for the same manager class and name return the same cached filter input type instance.
+        
+        Verifies that the filter options registry correctly caches and reuses filter input types for a given manager class.
         """
 
         class DummyManager2:
@@ -241,7 +241,7 @@ class GraphQLTests(TestCase):
 class TestGetReadPermissionFilter(TestCase):
     def test_get_read_permission_filter(self):
         """
-        Tests that getReadPermissionFilter returns the correct filter and exclude dictionaries from a manager's permission class.
+        Verify that getReadPermissionFilter extracts and returns filter and exclude tuples from a manager's permission class.
         """
 
         class DummyManager:
@@ -264,9 +264,9 @@ class TestGetReadPermissionFilter(TestCase):
 class TestGrapQlMutation(TestCase):
     def setUp(self) -> None:
         """
-        Set up dummy manager classes and reset GraphQL mutation registry for mutation-related tests.
-
-        Defines two dummy manager classes with interface methods to simulate different mutation capabilities and assigns them to instance attributes. Also clears the GraphQL mutation registry to ensure a clean test environment.
+        Initializes dummy manager classes and resets the GraphQL mutation registry for mutation tests.
+        
+        Creates two mock manager classes with interface methods to simulate various mutation capabilities, assigns them to instance attributes, and clears the GraphQL mutation registry to ensure test isolation.
         """
 
         class DummyManager:
@@ -287,10 +287,10 @@ class TestGrapQlMutation(TestCase):
             class Interface(InterfaceBase):
                 def getData(self, search_date: datetime | None = None):
                     """
-                    Raises a NotImplementedError to indicate that data retrieval is not implemented.
-
+                    Raises NotImplementedError to indicate that data retrieval is not supported.
+                    
                     Parameters:
-                        search_date (datetime, optional): An optional date to filter or specify the data retrieval context.
+                        search_date (datetime, optional): Optional date to specify or filter the data retrieval context.
                     """
                     raise NotImplementedError
 
@@ -327,19 +327,19 @@ class TestGrapQlMutation(TestCase):
                     cls,
                 ) -> None:
                     """
-                    Handles the interface setup or registration for the class.
-
-                    This method is intended to be called on a class to perform necessary interface-related initialization or configuration. It does not return a value.
+                    Performs interface setup or registration for the class.
+                    
+                    Intended to be called on a class to initialize or configure its interface-related components. Does not return a value.
                     """
                     pass
 
                 @classmethod
                 def getFieldType(cls, field_name: str) -> None:
                     """
-                    Placeholder method for retrieving the type of a specified field on the class.
-
+                    Placeholder method that returns the type of the specified field on the class.
+                    
                     Parameters:
-                        field_name (str): The name of the field whose type is to be retrieved.
+                        field_name (str): Name of the field to retrieve the type for.
                     """
                     pass
 
@@ -372,9 +372,9 @@ class TestGrapQlMutation(TestCase):
         self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
     ):
         """
-        Test that no mutation classes are generated when the manager lacks create, update, and delete methods.
-
-        Ensures that the mutation generation functions are not called for a manager class without the required interface methods.
+        Test that mutation classes are not generated when the manager lacks create, update, and delete methods.
+        
+        Verifies that the mutation generation functions for create, update, and delete are not invoked if the manager does not implement the corresponding interface methods.
         """
         GraphQL.createGraphqlMutation(self.manager2)
         mock_create.assert_not_called()
@@ -383,12 +383,18 @@ class TestGrapQlMutation(TestCase):
 
     def test_createWriteFields(self):
         """
-        Tests that `GraphQL.createWriteFields` generates input fields for editable, non-derived attributes of an interface, mapping types correctly and excluding derived fields.
+        Test that `GraphQL.createWriteFields` generates input fields for editable, non-derived attributes, mapping their types appropriately and excluding derived fields.
         """
 
         class DummyInterface:
             @staticmethod
             def getAttributeTypes():
+                """
+                Return a dictionary describing attribute metadata for fields, including type, requirement, derivation, default value, and editability.
+                
+                Returns:
+                    dict: A mapping of field names to their metadata, where each value specifies the field's type, whether it is required, derived, its default value, and if it is editable.
+                """
                 return {
                     "field1": {
                         "type": str,
@@ -430,12 +436,15 @@ class TestGrapQlMutation(TestCase):
 
     def test_createWriteFields_with_manager(self):
         """
-        Tests that `GraphQL.createWriteFields` correctly generates input fields for attributes of type `GeneralManager`, mapping single instances to `graphene.ID` and lists to `graphene.List`.
+        Test that `GraphQL.createWriteFields` generates correct input fields for attributes of type `GeneralManager`, mapping single instances to `graphene.ID` and lists to `graphene.List`.
         """
 
         class DummyInterface:
             @staticmethod
             def getAttributeTypes():
+                """
+                Return a dictionary describing attribute metadata for 'manager' and 'manager_list', including type, requirement, derivation, default value, and editability.
+                """
                 return {
                     "manager": {
                         "type": GeneralManager,
@@ -461,18 +470,20 @@ class TestGrapQlMutation(TestCase):
 
     def test_generateCreateMutationClass(self):
         """
-        Tests that the create mutation class generated by GraphQL correctly defines arguments, default values, and mutation behavior.
-
+        Test that the generated create mutation class defines correct arguments, applies default values, and enforces mutation behavior.
+        
         Verifies that the mutation class:
         - Inherits from `graphene.Mutation`.
-        - Includes the expected arguments and fields.
-        - Applies default values from the interface.
-        - Returns a successful result and instance when provided with valid input and context.
-        - Returns failure and error messages when context is missing.
+        - Includes required arguments with correct types and default values.
+        - Returns a successful result and instance when invoked with valid input and context.
+        - Raises a `GraphQLError` when the mutation context is missing.
         """
 
         class DummyManager:
             def __init__(self, *args, **kwargs):
+                """
+                Initialize the instance and set the value of `field1` from keyword arguments if provided.
+                """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
@@ -526,18 +537,20 @@ class TestGrapQlMutation(TestCase):
 
     def test_generateUpdateMutationClass(self):
         """
-        Tests that the update mutation class generated by GraphQL correctly defines arguments, default values, and mutation behavior.
-
-        Verifies that the mutation class:
+        Test that the update mutation class generated by GraphQL defines the correct arguments, applies default values, and enforces mutation behavior.
+        
+        Verifies that the generated mutation class:
         - Inherits from `graphene.Mutation`.
-        - Includes the expected arguments and fields.
-        - Applies default values from the interface.
-        - Returns a successful result and updated instance when provided with valid input and context.
-        - Returns failure and error messages when context is missing.
+        - Includes expected arguments and fields with correct default values.
+        - Returns a successful result and updated instance when provided valid input and context.
+        - Raises a `GraphQLError` when the mutation context (`info`) is missing.
         """
 
         class DummyManager:
             def __init__(self, *args, **kwargs):
+                """
+                Initialize the instance and set the value of `field1` from keyword arguments if provided.
+                """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
@@ -591,17 +604,20 @@ class TestGrapQlMutation(TestCase):
 
     def test_generateDeleteMutationClass(self):
         """
-        Tests that the delete mutation class generated by GraphQL correctly defines required fields, arguments, and mutation behavior.
-
-        Verifies that the mutation class:
-        - Is a subclass of `graphene.Mutation`.
-        - Includes `success` field.
+        Tests that the delete mutation class generated by GraphQL defines the correct fields and mutation logic.
+        
+        Verifies that the generated mutation class:
+        - Inherits from `graphene.Mutation`.
+        - Includes a `success` field.
         - Calls the manager's `deactivate` method and returns a success flag.
-        - Handles missing context by returning failure.
+        - Raises a `GraphQLError` if the mutation context (`info`) is missing.
         """
 
         class DummyManager:
             def __init__(self, *args, **kwargs):
+                """
+                Initialize the instance and set the value of `field1` from keyword arguments if provided.
+                """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):

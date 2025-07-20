@@ -36,7 +36,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for creating a TestProject instance.
+        Prepares the test environment by creating and logging in a test user and setting the GraphQL mutation string for creating a TestProject instance.
         """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="geheim")
@@ -139,6 +139,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(data["budget"]["unit"], "EUR")
 
     def test_create_project_with_invalid_budget(self):
+        """
+        Test that creating a project with an invalid budget value returns an error indicating the budget field is invalid.
+        """
         variables = {
             "name": "Test Project",
             "number": 42,
@@ -193,7 +196,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for creating a TestProject instance.
+        Prepares GraphQL mutation strings for creating TestProject and TestProject2 instances in test cases.
         """
         self.create_mutation = """
         mutation CreateProject($name: String!, $number: Int, $budget: String) {
@@ -229,9 +232,9 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
     def test_create_project_without_login(self):
         """
-        Tests that creating a TestProject instance without login fails due to permission restrictions.
-
-        Verifies that the mutation response indicates failure with a 'Permission denied' error when attempting to create a project without authentication.
+        Test that creating a TestProject without authentication fails due to permission restrictions.
+        
+        Asserts that the mutation response contains a 'Permission denied' error when no user is logged in.
         """
         variables = {
             "name": "Test Project",
@@ -247,9 +250,9 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
     def test_create_project_without_login_and_public_permissions(self):
         """
-        Tests successful creation of a TestProject2 instance without login when public permissions are enabled.
-
-        Verifies that the mutation succeeds without authentication due to public create permissions, with the created record having changed_by set to None.
+        Test that a TestProject2 instance can be created without authentication when public create permissions are enabled.
+        
+        Verifies that the mutation succeeds, the created record matches the input data, and the `changed_by` field is set to None.
         """
         variables = {
             "name": "Test Project",
@@ -303,7 +306,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for updating a TestProject instance.
+        Prepares the test environment by creating a test user, logging them in, creating an initial TestProject instance, and defining GraphQL mutation strings for updating a TestProject with and without the budget field.
         """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="geheim")
@@ -432,7 +435,7 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Sets up the test environment by creating and logging in a test user and defining the GraphQL mutation string for deactivating a TestProject instance.
+        Prepares the test case by creating and logging in a user, initializing a TestProject instance, and defining the GraphQL mutation for deactivating a project.
         """
         User = get_user_model()
         self.user = User.objects.create_user(username="tester", password="geheim")
