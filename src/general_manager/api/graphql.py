@@ -26,6 +26,13 @@ class MeasurementType(graphene.ObjectType):
     unit = graphene.String()
 
 
+class PageInfo(graphene.ObjectType):
+    total_count = graphene.Int(required=True)
+    page_size = graphene.Int(required=False)
+    current_page = graphene.Int(required=True)
+    total_pages = graphene.Int(required=True)
+
+
 def getReadPermissionFilter(
     generalManagerClass: GeneralManagerMeta,
     info: GraphQLResolveInfo,
@@ -59,6 +66,7 @@ class GraphQL:
     _mutation_class: type[graphene.ObjectType] | None = None
     _mutations: dict[str, Any] = {}
     _query_fields: dict[str, Any] = {}
+    _page_type_registry: dict[str, type[graphene.ObjectType]] = {}
     graphql_type_registry: dict[str, type] = {}
     graphql_filter_type_registry: dict[str, type] = {}
 
@@ -260,6 +268,13 @@ class GraphQL:
                 sort_by_options = GraphQL._sortByOptions(field_type)
                 if sort_by_options:
                     attributes["sort_by"] = sort_by_options()
+
+                page_type = GraphQL._getOrCreatePageType(
+                    field_type.__name__ + "Page",
+                    lambda: GraphQL.graphql_type_registry[field_type.__name__],
+                )
+                return graphene.Field(page_type, **attributes)
+
                 return graphene.List(
                     lambda: GraphQL.graphql_type_registry[field_type.__name__],
                     **attributes,
@@ -385,7 +400,7 @@ class GraphQL:
             page: int | None = None,
             page_size: int | None = None,
             group_by: list[str] | None = None,
-        ) -> Any:
+        ) -> dict[str, Any]:
             """
             Resolves a list field by returning a queryset with permission filters, query filters, sorting, pagination, and optional grouping applied.
 
@@ -410,10 +425,22 @@ class GraphQL:
             qs = GraphQL._applyQueryParameters(qs, filter, exclude, sort_by, reverse)
             qs = GraphQL._applyGrouping(qs, group_by)
 
-            info.context["response"].headers["X-Total-Count"] = str(len(qs))
+            total_count = len(qs)
 
-            qs = GraphQL._applyPagination(qs, page, page_size)
-            return qs
+            qs_paginated = GraphQL._applyPagination(qs, page, page_size)
+
+            page_info = {
+                "total_count": total_count,
+                "page_size": page_size,
+                "current_page": page or 1,
+                "total_pages": (
+                    ((total_count + page_size - 1) // page_size) if page_size else 1
+                ),
+            }
+            return {
+                "items": qs_paginated,
+                "pageInfo": page_info,
+            }
 
         return resolver
 
@@ -512,6 +539,28 @@ class GraphQL:
         return cls._createNormalResolver(field_name)
 
     @classmethod
+    def _getOrCreatePageType(
+        cls,
+        page_type_name: str,
+        item_type: type[graphene.ObjectType] | Callable[[], type[graphene.ObjectType]],
+    ) -> type[graphene.ObjectType]:
+        """
+        Retrieves or creates a GraphQL Page type for the specified item type.
+
+        If the page type already exists in the registry, it returns that type; otherwise, it creates a new one.
+        """
+        if page_type_name not in cls._page_type_registry:
+            cls._page_type_registry[page_type_name] = type(
+                page_type_name,
+                (graphene.ObjectType,),
+                {
+                    "items": graphene.List(item_type, required=True),
+                    "pageInfo": graphene.Field(PageInfo, required=True),
+                },
+            )
+        return cls._page_type_registry[page_type_name]
+
+    @classmethod
     def _addQueriesToSchema(
         cls, graphene_type: type, generalManagerClass: GeneralManagerMeta
     ) -> None:
@@ -545,10 +594,11 @@ class GraphQL:
         sort_by_options = cls._sortByOptions(generalManagerClass)
         if sort_by_options:
             attributes["sort_by"] = sort_by_options()
-        list_field = graphene.List(
-            graphene_type,
-            **attributes,
+
+        page_type = cls._getOrCreatePageType(
+            graphene_type.__name__ + "Page", graphene_type
         )
+        list_field = graphene.Field(page_type, **attributes)
 
         list_resolver = cls._createListResolver(
             lambda self: generalManagerClass.all(), generalManagerClass
