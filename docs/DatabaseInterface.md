@@ -45,6 +45,8 @@ manager.deactivate(creator_id=user.id, history_comment="outdated")
 
 Many-to-many fields are passed using the `<field>_id_list` convention. The interface handles sorting these values and applying them after saving the instance.
 
+GraphQL properties defined on the manager can be marked as `filterable` or `sortable`. If a property also defines a `query_annotation`, DatabaseBucket will annotate the queryset so filtering and ordering happen in the database. Without an annotation the property value is evaluated in Python which may be slower for large result sets.
+
 ## Rules
 
 `DatabaseInterface` supports rule validation. Rules allow you to validate incoming data before it is saved. See [Rule Validation](Rules.md) for more details.

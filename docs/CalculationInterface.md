@@ -31,6 +31,7 @@ class ProjectSummary(GeneralManager):
 ```
 
 `graphQlProperty` turns a method into a read-only attribute and registers it as a resolver for GraphQL queries. The calculation runs lazily when the property is accessed.
+Additional options allow properties to be marked as `filterable` or `sortable`. When set, buckets and GraphQL queries can filter or order by these properties.
 
 To iterate over all possible combinations you can call `all()`, or filter by inputs:
 

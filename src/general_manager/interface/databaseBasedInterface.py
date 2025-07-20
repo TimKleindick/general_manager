@@ -20,6 +20,7 @@ from general_manager.interface.baseInterface import (
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.databaseBucket import DatabaseBucket
+from general_manager.api.property import GraphQLProperty
 from general_manager.interface.models import (
     GeneralManagerBasisModel,
     GeneralManagerModel,
@@ -320,6 +321,14 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                     ).all()
                 )
         return field_values
+
+    @classmethod
+    def getGraphQLProperties(cls) -> dict[str, GraphQLProperty]:
+        return {
+            name: prop
+            for name, prop in vars(cls._parent_class).items()
+            if isinstance(prop, GraphQLProperty)
+        }
 
     @staticmethod
     def handleCustomFields(

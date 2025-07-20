@@ -4,6 +4,7 @@ from unittest.mock import patch
 from general_manager.bucket.calculationBucket import CalculationBucket
 from general_manager.interface.calculationInterface import CalculationInterface
 from general_manager.manager.input import Input
+from general_manager.api.property import graphQlProperty
 
 
 # Create a dummy CalculationInterface with no input fields for simplicity
@@ -103,7 +104,18 @@ class TestCalculationBucket(TestCase):
         cls, args, state = bucket.__reduce__()
         # Check reduce data
         self.assertEqual(cls, CalculationBucket)
-        self.assertEqual(args, (DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True))
+        self.assertEqual(
+            args,
+            (
+                DummyGeneralManager,
+                {"a": 1},
+                {"b": 2},
+                {},
+                {},
+                "k",
+                True,
+            ),
+        )
         self.assertIn("current_combinations", state)
         # Restore state on new instance
         new_bucket = CalculationBucket(*args)
@@ -164,7 +176,7 @@ class TestCalculationBucket(TestCase):
         s3 = repr(bucket)
         self.assertEqual(
             s3,
-            f"CalculationBucket({DummyGeneralManager.__name__}, {{}}, {{}}, None, False)",
+            f"CalculationBucket({DummyGeneralManager.__name__}, {{}}, {{}}, {{}}, {{}}, None, False)",
         )
 
     def test_all_iter_len_count(self, mock_parse):
@@ -236,7 +248,7 @@ class TestCalculationBucket(TestCase):
 @patch("general_manager.bucket.calculationBucket.parse_filters", return_value={})
 class TestGenerateCombinations(TestCase):
 
-    def _make_bucket_with_fields(self, fields):
+    def _make_bucket_with_fields(self, fields, prop_func=None):
         # Dynamically create an interface and manager class with given input_fields
         """
         Creates a CalculationBucket with dynamically defined input fields.
@@ -252,6 +264,11 @@ class TestGenerateCombinations(TestCase):
 
         class DynManager:
             Interface = DynInterface
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        if prop_func:
+            setattr(DynManager, prop_func.__name__, graphQlProperty(prop_func))
 
         DynInterface._parent_class = DynManager
         return CalculationBucket(DynManager)
@@ -371,3 +388,17 @@ class TestGenerateCombinations(TestCase):
         bucket = self._make_bucket_with_fields(fields)
         with self.assertRaises(TypeError):
             bucket.generate_combinations()
+
+    def test_property_filter_and_sort(self, mock_parse):
+        def total(self):
+            return self.kwargs["a"] + self.kwargs["b"]
+
+        fields = {
+            "a": Input(type=int, possible_values=[1, 2]),
+            "b": Input(type=int, possible_values=[1, 2]),
+        }
+        bucket = self._make_bucket_with_fields(fields, total)
+        filtered = bucket.filter(total__gte=3)
+        combos = filtered.sort("total").generate_combinations()
+        self.assertEqual(len(combos), 3)
+        self.assertEqual(combos[0]["a"] + combos[0]["b"], 3)

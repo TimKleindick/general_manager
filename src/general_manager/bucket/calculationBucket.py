@@ -15,7 +15,7 @@ from general_manager.interface.baseInterface import (
 )
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.manager.input import Input
-from general_manager.utils.filterParser import parse_filters
+from general_manager.utils.filterParser import parse_filters, create_filter_function
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
@@ -23,11 +23,23 @@ if TYPE_CHECKING:
 
 
 class CalculationBucket(Bucket[GeneralManagerType]):
+    @staticmethod
+    def _parse_property_filters(filter_kwargs: dict[str, Any]) -> dict[str, dict]:
+        filters: dict[str, dict] = {}
+        for kwarg, value in filter_kwargs.items():
+            parts = kwarg.split("__")
+            name = parts[0]
+            lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
+            func = create_filter_function(lookup, value)
+            filters.setdefault(name, {}).setdefault("filter_funcs", []).append(func)
+        return filters
     def __init__(
         self,
         manager_class: Type[GeneralManagerType],
         filter_definitions: Optional[dict[str, dict]] = None,
         exclude_definitions: Optional[dict[str, dict]] = None,
+        prop_filter_definitions: Optional[dict[str, dict]] = None,
+        prop_exclude_definitions: Optional[dict[str, dict]] = None,
         sort_key: Optional[Union[str, tuple[str]]] = None,
         reverse: bool = False,
     ):
@@ -55,9 +67,23 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             raise TypeError(
                 "CalculationBucket can only be used with CalculationInterface subclasses"
             )
+        # backward compatibility for older constructor without property args
+        if prop_filter_definitions is not None and not isinstance(
+            prop_filter_definitions, dict
+        ):
+            sort_key = prop_filter_definitions  # type: ignore[assignment]
+            reverse = bool(prop_exclude_definitions)
+            prop_filter_definitions = {}
+            prop_exclude_definitions = {}
         self.input_fields = interface_class.input_fields
         self.filters = {} if filter_definitions is None else filter_definitions
         self.excludes = {} if exclude_definitions is None else exclude_definitions
+        self.prop_filters = (
+            {} if prop_filter_definitions is None else prop_filter_definitions
+        )
+        self.prop_excludes = (
+            {} if prop_exclude_definitions is None else prop_exclude_definitions
+        )
         self._current_combinations = None
         self.sort_key = sort_key
         self.reverse = reverse
@@ -75,6 +101,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self._manager_class,
                 self.filters,
                 self.excludes,
+                self.prop_filters,
+                self.prop_excludes,
                 self.sort_key,
                 self.reverse,
             ),
@@ -120,16 +148,30 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             if key in other.filters and value == other.filters[key]
         }
 
+        combined_prop_filters = {
+            key: value
+            for key, value in self.prop_filters.items()
+            if key in other.prop_filters and value == other.prop_filters[key]
+        }
+
         combined_excludes = {
             key: value
             for key, value in self.excludes.items()
             if key in other.excludes and value == other.excludes[key]
         }
 
+        combined_prop_excludes = {
+            key: value
+            for key, value in self.prop_excludes.items()
+            if key in other.prop_excludes and value == other.prop_excludes[key]
+        }
+
         return CalculationBucket(
             self._manager_class,
             combined_filters,
             combined_excludes,
+            combined_prop_filters,
+            combined_prop_excludes,
         )
 
     def __str__(self) -> str:
@@ -157,7 +199,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         Returns a concise string representation of the CalculationBucket, including the manager class name, filters, excludes, sort key, and sort order.
         """
-        return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filters}, {self.excludes}, {self.sort_key}, {self.reverse})"
+        return (
+            f"{self.__class__.__name__}({self._manager_class.__name__}, "
+            f"{self.filters}, {self.excludes}, {self.prop_filters}, "
+            f"{self.prop_excludes}, {self.sort_key}, {self.reverse})"
+        )
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
@@ -167,8 +213,22 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         filters = self.filters.copy()
         excludes = self.excludes.copy()
-        filters.update(parse_filters(kwargs, self.input_fields))
-        return CalculationBucket(self._manager_class, filters, excludes)
+        prop_filters = self.prop_filters.copy()
+        prop_excludes = self.prop_excludes.copy()
+        prop_names = self._manager_class.Interface.getGraphQLProperties().keys()
+        input_kwargs = {k: v for k, v in kwargs.items() if k.split("__")[0] not in prop_names}
+        prop_kwargs = {k: v for k, v in kwargs.items() if k.split("__")[0] in prop_names}
+        filters.update(parse_filters(input_kwargs, self.input_fields))
+        prop_filters.update(self._parse_property_filters(prop_kwargs))
+        return CalculationBucket(
+            self._manager_class,
+            filters,
+            excludes,
+            prop_filters,
+            prop_excludes,
+            self.sort_key,
+            self.reverse,
+        )
 
     def exclude(self, **kwargs: Any) -> CalculationBucket:
         """
@@ -178,8 +238,22 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         filters = self.filters.copy()
         excludes = self.excludes.copy()
-        excludes.update(parse_filters(kwargs, self.input_fields))
-        return CalculationBucket(self._manager_class, filters, excludes)
+        prop_filters = self.prop_filters.copy()
+        prop_excludes = self.prop_excludes.copy()
+        prop_names = self._manager_class.Interface.getGraphQLProperties().keys()
+        input_kwargs = {k: v for k, v in kwargs.items() if k.split("__")[0] not in prop_names}
+        prop_kwargs = {k: v for k, v in kwargs.items() if k.split("__")[0] in prop_names}
+        excludes.update(parse_filters(input_kwargs, self.input_fields))
+        prop_excludes.update(self._parse_property_filters(prop_kwargs))
+        return CalculationBucket(
+            self._manager_class,
+            filters,
+            excludes,
+            prop_filters,
+            prop_excludes,
+            self.sort_key,
+            self.reverse,
+        )
 
     def all(self) -> CalculationBucket:
         """
@@ -207,26 +281,60 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             A list of dictionaries, each representing a unique combination of input values that satisfy the current filters, exclusions, and sorting order.
         """
 
-        def key_func(item: dict[str, Any]) -> tuple:
-            return tuple(item[key] for key in sort_key)
+        def input_key_func(item: dict[str, Any], sk: tuple[str, ...]) -> tuple:
+            return tuple(item[k] for k in sk)
 
         if self._current_combinations is None:
-            # Implementierung ähnlich wie im InputManager
             sorted_inputs = self.topological_sort_inputs()
-            current_combinations = self._generate_combinations(
-                sorted_inputs, self.filters, self.excludes
-            )
+            combos = self._generate_combinations(sorted_inputs, self.filters, self.excludes)
+
+            sort_keys: tuple[str, ...] = ()
             if self.sort_key is not None:
-                sort_key = self.sort_key
-                if isinstance(sort_key, str):
-                    sort_key = (sort_key,)
-                current_combinations = sorted(
-                    current_combinations,
-                    key=key_func,
-                )
+                sort_keys = (self.sort_key,) if isinstance(self.sort_key, str) else self.sort_key
+
+            props_needed = set(self.prop_filters.keys()) | set(self.prop_excludes.keys())
+            props_needed.update(k for k in sort_keys if k not in self.input_fields)
+
+            if props_needed:
+                processed: list[tuple[dict[str, Any], dict[str, Any]]] = []
+                for combo in combos:
+                    instance = self._manager_class(**combo)
+                    values = {p: getattr(instance, p) for p in props_needed}
+                    keep = True
+                    for p, defs in self.prop_filters.items():
+                        for func in defs.get("filter_funcs", []):
+                            if not func(values[p]):
+                                keep = False
+                                break
+                        if not keep:
+                            break
+                    if not keep:
+                        continue
+                    for p, defs in self.prop_excludes.items():
+                        for func in defs.get("filter_funcs", []):
+                            if func(values[p]):
+                                keep = False
+                                break
+                        if not keep:
+                            break
+                    if keep:
+                        processed.append((combo, values))
+
+                if sort_keys:
+                    def key_func(item: tuple[dict[str, Any], dict[str, Any]]) -> tuple:
+                        c, vals = item
+                        return tuple(c[k] if k in c else vals.get(k) for k in sort_keys)
+
+                    processed.sort(key=key_func)
+
+                combos = [c for c, _ in processed]
+            else:
+                if sort_keys:
+                    combos = sorted(combos, key=lambda x: input_key_func(x, sort_keys))
+
             if self.reverse:
-                current_combinations.reverse()
-            self._current_combinations = current_combinations
+                combos.reverse()
+            self._current_combinations = combos
 
         return self._current_combinations
 
@@ -480,5 +588,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             A new CalculationBucket instance with the specified sorting applied.
         """
         return CalculationBucket(
-            self._manager_class, self.filters, self.excludes, key, reverse
+            self._manager_class,
+            self.filters,
+            self.excludes,
+            self.prop_filters,
+            self.prop_excludes,
+            key,
+            reverse,
         )
