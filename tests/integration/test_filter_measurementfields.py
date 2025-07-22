@@ -10,6 +10,9 @@ from django.core.exceptions import ValidationError
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """
+        Defines a test model `TestHuman` with a measurement field and assigns it to class variables for use in integration tests.
+        """
         class TestHuman(GeneralManager):
             name: str
             height: Measurement
@@ -22,6 +25,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [TestHuman]
 
     def setUp(self):
+        """
+        Creates two test `TestHuman` instances with predefined names and heights for use in integration tests.
+        """
         super().setUp()
         self.test_human1 = self.TestHuman.create(
             creator_id=None,
@@ -38,6 +44,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         )
 
     def test_measurement_fields(self):
+        """
+        Test creation, retrieval, and filtering of model instances with a measurement field.
+        
+        Verifies that measurement values are stored and represented with correct units, and that filtering by measurement values in different units returns the expected instances.
+        """
         humans = self.TestHuman.all()
         self.assertEqual(len(humans), 2)
 
@@ -57,6 +68,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_measurement_field_filtering(self):
         # Test filtering by measurement field (greater than or equal to)
+        """
+        Test filtering of model instances using comparison operators on a measurement field.
+        
+        Verifies that filtering by greater than, greater than or equal, less than, and less than or equal conditions on the measurement field returns the correct set of instances, including correct handling of unit conversions.
+        """
         filtered_humans = self.TestHuman.filter(height__gte="165 cm")
         self.assertEqual(len(filtered_humans), 2)
         filtered_humans = self.TestHuman.filter(height__gt="180 cm")
@@ -70,6 +86,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_measurement_field_operations(self):
         # Test addition of measurements
+        """
+        Test arithmetic operations on the measurement field of a model instance.
+        
+        Verifies that addition, subtraction, multiplication, and division operations on the `height` measurement field correctly update its value and maintain unit consistency.
+        """
         human = self.TestHuman.create(
             creator_id=None,
             name="Charlie",
@@ -92,6 +113,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(human.height, "175 cm")
 
     def test_measurement_field_validation(self):
+        """
+        Test that invalid measurement values for the height field raise a ValidationError.
+        
+        Verifies that creating a TestHuman instance with an incompatible unit or a null value for the height field results in a ValidationError.
+        """
         with self.assertRaises(ValidationError):
             self.TestHuman.Interface.create(
                 creator_id=None,
