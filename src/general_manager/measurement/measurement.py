@@ -23,9 +23,9 @@ class Measurement:
     def __init__(self, value: Decimal | float | int | str, unit: str):
         """
         Initialize a Measurement with a numeric value and unit.
-        
+
         Creates a Measurement instance by converting the provided value to a Decimal and associating it with the specified unit. Accepts numeric types or strings convertible to Decimal.
-        
+
         Raises:
             ValueError: If the value cannot be converted to a Decimal.
         """
@@ -227,12 +227,12 @@ class Measurement:
     def __mul__(self, other: Any) -> Measurement:
         """
         Multiplies this measurement by another measurement or a numeric value.
-        
+
         Multiplication between two currency measurements is not permitted. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
-        
+
         Returns:
             Measurement: A new measurement representing the product.
-        
+
         Raises:
             TypeError: If both operands are currency measurements, or if the operand is neither a Measurement nor a numeric value.
         """
@@ -315,6 +315,8 @@ class Measurement:
         Returns:
             bool: The result of the comparison.
         """
+        if other is None or other in ("", [], (), {}):
+            return False
         if isinstance(other, str):
             other = Measurement.from_string(other)
 
