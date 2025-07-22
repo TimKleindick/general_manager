@@ -23,9 +23,9 @@ class Measurement:
     def __init__(self, value: Decimal | float | int | str, unit: str):
         """
         Initialize a Measurement with a numeric value and unit.
-
-        Creates a Measurement instance by converting the provided value to a Decimal and associating it with the specified unit. Accepts numeric types or strings convertible to Decimal.
-
+        
+        Converts the provided value to a Decimal and associates it with the specified unit, creating a unit-aware measurement.
+        
         Raises:
             ValueError: If the value cannot be converted to a Decimal.
         """
@@ -226,13 +226,13 @@ class Measurement:
 
     def __mul__(self, other: Any) -> Measurement:
         """
-        Multiplies this measurement by another measurement or a numeric value.
-
-        Multiplication between two currency measurements is not permitted. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
-
+        Multiply this measurement by another measurement or a numeric value.
+        
+        Multiplication between two currency measurements is not allowed. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
+        
         Returns:
-            Measurement: A new measurement representing the product.
-
+            Measurement: The product as a new Measurement instance.
+        
         Raises:
             TypeError: If both operands are currency measurements, or if the operand is neither a Measurement nor a numeric value.
         """
@@ -304,16 +304,16 @@ class Measurement:
 
     def _compare(self, other: Any, operation: Callable[..., bool]) -> bool:
         """
-        Compares this Measurement to another using a specified comparison operation.
-
-        If `other` is a string, it is parsed as a Measurement. The comparison is performed after converting `other` to this instance's unit. Raises a TypeError if `other` is not a Measurement or a valid string, and a ValueError if the measurements have incompatible dimensions.
-
+        Compare this Measurement to another using a specified comparison operation.
+        
+        If `other` is a string, it is parsed as a Measurement. Returns `False` if `other` is `None` or an empty value. Raises `TypeError` if `other` is not a Measurement or a valid string. Raises `ValueError` if the measurements have incompatible dimensions.
+        
         Parameters:
-            other: The object to compare, either a Measurement or a string in the format "value unit".
-            operation: A callable that takes two magnitudes and returns a boolean.
-
+            other: The object to compare, which can be a Measurement instance or a string in the format "value unit".
+            operation: A callable that takes two magnitudes and returns a boolean result.
+        
         Returns:
-            bool: The result of the comparison.
+            bool: The result of applying the comparison operation to the magnitudes.
         """
         if other is None or other in ("", [], (), {}):
             return False
