@@ -1,168 +1,275 @@
-# fields.py
 from __future__ import annotations
+
 from django.db import models
 from django.core.exceptions import ValidationError
+from django.db.models.expressions import Col
 from decimal import Decimal
-from general_manager.measurement.measurement import Measurement, ureg, currency_units
 import pint
-from typing import Any
+from general_manager.measurement.measurement import Measurement, ureg, currency_units
 
 
-class MeasurementField(models.Field):  # type: ignore
-    description = (
-        "A field that stores a measurement value, both in base unit and original unit"
-    )
+class MeasurementField(models.Field):
+    description = "Stores a measurement (value + unit) but exposes a single field API"
+
+    empty_values = (None,)  # nur None zählt als leer
 
     def __init__(
-        self,
-        base_unit: str,
-        null: bool = False,
-        blank: bool = False,
-        editable: bool = True,
-        *args: Any,
-        **kwargs: Any,
+        self, base_unit: str, null=False, blank=False, editable=True, *args, **kwargs
     ):
         """
-        Initialize a MeasurementField to store values in a specified base unit and retain the original unit.
+        Initialize a MeasurementField to store a numeric value and its unit with unit-aware validation.
         
         Parameters:
-            base_unit (str): The canonical unit in which values are stored (e.g., 'meter').
-            null (bool, optional): Whether the field allows NULL values.
-            blank (bool, optional): Whether the field allows blank values.
-            editable (bool, optional): Whether the field is editable in Django admin and forms.
+            base_unit (str): The canonical unit for the measurement, used for conversions and validation.
+            null (bool, optional): Whether the field allows NULL values. Defaults to False.
+            blank (bool, optional): Whether the field allows blank values. Defaults to False.
+            editable (bool, optional): Whether the field is editable in forms and admin. Defaults to True.
         
-        The field internally manages a DecimalField for the value (in the base unit) and a CharField for the original unit.
+        The field internally manages a DecimalField for the value and a CharField for the unit, both configured according to the provided options.
         """
-        self.base_unit = base_unit  # E.g., 'meter' for length units
-        # Determine the dimensionality of the base unit
+        self.base_unit = base_unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
-        # Internal fields
-        null_blank_kwargs = {}
-        if null is True:
-            null_blank_kwargs["null"] = True
-        if blank is True:
-            null_blank_kwargs["blank"] = True
-        self.editable = editable
-        self.value_field: models.DecimalField[Decimal] = models.DecimalField(
-            max_digits=30,
-            decimal_places=10,
-            db_index=True,
-            **null_blank_kwargs,
-            editable=editable,
-        )
-        self.unit_field: models.CharField[str] = models.CharField(
-            max_length=30, **null_blank_kwargs, editable=editable
-        )
-        super().__init__(null=null, blank=blank, *args, **kwargs)
 
-    def contribute_to_class(
-        self, cls: type, name: str, private_only: bool = False, **kwargs: Any
-    ) -> None:
+        nb = {}
+        if null:
+            nb["null"] = True
+        if blank:
+            nb["blank"] = True
+
+        self.editable = editable
+        self.value_field = models.DecimalField(
+            max_digits=30, decimal_places=10, db_index=True, editable=editable, **nb
+        )
+        self.unit_field = models.CharField(max_length=30, editable=editable, **nb)
+
+        super().__init__(null=null, blank=blank, editable=editable, *args, **kwargs)
+
+    def contribute_to_class(self, cls, name, private_only=False, **kwargs):
+        # Register myself first (so opts.get_field('height') works)
         """
-        Integrates the MeasurementField into the Django model class, setting up internal fields for value and unit storage.
+        Registers the MeasurementField with the model class and attaches internal value and unit fields.
         
-        This method assigns unique attribute names for the value and unit fields, attaches them to the model, and sets the descriptor for the custom field on the model class.
+        This method sets up the composite field by creating and adding separate fields for the numeric value and unit to the model class, ensuring they are not duplicated. It also overrides the model attribute with the MeasurementField descriptor itself to manage access and assignment.
         """
-        self.name = name
+        super().contribute_to_class(cls, name, private_only=private_only, **kwargs)
+        self.concrete = False
+        self.column = None  # type: ignore # will not be set in db
+        self.field = self
+
         self.value_attr = f"{name}_value"
         self.unit_attr = f"{name}_unit"
-        self.value_field.attname = self.value_attr
-        self.unit_field.attname = self.unit_attr
-        self.value_field.name = self.value_attr
-        self.unit_field.name = self.unit_attr
-        self.value_field.column = self.value_attr
-        self.unit_field.column = self.unit_attr
 
-        self.value_field.model = cls
-        self.unit_field.model = cls
+        # prevent duplicate attributes
+        if hasattr(cls, self.value_attr):
+            self.value_field = getattr(cls, self.value_attr).field
+        else:
+            self.value_field.set_attributes_from_name(self.value_attr)
+            self.value_field.contribute_to_class(cls, self.value_attr)
 
-        self.value_field.contribute_to_class(cls, self.value_attr)
-        self.unit_field.contribute_to_class(cls, self.unit_attr)
+        if hasattr(cls, self.unit_attr):
+            self.unit_field = getattr(cls, self.unit_attr).field
+        else:
+            self.unit_field.set_attributes_from_name(self.unit_attr)
+            self.unit_field.contribute_to_class(cls, self.unit_attr)
 
-        setattr(cls, self.name, self)
+        # Descriptor override
+        setattr(cls, name, self)
 
-    def __get__(self, instance: Any, owner: Any) -> Any:
-        if instance is None:
-            return self
-        value = getattr(instance, self.value_attr)
-        unit = getattr(instance, self.unit_attr)
-        if value is None or unit is None:
+    # ---- ORM Delegation ----
+    def get_col(self, alias, output_field=None):
+        """
+        Returns a Django ORM column expression for the internal value field, enabling queries on the numeric part of the measurement.
+        """
+        return Col(alias, self.value_field, output_field or self.value_field)  # type: ignore
+
+    def get_lookup(self, lookup_name):
+        """
+        Return the lookup class for the specified lookup name, delegating to the internal value field.
+        
+        Parameters:
+        	lookup_name (str): The name of the lookup to retrieve.
+        
+        Returns:
+        	The lookup class corresponding to the given name, as provided by the internal decimal value field.
+        """
+        return self.value_field.get_lookup(lookup_name)
+
+    def get_transform(self, lookup_name) -> models.Transform | None:
+        """
+        Delegates retrieval of a transform operation to the internal value field.
+        
+        Returns:
+            The transform corresponding to the given lookup name, or None if not found.
+        """
+        return self.value_field.get_transform(lookup_name)
+
+    def db_type(self, connection) -> None:  # type: ignore
+        """
+        Return None to indicate that MeasurementField does not correspond to a single database column.
+        
+        This field manages its data using separate internal fields and does not require a direct database type.
+        """
+        return None
+
+    def run_validators(self, value: Measurement | None) -> None:
+        """
+        Runs all validators on the provided Measurement value if it is not None.
+        
+        Parameters:
+            value (Measurement | None): The measurement to validate, or None to skip validation.
+        """
+        if value is None:
+            return
+        for v in self.validators:
+            v(value)
+
+    def clean(
+        self, value: Measurement | None, model_instance: models.Model | None = None
+    ) -> Measurement | None:
+        """
+        Validates and cleans a Measurement value for use in the model field.
+        
+        Runs field-level validation and all configured validators on the provided value, returning it unchanged if valid.
+        
+        Parameters:
+            value (Measurement | None): The measurement value to validate and clean.
+            model_instance (models.Model | None): The model instance this value is associated with, if any.
+        
+        Returns:
+            Measurement | None: The validated measurement value, or None if the input was None.
+        """
+        self.validate(value, model_instance)
+        self.run_validators(value)
+        return value
+
+    def to_python(self, value):
+        """
+        Returns the input value unchanged.
+        
+        This method is required by Django custom fields to convert database values to Python objects, but no conversion is performed for this field.
+        """
+        return value
+
+    def get_prep_value(self, value):
+        """
+        Prepare a value for database storage by converting a Measurement to its decimal magnitude in the base unit.
+        
+        If the input is a string, it is parsed into a Measurement. If the value cannot be converted to the base unit due to dimensionality mismatch, a ValidationError is raised. Only Measurement instances or None are accepted.
+        
+        Returns:
+            Decimal: The numeric value of the measurement in the base unit, or None if the input is None.
+        
+        Raises:
+            ValidationError: If the value is not a Measurement or cannot be converted to the base unit.
+        """
+        if value is None:
             return None
-        # Create a Measurement object with the value in the original unit
-        quantity_in_base_unit = Decimal(value) * ureg(self.base_unit)
-        # Convert back to the original unit
-        try:
-            quantity_in_original_unit: pint.Quantity = quantity_in_base_unit.to(unit)  # type: ignore
-        except pint.errors.DimensionalityError:
-            # If the unit is not compatible, return the value in base unit
-            quantity_in_original_unit = quantity_in_base_unit
-        return Measurement(
-            quantity_in_original_unit.magnitude, str(quantity_in_original_unit.units)
+        if isinstance(value, str):
+            value = Measurement.from_string(value)
+        if isinstance(value, Measurement):
+            try:
+                return Decimal(str(value.quantity.to(self.base_unit).magnitude))
+            except pint.errors.DimensionalityError:
+                raise ValidationError(
+                    {self.name: [f"Inkompatible Einheit zu '{self.base_unit}'."]}
+                )
+        raise ValidationError(
+            {self.name: ["Value must be a Measurement instance or None."]}
         )
 
-    def __set__(self, instance: Any, value: Any) -> None:
-        if self.editable is False:
+    # ------------ Descriptor ------------
+    def __get__(  # type: ignore
+        self, instance: models.Model | None, owner: None = None
+    ) -> MeasurementField | Measurement | None:
+        """
+        Retrieve the measurement value from the model instance, reconstructing it as a `Measurement` object with the stored unit.
+        
+        Returns:
+            Measurement: The measurement with its original unit if both value and unit are present.
+            None: If either the value or unit is missing.
+            MeasurementField: If accessed from the class rather than an instance.
+        """
+        if instance is None:
+            return self
+        val = getattr(instance, self.value_attr)
+        unit = getattr(instance, self.unit_attr)
+        if val is None or unit is None:
+            return None
+        qty_base = Decimal(val) * ureg(self.base_unit)
+        try:
+            qty_orig = qty_base.to(unit)
+        except pint.errors.DimensionalityError:
+            qty_orig = qty_base
+        return Measurement(qty_orig.magnitude, str(qty_orig.units))
+
+    def __set__(self, instance, value):
+        """
+        Assigns a measurement value to the model instance, validating type, unit compatibility, and editability.
+        
+        If the value is a string, attempts to parse it as a Measurement. Ensures the unit matches the expected base unit's dimensionality or currency status. Stores the numeric value (converted to the base unit) and the original unit string in the instance. Raises ValidationError if the value is invalid or incompatible.
+        """
+        if not self.editable:
             raise ValidationError(f"{self.name} is not editable.")
         if value is None:
             setattr(instance, self.value_attr, None)
             setattr(instance, self.unit_attr, None)
             return
-        elif isinstance(value, str):
+        if isinstance(value, str):
             try:
                 value = Measurement.from_string(value)
             except ValueError:
                 raise ValidationError(
                     {self.name: ["Value must be a Measurement instance or None."]}
                 )
-        if isinstance(value, Measurement):
-            if str(self.base_unit) in currency_units:
-                # Base unit is a currency
-                if not value.is_currency():
-                    raise ValidationError(
-                        {
-                            self.name: [
-                                f"The unit must be a currency ({', '.join(currency_units)})."
-                            ]
-                        }
-                    )
-            else:
-                # Physical unit
-                if value.is_currency():
-                    raise ValidationError(
-                        {self.name: ["The unit cannot be a currency."]}
-                    )
-                elif value.quantity.dimensionality != self.base_dimension:
-                    raise ValidationError(
-                        {
-                            self.name: [
-                                f"The unit must be compatible with '{self.base_unit}'."
-                            ]
-                        }
-                    )
-            # Store the value in the base unit
-            try:
-                value_in_base_unit: Any = value.quantity.to(self.base_unit).magnitude  # type: ignore
-            except pint.errors.DimensionalityError:
-                raise ValidationError(
-                    {
-                        self.name: [
-                            f"The unit must be compatible with '{self.base_unit}'."
-                        ]
-                    }
-                )
-            setattr(instance, self.value_attr, Decimal(str(value_in_base_unit)))
-            # Store the original unit
-            setattr(instance, self.unit_attr, str(value.quantity.units))
-        else:
+        if not isinstance(value, Measurement):
             raise ValidationError(
                 {self.name: ["Value must be a Measurement instance or None."]}
             )
 
-    def get_prep_value(self, value: Any) -> Any:
-        # Not needed since we use internal fields
-        pass
+        if str(self.base_unit) in currency_units:
+            if not value.is_currency():
+                raise ValidationError(
+                    {
+                        self.name: [
+                            f"Unit must be a currency ({', '.join(currency_units)})."
+                        ]
+                    }
+                )
+        else:
+            if value.is_currency():
+                raise ValidationError({self.name: ["Unit cannot be a currency."]})
+            if value.quantity.dimensionality != self.base_dimension:
+                raise ValidationError(
+                    {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
+                )
 
-    def deconstruct(self):
-        name, path, args, kwargs = super().deconstruct()
-        kwargs["base_unit"] = self.base_unit
-        return name, path, args, kwargs
+        try:
+            base_mag = value.quantity.to(self.base_unit).magnitude
+        except pint.errors.DimensionalityError:
+            raise ValidationError(
+                {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
+            )
+
+        setattr(instance, self.value_attr, Decimal(str(base_mag)))
+        setattr(instance, self.unit_attr, str(value.quantity.units))
+
+    def validate(
+        self, value: Measurement | None, model_instance: models.Model | None = None
+    ) -> None:
+        """
+        Validates a measurement value against null and blank constraints and applies all field validators.
+        
+        Raises:
+            ValidationError: If the value is None and the field does not allow nulls, or if the value is blank and the field does not allow blanks, or if any validator fails.
+        """
+        if value is None:
+            if not self.null:
+                raise ValidationError(self.error_messages["null"], code="null")
+            return
+        if value in ("", [], (), {}):
+            if not self.blank:
+                raise ValidationError(self.error_messages["blank"], code="blank")
+            return
+
+        for validator in self.validators:
+            validator(value)
