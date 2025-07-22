@@ -137,7 +137,7 @@ class Derivative(GeneralManager):
         project = ForeignKey("Project", on_delete=CASCADE)
         price = MeasurementField(base_unit="EUR", null=True, blank=True)
 
-    @graphQlProperty
+    @graphQlProperty(filterable=True, sortable=True)
     def estimated_shipment(self) -> Optional[Measurement]:
         if self.estimated_weight is None or self.estimated_volume is None:
             return None
