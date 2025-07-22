@@ -103,7 +103,7 @@ class GraphQL:
     def createGraphqlInterface(cls, generalManagerClass: GeneralManagerMeta) -> None:
         """
         Generates and registers a GraphQL ObjectType for the specified GeneralManager class.
-        
+
         This method maps interface attributes and GraphQLProperty fields to Graphene fields, creates appropriate resolvers, registers the resulting type in the internal registry, and adds related query fields to the schema.
         """
         interface_cls: InterfaceBase | None = getattr(
@@ -146,7 +146,7 @@ class GraphQL:
     ) -> type[graphene.Enum] | None:
         """
         Creates a Graphene Enum type representing sortable fields for a given GeneralManager class.
-        
+
         Returns:
             A Graphene Enum type with options for each sortable attribute, or None if no sortable fields exist.
         """
@@ -164,7 +164,10 @@ class GraphQL:
             else:
                 sort_options.append(field_name)
 
-        for prop_name, prop in generalManagerClass.Interface.getGraphQLProperties().items():
+        for (
+            prop_name,
+            prop,
+        ) in generalManagerClass.Interface.getGraphQLProperties().items():
             if prop.sortable:
                 sort_options.append(prop_name)
 
@@ -178,14 +181,7 @@ class GraphQL:
         )
 
     @staticmethod
-    def _createFilterOptions(
-        field_name: str, field_type: GeneralManagerMeta
-    ) -> type[graphene.InputObjectType] | None:
-        """
-        Dynamically generates a Graphene InputObjectType for filtering fields of a GeneralManager subclass.
-        
-        Creates filter fields for each attribute based on its type, supporting numeric and string filter options, as well as specialized handling for Measurement attributes. Returns the generated InputObjectType or None if no filter fields are applicable.
-        """
+    def __iteratorFilterType(name: str, field_type: type, is_property: bool = False):
         number_options = ["exact", "gt", "gte", "lt", "lte"]
         string_options = [
             "exact",
@@ -196,41 +192,70 @@ class GraphQL:
             "endswith",
         ]
 
+        if issubclass(field_type, GeneralManager):
+            yield None, None
+        elif issubclass(field_type, Measurement) and not is_property:
+            yield f"{name}_value", graphene.Float()
+            yield f"{name}_unit", graphene.String()
+            for option in number_options:
+                yield f"{name}_value__{option}", graphene.Float()
+                yield f"{name}_unit__{option}", graphene.String()
+        elif issubclass(field_type, Measurement) and is_property:
+            yield f"{name}", graphene.String()
+            for option in number_options:
+                yield f"{name}__{option}", graphene.String()
+        else:
+            yield name, GraphQL._mapFieldToGrapheneRead(field_type, name)
+
+            if issubclass(field_type, (int, float, Decimal, date, datetime)):
+                for option in number_options:
+                    yield f"{name}__{option}", (
+                        GraphQL._mapFieldToGrapheneRead(field_type, name)
+                    )
+            elif issubclass(field_type, str):
+                for option in string_options:
+                    yield f"{name}__{option}", (
+                        GraphQL._mapFieldToGrapheneRead(field_type, name)
+                    )
+
+    @staticmethod
+    def _createFilterOptions(
+        field_type: GeneralManagerMeta,
+    ) -> type[graphene.InputObjectType] | None:
+        """
+        Dynamically generates a Graphene InputObjectType for filtering fields of a GeneralManager subclass.
+
+        Creates filter fields for each attribute based on its type, supporting numeric and string filter options, as well as specialized handling for Measurement attributes. Returns the generated InputObjectType or None if no filter fields are applicable.
+        """
         graphene_filter_type_name = f"{field_type.__name__}FilterType"
         if graphene_filter_type_name in GraphQL.graphql_filter_type_registry:
             return GraphQL.graphql_filter_type_registry[graphene_filter_type_name]
 
         filter_fields = {}
+
         for attr_name, attr_info in field_type.Interface.getAttributeTypes().items():
             attr_type = attr_info["type"]
-            if issubclass(attr_type, GeneralManager):
-                continue
-            elif issubclass(attr_type, Measurement):
-                filter_fields[f"{attr_name}_value"] = graphene.Float()
-                filter_fields[f"{attr_name}_unit"] = graphene.String()
-                for option in number_options:
-                    filter_fields[f"{attr_name}_value__{option}"] = graphene.Float()
-                    filter_fields[f"{attr_name}_unit__{option}"] = graphene.String()
-            else:
-                filter_fields[attr_name] = GraphQL._mapFieldToGrapheneRead(
-                    attr_type, attr_name
-                )
-                if issubclass(attr_type, (int, float, Decimal, date, datetime)):
-                    for option in number_options:
-                        filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
-                        )
-                elif issubclass(attr_type, str):
-                    for option in string_options:
-                        filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
-                        )
+            for attr_name, graph_ql_type in GraphQL.__iteratorFilterType(
+                attr_name, attr_type
+            ):
+                if attr_name is None or graph_ql_type is None:
+                    continue
+                filter_fields[attr_name] = graph_ql_type
 
         for prop_name, prop in field_type.Interface.getGraphQLProperties().items():
             if not prop.filterable:
                 continue
-            prop_type = prop.graphql_type_hint or str
-            filter_fields[prop_name] = GraphQL._mapFieldToGrapheneRead(prop_type, prop_name)
+            type_hints = get_args(prop.graphql_type_hint)
+            field_type = (
+                type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
+            )
+            for attr_name, graph_ql_type in GraphQL.__iteratorFilterType(
+                prop_name, field_type
+            ):
+                if attr_name is None or graph_ql_type is None:
+                    continue
+                filter_fields[attr_name] = graph_ql_type
+
         if not filter_fields:
             return None
 
@@ -246,7 +271,7 @@ class GraphQL:
     def _mapFieldToGrapheneRead(field_type: type, field_name: str) -> Any:
         """
         Maps a Python field type and name to the appropriate Graphene field for GraphQL schema generation.
-        
+
         For `Measurement` types, returns a field with an optional `target_unit` argument. For `GeneralManager` subclasses, returns either a list field (with optional filtering, exclusion, sorting, pagination, and grouping arguments if available) or a single field, depending on the field name. For other types, returns the corresponding Graphene scalar field.
         """
         if issubclass(field_type, Measurement):
@@ -259,7 +284,7 @@ class GraphQL:
                     "page_size": graphene.Int(),
                     "group_by": graphene.List(graphene.String),
                 }
-                filter_options = GraphQL._createFilterOptions(field_name, field_type)
+                filter_options = GraphQL._createFilterOptions(field_type)
                 if filter_options:
                     attributes["filter"] = filter_options()
                     attributes["exclude"] = filter_options()
@@ -381,11 +406,11 @@ class GraphQL:
     ) -> Callable[..., Any]:
         """
         Create a resolver function for GraphQL list fields that retrieves and returns a queryset with permission filters, query filters, sorting, pagination, and optional grouping applied.
-        
+
         Parameters:
             base_getter: Function to obtain the base queryset from the parent instance.
             fallback_manager_class: Manager class to use if the queryset does not specify one.
-        
+
         Returns:
             A resolver function that processes list queries with filtering, sorting, pagination, and grouping.
         """
@@ -403,7 +428,7 @@ class GraphQL:
         ) -> Any:
             """
             Resolves a list field by returning a queryset with permission filters, query filters, sorting, pagination, and optional grouping applied.
-            
+
             Parameters:
                 filter: Filter criteria as a dictionary or JSON string.
                 exclude: Exclusion criteria as a dictionary or JSON string.
@@ -412,7 +437,7 @@ class GraphQL:
                 page: Page number for pagination.
                 page_size: Number of items per page.
                 group_by: List of field names to group results by.
-            
+
             Returns:
                 The resulting queryset after applying permissions, filters, sorting, pagination, and grouping.
             """
@@ -491,7 +516,7 @@ class GraphQL:
     ) -> None:
         """
         Add list and single-item query fields for a GeneralManager subclass to the GraphQL schema.
-        
+
         Registers a list query field with optional filtering, exclusion, sorting, pagination, and grouping arguments, as well as a single-item query field using identification fields from the manager's interface. Attaches the corresponding resolvers for both queries to the schema.
         """
         if not issubclass(generalManagerClass, GeneralManager):
@@ -510,9 +535,7 @@ class GraphQL:
             "page_size": graphene.Int(),
             "group_by": graphene.List(graphene.String),
         }
-        filter_options = cls._createFilterOptions(
-            generalManagerClass.__name__.lower(), generalManagerClass
-        )
+        filter_options = cls._createFilterOptions(generalManagerClass)
         if filter_options:
             attributes["filter"] = filter_options()
             attributes["exclude"] = filter_options()
@@ -562,9 +585,9 @@ class GraphQL:
     def createWriteFields(cls, interface_cls: InterfaceBase) -> dict[str, Any]:
         """
         Generate a dictionary of Graphene input fields for mutations based on the attributes of the provided interface class.
-        
+
         Skips system-managed and derived attributes. For attributes referencing `GeneralManager` subclasses, uses an ID or list of IDs as appropriate. Other types are mapped to their corresponding Graphene scalar types. Each field is annotated with an `editable` attribute. An optional `history_comment` field, also marked as editable, is always included.
-        
+
         Returns:
             dict[str, Any]: Mapping of attribute names to Graphene input fields for mutation arguments.
         """
@@ -617,9 +640,9 @@ class GraphQL:
     ) -> type[graphene.Mutation] | None:
         """
         Dynamically generates a Graphene mutation class for creating an instance of a specified GeneralManager subclass.
-        
+
         The generated mutation class filters out fields with `NOT_PROVIDED` values, calls the manager's `create` method with the provided arguments and the current user's ID, and returns a dictionary containing a success flag, any errors, and the created instance. Returns None if the manager class does not define an interface.
-        
+
         Returns:
             The generated Graphene mutation class, or None if the manager class does not define an interface.
         """
@@ -636,7 +659,7 @@ class GraphQL:
         ) -> dict:
             """
             Create a new instance of the manager class using the provided arguments.
-            
+
             Filters out any fields with values set to `NOT_PROVIDED` before invoking the creation method. Returns a dictionary with a success flag, a list of errors if creation fails, and the created instance keyed by the manager class name.
             """
             try:
@@ -689,9 +712,9 @@ class GraphQL:
     ) -> type[graphene.Mutation] | None:
         """
         Generates a GraphQL mutation class for updating an instance of a GeneralManager subclass.
-        
+
         The generated mutation accepts editable fields as arguments, calls the manager's `update` method with the provided values and the current user's ID, and returns a dictionary containing the operation's success status, any error messages, and the updated instance. Returns None if the manager class does not define an `Interface`.
-        
+
         Returns:
             The generated Graphene mutation class, or None if no interface is defined.
         """
@@ -708,11 +731,11 @@ class GraphQL:
         ) -> dict:
             """
             Updates a GeneralManager instance with the provided fields.
-            
+
             Parameters:
                 info (GraphQLResolveInfo): The GraphQL resolver context, typically containing user and request information.
                 **kwargs: Fields to update, including the required 'id' of the instance.
-            
+
             Returns:
                 dict: A dictionary with keys 'success' (bool), 'errors' (list of str), and the updated instance keyed by its class name.
             """
@@ -761,9 +784,9 @@ class GraphQL:
     ) -> type[graphene.Mutation] | None:
         """
         Generates a GraphQL mutation class for deactivating (soft-deleting) an instance of a GeneralManager subclass.
-        
+
         The generated mutation accepts input fields defined by the manager's interface, deactivates the specified instance using its ID, and returns a dictionary containing the operation's success status, any error messages, and the deactivated instance keyed by the class name.
-        
+
         Returns:
             The generated Graphene mutation class, or None if the manager class does not define an interface.
         """
@@ -780,7 +803,7 @@ class GraphQL:
         ) -> dict:
             """
             Deactivates an instance of the specified GeneralManager class and returns the operation result.
-            
+
             Returns:
                 dict: A dictionary with keys:
                     - "success": Boolean indicating if the operation was successful.
