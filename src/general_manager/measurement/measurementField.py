@@ -217,10 +217,10 @@ class MeasurementField(models.Field):
         if isinstance(value, str):
             try:
                 value = Measurement.from_string(value)
-            except ValueError:
+            except ValueError as e:
                 raise ValidationError(
                     {self.name: ["Value must be a Measurement instance or None."]}
-                )
+                ) from e
         if not isinstance(value, Measurement):
             raise ValidationError(
                 {self.name: ["Value must be a Measurement instance or None."]}
@@ -245,10 +245,10 @@ class MeasurementField(models.Field):
 
         try:
             base_mag = value.quantity.to(self.base_unit).magnitude
-        except pint.errors.DimensionalityError:
+        except pint.errors.DimensionalityError as e:
             raise ValidationError(
                 {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
-            )
+            ) from e
 
         setattr(instance, self.value_attr, Decimal(str(base_mag)))
         setattr(instance, self.unit_attr, str(value.quantity.units))
