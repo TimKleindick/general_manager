@@ -42,7 +42,7 @@ class MeasurementField(models.Field):
         )
         self.unit_field = models.CharField(max_length=30, editable=editable, **nb)
 
-        super().__init__(null=null, blank=blank, editable=editable, *args, **kwargs)
+        super().__init__(*args, null=null, blank=blank, editable=editable, **kwargs)
 
     def contribute_to_class(self, cls, name, private_only=False, **kwargs):
         # Register myself first (so opts.get_field('height') works)
