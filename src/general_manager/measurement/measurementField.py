@@ -171,7 +171,7 @@ class MeasurementField(models.Field):
                 return Decimal(str(value.quantity.to(self.base_unit).magnitude))
             except pint.errors.DimensionalityError as e:
                 raise ValidationError(
-                    {self.name: [f"incompatible unit for '{self.base_unit}'."]}
+                    {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
                 ) from e
         raise ValidationError(
             {self.name: ["Value must be a Measurement instance or None."]}
@@ -238,10 +238,6 @@ class MeasurementField(models.Field):
         else:
             if value.is_currency():
                 raise ValidationError({self.name: ["Unit cannot be a currency."]})
-            if value.quantity.dimensionality != self.base_dimension:
-                raise ValidationError(
-                    {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
-                )
 
         try:
             base_mag = value.quantity.to(self.base_unit).magnitude
