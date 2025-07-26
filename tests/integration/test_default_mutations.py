@@ -42,7 +42,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         self.user = User.objects.create_user(username="tester", password="geheim")
         self.client.force_login(self.user)
         self.create_mutation = """
-        mutation CreateProject($name: String!, $number: Int, $budget: String) {
+        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
             createTestProject(name: $name, number: $number, budget: $budget) {
                 TestProject {
                     name
@@ -199,7 +199,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         Prepares GraphQL mutation strings for creating TestProject and TestProject2 instances in test cases.
         """
         self.create_mutation = """
-        mutation CreateProject($name: String!, $number: Int, $budget: String) {
+        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
             createTestProject(name: $name, number: $number, budget: $budget) {
                 TestProject {
                     name
@@ -215,7 +215,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         """
 
         self.create_mutation2 = """
-        mutation CreateProject($name: String!, $number: Int, $budget: String) {
+        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
             createTestProject2(name: $name, number: $number, budget: $budget) {
                 TestProject2 {
                     name
@@ -233,7 +233,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
     def test_create_project_without_login(self):
         """
         Test that creating a TestProject without authentication fails due to permission restrictions.
-        
+
         Asserts that the mutation response contains a 'Permission denied' error when no user is logged in.
         """
         variables = {
@@ -251,7 +251,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
     def test_create_project_without_login_and_public_permissions(self):
         """
         Test that a TestProject2 instance can be created without authentication when public create permissions are enabled.
-        
+
         Verifies that the mutation succeeds, the created record matches the input data, and the `changed_by` field is set to None.
         """
         variables = {
@@ -320,7 +320,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         )
 
         self.update_mutation = """
-        mutation UpdateProject($id: Int!, $name: String, $budget: String) {
+        mutation UpdateProject($id: Int!, $name: String, $budget: MeasurementScalar) {
             updateTestProject(id: $id, name: $name, budget: $budget) {
                 TestProject {
                     name
