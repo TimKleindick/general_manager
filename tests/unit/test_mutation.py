@@ -119,6 +119,7 @@ class MutationDecoratorTests(TestCase):
         """
         Tests that a GraphQL mutation returning multiple values as a tuple correctly exposes each value as a separate field in the mutation response and that the mutation executes and returns expected results.
         """
+
         @graphQlMutation()
         def multi(info, value: int) -> tuple[bool, str]:
             if value > 0:
@@ -141,7 +142,7 @@ class MutationDecoratorTests(TestCase):
         class addPermission(MutationPermission):
             __mutate__ = ["isAuthenticated"]
 
-        @graphQlMutation(addPermission)
+        @graphQlMutation(permission=addPermission)
         def add(info, a: int, b: int) -> int:
             return a + b
 
