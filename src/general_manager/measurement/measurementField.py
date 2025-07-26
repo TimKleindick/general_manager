@@ -169,10 +169,10 @@ class MeasurementField(models.Field):
         if isinstance(value, Measurement):
             try:
                 return Decimal(str(value.quantity.to(self.base_unit).magnitude))
-            except pint.errors.DimensionalityError:
+            except pint.errors.DimensionalityError as e:
                 raise ValidationError(
-                    {self.name: [f"Inkompatible Einheit zu '{self.base_unit}'."]}
-                )
+                    {self.name: [f"incompatible unit for '{self.base_unit}'."]}
+                ) from e
         raise ValidationError(
             {self.name: ["Value must be a Measurement instance or None."]}
         )
