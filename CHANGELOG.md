@@ -2,6 +2,52 @@
 
 <!-- version list -->
 
+## v0.12.1 (2025-07-26)
+
+### Bug Fixes
+
+- Adjust measurement handling
+  ([`6385845`](https://github.com/TimKleindick/general_manager/commit/6385845e33715502d5b202072496f18a7b731af3))
+
+- Correct argument order in MeasurementField initialization
+  ([`ac039b1`](https://github.com/TimKleindick/general_manager/commit/ac039b1337e19b04944cd84efbf2f54189740bf2))
+
+- Enhance error handling in MeasurementField validation for string and dimensionality errors
+  ([`1c7bb67`](https://github.com/TimKleindick/general_manager/commit/1c7bb67d4bd0904c869dde27273192b98a746310))
+
+- Implement MeasurementScalar for GraphQL handling of Measurement types
+  ([`c7df284`](https://github.com/TimKleindick/general_manager/commit/c7df2841a2ac5c9dca42bc8f8d73697312d8bfe7))
+
+- Improve compare with None and empty value handling
+  ([`f22849f`](https://github.com/TimKleindick/general_manager/commit/f22849f845e21d9fc32e13fc1fa622c707a4b9d9))
+
+- Improve error handling in MeasurementField validation for incompatible units
+  ([`a823b4e`](https://github.com/TimKleindick/general_manager/commit/a823b4e9638871594657432d32f727da1098f7b6))
+
+- Improve error message for incompatible units in MeasurementField validation
+  ([`89f74a3`](https://github.com/TimKleindick/general_manager/commit/89f74a380e0adceb26905cde8821e5919c4560c9))
+
+- Update empty_values to allow more empty representations and clean up docstring formatting
+  ([`fe26eae`](https://github.com/TimKleindick/general_manager/commit/fe26eaedf4850ae8179dd6c3008d1e749abd07a0))
+
+- Use measurement field as unified api for two db fields
+  ([`5a07369`](https://github.com/TimKleindick/general_manager/commit/5a07369397b4340f4c21a76f4a3e2e427fdd0562))
+
+### Testing
+
+- Add integration tests for measurement field functionality
+  ([`8f422b7`](https://github.com/TimKleindick/general_manager/commit/8f422b7dadb46dcfe677819cf3600a14e290b534))
+
+- Persist measurement operations in db
+  ([`54d8c6a`](https://github.com/TimKleindick/general_manager/commit/54d8c6a04d2089d7abcc6746196e6b962c559a6b))
+
+- Remove unnecessary special handling for graphql measurement handling
+  ([`a0baf07`](https://github.com/TimKleindick/general_manager/commit/a0baf07b3a3506d8fb7f4fde4ab966d3694a4b0f))
+
+- Update GraphQL mutations to use MeasurementScalar for budget parameter
+  ([`b4068b4`](https://github.com/TimKleindick/general_manager/commit/b4068b425556fbfc510abc399229b55efcfab045))
+
+
 ## v0.12.0 (2025-07-20)
 
 ### Bug Fixes
