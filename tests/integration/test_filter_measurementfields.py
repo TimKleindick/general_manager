@@ -13,6 +13,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         Defines a test model `TestHuman` with a measurement field and assigns it to class variables for use in integration tests.
         """
+
         class TestHuman(GeneralManager):
             name: str
             height: Measurement
@@ -46,7 +47,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def test_measurement_fields(self):
         """
         Test creation, retrieval, and filtering of model instances with a measurement field.
-        
+
         Verifies that measurement values are stored and represented with correct units, and that filtering by measurement values in different units returns the expected instances.
         """
         humans = self.TestHuman.all()
@@ -70,7 +71,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         # Test filtering by measurement field (greater than or equal to)
         """
         Test filtering of model instances using comparison operators on a measurement field.
-        
+
         Verifies that filtering by greater than, greater than or equal, less than, and less than or equal conditions on the measurement field returns the correct set of instances, including correct handling of unit conversions.
         """
         filtered_humans = self.TestHuman.filter(height__gte="165 cm")
@@ -88,7 +89,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         # Test addition of measurements
         """
         Test arithmetic operations on the measurement field of a model instance.
-        
+
         Verifies that addition, subtraction, multiplication, and division operations on the `height` measurement field correctly update its value and maintain unit consistency.
         """
         human = self.TestHuman.create(
@@ -112,10 +113,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         human.height /= 2
         self.assertEqual(human.height, "175 cm")
 
+        updated_human = human.update(height=human.height, ignore_permission=True)
+        self.assertEqual(updated_human.height, "175 cm")
+
     def test_measurement_field_validation(self):
         """
         Test that invalid measurement values for the height field raise a ValidationError.
-        
+
         Verifies that creating a TestHuman instance with an incompatible unit or a null value for the height field results in a ValidationError.
         """
         with self.assertRaises(ValidationError):
