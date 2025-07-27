@@ -278,7 +278,11 @@ class GraphQL:
             attr_type = attr_info["type"]
             filter_fields = {
                 **filter_fields,
-                **dict(GraphQL._getFilterOptions(attr_type, attr_name)),
+                **{
+                    k: v
+                    for k, v in GraphQL._getFilterOptions(attr_type, attr_name)
+                    if v is not None
+                },
             }
         for prop_name, prop in field_type.Interface.getGraphQLProperties().items():
             if not prop.filterable:
@@ -289,7 +293,11 @@ class GraphQL:
             )
             filter_fields = {
                 **filter_fields,
-                **dict(GraphQL._getFilterOptions(field_type, prop_name)),
+                **{
+                    k: v
+                    for k, v in GraphQL._getFilterOptions(field_type, prop_name)
+                    if v is not None
+                },
             }
 
         if not filter_fields:
