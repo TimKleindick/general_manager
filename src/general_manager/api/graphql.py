@@ -1,6 +1,6 @@
 from __future__ import annotations
 import graphene
-from typing import Any, Callable, get_args, TYPE_CHECKING, cast, Type
+from typing import Any, Callable, get_args, TYPE_CHECKING, cast, Type, Generator
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -156,18 +156,18 @@ class GraphQL:
             fields[resolver_name] = cls._createResolver(field_name, field_type)
 
         # handle GraphQLProperty attributes
-        for attr_name, attr_value in generalManagerClass.__dict__.items():
-            if isinstance(attr_value, GraphQLProperty):
-                type_hints = get_args(attr_value.graphql_type_hint)
-                field_type = (
-                    type_hints[0]
-                    if type_hints
-                    else cast(type, attr_value.graphql_type_hint)
-                )
-                fields[attr_name] = cls._mapFieldToGrapheneRead(field_type, attr_name)
-                fields[f"resolve_{attr_name}"] = cls._createResolver(
-                    attr_name, field_type
-                )
+        for (
+            attr_name,
+            attr_value,
+        ) in generalManagerClass.Interface.getGraphQLProperties().items():
+            type_hints = get_args(attr_value.graphql_type_hint)
+            field_type = (
+                type_hints[0]
+                if type_hints
+                else cast(type, attr_value.graphql_type_hint)
+            )
+            fields[attr_name] = cls._mapFieldToGrapheneRead(field_type, attr_name)
+            fields[f"resolve_{attr_name}"] = cls._createResolver(attr_name, field_type)
 
         graphene_type = type(graphene_type_name, (graphene.ObjectType,), fields)
         cls.graphql_type_registry[generalManagerClass.__name__] = graphene_type
@@ -194,6 +194,18 @@ class GraphQL:
             else:
                 sort_options.append(field_name)
 
+        for (
+            prop_name,
+            prop,
+        ) in generalManagerClass.Interface.getGraphQLProperties().items():
+            if prop.sortable is False:
+                continue
+            type_hints = get_args(prop.graphql_type_hint)
+            field_type = (
+                type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
+            )
+            sort_options.append(prop_name)
+
         if not sort_options:
             return None
 
@@ -202,6 +214,43 @@ class GraphQL:
             (graphene.Enum,),
             {option: option for option in sort_options},
         )
+
+    @staticmethod
+    def _getFilterOptions(attribute_type: type, attribute_name: str) -> Generator[
+        tuple[str, type[graphene.ObjectType] | MeasurementScalar | None],
+        None,
+        None,
+    ]:
+        number_options = ["exact", "gt", "gte", "lt", "lte"]
+        string_options = [
+            "exact",
+            "icontains",
+            "contains",
+            "in",
+            "startswith",
+            "endswith",
+        ]
+
+        if issubclass(attribute_type, GeneralManager):
+            yield attribute_name, None
+        elif issubclass(attribute_type, Measurement):
+            yield attribute_name, MeasurementScalar()
+            for option in number_options:
+                yield f"{attribute_name}__{option}", MeasurementScalar()
+        else:
+            yield attribute_name, GraphQL._mapFieldToGrapheneRead(
+                attribute_type, attribute_name
+            )
+            if issubclass(attribute_type, (int, float, Decimal, date, datetime)):
+                for option in number_options:
+                    yield f"{attribute_name}__{option}", (
+                        GraphQL._mapFieldToGrapheneRead(attribute_type, attribute_name)
+                    )
+            elif issubclass(attribute_type, str):
+                for option in string_options:
+                    yield f"{attribute_name}__{option}", (
+                        GraphQL._mapFieldToGrapheneRead(attribute_type, attribute_name)
+                    )
 
     @staticmethod
     def _createFilterOptions(
@@ -219,15 +268,6 @@ class GraphQL:
         Returns:
             type[graphene.InputObjectType] | None: The generated filter input type, or None if no filter fields are applicable.
         """
-        number_options = ["exact", "gt", "gte", "lt", "lte"]
-        string_options = [
-            "exact",
-            "icontains",
-            "contains",
-            "in",
-            "startswith",
-            "endswith",
-        ]
 
         graphene_filter_type_name = f"{field_type.__name__}FilterType"
         if graphene_filter_type_name in GraphQL.graphql_filter_type_registry:
@@ -236,26 +276,22 @@ class GraphQL:
         filter_fields = {}
         for attr_name, attr_info in field_type.Interface.getAttributeTypes().items():
             attr_type = attr_info["type"]
-            if issubclass(attr_type, GeneralManager):
+            filter_fields = {
+                **filter_fields,
+                **dict(GraphQL._getFilterOptions(attr_type, attr_name)),
+            }
+        for prop_name, prop in field_type.Interface.getGraphQLProperties().items():
+            if not prop.filterable:
                 continue
-            elif issubclass(attr_type, Measurement):
-                filter_fields[f"{attr_name}"] = MeasurementScalar()
-                for option in number_options:
-                    filter_fields[f"{attr_name}__{option}"] = MeasurementScalar()
-            else:
-                filter_fields[attr_name] = GraphQL._mapFieldToGrapheneRead(
-                    attr_type, attr_name
-                )
-                if issubclass(attr_type, (int, float, Decimal, date, datetime)):
-                    for option in number_options:
-                        filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
-                        )
-                elif issubclass(attr_type, str):
-                    for option in string_options:
-                        filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
-                        )
+            type_hints = get_args(prop.graphql_type_hint)
+            field_type = (
+                type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
+            )
+            filter_fields = {
+                **filter_fields,
+                **dict(GraphQL._getFilterOptions(field_type, prop_name)),
+            }
+
         if not filter_fields:
             return None
 

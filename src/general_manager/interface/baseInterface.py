@@ -13,7 +13,9 @@ from typing import (
 from datetime import datetime
 from django.conf import settings
 from django.db.models import Model
+
 from general_manager.utils import args_to_kwargs
+from general_manager.api.property import GraphQLProperty
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input
@@ -183,6 +185,17 @@ class InterfaceBase(ABC):
     @abstractmethod
     def getAttributes(cls) -> dict[str, Any]:
         raise NotImplementedError
+
+    @classmethod
+    def getGraphQLProperties(cls) -> dict[str, GraphQLProperty]:
+        """Return GraphQL properties defined on the parent manager."""
+        if not hasattr(cls, "_parent_class"):
+            return {}
+        return {
+            name: prop
+            for name, prop in vars(cls._parent_class).items()
+            if isinstance(prop, GraphQLProperty)
+        }
 
     @classmethod
     @abstractmethod
