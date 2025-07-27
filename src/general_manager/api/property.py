@@ -4,18 +4,24 @@ T = TypeVar("T", bound=Callable[..., Any])
 
 
 class GraphQLProperty(property):
+    sortable: bool
+    filterable: bool
+    query_annotation: Any | None
+
     def __init__(
         self,
         fget: Callable[..., Any],
         doc: str | None = None,
         *,
-        is_operatable: bool = False,
+        sortable: bool = False,
+        filterable: bool = False,
         query_annotation: Any | None = None,
     ) -> None:
         super().__init__(fget, doc=doc)
         self.is_graphql_resolver = True
         self.graphql_type_hint = get_type_hints(fget).get("return", None)
-        self.is_operatable = is_operatable
+        self.sortable = sortable
+        self.filterable = filterable
         self.query_annotation = query_annotation
 
 
@@ -24,7 +30,8 @@ def graphQlProperty(func: T) -> GraphQLProperty: ...
 @overload
 def graphQlProperty(
     *,
-    is_operatable: bool = False,
+    sortable: bool = False,
+    filterable: bool = False,
     query_annotation: Any | None = None,
 ) -> Callable[[T], GraphQLProperty]: ...
 
@@ -32,7 +39,8 @@ def graphQlProperty(
 def graphQlProperty(
     func: Callable[..., Any] | None = None,
     *,
-    is_operatable: bool = False,
+    sortable: bool = False,
+    filterable: bool = False,
     query_annotation: Any | None = None,
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
     from general_manager.cache.cacheDecorator import cached
@@ -46,8 +54,9 @@ def graphQlProperty(
     def wrapper(f: Callable[..., Any]) -> GraphQLProperty:
         return GraphQLProperty(
             cached()(f),
-            is_operatable=is_operatable,
+            sortable=sortable,
             query_annotation=query_annotation,
+            filterable=filterable,
         )
 
     if func is None:
