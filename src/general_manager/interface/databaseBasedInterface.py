@@ -135,10 +135,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
-        Return a dictionary mapping each attribute name of the model to its type information and metadata.
-
-        The returned dictionary includes all standard model fields, custom fields, foreign keys, many-to-many, and reverse relation fields, excluding any GenericForeignKey fields. For each attribute, the metadata specifies its Python type (translated from Django field types when possible), whether it is required, editable, derived, and its default value. For related models with a general manager class, the type is set to that class.
-
+        Return a dictionary mapping each model attribute name to its type information and metadata.
+        
+        Includes standard fields, custom fields, foreign keys, many-to-many, and reverse relation fields, excluding GenericForeignKey fields. For each attribute, provides its Python type (translated from Django field types when possible), required and editable status, whether it is derived, and its default value. For related models with a general manager class, the type is set to that class.
+        
         Returns:
             dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
         """
@@ -247,12 +247,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
-        Return a dictionary mapping attribute names to callables that retrieve values from a DBBasedInterface instance.
-
-        The mapping includes accessors for custom fields, standard model fields, foreign keys, many-to-many relations, and reverse relations. For related models with a general manager class, the accessor returns an instance of that class; otherwise, it returns the related object or queryset. Raises a ValueError if a field name conflict is detected.
-
+        Return a mapping of attribute names to callables that extract values from a DBBasedInterface instance.
+        
+        The returned dictionary includes accessors for custom fields, standard model fields, foreign keys, many-to-many relations, and reverse relations. For related models with a general manager class, the accessor returns an instance or queryset of that class; otherwise, it returns the related object or queryset directly. Raises a ValueError if a field name conflict is detected.
+        
         Returns:
-            dict: A dictionary where keys are attribute names and values are callables that extract the corresponding value from a DBBasedInterface instance.
+            dict[str, Callable[[DBBasedInterface], Any]]: Mapping of attribute names to callables for retrieving values from a DBBasedInterface instance.
         """
         from general_manager.manager.generalManager import GeneralManager
 
