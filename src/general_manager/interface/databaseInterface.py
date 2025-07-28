@@ -84,14 +84,9 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance: GeneralManagerModel, many_to_many_kwargs: dict[str, list[Any]]
     ) -> GeneralManagerModel:
         """
-        Sets many-to-many attributes for the given instance based on the provided kwargs.
-
-        Args:
-            instance: The model instance to update.
-            many_to_many_kwargs: A dictionary containing many-to-many field names and their corresponding values.
-
-        Returns:
-            The updated model instance.
+        Set many-to-many relationship fields on a model instance using provided values.
+        
+        Converts lists of `GeneralManager` instances to their corresponding IDs before updating the relationships. Returns the updated instance.
         """
         from general_manager.manager.generalManager import GeneralManager
 
