@@ -66,6 +66,25 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             instance = self.getHistoricalRecord(instance, search_date)
         return instance
 
+    @staticmethod
+    def __parseKwargs(**kwargs: Any) -> dict[str, Any]:
+        """
+        Parses keyword arguments to ensure they are compatible with the model's fields.
+
+        Converts GeneralManager instances to their primary key values and returns a dictionary of parsed arguments.
+        """
+        from general_manager.manager.generalManager import GeneralManager
+
+        parsed_kwargs: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if isinstance(value, GeneralManager):
+                parsed_kwargs[key] = getattr(
+                    value._interface, "_instance", value.identification["id"]
+                )
+            else:
+                parsed_kwargs[key] = value
+        return parsed_kwargs
+
     @classmethod
     def filter(cls, **kwargs: Any) -> DatabaseBucket:
         """
@@ -77,6 +96,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns:
             A DatabaseBucket wrapping the filtered queryset and associated metadata.
         """
+
+        kwargs = cls.__parseKwargs(**kwargs)
+
         return DatabaseBucket(
             cls._model.objects.filter(**kwargs),
             cls._parent_class,
@@ -94,6 +116,8 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns:
             A DatabaseBucket wrapping the queryset of excluded model instances.
         """
+        kwargs = cls.__parseKwargs(**kwargs)
+
         return DatabaseBucket(
             cls._model.objects.exclude(**kwargs),
             cls._parent_class,
@@ -136,9 +160,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
         Return a dictionary mapping each model attribute name to its type information and metadata.
-        
+
         Includes standard fields, custom fields, foreign keys, many-to-many, and reverse relation fields, excluding GenericForeignKey fields. For each attribute, provides its Python type (translated from Django field types when possible), required and editable status, whether it is derived, and its default value. For related models with a general manager class, the type is set to that class.
-        
+
         Returns:
             dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
         """
@@ -248,9 +272,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     def getAttributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
         Return a mapping of attribute names to callables that extract values from a DBBasedInterface instance.
-        
+
         The returned dictionary includes accessors for custom fields, standard model fields, foreign keys, many-to-many relations, and reverse relations. For related models with a general manager class, the accessor returns an instance or queryset of that class; otherwise, it returns the related object or queryset directly. Raises a ValueError if a field name conflict is detected.
-        
+
         Returns:
             dict[str, Callable[[DBBasedInterface], Any]]: Mapping of attribute names to callables for retrieving values from a DBBasedInterface instance.
         """
