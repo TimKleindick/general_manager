@@ -39,7 +39,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
         except ValidationError as e:
             errors.update(e.message_dict)
 
-        rules: list[Rule] = getattr(self._meta, "rules")
+        rules: list[Rule] = getattr(self._meta, "rules", [])
         for rule in rules:
             if rule.evaluate(self) is False:
                 error_message = rule.getErrorMessage()
