@@ -334,10 +334,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                     Type[models.Model],
                     cls._model._meta.get_field(field_name).related_model,
                 )
-                related_fields = filter(
-                    lambda x: x.related_model == cls._model,
-                    related_model._meta.get_fields(),
-                )
+                related_fields = [
+                    f
+                    for f in related_model._meta.get_fields()
+                    if f.related_model == cls._model
+                ]
+
                 field_values[
                     f"{field_name}_list"
                 ] = lambda self, field_name=field_name, related_fields=related_fields: self._instance._meta.get_field(
