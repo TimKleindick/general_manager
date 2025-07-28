@@ -11,6 +11,11 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """
+        Define and assign GeneralManager model classes for use in integration tests.
+        
+        This method creates three nested model classes—TestCountry, TestHuman, and TestFamily—each with associated Django model interfaces and relationships. The classes are assigned to class variables for use in test methods, and lists of all manager classes and read-only classes are maintained.
+        """
         class TestCountry(GeneralManager):
             _data = [
                 {"code": "US", "name": "United States"},
@@ -56,6 +61,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.read_only_classes = [TestCountry]
 
     def setUp(self):
+        """
+        Prepares the test database with sample country, human, and family data for integration tests.
+        
+        Synchronizes country data, creates two human instances (one linked to a country), and a family instance associating both humans.
+        """
         super().setUp()
         self.TestCountry.Interface.syncData()  # type: ignore
 
@@ -80,6 +90,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         )
 
     def test_iter(self):
+        """
+        Tests that all TestHuman instances can be retrieved and their attributes match the dictionary representation.
+        """
         humans = self.TestHuman.all()
         self.assertEqual(len(humans), 2)
         for human in humans:
@@ -87,6 +100,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             self.assertEqual(human.country, dict(human)["country"])
 
     def test_manager_connections(self):
+        """
+        Test that the many-to-many relationship between humans and families is correctly established.
+        
+        Verifies that the test family includes both test humans in its `humans_list` and that the family appears in a human's `families_list`.
+        """
         humans = self.test_family.humans_list
 
         self.assertEqual(len(humans), 2)
