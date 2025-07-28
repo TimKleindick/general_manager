@@ -1,5 +1,9 @@
+# type: ignore
+
 from __future__ import annotations
 from django.db import models
+from django.core.exceptions import ValidationError
+from django.contrib.auth.models import User
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -13,9 +17,10 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Define and assign GeneralManager model classes for use in integration tests.
-        
+
         This method creates three nested model classes—TestCountry, TestHuman, and TestFamily—each with associated Django model interfaces and relationships. The classes are assigned to class variables for use in test methods, and lists of all manager classes and read-only classes are maintained.
         """
+
         class TestCountry(GeneralManager):
             _data = [
                 {"code": "US", "name": "United States"},
@@ -23,6 +28,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ]
             code: str
             name: str
+            humans_list: Bucket[TestHuman]
 
             class Interface(ReadOnlyInterface):
                 code = models.CharField(max_length=2, unique=True)
@@ -63,7 +69,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def setUp(self):
         """
         Prepares the test database with sample country, human, and family data for integration tests.
-        
+
         Synchronizes country data, creates two human instances (one linked to a country), and a family instance associating both humans.
         """
         super().setUp()
@@ -89,6 +95,17 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ignore_permission=True,
         )
 
+    def tearDown(self):
+        """
+        Cleans up the test database by deleting all instances of TestCountry, TestHuman, and TestFamily.
+
+        This ensures that each test starts with a clean state.
+        """
+        self.TestCountry.Interface._model._meta.model.objects.all().delete()
+        self.TestHuman.Interface._model._meta.model.objects.all().delete()
+        self.TestFamily.Interface._model._meta.model.objects.all().delete()
+        super().tearDown()
+
     def test_iter(self):
         """
         Tests that all TestHuman instances can be retrieved and their attributes match the dictionary representation.
@@ -102,7 +119,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def test_manager_connections(self):
         """
         Test that the many-to-many relationship between humans and families is correctly established.
-        
+
         Verifies that the test family includes both test humans in its `humans_list` and that the family appears in a human's `families_list`.
         """
         humans = self.test_family.humans_list
@@ -126,7 +143,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(human.name, "Charlie")
         self.assertEqual(human.country.code, "DE")
-        
+
         # Test creation with None country (should be allowed)
         human_no_country = self.TestHuman.create(
             creator_id=None,
@@ -145,16 +162,16 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         us_humans = self.TestHuman.filter(country__code="US")
         self.assertEqual(len(us_humans), 1)
         self.assertEqual(us_humans[0].name, "Alice")
-        
+
         # Test filtering by name
         alice = self.TestHuman.filter(name="Alice")
         self.assertEqual(len(alice), 1)
         self.assertEqual(alice[0].name, "Alice")
-        
+
         # Test filtering with no results
         no_match = self.TestHuman.filter(name="NonExistent")
         self.assertEqual(len(no_match), 0)
-        
+
         # Test filtering countries
         us_country = self.TestCountry.filter(code="US")
         self.assertEqual(len(us_country), 1)
@@ -165,23 +182,23 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Test first() and last() operations on QuerySets.
         """
         # Test first() on existing data
-        first_human = self.TestHuman.first()
+        first_human = self.TestHuman.all().first()
         self.assertIsNotNone(first_human)
         self.assertIn(first_human.name, ["Alice", "Bob"])
-        
+
         # Test first() on filtered data
         us_human = self.TestHuman.filter(country__code="US").first()
         self.assertIsNotNone(us_human)
         self.assertEqual(us_human.name, "Alice")
-        
+
         # Test first() on empty result
         empty_result = self.TestHuman.filter(name="NonExistent").first()
         self.assertIsNone(empty_result)
-        
-        # Test first() on countries
-        first_country = self.TestCountry.first()
-        self.assertIsNotNone(first_country)
-        self.assertIn(first_country.code, ["US", "DE"])
+
+        # Test last() on countries
+        last_country = self.TestCountry.all().last()
+        self.assertIsNotNone(last_country)
+        self.assertIn(last_country.code, ["US", "DE"])
 
     def test_all_operations(self):
         """
@@ -193,14 +210,14 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         human_names = [h.name for h in all_humans]
         self.assertIn("Alice", human_names)
         self.assertIn("Bob", human_names)
-        
+
         # Test all countries
         all_countries = self.TestCountry.all()
         self.assertEqual(len(all_countries), 2)
         country_codes = [c.code for c in all_countries]
         self.assertIn("US", country_codes)
         self.assertIn("DE", country_codes)
-        
+
         # Test all families
         all_families = self.TestFamily.all()
         self.assertEqual(len(all_families), 1)
@@ -212,21 +229,24 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         # Test updating human name
         original_name = self.test_human1.name
-        self.test_human1.update(name="Alice Updated", ignore_permission=True)
-        self.test_human1.refresh_from_db()
-        self.assertEqual(self.test_human1.name, "Alice Updated")
-        self.assertNotEqual(self.test_human1.name, original_name)
-        
+        test_human1 = self.test_human1.update(
+            name="Alice Updated", ignore_permission=True
+        )
+        self.assertEqual(test_human1.name, "Alice Updated")
+        self.assertNotEqual(test_human1.name, original_name)
+
         # Test updating country relationship
         de_country = self.TestCountry.filter(code="DE").first()
-        self.test_human2.update(country=de_country, ignore_permission=True)
-        self.test_human2.refresh_from_db()
-        self.assertEqual(self.test_human2.country.code, "DE")
-        
+        test_human2 = self.test_human2.update(
+            country=de_country, ignore_permission=True
+        )
+        self.assertEqual(test_human2.country.code, "DE")
+
         # Test updating family name
-        self.test_family.update(name="Updated Family Name", ignore_permission=True)
-        self.test_family.refresh_from_db()
-        self.assertEqual(self.test_family.name, "Updated Family Name")
+        test_family = self.test_family.update(
+            name="Updated Family Name", ignore_permission=True
+        )
+        self.assertEqual(test_family.name, "Updated Family Name")
 
     def test_delete_operations(self):
         """
@@ -239,13 +259,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             country=self.TestCountry.filter(code="DE").first(),
             ignore_permission=True,
         )
-        
+
         # Test deleting a human
         human_count_before = len(self.TestHuman.all())
-        test_human3.delete(ignore_permission=True)
+        test_human3.deactivate(ignore_permission=True)
         human_count_after = len(self.TestHuman.all())
         self.assertEqual(human_count_after, human_count_before - 1)
-        
+
         # Verify the deleted human is not in any families
         remaining_humans = self.TestHuman.all()
         for human in remaining_humans:
@@ -258,25 +278,28 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         # Test accessing humans_list bucket
         humans_bucket = self.test_family.humans_list
         self.assertEqual(len(humans_bucket), 2)
-        
+
         # Test accessing families_list bucket
         families_bucket = self.test_human1.families_list
         self.assertEqual(len(families_bucket), 1)
         self.assertEqual(families_bucket[0].name, "Smith Family")
-        
+
         # Test adding to bucket
         new_human = self.TestHuman.create(
             creator_id=None,
             name="Eve",
             ignore_permission=True,
         )
-        
+
         # Add human to family
-        self.test_family.humans_list.add(new_human)
-        updated_humans = self.test_family.humans_list
+        updated_family = self.test_family.update(
+            humans=[*self.test_family.humans_list, new_human],
+            ignore_permission=True,
+        )
+        updated_humans = updated_family.humans_list
         self.assertEqual(len(updated_humans), 3)
         self.assertIn(new_human, updated_humans)
-        
+
         # Verify reverse relationship
         self.assertIn(self.test_family, new_human.families_list)
 
@@ -289,7 +312,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertIn("name", human_dict)
         self.assertIn("country", human_dict)
         self.assertEqual(human_dict["name"], self.test_human1.name)
-        
+
         # Test country to dict conversion
         country = self.TestCountry.filter(code="US").first()
         country_dict = dict(country)
@@ -297,7 +320,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertIn("name", country_dict)
         self.assertEqual(country_dict["code"], "US")
         self.assertEqual(country_dict["name"], "United States")
-        
+
         # Test family to dict conversion
         family_dict = dict(self.test_family)
         self.assertIn("name", family_dict)
@@ -308,18 +331,18 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Test ReadOnlyInterface syncData functionality.
         """
         # Test that syncData creates the expected country records
-        
+
         # Clear existing data and resync
-        self.TestCountry.Interface._meta.model.objects.all().delete()
+        self.TestCountry.Interface._model._meta.model.objects.all().delete()
         self.TestCountry.Interface.syncData()
-        
+
         countries_after_sync = self.TestCountry.all()
         self.assertEqual(len(countries_after_sync), 2)
-        
+
         # Verify specific country data
         us_country = self.TestCountry.filter(code="US").first()
         de_country = self.TestCountry.filter(code="DE").first()
-        
+
         self.assertIsNotNone(us_country)
         self.assertIsNotNone(de_country)
         self.assertEqual(us_country.name, "United States")
@@ -332,13 +355,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         # Test accessing country from human
         self.assertEqual(self.test_human1.country.code, "US")
         self.assertEqual(self.test_human1.country.name, "United States")
-        
+
         # Test reverse relationship (humans from country)
         us_country = self.TestCountry.filter(code="US").first()
-        related_humans = us_country.Interface.humans.all()
+        related_humans = us_country.humans_list.all()
         self.assertEqual(len(related_humans), 1)
         self.assertEqual(related_humans[0].name, "Alice")
-        
+
         # Test null country relationship
         self.assertIsNone(self.test_human2.country)
 
@@ -347,23 +370,20 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Test many-to-many relationships between humans and families.
         """
         # Create additional family for testing
-        self.TestFamily.create(
+        second_family = self.TestFamily.create(
             creator_id=None,
             name="Johnson Family",
             humans=[self.test_human2],
             ignore_permission=True,
         )
-        
-        # Test that human can belong to multiple families
-        self.test_human2.families_list.add(self.test_family)
-        
+
         # Verify relationships
         bob_families = self.test_human2.families_list
         self.assertEqual(len(bob_families), 2)
         family_names = [f.name for f in bob_families]
         self.assertIn("Smith Family", family_names)
         self.assertIn("Johnson Family", family_names)
-        
+
         # Test that family can have multiple humans
         smith_family_humans = self.test_family.humans_list
         self.assertEqual(len(smith_family_humans), 2)
@@ -383,15 +403,17 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         except Exception:
             # Exception is acceptable for invalid field access
             pass
-        
+
         # Test empty string names
-        empty_name_human = self.TestHuman.create(
-            creator_id=None,
-            name="",
-            ignore_permission=True,
+        self.assertRaises(
+            ValidationError,
+            lambda: self.TestHuman.create(
+                creator_id=None,
+                name="",
+                ignore_permission=True,
+            ),
         )
-        self.assertEqual(empty_name_human.name, "")
-        
+
         # Test creating family with empty humans list
         empty_family = self.TestFamily.create(
             creator_id=None,
@@ -405,6 +427,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         Test permission system and creator tracking functionality.
         """
+        User.objects.create_user(
+            username="testuser",
+            password="testpassword",
+            id=1,
+        )
         # Test creation with creator_id
         human_with_creator = self.TestHuman.create(
             creator_id=1,
@@ -412,10 +439,10 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ignore_permission=True,
         )
         self.assertEqual(human_with_creator.name, "Frank")
-        
+
         # Test that ignore_permission parameter works
         family_with_permission = self.TestFamily.create(
-            creator_id=2,
+            creator_id=None,
             name="Permission Family",
             humans=[human_with_creator],
             ignore_permission=True,
@@ -433,16 +460,18 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             country=self.TestCountry.filter(code="DE").first(),
             ignore_permission=True,
         )
-        
+
         # Test chaining filters
-        de_humans = self.TestHuman.filter(country__code="DE").filter(name__startswith="G")
+        de_humans = self.TestHuman.filter(country__code="DE").filter(
+            name__startswith="G"
+        )
         self.assertEqual(len(de_humans), 1)
         self.assertEqual(de_humans[0].name, "Grace")
-        
+
         # Test complex filtering
         humans_with_country = self.TestHuman.filter(country__isnull=False)
         self.assertEqual(len(humans_with_country), 2)  # Alice and Grace
-        
+
         humans_without_country = self.TestHuman.filter(country__isnull=True)
         self.assertEqual(len(humans_without_country), 1)  # Bob
 
@@ -453,11 +482,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         # Test unique constraint on country code
         countries = self.TestCountry.all()
         country_codes = [c.code for c in countries]
-        self.assertEqual(len(country_codes), len(set(country_codes)))  # All codes should be unique
-        
+        self.assertEqual(
+            len(country_codes), len(set(country_codes))
+        )  # All codes should be unique
+
         # Test cascade deletion behavior
         country_to_delete = self.TestCountry.filter(code="US").first()
-        
+
         # Since countries are read-only, test that related humans handle country deletion gracefully
         # This is more of a constraint verification than actual deletion
         related_humans = self.TestHuman.filter(country=country_to_delete)
