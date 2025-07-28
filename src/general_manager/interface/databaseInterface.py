@@ -85,7 +85,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     ) -> GeneralManagerModel:
         """
         Set many-to-many relationship fields on a model instance using provided values.
-        
+
         Converts lists of `GeneralManager` instances to their corresponding IDs before updating the relationships. Returns the updated instance.
         """
         from general_manager.manager.generalManager import GeneralManager
