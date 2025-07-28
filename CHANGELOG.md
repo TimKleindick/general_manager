@@ -2,6 +2,46 @@
 
 <!-- version list -->
 
+## v0.12.2 (2025-07-28)
+
+### Bug Fixes
+
+- Add __parseKwargs method for keyword argument parsing in DBBasedInterface
+  ([`0fa60ce`](https://github.com/TimKleindick/general_manager/commit/0fa60ce283fe64e01929c30df9b5aa9bd158b24e))
+
+- Correct conditional structure in related model handling
+  ([`6a6269b`](https://github.com/TimKleindick/general_manager/commit/6a6269ba1a700a4ba885d8c60109d8c545da24bf))
+
+- Debug related fields filtering in DBBasedInterface
+  ([`8a39aff`](https://github.com/TimKleindick/general_manager/commit/8a39affa4fda403a0bafa71cefa62f7d5804c6cf))
+
+- Enhance many-to-many relationship handling in DatabaseInterface
+  ([`0b2de0d`](https://github.com/TimKleindick/general_manager/commit/0b2de0d56e140abeaae7004713ef5cb131ec8f8c))
+
+- Enhance related field handling in DBBasedInterface
+  ([`df92257`](https://github.com/TimKleindick/general_manager/commit/df92257365fe7190d0494d13b13d608f8e5ff6f2))
+
+- Ensure rules attribute defaults to an empty list in getFullCleanMethode
+  ([`afd46ec`](https://github.com/TimKleindick/general_manager/commit/afd46ecacdf06c3f68a5dea9f275be7c999a0a1f))
+
+- Update is_required logic to consider default value in DBBasedInterface
+  ([`9f9233d`](https://github.com/TimKleindick/general_manager/commit/9f9233dd31ea2781780588bad6fe68302d6754a2))
+
+### Testing
+
+- Add testcase for ManyToMany
+  ([`03aeaf5`](https://github.com/TimKleindick/general_manager/commit/03aeaf5230749c58cc76a854b0558c965b9247ba))
+
+- Enhance integration tests with tearDown method and additional validations
+  ([`e895d8b`](https://github.com/TimKleindick/general_manager/commit/e895d8bac4e0cc7f6a2c1768cc9b7036d7ce4792))
+
+- Update exception handling and improve attribute access in DBBasedInterface tests
+  ([`d6f3864`](https://github.com/TimKleindick/general_manager/commit/d6f3864a4ea6fdfc8e42f77b8b862e9b89e5d169))
+
+- Update human count checks to filter only active humans in delete operation tests
+  ([`bc07aef`](https://github.com/TimKleindick/general_manager/commit/bc07aef25d9b122f0ae5897d44b95387a6ae4d70))
+
+
 ## v0.12.1 (2025-07-26)
 
 ### Bug Fixes
