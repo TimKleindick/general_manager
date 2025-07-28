@@ -93,10 +93,19 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         Returns:
             The updated model instance.
         """
+        from general_manager.manager.generalManager import GeneralManager
+
         for key, value in many_to_many_kwargs.items():
             if not value:
                 continue
-            field_name = key.split("_id_list")[0]
+            field_name = key.removesuffix("_id_list")
+            if isinstance(value, list) and all(
+                isinstance(v, GeneralManager) for v in value
+            ):
+                value = [
+                    v.identification["id"] if hasattr(v, "identification") else v
+                    for v in value
+                ]
             getattr(instance, field_name).set(value)
 
         return instance
