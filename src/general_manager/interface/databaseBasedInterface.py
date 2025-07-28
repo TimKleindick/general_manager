@@ -306,12 +306,20 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 cls._model._meta.get_field(field_name).related_model,
                 "_general_manager_class",
             ):
+                related_model = cast(
+                    Type[models.Model],
+                    cls._model._meta.get_field(field_name).related_model,
+                )
+                related_fields = filter(
+                    lambda x: x.related_model == cls._model,
+                    related_model._meta.get_fields(),
+                )
                 field_values[
                     f"{field_name}_list"
-                ] = lambda self, field_name=field_name: self._instance._meta.get_field(
+                ] = lambda self, field_name=field_name, related_fields=related_fields: self._instance._meta.get_field(
                     field_name
                 ).related_model._general_manager_class.filter(
-                    **{self._instance.__class__.__name__.lower(): self.pk}
+                    **{related_field.name: self.pk for related_field in related_fields}
                 )
             else:
                 field_values[f"{field_name}_list"] = (
@@ -319,6 +327,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                         self._instance, field_call
                     ).all()
                 )
+
         return field_values
 
     @staticmethod
