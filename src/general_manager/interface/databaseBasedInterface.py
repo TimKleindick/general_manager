@@ -196,7 +196,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             ):
                 related_model = related_model._general_manager_class  # type: ignore
 
-            elif related_model is not None:
+            if related_model is not None:
                 default = None
                 if hasattr(field, "default"):
                     default = field.default  # type: ignore
