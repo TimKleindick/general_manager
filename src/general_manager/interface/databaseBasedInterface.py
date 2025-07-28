@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic, cast
 from django.db import models
+
 from datetime import datetime, timedelta
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
@@ -202,7 +203,8 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 fields[field_name] = {
                     "type": type(field),
                     "is_derived": False,
-                    "is_required": not field.null,
+                    "is_required": not field.null
+                    and field.default is models.NOT_PROVIDED,
                     "is_editable": field.editable,
                     "default": field.default,
                 }
