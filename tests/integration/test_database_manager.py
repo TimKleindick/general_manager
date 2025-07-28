@@ -261,13 +261,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         )
 
         # Test deleting a human
-        human_count_before = len(self.TestHuman.all())
+        human_count_before = len(self.TestHuman.filter(is_active=True))
         test_human3.deactivate(ignore_permission=True)
-        human_count_after = len(self.TestHuman.all())
+        human_count_after = len(self.TestHuman.filter(is_active=True))
         self.assertEqual(human_count_after, human_count_before - 1)
 
         # Verify the deleted human is not in any families
-        remaining_humans = self.TestHuman.all()
+        remaining_humans = self.TestHuman.filter(is_active=True)
         for human in remaining_humans:
             self.assertNotEqual(human.name, "Charlie")
 
