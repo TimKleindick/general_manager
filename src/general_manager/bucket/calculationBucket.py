@@ -1,4 +1,5 @@
 from __future__ import annotations
+from types import UnionType
 from typing import (
     Any,
     Type,
@@ -9,6 +10,7 @@ from typing import (
     Generator,
     List,
     TypedDict,
+    get_origin,
 )
 from general_manager.interface.baseInterface import (
     generalManagerClassName,
@@ -182,17 +184,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             dict[str, Any]: A dictionary mapping input field names to their possible values.
         """
-        possible_values = {**input_fields}
+        parsed_inputs = {**input_fields}
         for prop_name, prop in properties.items():
             type_hint = prop.graphql_type_hint
-            if issubclass(type_hint, (list, tuple, set, dict)):
-                type_hint = (
+            origin = get_origin(type_hint)
+            if origin in (Union, UnionType):
+                type_hint = type_hint.__args__[0] if type_hint.__args__ else str  # type: ignore
+
+            elif issubclass(type_hint, (list, tuple, set, dict)):
+                type_hint: type = (
                     type_hint.__args__[0] if hasattr(type_hint, "__args__") else str  # type: ignore
                 )
             prop_input = Input(type=type_hint, possible_values=None, depends_on=None)
-            possible_values[prop_name] = prop_input
+            parsed_inputs[prop_name] = prop_input
 
-        return possible_values
+        return parsed_inputs
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
@@ -206,9 +212,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         )
         return CalculationBucket(
             manager_class=self._manager_class,
-            filter_definitions=self.filters.copy().update(
-                parse_filters(kwargs, possible_values)
-            ),
+            filter_definitions={
+                **self.filters.copy(),
+                **parse_filters(kwargs, possible_values),
+            },
             exclude_definitions=self.excludes.copy(),
         )
 
@@ -225,9 +232,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return CalculationBucket(
             manager_class=self._manager_class,
             filter_definitions=self.filters.copy(),
-            exclude_definitions=self.excludes.copy().update(
-                parse_filters(kwargs, possible_values)
-            ),
+            exclude_definitions={
+                **self.excludes.copy(),
+                **parse_filters(kwargs, possible_values),
+            },
         )
 
     def all(self) -> CalculationBucket:
