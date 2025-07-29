@@ -8,6 +8,7 @@ from typing import (
     Optional,
     Generator,
     List,
+    TypedDict,
 )
 from general_manager.interface.baseInterface import (
     generalManagerClassName,
@@ -18,8 +19,14 @@ from general_manager.manager.input import Input
 from general_manager.utils.filterParser import parse_filters
 
 if TYPE_CHECKING:
-    from general_manager.manager.generalManager import GeneralManager
-    from general_manager.interface.calculationInterface import CalculationInterface
+    from general_manager.api.property import GraphQLProperty
+
+
+class SortedFilters(TypedDict):
+    prop_filters: dict[str, Any]
+    input_filters: dict[str, Any]
+    prop_excludes: dict[str, Any]
+    input_excludes: dict[str, Any]
 
 
 class CalculationBucket(Bucket[GeneralManagerType]):
@@ -96,12 +103,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     ) -> CalculationBucket[GeneralManagerType]:
         """
         Combine this CalculationBucket with another bucket or manager instance of the same manager class.
-        
+
         If combined with a manager instance, returns a bucket filtered to that manager's identification. If combined with another CalculationBucket of the same manager class, returns a new bucket containing only the filters and excludes that are present and identical in both buckets.
-        
+
         Raises:
             ValueError: If the other object is not a CalculationBucket or manager of the same class.
-            
+
         Returns:
             CalculationBucket[GeneralManagerType]: A new CalculationBucket representing the intersection of filters and excludes, or a filtered bucket for the given manager instance.
         """
@@ -159,16 +166,51 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filters}, {self.excludes}, {self.sort_key}, {self.reverse})"
 
+    @staticmethod
+    def transformPropertiesToInputFields(
+        properties: dict[str, GraphQLProperty], input_fields: dict[str, Input]
+    ) -> dict[str, Input]:
+        """
+        Returns a dictionary of possible values for each input field based on the provided properties.
+
+        This method analyzes the properties and input fields to determine valid values for each input parameter.
+
+        Args:
+            properties (dict[str, Any]): The GraphQL properties of the manager class.
+            input_fields (dict[str, Any]): The input fields to analyze.
+
+        Returns:
+            dict[str, Any]: A dictionary mapping input field names to their possible values.
+        """
+        possible_values = {**input_fields}
+        for prop_name, prop in properties.items():
+            type_hint = prop.graphql_type_hint
+            if issubclass(type_hint, (list, tuple, set, dict)):
+                type_hint = (
+                    type_hint.__args__[0] if hasattr(type_hint, "__args__") else str  # type: ignore
+                )
+            prop_input = Input(type=type_hint, possible_values=None, depends_on=None)
+            possible_values[prop_name] = prop_input
+
+        return possible_values
+
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
         Returns a new CalculationBucket with additional filters applied.
 
         Merges the provided filter criteria with existing filters to further restrict valid input combinations.
         """
-        filters = self.filters.copy()
-        excludes = self.excludes.copy()
-        filters.update(parse_filters(kwargs, self.input_fields))
-        return CalculationBucket(self._manager_class, filters, excludes)
+        properties = self._manager_class.Interface.getGraphQLProperties()
+        possible_values = self.transformPropertiesToInputFields(
+            properties, self.input_fields
+        )
+        return CalculationBucket(
+            manager_class=self._manager_class,
+            filter_definitions=self.filters.copy().update(
+                parse_filters(kwargs, possible_values)
+            ),
+            exclude_definitions=self.excludes.copy(),
+        )
 
     def exclude(self, **kwargs: Any) -> CalculationBucket:
         """
@@ -176,10 +218,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         Keyword arguments specify input values to exclude from the generated combinations.
         """
-        filters = self.filters.copy()
-        excludes = self.excludes.copy()
-        excludes.update(parse_filters(kwargs, self.input_fields))
-        return CalculationBucket(self._manager_class, filters, excludes)
+        properties = self._manager_class.Interface.getGraphQLProperties()
+        possible_values = self.transformPropertiesToInputFields(
+            properties, self.input_fields
+        )
+        return CalculationBucket(
+            manager_class=self._manager_class,
+            filter_definitions=self.filters.copy(),
+            exclude_definitions=self.excludes.copy().update(
+                parse_filters(kwargs, possible_values)
+            ),
+        )
 
     def all(self) -> CalculationBucket:
         """
@@ -199,6 +248,30 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         for combo in combinations:
             yield self._manager_class(**combo)
 
+    def _sortFilters(self, sorted_inputs: List[str]) -> SortedFilters:
+        input_filters: dict[str, dict] = {}
+        prop_filters: dict[str, dict] = {}
+        input_excludes: dict[str, dict] = {}
+        prop_excludes: dict[str, dict] = {}
+
+        for filter_name, filter_def in self.filters.items():
+            if filter_name in sorted_inputs:
+                input_filters[filter_name] = filter_def
+            else:
+                prop_filters[filter_name] = filter_def
+        for exclude_name, exclude_def in self.excludes.items():
+            if exclude_name in sorted_inputs:
+                input_excludes[exclude_name] = exclude_def
+            else:
+                prop_excludes[exclude_name] = exclude_def
+
+        return {
+            "prop_filters": prop_filters,
+            "input_filters": input_filters,
+            "prop_excludes": prop_excludes,
+            "input_excludes": input_excludes,
+        }
+
     def generate_combinations(self) -> List[dict[str, Any]]:
         """
         Generates and caches all valid input combinations based on filters, exclusions, and sorting.
@@ -211,11 +284,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             return tuple(item[key] for key in sort_key)
 
         if self._current_combinations is None:
-            # Implementierung ähnlich wie im InputManager
             sorted_inputs = self.topological_sort_inputs()
-            current_combinations = self._generate_combinations(
-                sorted_inputs, self.filters, self.excludes
+            sorted_filters = self._sortFilters(sorted_inputs)
+            current_combinations = self._generate_input_combinations(
+                sorted_inputs,
+                sorted_filters["input_filters"],
+                sorted_filters["input_excludes"],
             )
+            current_combinations = self._generate_prop_combinations(
+                current_combinations,
+                sorted_filters["prop_filters"],
+                sorted_filters["prop_excludes"],
+            )
+
             if self.sort_key is not None:
                 sort_key = self.sort_key
                 if isinstance(sort_key, str):
@@ -312,7 +393,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             raise TypeError(f"Invalid possible_values for input '{key_name}'")
         return possible_values
 
-    def _generate_combinations(
+    def _generate_input_combinations(
         self,
         sorted_inputs: List[str],
         filters: dict[str, dict],
@@ -378,6 +459,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 del current_combo[input_name]
 
         return list(helper(0, {}))
+
+    def _generate_prop_combinations(
+        self,
+        current_combos: list[dict[str, Any]],
+        prop_filters: dict[str, Any],
+        prop_excludes: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+
+        props_needed = set(prop_filters.keys()) | set(prop_excludes.keys())
+        if not props_needed:
+            return current_combos
+
+        raise NotImplementedError(
+            "Property combinations are not yet implemented in CalculationBucket."
+        )
 
     def first(self) -> GeneralManagerType | None:
         """
