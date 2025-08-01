@@ -19,10 +19,10 @@ type permission_type = Literal[
 
 class ManagerBasedPermission(BasePermission):
     __based_on__: Optional[str] = None
-    __read__: list[str] = ["public"]
-    __create__: list[str] = ["isAuthenticated"]
-    __update__: list[str] = ["isAuthenticated"]
-    __delete__: list[str] = ["isAuthenticated"]
+    __read__: list[str]
+    __create__: list[str]
+    __update__: list[str]
+    __delete__: list[str]
 
     def __init__(
         self,
@@ -31,6 +31,19 @@ class ManagerBasedPermission(BasePermission):
     ) -> None:
 
         super().__init__(instance, request_user)
+
+        default_read = ["public"]
+        default_write = ["isAuthenticated"]
+
+        if self.__based_on__ is not None:
+            default_read = []
+            default_write = []
+
+        self.__read__ = getattr(self, "__read__", default_read)
+        self.__create__ = getattr(self, "__create__", default_write)
+        self.__update__ = getattr(self, "__update__", default_write)
+        self.__delete__ = getattr(self, "__delete__", default_write)
+
         self.__attribute_permissions = self.__getAttributePermissions()
         self.__based_on_permission = self.__getBasedOnPermission()
         self.__overall_results: Dict[permission_type, Optional[bool]] = {
@@ -124,6 +137,8 @@ class ManagerBasedPermission(BasePermission):
         self,
         permissions: list[str],
     ) -> bool:
+        if not permissions:
+            return True
         for permission in permissions:
             if self.validatePermissionString(permission):
                 return True
