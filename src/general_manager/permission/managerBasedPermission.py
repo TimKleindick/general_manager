@@ -19,10 +19,10 @@ type permission_type = Literal[
 
 class ManagerBasedPermission(BasePermission):
     __based_on__: Optional[str] = None
-    __read__: list[str] = ["public"]
-    __create__: list[str] = ["isAuthenticated"]
-    __update__: list[str] = ["isAuthenticated"]
-    __delete__: list[str] = ["isAuthenticated"]
+    __read__: list[str]
+    __create__: list[str]
+    __update__: list[str]
+    __delete__: list[str]
 
     def __init__(
         self,
@@ -30,7 +30,25 @@ class ManagerBasedPermission(BasePermission):
         request_user: AbstractUser,
     ) -> None:
 
+        """
+        Initialize the ManagerBasedPermission with a manager instance and a requesting user.
+        
+        Sets up default CRUD permission lists based on whether a related "based on" permission is specified, populates attribute-specific permissions, and prepares internal state for permission checks.
+        """
         super().__init__(instance, request_user)
+
+        default_read = ["public"]
+        default_write = ["isAuthenticated"]
+
+        if self.__based_on__ is not None:
+            default_read = []
+            default_write = []
+
+        self.__read__ = getattr(self, "__read__", default_read)
+        self.__create__ = getattr(self, "__create__", default_write)
+        self.__update__ = getattr(self, "__update__", default_write)
+        self.__delete__ = getattr(self, "__delete__", default_write)
+
         self.__attribute_permissions = self.__getAttributePermissions()
         self.__based_on_permission = self.__getBasedOnPermission()
         self.__overall_results: Dict[permission_type, Optional[bool]] = {
@@ -41,6 +59,16 @@ class ManagerBasedPermission(BasePermission):
         }
 
     def __getBasedOnPermission(self) -> Optional[BasePermission]:
+        """
+        Retrieve and instantiate the permission object associated with the `__based_on__` attribute.
+        
+        Returns:
+            An instance of the related `BasePermission` subclass if the `__based_on__` attribute exists on the instance and its `Permission` class is valid; otherwise, returns `None`.
+        
+        Raises:
+            ValueError: If the `__based_on__` attribute is missing from the instance.
+            TypeError: If the `__based_on__` attribute is not a `GeneralManager` or its subclass.
+        """
         from general_manager.manager.generalManager import GeneralManager
 
         __based_on__ = getattr(self, "__based_on__")
@@ -52,8 +80,8 @@ class ManagerBasedPermission(BasePermission):
             raise ValueError(
                 f"Based on object {__based_on__} not found in instance {self.instance}"
             )
-        if not isinstance(basis_object, GeneralManager) and not issubclass(
-            basis_object, GeneralManager
+        if not isinstance(basis_object, GeneralManager) and not (
+            isinstance(basis_object, type) and issubclass(basis_object, GeneralManager)
         ):
             raise TypeError(f"Based on object {__based_on__} is not a GeneralManager")
 
@@ -124,6 +152,17 @@ class ManagerBasedPermission(BasePermission):
         self,
         permissions: list[str],
     ) -> bool:
+        """
+        Return True if the provided permissions list is empty or if any permission string is valid for the user.
+        
+        Parameters:
+            permissions (list[str]): List of permission strings to validate.
+        
+        Returns:
+            bool: True if no permissions are required or at least one permission string is valid; otherwise, False.
+        """
+        if not permissions:
+            return True
         for permission in permissions:
             if self.validatePermissionString(permission):
                 return True
