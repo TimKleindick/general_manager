@@ -299,16 +299,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 sorted_filters["input_filters"],
                 sorted_filters["input_excludes"],
             )
+            # ToDo: current_combinations darf am ende nur input values enthalten
             current_combinations = self._generate_prop_combinations(
                 current_combinations,
                 sorted_filters["prop_filters"],
                 sorted_filters["prop_excludes"],
+                sort_key=self.sort_key,
             )
 
             if self.sort_key is not None:
                 sort_key = self.sort_key
                 if isinstance(sort_key, str):
                     sort_key = (sort_key,)
+                # hier brauchen wir auch prop values zum sortieren
                 current_combinations = sorted(
                     current_combinations,
                     key=key_func,
@@ -473,10 +476,20 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         current_combos: list[dict[str, Any]],
         prop_filters: dict[str, Any],
         prop_excludes: dict[str, Any],
+        sort_key: Optional[str | tuple[str]] = None,
     ) -> list[dict[str, Any]]:
+        props_needed_sort_key = set()
+        if sort_key is not None:
+            if isinstance(sort_key, str):
+                sort_key_list = [sort_key]
+            elif isinstance(sort_key, tuple):
+                sort_key_list = list(sort_key)
+            props_needed_sort_key = set(
+                [key for key in sort_key_list if key not in self.input_fields.keys()]
+            )
 
         props_needed = set(prop_filters.keys()) | set(prop_excludes.keys())
-        if not props_needed:
+        if not props_needed and not props_needed_sort_key:
             return current_combos
 
         raise NotImplementedError(
