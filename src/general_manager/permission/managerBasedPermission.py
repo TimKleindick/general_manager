@@ -65,8 +65,8 @@ class ManagerBasedPermission(BasePermission):
             raise ValueError(
                 f"Based on object {__based_on__} not found in instance {self.instance}"
             )
-        if not isinstance(basis_object, GeneralManager) and not issubclass(
-            basis_object, GeneralManager
+        if not isinstance(basis_object, GeneralManager) and not (
+            isinstance(basis_object, type) and issubclass(basis_object, GeneralManager)
         ):
             raise TypeError(f"Based on object {__based_on__} is not a GeneralManager")
 
