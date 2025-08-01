@@ -12,9 +12,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Define and assign GeneralManager model classes for use in integration tests.
-
-        This method creates three nested model classes—TestCountry, TestHuman, and TestFamily—each with associated Django model interfaces and relationships. The classes are assigned to class variables for use in test methods, and lists of all manager classes and read-only classes are maintained.
+        Defines and assigns nested GeneralManager model classes with interfaces and permissions for integration tests.
+        
+        This method creates three model classes—TestCountry1, TestHuman1, and TestFamily1—each with Django ORM fields and manager-based permissions. The classes are assigned to class variables for use in test methods, and lists of all manager classes and read-only classes are initialized.
         """
 
         class TestCountry1(GeneralManager):
@@ -75,9 +75,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Prepares the test database with sample country, human, and family data for integration tests.
-
-        Synchronizes country data, creates two human instances (one linked to a country), and a family instance associating both humans.
+        Populate the test database with sample countries, humans, and a family for integration testing.
+        
+        Creates two country instances, three human instances (one linked to a country), and a family instance associating two humans. All objects are created with permissions bypassed for test setup.
         """
         super().setUp()
 
@@ -122,9 +122,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_update_family(self):
         """
-        Tests the update of a family with three humans and verifies the family and human relationships.
-
-        This test checks that the family is updated successfully, that it contains the correct humans, and that the humans are linked to the family.
+        Verify that updating a family instance correctly changes its name and updates its associated humans.
+        
+        Asserts that the family initially contains the expected humans, then updates the family's name and membership, and verifies the changes are reflected in the relationships.
         """
         self.assertEqual(self.test_family.name, "Smith Family")
         self.assertIn(self.test_human1, self.test_family.humans_list)
@@ -141,7 +141,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_based_on_permissions_public(self):
         """
-        Tests the manager-based permissions for the family model.
+        Test that manager-based permissions allow updating and creating human instances.
+        
+        Verifies that a human's name can be updated and a new human can be created with a country association, ensuring permission logic is correctly enforced.
         """
 
         self.test_human1 = self.test_human1.update(
