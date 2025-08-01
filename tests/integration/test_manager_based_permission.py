@@ -1,9 +1,7 @@
 from __future__ import annotations
 from django.db import models
-from django.contrib.auth.models import User
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.permission.managerBasedPermission import ManagerBasedPermission
 
