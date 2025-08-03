@@ -383,11 +383,16 @@ class GraphQL:
         general_manager_class: type[GeneralManager],
         info: GraphQLResolveInfo,
     ) -> Bucket:
+        import copy
+
         """
         Wendet die vom Permission-Interface vorgegebenen Filter auf das Queryset an.
         """
         permission_filters = getReadPermissionFilter(general_manager_class, info)
-        filtered_queryset = queryset
+        if not permission_filters:
+            return queryset
+
+        filtered_queryset = queryset.none()
         for perm_filter, perm_exclude in permission_filters:
             qs_perm = queryset.exclude(**perm_exclude).filter(**perm_filter)
             filtered_queryset = filtered_queryset | qs_perm
