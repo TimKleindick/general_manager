@@ -18,18 +18,18 @@ class DummyGeneralManager:
     def __init__(self, **kwargs):
         # Initialize with any keyword arguments, simulating a manager
         """
-        Initializes the dummy manager with provided keyword arguments.
-
-        Stores all keyword arguments for later comparison and representation.
+        Initialize the dummy manager with arbitrary keyword arguments.
+        
+        All provided keyword arguments are stored for later comparison and representation.
         """
         self.kwargs = kwargs
 
     def __eq__(self, value: object) -> bool:
         """
-        Checks equality with another DummyGeneralManager based on initialization arguments.
-
+        Determine if another object is a DummyGeneralManager with identical initialization arguments.
+        
         Returns:
-            True if the other object is a DummyGeneralManager with identical kwargs; otherwise, False.
+            bool: True if the other object is a DummyGeneralManager and has the same kwargs; otherwise, False.
         """
         if not isinstance(value, DummyGeneralManager):
             return False
@@ -54,9 +54,9 @@ class TestCalculationBucket(TestCase):
     def test_initialization_defaults(self, mock_parse):
         # Test basic initialization without optional parameters
         """
-        Tests that CalculationBucket initializes with default values when only the manager class is provided.
-
-        Verifies that filters, excludes, sort key, and reverse flag are set to their defaults, and that input fields are sourced from the associated interface.
+        Test that CalculationBucket initializes with default parameters when only the manager class is provided.
+        
+        Ensures filters and excludes are empty, sort key is None, reverse is False, and input fields are taken from the associated interface.
         """
         bucket = CalculationBucket(manager_class=DummyGeneralManager)
         self.assertIsInstance(bucket, CalculationBucket)
@@ -71,9 +71,9 @@ class TestCalculationBucket(TestCase):
     def test_initialization_with_filters_and_excludes(self, mock_parse):
         # Filters and excludes passed directly to constructor
         """
-        Tests that CalculationBucket initializes with provided filter and exclude definitions, sort key, and reverse flag.
-
-        Verifies that the constructor correctly assigns the given filters, excludes, sort key, and reverse attributes.
+        Test that CalculationBucket initializes with specified filters, excludes, sort key, and reverse flag.
+        
+        Verifies that the constructor assigns the provided filter and exclude definitions, sort key, and reverse attribute as expected.
         """
         fdefs = {"f": {"filter_kwargs": {"f": 1}}}
         edefs = {"e": {"filter_kwargs": {"e": 2}}}
@@ -92,10 +92,9 @@ class TestCalculationBucket(TestCase):
     def test_reduce_and_setstate(self, mock_parse):
         # Test pickling support
         """
-        Tests that CalculationBucket supports pickling and unpickling via __reduce__ and __setstate__.
-
-        Verifies that the reduced state includes current combinations and that state restoration
-        correctly sets the internal combinations on a new instance.
+        Tests that CalculationBucket instances can be pickled and unpickled using __reduce__ and __setstate__.
+        
+        Ensures that the reduced state includes the current combinations and that restoring state correctly sets the internal combinations on a new instance.
         """
         bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True)
         # Prepopulate state
@@ -144,9 +143,9 @@ class TestCalculationBucket(TestCase):
 
     def test_str_and_repr_formatting(self, mock_parse):
         """
-        Tests the string and repr formatting of CalculationBucket instances.
-
-        Verifies that the string representation displays the total count and up to five combinations, using an ellipsis if more exist, and that the repr shows the constructor parameters.
+        Tests that the string and repr representations of CalculationBucket instances display the correct format.
+        
+        Verifies that the string representation shows the total number of combinations and up to five example combinations, using an ellipsis if there are more than five. Also checks that the repr output includes the constructor parameters.
         """
         bucket = CalculationBucket(DummyGeneralManager)
         # Manually set combinations for string formatting tests
@@ -169,9 +168,9 @@ class TestCalculationBucket(TestCase):
 
     def test_all_iter_len_count(self, mock_parse):
         """
-        Tests that CalculationBucket's all(), iteration, count(), and length methods behave as expected.
-
-        Verifies that all() returns the bucket itself, iteration yields one manager instance per combination, and both count() and len() return the correct number of combinations.
+        Test that CalculationBucket's all(), iteration, count(), and length methods return the expected results.
+        
+        Ensures that all() returns the bucket itself, iteration yields one manager instance per combination, and both count() and len() reflect the number of combinations.
         """
         bucket = CalculationBucket(DummyGeneralManager)
         # Set a single empty combination so manager(**{}) works
@@ -187,9 +186,7 @@ class TestCalculationBucket(TestCase):
 
     def test_first_last_empty_and_nonempty(self, mock_parse):
         """
-        Tests the behavior of the `first()` and `last()` methods on a `CalculationBucket`.
-
-        Verifies that `first()` and `last()` return `None` when the bucket has no combinations, and return the same manager instance when only one combination exists.
+        Test that `first()` and `last()` on a `CalculationBucket` return `None` when there are no combinations, and return the same manager instance when only one combination exists.
         """
         bucket = CalculationBucket(DummyGeneralManager)
         # Empty combos
@@ -239,13 +236,13 @@ class TestGenerateCombinations(TestCase):
     def _make_bucket_with_fields(self, fields):
         # Dynamically create an interface and manager class with given input_fields
         """
-        Creates a CalculationBucket with dynamically defined input fields.
-
-        Args:
-            fields: A list of input field definitions to assign to the generated interface.
-
+        Create a CalculationBucket instance using dynamically generated input fields.
+        
+        Parameters:
+        	fields (list): Input field definitions to assign to the generated interface.
+        
         Returns:
-            A CalculationBucket instance using a dynamically created manager and interface with the specified input fields.
+        	CalculationBucket: An instance configured with a manager and interface using the specified input fields.
         """
 
         class DynInterface(CalculationInterface):
@@ -260,9 +257,9 @@ class TestGenerateCombinations(TestCase):
     def test_basic_cartesian_product(self, mock_parse):
         # Two independent fields produce a Cartesian product
         """
-        Tests that generate_combinations produces the Cartesian product of independent input fields.
-
-        Verifies that two fields with independent possible values yield all possible combinations.
+        Tests that generate_combinations returns all possible combinations for independent input fields.
+        
+        Verifies that when two fields have independent possible values, the resulting combinations form the full Cartesian product.
         """
         fields = {
             "num": Input(type=int, possible_values=[1, 2]),
@@ -297,12 +294,21 @@ class TestGenerateCombinations(TestCase):
     def test_dependent_field(self, mock_parse):
         # Field2 depends on field1 and its possible_values is a callable
         """
-        Tests that a dependent input field with callable possible values generates combinations reflecting the dependency.
-
-        Verifies that when one field's possible values depend on another field's value, the generated combinations correctly incorporate this relationship.
+        Test that dependent input fields with callable possible values generate correct combinations.
+        
+        Verifies that when a field's possible values are defined as a callable depending on another field, the generated combinations reflect this dependency.
         """
 
         def pv_func(a):
+            """
+            Return a list containing the input value multiplied by 10.
+            
+            Parameters:
+            	a (int or float): The value to be multiplied.
+            
+            Returns:
+            	list: A single-element list with the result of a * 10.
+            """
             return [a * 10]
 
         fields = {
@@ -320,9 +326,9 @@ class TestGenerateCombinations(TestCase):
     def test_filters_and_excludes(self, mock_parse):
         # Apply filter_funcs to include only even numbers, and exclude a specific value
         """
-        Tests that filter and exclude functions are correctly applied to input values.
-
-        Verifies that only even numbers are included and a specific value is excluded from the generated combinations.
+        Test that filter and exclude functions are correctly applied to input values when generating combinations.
+        
+        Ensures that only even numbers are included and a specified value is excluded from the resulting combinations.
         """
         fields = {
             "n": Input(type=int, possible_values=[1, 2, 3, 4]),
@@ -338,9 +344,9 @@ class TestGenerateCombinations(TestCase):
     def test_sort_and_reverse_and_caching(self, mock_parse):
         # Three values, sorted and reversed
         """
-        Tests that sorting and reversing combinations works as expected and that results are cached.
-
-        Verifies that combinations are sorted in descending order by the specified key, and that repeated calls to `generate_combinations` return the cached result.
+        Tests that sorting and reversing combinations in a CalculationBucket works as expected and that the generated combinations are cached.
+        
+        Verifies that combinations are sorted in descending order by the specified key and that repeated calls to `generate_combinations` return the same cached result.
         """
         fields = {
             "v": Input(type=int, possible_values=[3, 1, 2]),

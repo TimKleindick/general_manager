@@ -34,9 +34,9 @@ class ManagerBasedPermission(BasePermission):
         request_user: AbstractUser,
     ) -> None:
         """
-        Initialize the ManagerBasedPermission with a manager instance and a requesting user.
-
-        Sets up default CRUD permission lists based on whether a related "based on" permission is specified, populates attribute-specific permissions, and prepares internal state for permission checks.
+        Initializes the ManagerBasedPermission with a manager instance and the requesting user.
+        
+        Configures default CRUD permissions, collects attribute-specific permissions, and sets up any related "based on" permission for cascading checks.
         """
         super().__init__(instance, request_user)
         self.__setPermissions()
@@ -52,6 +52,11 @@ class ManagerBasedPermission(BasePermission):
 
     def __setPermissions(self, skip_based_on: bool = False) -> None:
 
+        """
+        Assigns default permission lists for CRUD actions based on the presence of a related permission attribute.
+        
+        If the permission is based on another attribute and `skip_based_on` is False, all default permissions are set to empty lists. Otherwise, read permissions default to `["public"]` and write permissions to `["isAuthenticated"]`. Class-level overrides are respected if present.
+        """
         default_read = ["public"]
         default_write = ["isAuthenticated"]
 
@@ -66,11 +71,11 @@ class ManagerBasedPermission(BasePermission):
 
     def __getBasedOnPermission(self) -> Optional[BasePermission]:
         """
-        Retrieve and instantiate the permission object associated with the `__based_on__` attribute.
-
+        Retrieves the permission object associated with the `__based_on__` attribute, if present and valid.
+        
         Returns:
-            An instance of the related `BasePermission` subclass if the `__based_on__` attribute exists on the instance and its `Permission` class is valid; otherwise, returns `None`.
-
+            An instance of the related `BasePermission` subclass if the `__based_on__` attribute exists on the instance and its `Permission` class is a subclass of `BasePermission`; otherwise, returns `None`.
+        
         Raises:
             ValueError: If the `__based_on__` attribute is missing from the instance.
             TypeError: If the `__based_on__` attribute is not a `GeneralManager` or its subclass.
@@ -162,13 +167,9 @@ class ManagerBasedPermission(BasePermission):
         permissions: list[str],
     ) -> bool:
         """
-        Return True if the provided permissions list is empty or if any permission string is valid for the user.
-
-        Parameters:
-            permissions (list[str]): List of permission strings to validate.
-
-        Returns:
-            bool: True if no permissions are required or at least one permission string is valid; otherwise, False.
+        Return True if no permissions are required or if at least one permission string is valid for the user.
+        
+        If the permissions list is empty, access is granted. Otherwise, returns True if any permission string in the list is validated for the user; returns False if none are valid.
         """
         if not permissions:
             return True

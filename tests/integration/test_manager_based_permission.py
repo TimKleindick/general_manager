@@ -14,9 +14,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines and assigns nested GeneralManager model classes with interfaces and permissions for integration tests.
-
-        This method creates three model classes—TestCountry1, TestHuman1, and TestFamily1—each with Django ORM fields and manager-based permissions. The classes are assigned to class variables for use in test methods, and lists of all manager classes and read-only classes are initialized.
+        Defines and assigns test model classes with interfaces and permissions for integration tests.
+        
+        This class method creates three nested GeneralManager-based models—TestCountry1, TestHuman1, and TestFamily1—each with Django ORM fields and manager-based permissions. The models are assigned to class variables for use in test cases, and a list of all manager classes is initialized.
         """
 
         class TestCountry1(GeneralManager):
@@ -76,9 +76,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Populate the test database with sample countries, humans, and a family for integration testing.
-
-        Creates two country instances, three human instances (one linked to a country), and a family instance associating two humans. All objects are created with permissions bypassed for test setup.
+        Sets up initial test data including users, countries, humans, and a family for integration tests.
+        
+        Creates a test user, two country instances, three human instances (one linked to a country), and a family associating two humans. All objects are created with permissions bypassed to ensure consistent test setup.
         """
         super().setUp()
         self.user: User = User.objects.create_user(
@@ -125,9 +125,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_update_family(self):
         """
-        Verify that updating a family instance correctly changes its name and updates its associated humans.
-
-        Asserts that the family initially contains the expected humans, then updates the family's name and membership, and verifies the changes are reflected in the relationships.
+        Test that updating a family instance changes its name and updates its associated humans.
+        
+        Verifies the initial family name and membership, performs an update to change the name and add a human, and asserts that the changes are correctly reflected.
         """
         self.assertEqual(self.test_family.name, "Smith Family")
         self.assertIn(self.test_human1, self.test_family.humans_list)
@@ -144,9 +144,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_based_on_permissions_public(self):
         """
-        Test that manager-based permissions allow updating and creating human instances.
-
-        Verifies that a human's name can be updated and a new human can be created with a country association, ensuring permission logic is correctly enforced.
+        Verify that manager-based permissions allow updating an existing human and creating a new human with a country association.
+        
+        Ensures that permission logic permits modifying a human's name and adding a new human linked to a specific country.
         """
 
         self.test_human1 = self.test_human1.update(
@@ -164,9 +164,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_permission_based_on_field_inheritance(self):
         """
-        Test that permissions are correctly inherited based on the __based_on__ field.
-
-        Verifies that humans inherit permissions from their associated country.
+        Test that permission inheritance is correctly applied based on the `__based_on__` field.
+        
+        Verifies that a human instance inherits permissions from its associated country, and that updating the country field updates the inherited permissions accordingly.
         """
         # Test that human with US country inherits US permissions
         self.assertEqual(self.test_human1.country.code, "US")  # type: ignore
@@ -182,9 +182,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_create_with_permission_validation(self):
         """
-        Test creating instances with different permission scenarios.
-
-        Validates that permission checking works correctly during creation.
+        Test creation of human instances under various permission scenarios.
+        
+        Verifies that creating a human with a valid country reference succeeds, while attempting to create a human without a country and without a creator ID raises a PermissionError. Also confirms that providing a creator ID allows creation without a country.
         """
         # Test creating human with valid country reference -> should use country-based permissions
         human_with_country = self.TestHuman.create(
@@ -207,9 +207,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_update_with_permission_validation(self):
         """
-        Test updating instances with different permission scenarios.
-
-        Validates that permission checking works correctly during updates.
+        Test updating a human's country association with permission enforcement.
+        
+        Validates that updating a human's country field requires appropriate permissions, raising a PermissionError when permissions are insufficient, and allowing the update when a valid creator ID is provided.
         """
         # Test updating human's country association
         original_country = self.test_human1.country
@@ -226,9 +226,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_delete_with_permissions(self):
         """
-        Test deletion scenarios with permission validation.
-
-        Verifies that deletion works correctly with manager-based permissions.
+        Tests that a human instance can be deleted (deactivated) when permissions allow, and verifies the instance is no longer active in the database.
         """
         # Create a temporary human for deletion test
         temp_human = self.TestHuman.create(
@@ -244,9 +242,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_filter_operations_with_permissions(self):
         """
-        Test filtering operations work correctly with permission system.
-
-        Validates that filtering respects permission boundaries.
+        Verify that filtering queries return only permitted results according to the permission system.
+        
+        Ensures that when read permissions are restricted (e.g., to a specific country code), filtered queries via GraphQL only return items the user is allowed to access, and items outside the permission scope are excluded.
         """
         # Test filtering countries
 
@@ -285,9 +283,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_edge_case_empty_relationships(self):
         """
-        Test edge cases with empty relationships and null values.
-
-        Validates behavior when dealing with empty or null relationship data.
+        Test handling of empty many-to-many and null foreign key relationships.
+        
+        Verifies that creating or updating a family with an empty humans list results in no associated humans, and that creating a human with a null country is handled correctly.
         """
         # Test creating family with empty humans list
         empty_family = self.TestFamily.create(
@@ -307,9 +305,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_bulk_operations_with_permissions(self):
         """
-        Test bulk create and update operations with permission validation.
-
-        Validates that bulk operations respect permission boundaries.
+        Tests bulk creation of human instances with various country associations, ensuring permission rules are respected.
+        
+        Creates multiple humans in a single operation, assigning different country relationships, and verifies correct assignment and creation.
         """
         # Test bulk creation of humans
         humans_data = [
@@ -332,9 +330,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_field_validation_and_constraints(self):
         """
-        Test field validation and database constraints work correctly.
-
-        Validates that model field constraints are properly enforced.
+        Test that model field validation and database constraints are enforced.
+        
+        Verifies that creating a country with a duplicate code raises a ValidationError due to the unique constraint, and that exceeding the maximum length for the code field also raises a ValidationError.
         """
         # Test unique constraint on country code
         with self.assertRaises(ValidationError):
@@ -356,9 +354,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_complex_permission_scenarios(self):
         """
-        Test complex permission scenarios with nested relationships.
-
-        Validates permission logic in complex relationship hierarchies.
+        Test permission logic in scenarios involving nested relationships across models.
+        
+        Creates humans from different countries and a family containing them, then verifies that the family includes members with distinct country associations.
         """
         # Create a human in Germany
         german_human = self.TestHuman.create(
