@@ -211,14 +211,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ) -> DatabaseBucket:
         """
-        Return a new DatabaseBucket sorted by the specified field or fields.
-
+        Return a new DatabaseBucket with items sorted by the specified field or fields.
+        
         Parameters:
             key (str or tuple of str): Field name or tuple of field names to sort by.
             reverse (bool): If True, sort in descending order.
-
+        
         Returns:
-            DatabaseBucket: A new bucket instance containing the sorted queryset.
+            DatabaseBucket: A new bucket containing the sorted items.
         """
         if isinstance(key, str):
             key = (key,)
@@ -230,9 +230,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:
         """
-        Returns a new DatabaseBucket with no items, maintaining the same class type.
-
-        This method is useful for creating a bucket that contains no items, while maintaining the same class type.
+        Return a new DatabaseBucket instance of the same type containing no items.
+        
+        This method creates an empty bucket while preserving the current manager class and bucket type.
         """
         own = self.all()
         own._data = own._data.none()
