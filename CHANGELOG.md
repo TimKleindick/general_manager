@@ -2,6 +2,56 @@
 
 <!-- version list -->
 
+## v0.13.0 (2025-08-03)
+
+### Bug Fixes
+
+- Apply permission filters to queryset in GraphQL class
+  ([`5125e33`](https://github.com/TimKleindick/general_manager/commit/5125e33f494fbee969d90f3af172e04b9d264d86))
+
+- Improve type checking for based_on object in ManagerBasedPermission
+  ([`95c483e`](https://github.com/TimKleindick/general_manager/commit/95c483e70a41e591b945505f5d1f02e30a57e014))
+
+- Refactor permission attributes initialization and handle based_on condition
+  ([`2e21b3b`](https://github.com/TimKleindick/general_manager/commit/2e21b3b64619942de5a011868f2600107f7245c3))
+
+- Remove unnecessary blank lines in test_calculationBucket.py
+  ([`3117b2a`](https://github.com/TimKleindick/general_manager/commit/3117b2afcf7b789a7a8cdd1d3e24f691710bdddc))
+
+- Remove unused import statement and clean up
+  ([`784c174`](https://github.com/TimKleindick/general_manager/commit/784c1742dbe304bd60f7c881c911e2641ca33c0d))
+
+- Remove unused import statement in GraphQL class
+  ([`8bab0a3`](https://github.com/TimKleindick/general_manager/commit/8bab0a354fec0c94b6f21ebfd3d1a13b5ac386cf))
+
+- Remove unused permission inheritance test method
+  ([`b987be3`](https://github.com/TimKleindick/general_manager/commit/b987be3cedfd58381acb48ca8575cb77f548acef))
+
+- Update condition to check for None or NOT_PROVIDED in many-to-many kwargs
+  ([`ca779b6`](https://github.com/TimKleindick/general_manager/commit/ca779b616f208cf28ddf1a258483f151337fbdce))
+
+### Features
+
+- Add 'matches' permission function to permission_functions
+  ([`542e820`](https://github.com/TimKleindick/general_manager/commit/542e82056a5b5085ae75359d63d6066c82647fd0))
+
+- Add `none` method to Bucket class and import QuerySet
+  ([`ca3c8b5`](https://github.com/TimKleindick/general_manager/commit/ca3c8b5b5b14099f8789fc6914216e81def42738))
+
+- Refactor permission initialization and add difference between None and no result
+  ([`94d4809`](https://github.com/TimKleindick/general_manager/commit/94d480934097bd51106ad9d04e702e7887466e3c))
+
+### Refactoring
+
+- Clean up code formatting and improve permission validation tests
+  ([`2070a60`](https://github.com/TimKleindick/general_manager/commit/2070a608306cbddd92a53e0cceec3a09808f93bc))
+
+### Testing
+
+- Add integration tests for manager-based permissions and family updates
+  ([`54eebde`](https://github.com/TimKleindick/general_manager/commit/54eebde4906d1386a731f9c336686803aeb535de))
+
+
 ## v0.12.2 (2025-07-28)
 
 ### Bug Fixes
