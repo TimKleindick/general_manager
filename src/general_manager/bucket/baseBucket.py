@@ -1,5 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from django.db.models import QuerySet
 from typing import (
     Type,
     Generator,
@@ -62,10 +63,10 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     ) -> Bucket[GeneralManagerType]:
         """
         Return a new bucket containing the union of this bucket and another bucket or manager instance.
-        
+
         Parameters:
             other: Another bucket or a single manager instance to combine with this bucket.
-        
+
         Returns:
             A new bucket containing all unique items from both sources.
         """
@@ -240,3 +241,9 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         from general_manager.bucket.groupBucket import GroupBucket
 
         return GroupBucket(self._manager_class, group_by_keys, self)
+
+    def none(self) -> Bucket[GeneralManagerType]:
+        raise NotImplementedError(
+            "The 'none' method is not implemented in the base Bucket class. "
+            "Subclasses should implement this method to return an empty bucket."
+        )

@@ -294,3 +294,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
             tuple([*self._group_by_keys, *group_by_keys]),
             self._basis_data,
         )
+
+    def none(self) -> GroupBucket[GeneralManagerType]:
+        """
+        Returns a new GroupBucket with no items, maintaining the same class type and group-by keys.
+
+        This method is useful for creating a bucket that contains no items, while maintaining the same class type.
+        """
+        return GroupBucket(
+            self._manager_class, self._group_by_keys, self._basis_data.none()
+        )

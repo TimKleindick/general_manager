@@ -227,3 +227,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         else:
             sorted_data = self._data.order_by(*key)
         return self.__class__(sorted_data, self._manager_class)
+
+    def none(self) -> DatabaseBucket[GeneralManagerType]:
+        """
+        Returns a new DatabaseBucket with no items, maintaining the same class type.
+
+        This method is useful for creating a bucket that contains no items, while maintaining the same class type.
+        """
+        own = self.all()
+        own._data = own._data.none()
+        return own
