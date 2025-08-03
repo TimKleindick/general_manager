@@ -281,7 +281,6 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response_2)
         response_2 = response_2.json()
         data_2 = response_2.get("data", {})
-        print(data_2["testcountry1List"]["items"])
         self.assertEqual(len(data_2["testcountry1List"]["items"]), 0)
 
     def test_edge_case_empty_relationships(self):
