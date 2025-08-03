@@ -91,7 +91,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         from general_manager.manager.generalManager import GeneralManager
 
         for key, value in many_to_many_kwargs.items():
-            if not value:
+            if value is None or value is NOT_PROVIDED:
                 continue
             field_name = key.removesuffix("_id_list")
             if isinstance(value, list) and all(
