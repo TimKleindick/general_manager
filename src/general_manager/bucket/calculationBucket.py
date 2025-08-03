@@ -9,6 +9,7 @@ from typing import (
     Generator,
     List,
 )
+from copy import deepcopy
 from general_manager.interface.baseInterface import (
     generalManagerClassName,
     GeneralManagerType,
@@ -96,12 +97,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     ) -> CalculationBucket[GeneralManagerType]:
         """
         Combine this CalculationBucket with another bucket or manager instance of the same manager class.
-        
+
         If combined with a manager instance, returns a bucket filtered to that manager's identification. If combined with another CalculationBucket of the same manager class, returns a new bucket containing only the filters and excludes that are present and identical in both buckets.
-        
+
         Raises:
             ValueError: If the other object is not a CalculationBucket or manager of the same class.
-            
+
         Returns:
             CalculationBucket[GeneralManagerType]: A new CalculationBucket representing the intersection of filters and excludes, or a filtered bucket for the given manager instance.
         """
@@ -187,7 +188,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         This method allows for compatibility with interfaces expecting an `all()` method that returns the full set of items.
         """
-        return self
+        return deepcopy(self)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
@@ -482,3 +483,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return CalculationBucket(
             self._manager_class, self.filters, self.excludes, key, reverse
         )
+
+    def none(self) -> CalculationBucket[GeneralManagerType]:
+        """
+        Returns a new CalculationBucket with no items, maintaining the same class type.
+
+        This method is useful for creating a bucket that contains no items, while preserving the class type.
+        """
+        own = self.all()
+        own._current_combinations = None
+        own.filters = {}
+        own.excludes = {}
+        return own
