@@ -383,8 +383,6 @@ class GraphQL:
         general_manager_class: type[GeneralManager],
         info: GraphQLResolveInfo,
     ) -> Bucket:
-        import copy
-
         """
         Wendet die vom Permission-Interface vorgegebenen Filter auf das Queryset an.
         """
