@@ -96,13 +96,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Combine this CalculationBucket with another bucket or manager instance of the same manager class.
-
-        If combined with a manager instance, returns a bucket filtered to that manager's identification. If combined with another CalculationBucket of the same manager class, returns a new bucket containing only the filters and excludes that are present and identical in both buckets.
-
+        Combine this CalculationBucket with another bucket or a manager instance of the same manager class.
+        
+        If combined with a manager instance, returns a bucket filtered to that instance's identification. If combined with another CalculationBucket of the same manager class, returns a new bucket containing only the filters and excludes that are present and identical in both buckets.
+        
         Raises:
             ValueError: If the other object is not a CalculationBucket or manager of the same class.
-
+        
         Returns:
             CalculationBucket[GeneralManagerType]: A new CalculationBucket representing the intersection of filters and excludes, or a filtered bucket for the given manager instance.
         """
@@ -184,17 +184,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def all(self) -> CalculationBucket:
         """
-        Returns the current CalculationBucket instance.
-
-        This method allows for compatibility with interfaces expecting an `all()` method that returns the full set of items.
+        Return a deep copy of the current CalculationBucket instance.
+        
+        Use this method to obtain an independent copy of the bucket, ensuring that modifications to the returned instance do not affect the original.
         """
         return deepcopy(self)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
-        Yields manager instances for each valid combination of input parameters.
-
-        Iterates over all generated input combinations, instantiating the manager class with each set of parameters.
+        Iterate over all valid input combinations, yielding a manager instance for each.
+        
+        Yields:
+            Manager instances created with each valid set of input parameters.
         """
         combinations = self.generate_combinations()
         for combo in combinations:
@@ -471,14 +472,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self, key: str | tuple[str], reverse: bool = False
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Returns a new CalculationBucket with updated sorting parameters.
-
-        Args:
-            key: The field name or tuple of field names to sort combinations by.
-            reverse: If True, sorts in descending order.
-
+        Return a new CalculationBucket instance with updated sorting criteria.
+        
+        Parameters:
+            key (str or tuple of str): Field name(s) to sort the combinations by.
+            reverse (bool): Whether to sort in descending order.
+        
         Returns:
-            A new CalculationBucket instance with the specified sorting applied.
+            CalculationBucket: A new bucket instance sorted according to the specified key and order.
         """
         return CalculationBucket(
             self._manager_class, self.filters, self.excludes, key, reverse
@@ -486,9 +487,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def none(self) -> CalculationBucket[GeneralManagerType]:
         """
-        Returns a new CalculationBucket with no items, maintaining the same class type.
-
-        This method is useful for creating a bucket that contains no items, while preserving the class type.
+        Return a new CalculationBucket instance of the same type containing no items.
+        
+        The returned bucket has all filters, excludes, and cached combinations cleared, representing an empty set of combinations.
         """
         own = self.all()
         own._current_combinations = None
