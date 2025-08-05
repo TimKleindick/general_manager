@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 
-from general_manager.interface.baseInterface import Bucket
+from general_manager.bucket.baseBucket import Bucket
 from general_manager.manager.generalManager import GeneralManager
 
 
