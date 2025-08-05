@@ -26,7 +26,7 @@ class PathMap:
     def createPathMapping(cls):
         """
         Builds the mapping of paths between all pairs of distinct managed classes.
-        
+
         Iterates over all registered managed classes and creates a PathTracer for each unique start and destination class pair, storing them in the mapping dictionary.
         """
         all_managed_classes = GeneralManagerMeta.all_classes
@@ -38,10 +38,9 @@ class PathMap:
                     ] = PathTracer(start_class, destination_class)
 
     def __init__(self, path_start: PathStart | GeneralManager | type[GeneralManager]):
-
         """
         Initializes a PathMap with a specified starting point.
-        
+
         The starting point can be a class name (string), a GeneralManager instance, or a GeneralManager subclass. Sets internal attributes for the start instance, class, and class name based on the input.
         """
         if isinstance(path_start, GeneralManager):
@@ -107,14 +106,13 @@ class PathTracer:
     def createPath(
         self, current_manager: type[GeneralManager], path: list[str]
     ) -> list[str] | None:
-
         """
         Recursively constructs a path of attribute names from the current manager class to the destination class.
-        
+
         Args:
             current_manager: The current GeneralManager subclass being inspected.
             path: The list of attribute names traversed so far.
-        
+
         Returns:
             A list of attribute names representing the path to the destination class, or None if no path exists.
         """
@@ -148,13 +146,12 @@ class PathTracer:
     def traversePath(
         self, start_instance: GeneralManager | Bucket
     ) -> GeneralManager | Bucket | None:
-
         """
         Traverses the stored path from a starting instance to reach the destination instance or bucket.
-        
+
         Args:
             start_instance: The initial GeneralManager or Bucket instance from which to begin traversal.
-        
+
         Returns:
             The resulting GeneralManager or Bucket instance at the end of the path, or None if the path is empty.
         """
