@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.13.1 (2025-08-05)
+
+### Bug Fixes
+
+- Correct import statement for Bucket class
+  ([`cbd5f6d`](https://github.com/TimKleindick/general_manager/commit/cbd5f6d990dc59dc05d5229bb3714621ffb188d8))
+
+- Ensure path existence check in PathMap methods
+  ([`ad5700c`](https://github.com/TimKleindick/general_manager/commit/ad5700ceb03ff95951061eb77585476c718ce6fb))
+
+- Handle None attribute types in PathTracer connections
+  ([`bff43f2`](https://github.com/TimKleindick/general_manager/commit/bff43f267e44a16acd16c1a0d82c8b375fb50918))
+
+- Simplify path tracer retrieval logic in PathMap
+  ([`bd6e327`](https://github.com/TimKleindick/general_manager/commit/bd6e327fb0253697b38a9de353d81b8d9061a0fb))
+
+### Refactoring
+
+- Clean up whitespace and improve path mapping documentation
+  ([`e0784cf`](https://github.com/TimKleindick/general_manager/commit/e0784cf43231381c11a7e7d184e2a75d6e9be814))
+
+- Clean up whitespace and improve readability in PathMapping unit tests
+  ([`e796941`](https://github.com/TimKleindick/general_manager/commit/e7969414007459eaa956e879df0ee369d2e58263))
+
+- Reorganize imports and simplify test setup in pathMapping tests
+  ([`c5656e6`](https://github.com/TimKleindick/general_manager/commit/c5656e685e7d990b74ec3d1d44004764ef38fa1b))
+
+### Testing
+
+- Add integration and unit tests for PathMap functionality
+  ([`fb0e080`](https://github.com/TimKleindick/general_manager/commit/fb0e080036ff787e087c38b6448a99a5506dc810))
+
+
 ## v0.13.0 (2025-08-03)
 
 ### Bug Fixes
