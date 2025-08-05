@@ -135,6 +135,8 @@ class PathTracer:
         for attr, attr_type in current_connections.items():
             if attr in path or attr_type == self.start_class:
                 continue
+            if attr_type is None:
+                continue
             if not issubclass(attr_type, GeneralManager):
                 continue
             if attr_type == self.destination_class:
