@@ -63,7 +63,7 @@ class PathMap:
             path_destination = path_destination.__name__
 
         tracer = self.mapping.get((self.start_class_name, path_destination), None)
-        if not tracer:
+        if not tracer or not tracer.path:
             return None
         return tracer
 
@@ -85,9 +85,11 @@ class PathMap:
         Returns a list of all classes that are connected to the start class.
         """
         connected_classes: set[str] = set()
-        for path_tuple in self.mapping.keys():
+        for path_tuple, path_obj in self.mapping.items():
             if path_tuple[0] == self.start_class_name:
                 destination_class_name = path_tuple[1]
+                if path_obj.path is None:
+                    continue
                 connected_classes.add(destination_class_name)
         return connected_classes
 
