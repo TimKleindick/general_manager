@@ -63,7 +63,7 @@ class PathMap:
             path_destination = path_destination.__name__
 
         tracer = self.mapping.get((self.start_class_name, path_destination), None)
-        if not tracer or not tracer.path:
+        if not tracer:
             return None
         return tracer
 
