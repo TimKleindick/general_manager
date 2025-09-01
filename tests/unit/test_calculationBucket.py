@@ -4,6 +4,8 @@ from unittest.mock import patch
 from general_manager.bucket.calculationBucket import CalculationBucket
 from general_manager.interface.calculationInterface import CalculationInterface
 from general_manager.manager.input import Input
+from general_manager.manager import GeneralManager
+from general_manager.api.property import GraphQLProperty
 
 
 # Create a dummy CalculationInterface with no input fields for simplicity
@@ -19,7 +21,7 @@ class DummyGeneralManager:
         # Initialize with any keyword arguments, simulating a manager
         """
         Initializes the dummy manager with provided keyword arguments.
-        
+
         Stores all keyword arguments for later comparison and representation.
         """
         self.kwargs = kwargs
@@ -27,7 +29,7 @@ class DummyGeneralManager:
     def __eq__(self, value: object) -> bool:
         """
         Checks equality with another DummyGeneralManager based on initialization arguments.
-        
+
         Returns:
             True if the other object is a DummyGeneralManager with identical kwargs; otherwise, False.
         """
@@ -55,7 +57,7 @@ class TestCalculationBucket(TestCase):
         # Test basic initialization without optional parameters
         """
         Tests that CalculationBucket initializes with default values when only the manager class is provided.
-        
+
         Verifies that filters, excludes, sort key, and reverse flag are set to their defaults, and that input fields are sourced from the associated interface.
         """
         bucket = CalculationBucket(manager_class=DummyGeneralManager)
@@ -72,7 +74,7 @@ class TestCalculationBucket(TestCase):
         # Filters and excludes passed directly to constructor
         """
         Tests that CalculationBucket initializes with provided filter and exclude definitions, sort key, and reverse flag.
-        
+
         Verifies that the constructor correctly assigns the given filters, excludes, sort key, and reverse attributes.
         """
         fdefs = {"f": {"filter_kwargs": {"f": 1}}}
@@ -93,7 +95,7 @@ class TestCalculationBucket(TestCase):
         # Test pickling support
         """
         Tests that CalculationBucket supports pickling and unpickling via __reduce__ and __setstate__.
-        
+
         Verifies that the reduced state includes current combinations and that state restoration
         correctly sets the internal combinations on a new instance.
         """
@@ -145,7 +147,7 @@ class TestCalculationBucket(TestCase):
     def test_str_and_repr_formatting(self, mock_parse):
         """
         Tests the string and repr formatting of CalculationBucket instances.
-        
+
         Verifies that the string representation displays the total count and up to five combinations, using an ellipsis if more exist, and that the repr shows the constructor parameters.
         """
         bucket = CalculationBucket(DummyGeneralManager)
@@ -170,7 +172,7 @@ class TestCalculationBucket(TestCase):
     def test_all_iter_len_count(self, mock_parse):
         """
         Tests that CalculationBucket's all(), iteration, count(), and length methods behave as expected.
-        
+
         Verifies that all() returns the bucket itself, iteration yields one manager instance per combination, and both count() and len() return the correct number of combinations.
         """
         bucket = CalculationBucket(DummyGeneralManager)
@@ -188,7 +190,7 @@ class TestCalculationBucket(TestCase):
     def test_first_last_empty_and_nonempty(self, mock_parse):
         """
         Tests the behavior of the `first()` and `last()` methods on a `CalculationBucket`.
-        
+
         Verifies that `first()` and `last()` return `None` when the bucket has no combinations, and return the same manager instance when only one combination exists.
         """
         bucket = CalculationBucket(DummyGeneralManager)
@@ -240,13 +242,14 @@ class TestGenerateCombinations(TestCase):
         # Dynamically create an interface and manager class with given input_fields
         """
         Creates a CalculationBucket with dynamically defined input fields.
-        
+
         Args:
             fields: A list of input field definitions to assign to the generated interface.
-        
+
         Returns:
             A CalculationBucket instance using a dynamically created manager and interface with the specified input fields.
         """
+
         class DynInterface(CalculationInterface):
             input_fields = fields
 
@@ -260,7 +263,7 @@ class TestGenerateCombinations(TestCase):
         # Two independent fields produce a Cartesian product
         """
         Tests that generate_combinations produces the Cartesian product of independent input fields.
-        
+
         Verifies that two fields with independent possible values yield all possible combinations.
         """
         fields = {
@@ -297,9 +300,10 @@ class TestGenerateCombinations(TestCase):
         # Field2 depends on field1 and its possible_values is a callable
         """
         Tests that a dependent input field with callable possible values generates combinations reflecting the dependency.
-        
+
         Verifies that when one field's possible values depend on another field's value, the generated combinations correctly incorporate this relationship.
         """
+
         def pv_func(a):
             return [a * 10]
 
@@ -319,7 +323,7 @@ class TestGenerateCombinations(TestCase):
         # Apply filter_funcs to include only even numbers, and exclude a specific value
         """
         Tests that filter and exclude functions are correctly applied to input values.
-        
+
         Verifies that only even numbers are included and a specific value is excluded from the generated combinations.
         """
         fields = {
@@ -337,7 +341,7 @@ class TestGenerateCombinations(TestCase):
         # Three values, sorted and reversed
         """
         Tests that sorting and reversing combinations works as expected and that results are cached.
-        
+
         Verifies that combinations are sorted in descending order by the specified key, and that repeated calls to `generate_combinations` return the cached result.
         """
         fields = {
