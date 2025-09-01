@@ -15,9 +15,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Initializes test-specific `Employee` and `TaxCalculation` manager classes with their interfaces for use in integration tests.
-        
+
         Defines an `Employee` class with database fields for name and salary (in EUR), and a `TaxCalculation` class that references an employee and exposes a calculation property for computing 20% tax on the employee's salary. Assigns these classes to class variables for use in test methods.
         """
+
         class Employee(GeneralManager):
             id: int
             name: str
@@ -33,13 +34,13 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             class Interface(CalculationInterface):
                 employee = Input(Employee, possible_values=lambda: Employee.all())
 
-            @graphQlProperty
-            def calculate(self) -> Measurement:
+            @graphQlProperty(sortable=True)
+            def calculatedTax(self) -> Measurement:
                 """
-                Calculates 20% of the associated employee's salary as tax.
-                
+                calculatedTaxs 20% of the associated employee's salary as tax.
+
                 Returns:
-                    Measurement: The calculated tax amount based on the employee's salary.
+                    Measurement: The calculatedTaxd tax amount based on the employee's salary.
                 """
                 return self.employee.salary * 0.2
 
@@ -58,7 +59,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.mutation = """
         query($employeeId: Int!) {
             taxcalculation(employeeId: $employeeId) {
-                calculate {
+                calculatedTax {
                     value
                     unit
                 }
@@ -66,11 +67,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         }
         """
 
-    def test_calculate_tax(self):
+    def test_calculatedTax_tax(self):
         """
         Tests the tax calculation GraphQL mutation for an employee.
-        
-        Creates an employee with a specified salary, executes the tax calculation mutation, and verifies that the calculated tax value and unit in the response are correct.
+
+        Creates an employee with a specified salary, executes the tax calculation mutation, and verifies that the calculatedTaxd tax value and unit in the response are correct.
         """
         employee = self.Employee.create(
             name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
@@ -79,5 +80,62 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         response = self.query(self.mutation, variables=variables)
         self.assertResponseNoErrors(response)
         data = response.json()["data"]["taxcalculation"]
-        self.assertEqual(data["calculate"]["value"], 600)
-        self.assertEqual(data["calculate"]["unit"], "EUR")
+        self.assertEqual(data["calculatedTax"]["value"], 600)
+        self.assertEqual(data["calculatedTax"]["unit"], "EUR")
+
+    def test_sort_by_calculation_property(self):
+        """
+        Tests that the tax calculation can be sorted by the employee's name.
+        """
+        employee1 = self.Employee.create(
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee2 = self.Employee.create(
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee3 = self.Employee.create(
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+
+        tax_calculation_bucket = self.TaxCalculation.all()
+        self.assertEqual(len(tax_calculation_bucket), 3)
+        self.assertEqual(tax_calculation_bucket[0].employee.name, "Alice")
+        self.assertEqual(tax_calculation_bucket[1].employee.name, "Bob")
+        self.assertEqual(tax_calculation_bucket[2].employee.name, "Tim")
+
+        tax_calculation_bucket_sorted = tax_calculation_bucket.sort("calculatedTax")
+        self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Tim")
+        self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
+        self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Bob")
+
+        tax_calculation_bucket_sorted = tax_calculation_bucket.sort(
+            "calculatedTax", reverse=True
+        )
+        self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Tim")
+        self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
+        self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Bob")
+
+    def test_sort_by_calculation_property_and_name(self):
+        """
+        Tests that the tax calculation can be sorted by the employee's name.
+        """
+        employee1 = self.Employee.create(
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee2 = self.Employee.create(
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee3 = self.Employee.create(
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee4 = self.Employee.create(
+            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+
+        tax_calculation_bucket_sorted = self.TaxCalculation.all().sort(
+            ("calculatedTax", "employee.name"), reverse=False
+        )
+        self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Tim")
+        self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
+        self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Tina")
+        self.assertEqual(tax_calculation_bucket_sorted[3].employee.name, "Bob")
