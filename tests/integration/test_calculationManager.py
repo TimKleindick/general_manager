@@ -139,3 +139,48 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
         self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Tina")
         self.assertEqual(tax_calculation_bucket_sorted[3].employee.name, "Bob")
+
+    def test_filter_by_calculation_property(self):
+        """
+        Tests that the tax calculation can be filtered by the employee's name.
+        """
+        employee1 = self.Employee.create(
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee2 = self.Employee.create(
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee3 = self.Employee.create(
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+        employee4 = self.Employee.create(
+            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+        )
+
+        tax_calculation_bucket_filtered1 = self.TaxCalculation.filter(
+            employee__name__startswith="T"
+        )
+        self.assertEqual(len(tax_calculation_bucket_filtered1), 2)
+        self.assertEqual(tax_calculation_bucket_filtered1[0].employee.name, "Tim")
+        self.assertEqual(tax_calculation_bucket_filtered1[1].employee.name, "Tina")
+
+        tax_calculation_bucket_filtered2 = tax_calculation_bucket_filtered1.filter(
+            calculatedTax=Measurement(3000, "EUR") * 0.2
+        )
+        self.assertEqual(len(tax_calculation_bucket_filtered2), 1)
+        self.assertEqual(tax_calculation_bucket_filtered2[0].employee.name, "Tina")
+
+        tax_calculation_bucket_filtered3 = self.TaxCalculation.filter(
+            calculatedTax=Measurement(3000, "EUR") * 0.2
+        )
+        self.assertEqual(len(tax_calculation_bucket_filtered3), 2)
+        self.assertEqual(tax_calculation_bucket_filtered3[0].employee.name, "Alice")
+        self.assertEqual(tax_calculation_bucket_filtered3[1].employee.name, "Tina")
+
+        tax_calculation_bucket_filtered4 = tax_calculation_bucket_filtered1.filter(
+            calculatedTax=Measurement(3000, "EUR") * 0.2
+        )
+
+        self.assertEqual(
+            tax_calculation_bucket_filtered4, tax_calculation_bucket_filtered2
+        )
