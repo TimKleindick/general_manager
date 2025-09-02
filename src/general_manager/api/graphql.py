@@ -343,10 +343,6 @@ class GraphQL:
                 )
                 return graphene.Field(page_type, **attributes)
 
-                return graphene.List(
-                    lambda: GraphQL.graphql_type_registry[field_type.__name__],
-                    **attributes,
-                )
             return graphene.Field(
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
             )
@@ -579,7 +575,7 @@ class GraphQL:
                 result = result.to(target_unit)
             return {
                 "value": result.quantity.magnitude,
-                "unit": result.quantity.units,
+                "unit": str(result.quantity.units),
             }
 
         return resolver
@@ -867,7 +863,7 @@ class GraphQL:
             """
             try:
                 manager_id = kwargs.pop("id", None)
-                instance = generalManagerClass(manager_id).update(
+                instance = generalManagerClass(id=manager_id).update(
                     creator_id=info.context.user.id, **kwargs
                 )
             except Exception as e:
@@ -882,7 +878,7 @@ class GraphQL:
             }
 
         return type(
-            f"Create{generalManagerClass.__name__}",
+            f"Update{generalManagerClass.__name__}",
             (graphene.Mutation,),
             {
                 **default_return_values,
