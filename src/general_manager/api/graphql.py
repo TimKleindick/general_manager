@@ -338,12 +338,12 @@ class GraphQL:
                 }
                 filter_options = GraphQL._createFilterOptions(field_name, field_type)
                 if filter_options:
-                    attributes["filter"] = filter_options()
-                    attributes["exclude"] = filter_options()
+                    attributes["filter"] = graphene.Argument(filter_options)
+                    attributes["exclude"] = graphene.Argument(filter_options)
 
                 sort_by_options = GraphQL._sortByOptions(field_type)
                 if sort_by_options:
-                    attributes["sort_by"] = sort_by_options()
+                    attributes["sort_by"] = graphene.Argument(sort_by_options)
 
                 page_type = GraphQL._getOrCreatePageType(
                     field_type.__name__ + "Page",
