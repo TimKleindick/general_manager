@@ -1,3 +1,5 @@
+# type: ignore
+
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
 from general_manager.manager.generalManager import GeneralManager
@@ -74,7 +76,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         Creates an employee with a specified salary, executes the tax calculation mutation, and verifies that the calculatedTaxd tax value and unit in the response are correct.
         """
         employee = self.Employee.create(
-            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
         variables = {"employeeId": employee.id}
         response = self.query(self.mutation, variables=variables)
@@ -88,13 +90,13 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         Tests that the tax calculation can be sorted by the employee's name.
         """
         employee1 = self.Employee.create(
-            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
         employee2 = self.Employee.create(
-            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
         )
         employee3 = self.Employee.create(
-            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
         )
 
         tax_calculation_bucket = self.TaxCalculation.all()
@@ -120,16 +122,16 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         Tests that the tax calculation can be sorted by the employee's name.
         """
         employee1 = self.Employee.create(
-            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
         employee2 = self.Employee.create(
-            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
         )
         employee3 = self.Employee.create(
-            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
         )
         employee4 = self.Employee.create(
-            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
 
         tax_calculation_bucket_sorted = self.TaxCalculation.all().sort(
@@ -145,16 +147,16 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         Tests that the tax calculation can be filtered by the employee's name.
         """
         employee1 = self.Employee.create(
-            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
         employee2 = self.Employee.create(
-            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
         )
         employee3 = self.Employee.create(
-            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
         )
         employee4 = self.Employee.create(
-            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id  # type: ignore
+            name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
 
         tax_calculation_bucket_filtered1 = self.TaxCalculation.filter(
