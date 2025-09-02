@@ -184,7 +184,7 @@ class GraphQLTests(TestCase):
                     }
 
         GraphQL.graphql_filter_type_registry.clear()
-        filter_cls = GraphQL._createFilterOptions("dummy", DummyManager)
+        filter_cls = GraphQL._createFilterOptions(DummyManager)
         fields = filter_cls._meta.fields
         self.assertNotIn("gm_field", fields)
         for key in [
@@ -226,8 +226,8 @@ class GraphQLTests(TestCase):
                     return {"num_field": {"type": int}}
 
         GraphQL.graphql_filter_type_registry.clear()
-        first = GraphQL._createFilterOptions("dummy2", DummyManager2)
-        second = GraphQL._createFilterOptions("dummy2", DummyManager2)
+        first = GraphQL._createFilterOptions(DummyManager2)
+        second = GraphQL._createFilterOptions(DummyManager2)
         self.assertIs(first, second)
 
 

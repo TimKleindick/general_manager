@@ -262,7 +262,7 @@ class GraphQL:
 
     @staticmethod
     def _createFilterOptions(
-        field_name: str, field_type: GeneralManagerMeta
+        field_type: GeneralManagerMeta,
     ) -> type[graphene.InputObjectType] | None:
         """
         Dynamically generates a Graphene InputObjectType for filtering fields of a GeneralManager subclass.
@@ -270,7 +270,6 @@ class GraphQL:
         Creates filter fields for each attribute based on its type, supporting numeric and string filter operations, and specialized handling for Measurement attributes. Returns the generated InputObjectType, or None if no applicable filter fields exist.
 
         Parameters:
-            field_name (str): The name of the field to generate filter options for.
             field_type (GeneralManagerMeta): The manager class whose attributes are used to build filter fields.
 
         Returns:
@@ -336,7 +335,7 @@ class GraphQL:
                     "page_size": graphene.Int(),
                     "group_by": graphene.List(graphene.String),
                 }
-                filter_options = GraphQL._createFilterOptions(field_name, field_type)
+                filter_options = GraphQL._createFilterOptions(field_type)
                 if filter_options:
                     attributes["filter"] = graphene.Argument(filter_options)
                     attributes["exclude"] = graphene.Argument(filter_options)
@@ -665,9 +664,7 @@ class GraphQL:
             "page_size": graphene.Int(),
             "group_by": graphene.List(graphene.String),
         }
-        filter_options = cls._createFilterOptions(
-            generalManagerClass.__name__.lower(), generalManagerClass
-        )
+        filter_options = cls._createFilterOptions(generalManagerClass)
         if filter_options:
             attributes["filter"] = filter_options()
             attributes["exclude"] = filter_options()
