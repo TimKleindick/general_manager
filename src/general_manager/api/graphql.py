@@ -217,7 +217,9 @@ class GraphQL:
 
     @staticmethod
     def _getFilterOptions(attribute_type: type, attribute_name: str) -> Generator[
-        tuple[str, type[graphene.ObjectType] | MeasurementScalar | None],
+        tuple[
+            str, type[graphene.ObjectType] | MeasurementScalar | graphene.List | None
+        ],
         None,
         None,
     ]:
@@ -247,10 +249,16 @@ class GraphQL:
                         GraphQL._mapFieldToGrapheneRead(attribute_type, attribute_name)
                     )
             elif issubclass(attribute_type, str):
+                base_type = GraphQL._mapFieldToGrapheneBaseType(attribute_type)
                 for option in string_options:
-                    yield f"{attribute_name}__{option}", (
-                        GraphQL._mapFieldToGrapheneRead(attribute_type, attribute_name)
-                    )
+                    if option == "in":
+                        yield f"{attribute_name}__in", graphene.List(base_type)
+                    else:
+                        yield f"{attribute_name}__{option}", (
+                            GraphQL._mapFieldToGrapheneRead(
+                                attribute_type, attribute_name
+                            )
+                        )
 
     @staticmethod
     def _createFilterOptions(
