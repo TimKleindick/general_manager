@@ -305,7 +305,6 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 current_combinations,
                 sorted_filters["prop_filters"],
                 sorted_filters["prop_excludes"],
-                sort_key=self.sort_key,
             )
 
             if self.sort_key is not None:
@@ -478,24 +477,31 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         current_combos: list[dict[str, Any]],
         prop_filters: dict[str, Any],
         prop_excludes: dict[str, Any],
-        sort_key: Optional[str | tuple[str]] = None,
     ) -> list[GeneralManagerType]:
 
         prop_filter_needed = set(prop_filters.keys()) | set(prop_excludes.keys())
+        manager_combinations = [
+            self._manager_class(**combo) for combo in current_combos
+        ]
         if not prop_filter_needed:
-            return [self._manager_class(**combo) for combo in current_combos]
+            return manager_combinations
 
         # Apply property filters and exclusions
         filtered_combos = []
-        for combo in current_combos:
-            if all(
-                combo.get(key) == value for key, value in prop_filters.items()
-            ) and not any(
-                combo.get(key) == value for key, value in prop_excludes.items()
-            ):
-                filtered_combos.append(combo)
-
-        return [self._manager_class(**combo) for combo in filtered_combos]
+        for manager in manager_combinations:
+            breaker = False
+            for prop_name, prop_filter in prop_filters.items():
+                for func in prop_filter.get("filter_funcs", []):
+                    if not func(getattr(manager, prop_name)):
+                        breaker = True
+                        break
+                for func in prop_filter.get("exclude_funcs", []):
+                    if func(getattr(manager, prop_name)):
+                        breaker = True
+                        break
+            if not breaker:
+                filtered_combos.append(manager)
+        return filtered_combos
 
     def first(self) -> GeneralManagerType | None:
         """
