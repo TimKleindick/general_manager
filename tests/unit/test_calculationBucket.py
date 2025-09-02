@@ -86,8 +86,8 @@ class TestCalculationBucket(TestCase):
             sort_key="key",
             reverse=True,
         )
-        self.assertEqual(bucket.filters, fdefs)
-        self.assertEqual(bucket.excludes, edefs)
+        self.assertEqual(bucket.filter_definitions, fdefs)
+        self.assertEqual(bucket.exclude_definitions, edefs)
         self.assertEqual(bucket.sort_key, "key")
         self.assertTrue(bucket.reverse)
 
@@ -124,8 +124,8 @@ class TestCalculationBucket(TestCase):
         combined = b1 | b2
         self.assertIsInstance(combined, CalculationBucket)
         # Only common identical definitions should remain
-        self.assertEqual(combined.filters, {"f1": 1})
-        self.assertEqual(combined.excludes, {"e1": 2})
+        self.assertEqual(combined.filter_definitions, {"f1": 1})
+        self.assertEqual(combined.exclude_definitions, {"e1": 2})
 
     def test_or_with_invalid(self, mock_parse):
         """
@@ -335,8 +335,8 @@ class TestGenerateCombinations(TestCase):
         }
         bucket = self._make_bucket_with_fields(fields)
         # Manually set filter and exclude definitions
-        bucket.filters = {"n": {"filter_funcs": [lambda x: x % 2 == 0]}}
-        bucket.excludes = {"n": {"filter_funcs": [lambda x: x == 4]}}
+        bucket._filters = {"n": {"filter_funcs": [lambda x: x % 2 == 0]}}
+        bucket._excludes = {"n": {"filter_funcs": [lambda x: x == 4]}}
         combos = bucket.generate_combinations()
         # Should include only 2, excluding 4
         self.assertEqual(combos, [{"n": 2}])

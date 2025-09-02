@@ -184,3 +184,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(
             tax_calculation_bucket_filtered4, tax_calculation_bucket_filtered2
         )
+
+        self.assertNotEqual(
+            tax_calculation_bucket_filtered4, tax_calculation_bucket_filtered1
+        )

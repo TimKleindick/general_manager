@@ -66,11 +66,39 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 "CalculationBucket can only be used with CalculationInterface subclasses"
             )
         self.input_fields = interface_class.input_fields
-        self.filters = {} if filter_definitions is None else filter_definitions
-        self.excludes = {} if exclude_definitions is None else exclude_definitions
+        self.filter_definitions = (
+            {} if filter_definitions is None else filter_definitions
+        )
+        self.exclude_definitions = (
+            {} if exclude_definitions is None else exclude_definitions
+        )
+
+        properties = self._manager_class.Interface.getGraphQLProperties()
+        possible_values = self.transformPropertiesToInputFields(
+            properties, self.input_fields
+        )
+
+        self._filters = parse_filters(self.filter_definitions, possible_values)
+        self._excludes = parse_filters(self.exclude_definitions, possible_values)
+
         self._data = None
         self.sort_key = sort_key
         self.reverse = reverse
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Checks if this Bucket is equal to another by comparing class, data, and manager class.
+
+        Returns:
+            True if both objects are of the same class and have equal internal data and manager class; otherwise, False.
+        """
+        if not isinstance(other, self.__class__):
+            return False
+        return (
+            self.filter_definitions == other.filter_definitions
+            and self.exclude_definitions == other.exclude_definitions
+            and self._manager_class == other._manager_class
+        )
 
     def __reduce__(self) -> generalManagerClassName | tuple[Any, ...]:
         """
@@ -83,8 +111,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             self.__class__,
             (
                 self._manager_class,
-                self.filters,
-                self.excludes,
+                self.filter_definitions,
+                self.exclude_definitions,
                 self.sort_key,
                 self.reverse,
             ),
@@ -102,7 +130,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __or__(
         self,
-        other: Bucket[GeneralManagerType] | GeneralManagerType,
+        other: CalculationBucket[GeneralManagerType] | GeneralManagerType,
     ) -> CalculationBucket[GeneralManagerType]:
         """
         Combine this CalculationBucket with another bucket or manager instance of the same manager class.
@@ -126,14 +154,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         combined_filters = {
             key: value
-            for key, value in self.filters.items()
-            if key in other.filters and value == other.filters[key]
+            for key, value in self.filter_definitions.items()
+            if key in other.filter_definitions
+            and value == other.filter_definitions[key]
         }
 
         combined_excludes = {
             key: value
-            for key, value in self.excludes.items()
-            if key in other.excludes and value == other.excludes[key]
+            for key, value in self.exclude_definitions.items()
+            if key in other.exclude_definitions
+            and value == other.exclude_definitions[key]
         }
 
         return CalculationBucket(
@@ -167,7 +197,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         Returns a concise string representation of the CalculationBucket, including the manager class name, filters, excludes, sort key, and sort order.
         """
-        return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filters}, {self.excludes}, {self.sort_key}, {self.reverse})"
+        return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filter_definitions}, {self.exclude_definitions}, {self.sort_key}, {self.reverse})"
 
     @staticmethod
     def transformPropertiesToInputFields(
@@ -214,10 +244,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return CalculationBucket(
             manager_class=self._manager_class,
             filter_definitions={
-                **self.filters.copy(),
-                **parse_filters(kwargs, possible_values),
+                **self.filter_definitions.copy(),
+                **kwargs,
             },
-            exclude_definitions=self.excludes.copy(),
+            exclude_definitions=self.exclude_definitions.copy(),
         )
 
     def exclude(self, **kwargs: Any) -> CalculationBucket:
@@ -232,9 +262,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         )
         return CalculationBucket(
             manager_class=self._manager_class,
-            filter_definitions=self.filters.copy(),
+            filter_definitions=self.filter_definitions.copy(),
             exclude_definitions={
-                **self.excludes.copy(),
+                **self.exclude_definitions.copy(),
                 **parse_filters(kwargs, possible_values),
             },
         )
@@ -263,12 +293,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         input_excludes: dict[str, dict] = {}
         prop_excludes: dict[str, dict] = {}
 
-        for filter_name, filter_def in self.filters.items():
+        for filter_name, filter_def in self._filters.items():
             if filter_name in sorted_inputs:
                 input_filters[filter_name] = filter_def
             else:
                 prop_filters[filter_name] = filter_def
-        for exclude_name, exclude_def in self.excludes.items():
+        for exclude_name, exclude_def in self._excludes.items():
             if exclude_name in sorted_inputs:
                 input_excludes[exclude_name] = exclude_def
             else:
@@ -545,8 +575,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if isinstance(result, list):
             new_bucket = CalculationBucket(
                 self._manager_class,
-                self.filters.copy(),
-                self.excludes.copy(),
+                self._filters.copy(),
+                self._excludes.copy(),
                 self.sort_key,
                 self.reverse,
             )
@@ -602,5 +632,5 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             A new CalculationBucket instance with the specified sorting applied.
         """
         return CalculationBucket(
-            self._manager_class, self.filters, self.excludes, key, reverse
+            self._manager_class, self._filters, self._excludes, key, reverse
         )
