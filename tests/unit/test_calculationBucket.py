@@ -101,16 +101,16 @@ class TestCalculationBucket(TestCase):
         """
         bucket = CalculationBucket(DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True)
         # Prepopulate state
-        bucket._current_combinations = [{"x": 10}]
+        bucket._data = [{"x": 10}]
         cls, args, state = bucket.__reduce__()
         # Check reduce data
         self.assertEqual(cls, CalculationBucket)
         self.assertEqual(args, (DummyGeneralManager, {"a": 1}, {"b": 2}, "k", True))
-        self.assertIn("current_combinations", state)
+        self.assertIn("data", state)
         # Restore state on new instance
         new_bucket = CalculationBucket(*args)
         new_bucket.__setstate__(state)
-        self.assertEqual(new_bucket._current_combinations, [{"x": 10}])
+        self.assertEqual(new_bucket._data, [{"x": 10}])
 
     def test_or_with_same_bucket(self, mock_parse):
         # Combining two buckets of same class should intersect filters/excludes
@@ -153,13 +153,13 @@ class TestCalculationBucket(TestCase):
         bucket = CalculationBucket(DummyGeneralManager)
         # Manually set combinations for string formatting tests
         combos = [{"x": i} for i in range(7)]
-        bucket._current_combinations = combos
+        bucket._data = combos
         s = str(bucket)
         # Should show total count and at most 5 entries
         self.assertTrue(s.startswith("CalculationBucket (7)["))
         self.assertIn("...", s)
         # Test below threshold (no ellipsis)
-        bucket._current_combinations = combos[:3]
+        bucket._data = combos[:3]
         s2 = str(bucket)
         self.assertFalse("..." in s2)
 
@@ -177,7 +177,7 @@ class TestCalculationBucket(TestCase):
         """
         bucket = CalculationBucket(DummyGeneralManager)
         # Set a single empty combination so manager(**{}) works
-        bucket._current_combinations = [{}] * 4
+        bucket._data = [{}] * 4
         # all() returns self
         self.assertIs(bucket.all(), bucket)
         # Iteration yields one manager per combo
@@ -195,11 +195,11 @@ class TestCalculationBucket(TestCase):
         """
         bucket = CalculationBucket(DummyGeneralManager)
         # Empty combos
-        bucket._current_combinations = []
+        bucket._data = []
         self.assertIsNone(bucket.first())
         self.assertIsNone(bucket.last())
         # Single combo
-        bucket._current_combinations = [{"test": 1}]
+        bucket._data = [{"test": 1}]
         first = bucket.first()
         last = bucket.last()
         self.assertIsNotNone(first)
@@ -211,7 +211,7 @@ class TestCalculationBucket(TestCase):
         """
         bucket = CalculationBucket(DummyGeneralManager)
         # Create distinct combos for index and slice
-        bucket._current_combinations = [{"i": 1}, {"i": 2}, {"i": 3}]
+        bucket._data = [{"i": 1}, {"i": 2}, {"i": 3}]
         # Index __getitem__
         mgr = bucket[1]
         self.assertIsInstance(mgr, DummyGeneralManager)
@@ -219,7 +219,7 @@ class TestCalculationBucket(TestCase):
         sliced = bucket[0:2]
         self.assertIsInstance(sliced, CalculationBucket)
         # Sliced bucket should have its own combinations
-        self.assertEqual(sliced._current_combinations, [{"i": 1}, {"i": 2}])
+        self.assertEqual(sliced._data, [{"i": 1}, {"i": 2}])
 
     def test_sort_returns_new_bucket(self, mock_parse):
         """

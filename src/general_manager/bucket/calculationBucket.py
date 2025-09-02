@@ -68,7 +68,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self.input_fields = interface_class.input_fields
         self.filters = {} if filter_definitions is None else filter_definitions
         self.excludes = {} if exclude_definitions is None else exclude_definitions
-        self._current_combinations = None
+        self._data = None
         self.sort_key = sort_key
         self.reverse = reverse
 
@@ -88,7 +88,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self.sort_key,
                 self.reverse,
             ),
-            {"current_combinations": self._current_combinations},
+            {"data": self._data},
         )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -98,7 +98,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Args:
             state: A dictionary containing the state of the instance, including current combinations.
         """
-        self._current_combinations = state.get("current_combinations")
+        self._data = state.get("data")
 
     def __or__(
         self,
@@ -293,7 +293,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             getters = [attrgetter(key) for key in sort_key]
             return tuple(getter(manager_obj) for getter in getters)
 
-        if self._current_combinations is None:
+        if self._data is None:
             sorted_inputs = self.topological_sort_inputs()
             sorted_filters = self._sortFilters(sorted_inputs)
             current_combinations = self._generate_input_combinations(
@@ -317,11 +317,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 )
             if self.reverse:
                 manager_combinations.reverse()
-            self._current_combinations = [
-                manager.identification for manager in manager_combinations
-            ]
+            self._data = [manager.identification for manager in manager_combinations]
 
-        return self._current_combinations
+        return self._data
 
     def topological_sort_inputs(self) -> List[str]:
         """
@@ -552,7 +550,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 self.sort_key,
                 self.reverse,
             )
-            new_bucket._current_combinations = result
+            new_bucket._data = result
             return new_bucket
         return self._manager_class(**result)
 
