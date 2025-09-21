@@ -74,7 +74,7 @@ class DummyInterface(InterfaceBase):
         return DatabaseBucket(User.objects.filter(**kwargs), UserManager)
 
     @classmethod
-    def exclude(cls, **kwargs):  # type: ignore
+    def exclude(cls, **_kwargs):  # type: ignore
         """
         Returns an empty list, indicating no objects are excluded.
 
@@ -83,7 +83,7 @@ class DummyInterface(InterfaceBase):
         return []
 
     @classmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def getFieldType(cls, _field_name: str) -> type:
         """
         Returns the type associated with the specified field name.
 
@@ -102,7 +102,7 @@ class DummyInterface(InterfaceBase):
                 - postCreation: Sets a 'post_mark' flag on the newly created class.
         """
 
-        def preCreation(name, attrs, interface):
+        def preCreation(_name, attrs, _interface):
             """
             Adds a marker attribute to the class attributes before creation.
 
@@ -117,7 +117,7 @@ class DummyInterface(InterfaceBase):
             attrs["marker"] = "initialized_by_dummy"
             return attrs, cls, None
 
-        def postCreation(new_cls, interface_cls, model):
+        def postCreation(new_cls, _interface_cls, _model):
             """
             Sets a flag on the newly created class after its creation.
 
@@ -259,6 +259,7 @@ class DatabaseBucketTestCase(TestCase):
         Verifies that filtering returns a bucket with only matching users and merges filter definitions, while excluding removes specified users and merges exclude definitions.
         """
         alice_bucket = self.bucket.filter(username="alice")
+
         self.assertIsInstance(alice_bucket, DatabaseBucket)
         self.assertEqual(len(alice_bucket), 1)
         self.assertEqual(alice_bucket.first().identification["id"], self.u1.id)
@@ -279,6 +280,7 @@ class DatabaseBucketTestCase(TestCase):
         Tests that the union of two DatabaseBuckets returns a new bucket containing unique manager instances from both buckets.
         """
         b1 = self.bucket.filter(username="alice")
+
         b2 = self.bucket.filter(username="carol")
         union = b1 | b2
         self.assertIsInstance(union, DatabaseBucket)
@@ -350,3 +352,106 @@ class DatabaseBucketTestCase(TestCase):
         sorted_bucket = bucket.sort("negative_length")
         first_id = sorted_bucket.first().identification["id"]
         self.assertIn(first_id, [self.u1.id, self.u3.id])
+
+
+# ---------------------------------------------------------------------------------
+# Additional tests focusing on edge cases, failure conditions, and property sorting.
+# NOTE: Testing framework: Django's unittest-based TestCase (django.test.TestCase).
+# These tests are also compatible with pytest when using pytest-django.
+# ---------------------------------------------------------------------------------
+
+
+class DatabaseBucketMoreTests(DatabaseBucketTestCase):
+    """
+    Additional edge-case and failure-path tests for DatabaseBucket built on the same fixture.
+
+    Note: Testing library/framework: Django's unittest-based TestCase (django.test.TestCase).
+    These tests are also compatible with pytest via pytest-django.
+    """
+
+    def test_union_with_overlap_deduplicates(self):
+        b1 = self.bucket.filter(username__in=["alice", "bob"])
+        b2 = self.bucket.filter(username__in=["bob", "carol"])
+        union = b1 | b2
+        ids = sorted(m.identification["id"] for m in union)
+        self.assertListEqual(ids, sorted([self.u1.id, self.u2.id, self.u3.id]))
+        # Ensure no duplicates make it into the union result
+        self.assertEqual(len(set(ids)), len(union))
+
+    def test_or_with_incompatible_manager_instance_raises(self):
+        # OR-ing with a manager of a different type should raise
+        other_mgr = AnotherManager(self.u1.id)
+        with self.assertRaises(ValueError):
+            _ = self.bucket | other_mgr
+
+    def test_get_by_pk(self):
+        mgr = self.bucket.get(pk=self.u1.pk)
+        self.assertIsInstance(mgr, UserManager)
+        self.assertEqual(mgr.identification["id"], self.u1.id)
+
+    def test_get_index_out_of_range_raises(self):
+        # Indexing past the end should raise IndexError
+        with self.assertRaises(IndexError):
+            _ = self.bucket[10]
+
+    def test_empty_bucket_contains_is_false(self):
+        empty = DatabaseBucket(User.objects.none(), UserManager)
+        self.assertNotIn(self.u1, empty)
+        self.assertNotIn(UserManager(self.u1.id), empty)
+
+    def test_multiple_filter_and_exclude_merge_definitions(self):
+        # Successive filter calls on the same field should merge values
+        b = self.bucket.filter(username="alice").filter(username="carol")
+        self.assertIn("username", b.filters)
+        self.assertCountEqual(b.filters["username"], ["alice", "carol"])
+        # Successive exclude calls should also merge values
+        e = self.bucket.exclude(username="alice").exclude(username="carol")
+        self.assertIn("username", e.excludes)
+        self.assertCountEqual(e.excludes["username"], ["alice", "carol"])
+
+    def test_filter_invalid_field_raises_fielderror(self):
+        from django.core.exceptions import FieldError
+
+        with self.assertRaises(FieldError):
+            _ = self.bucket.filter(doesnotexist="x")
+
+    def test_sort_by_property_ascending(self):
+        # username_length is defined via @graphQlProperty; ascending should place "bob" (len 3) first
+        sorted_bucket = self.bucket.sort("username_length")
+        first = sorted_bucket.first()
+        self.assertEqual(first.identification["id"], self.u2.id)  # bob
+
+    def test_first_and_last_on_singleton_bucket(self):
+        single = self.bucket.filter(username="alice")
+        self.assertEqual(single.first().identification["id"], self.u1.id)
+        self.assertEqual(single.last().identification["id"], self.u1.id)
+
+    def test_all_returns_new_instance(self):
+        all_bucket = self.bucket.all()
+        self.assertIsInstance(all_bucket, DatabaseBucket)
+        self.assertIsNot(all_bucket, self.bucket)
+        self.assertEqual(len(all_bucket), len(self.bucket))
+
+    def test_contains_manager_not_in_bucket(self):
+        # Create a user not present in a restricted subset bucket
+        dave = User.objects.create(username="dave")
+        subset = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]), UserManager
+        )
+        self.assertNotIn(UserManager(dave.id), subset)
+
+    def test_union_commutativity(self):
+        left = self.bucket.filter(username="alice")
+        right = self.bucket.filter(username__in=["bob", "carol"])
+        left_union = left | right
+        r = right | left
+        self.assertEqual(
+            sorted(m.identification["id"] for m in left_union),
+            sorted(m.identification["id"] for m in r),
+        )
+
+    def test_slice_beyond_length_returns_smaller_bucket(self):
+        # Slicing beyond available range should just return all available items in a new bucket
+        sub = self.bucket[:100]
+        self.assertIsInstance(sub, DatabaseBucket)
+        self.assertEqual(len(sub), 3)

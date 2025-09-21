@@ -7,6 +7,7 @@ import graphene
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
+from typing import ClassVar
 
 from general_manager.api.graphql import (
     MeasurementType,
@@ -29,7 +30,7 @@ class GraphQLPropertyTests(TestCase):
             TypeError,
             msg="GraphQLProperty requires a return type hint for the property function.",
         ):
-            prop = GraphQLProperty(mock_getter)
+            GraphQLProperty(mock_getter)
 
     def test_graphql_property_with_type_hint(self):
         def mock_getter() -> str:
@@ -53,7 +54,7 @@ class GraphQLTests(TestCase):
         self.info.context.user = AnonymousUser()
 
     @patch("general_manager.interface.baseInterface.InterfaceBase")
-    def test_create_graphql_interface_no_interface(self, mock_interface):
+    def test_create_graphql_interface_no_interface(self, _mock_interface):
         self.general_manager_class.Interface = None
         result = GraphQL.createGraphqlInterface(self.general_manager_class)
         self.assertIsNone(result)
@@ -113,7 +114,7 @@ class GraphQLTests(TestCase):
 
         resolver = GraphQL._createResolver("abc_list", GeneralManager)
         with patch("json.loads", side_effect=json.loads):
-            result = resolver(
+            resolver(
                 mock_instance,
                 self.info,
                 filter=json.dumps({"field": "value"}),
@@ -130,7 +131,7 @@ class GraphQLTests(TestCase):
 
         class TestManager:
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @staticmethod
                 def getAttributeTypes():
@@ -145,7 +146,7 @@ class GraphQLTests(TestCase):
 
         mock_interface.getAttributeTypes.return_value = {"test_field": {"type": str}}
         with patch("general_manager.api.graphql.issubclass", return_value=True):
-            setattr(TestManager, "test_prop", GraphQLProperty(prop_func))
+            TestManager.test_prop = GraphQLProperty(prop_func)
             GraphQL.createGraphqlInterface(TestManager)
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
@@ -172,7 +173,7 @@ class GraphQLTests(TestCase):
             __name__ = "DummyManager"
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @staticmethod
                 def getAttributeTypes():
@@ -219,7 +220,7 @@ class GraphQLTests(TestCase):
             __name__ = "DummyManager2"
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @staticmethod
                 def getAttributeTypes():
@@ -241,7 +242,7 @@ class TestGetReadPermissionFilter(TestCase):
             __name__ = "DummyManager"
 
             class Permission:
-                def __init__(self, *args, **kwargs):
+                def __init__(self, *args, **_kwargs):
                     self.args = args
 
                 def getPermissionFilter(self):
@@ -264,16 +265,16 @@ class TestGrapQlMutation(TestCase):
 
         class DummyManager:
             class Interface:
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @classmethod
-                def create(cls, *args, **kwargs):
+                def create(cls, *_, **__):
                     pass
 
-                def update(self, *args, **kwargs):
+                def update(self, *_, **__):
                     pass
 
-                def deactivate(self, *args, **kwargs):
+                def deactivate(self, *_, **__):
                     pass
 
         class DummyManager2:
@@ -476,14 +477,14 @@ class TestGrapQlMutation(TestCase):
         """
 
         class DummyManager:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @classmethod
                 def getAttributeTypes(cls):
@@ -498,7 +499,7 @@ class TestGrapQlMutation(TestCase):
                     }
 
             @classmethod
-            def create(cls, *args, **kwargs):
+            def create(cls, *_, **kwargs):
                 return DummyManager(**kwargs)
 
         default_return_values = {
@@ -542,14 +543,14 @@ class TestGrapQlMutation(TestCase):
         """
 
         class DummyManager:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @classmethod
                 def getAttributeTypes(cls):
@@ -564,7 +565,7 @@ class TestGrapQlMutation(TestCase):
                     }
 
             @classmethod
-            def update(cls, *args, **kwargs):
+            def update(cls, *_, **kwargs):
                 return DummyManager(**kwargs)
 
         default_return_values = {
@@ -587,9 +588,7 @@ class TestGrapQlMutation(TestCase):
         info = MagicMock()
         info.context.user = AnonymousUser()
 
-        mutation_result: dict = mutation_class.mutate(
-            None, info, field1="test_value", id=1
-        )
+        mutation_result: dict = mutation_class.mutate(None, info, field1="test_value")
         self.assertTrue(mutation_result["success"])
         self.assertIsInstance(mutation_result["DummyManager"], DummyManager)
         self.assertEqual(mutation_result["DummyManager"].field1, "test_value")
@@ -610,14 +609,14 @@ class TestGrapQlMutation(TestCase):
         """
 
         class DummyManager:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields = {"id": None}
+                input_fields: ClassVar[dict] = {"id": None}
 
                 @classmethod
                 def getAttributeTypes(cls):
@@ -632,7 +631,7 @@ class TestGrapQlMutation(TestCase):
                     }
 
             @classmethod
-            def deactivate(cls, *args, **kwargs):
+            def deactivate(cls, *_, **__):
                 return True
 
         default_return_values = {
@@ -653,3 +652,262 @@ class TestGrapQlMutation(TestCase):
         info = None
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info)
+
+class AdditionalGraphQLMappingTests(TestCase):
+    def test_map_field_to_graphene_datetime(self):
+        field = GraphQL._mapFieldToGrapheneRead(datetime, "ts")
+        self.assertIsInstance(field, graphene.DateTime)
+
+    def test_map_field_to_graphene_measurement_field_type(self):
+        field = GraphQL._mapFieldToGrapheneRead(Measurement, "distance")
+        # Expect a graphene.Field around MeasurementType
+        self.assertIsInstance(field, graphene.Field)
+        self.assertIs(field._type, MeasurementType)
+
+
+class AdditionalResolverTests(TestCase):
+    def setUp(self):
+        self.info = MagicMock()
+        self.info.context.user = AnonymousUser()
+
+    def test_measurement_resolver_without_target_unit_returns_base(self):
+        m = Measurement(2, "m")
+        obj = MagicMock()
+        obj.dist = m
+        resolver = GraphQL._createResolver("dist", Measurement)
+        result = resolver(obj, self.info)
+        # Base unit for meter is "meter"
+        self.assertEqual(result, {"value": Decimal(2), "unit": "meter"})
+
+    def test_measurement_resolver_with_invalid_target_unit_graceful(self):
+        m = Measurement(200, "cm")
+        obj = MagicMock()
+        obj.size = m
+        resolver = GraphQL._createResolver("size", Measurement)
+        # If invalid unit is provided, expect original value/unit (implementation should handle exceptions)
+        res = resolver(obj, self.info, target_unit="invalid_unit")
+        self.assertEqual(res, {"value": Decimal(200), "unit": "centimeter"})
+
+    def test_list_resolver_valid_filter_invalid_exclude(self):
+        qs = MagicMock()
+        filtered = MagicMock()
+        qs.filter.return_value = filtered
+        filtered.exclude.return_value = filtered  # should be ignored due to invalid exclude
+        obj = MagicMock()
+        obj.items_list = qs
+        resolver = GraphQL._createResolver("items_list", GeneralManager)
+        with patch("json.loads", side_effect=[{"a": 1}, ValueError]):
+            result = resolver(obj, self.info, filter=json.dumps({"a": 1}), exclude="bad")
+            qs.filter.assert_called_once_with(a=1)
+            # exclude should not be applied
+            self.assertEqual(result["items"], filtered)
+
+    def test_list_resolver_invalid_filter_valid_exclude(self):
+        qs = MagicMock()
+        filtered = MagicMock()
+        qs.filter.return_value = filtered  # should be ignored due to invalid filter
+        filtered.exclude.return_value = filtered
+        obj = MagicMock()
+        obj.objs = qs
+        resolver = GraphQL._createResolver("objs", GeneralManager)
+        with patch("json.loads", side_effect=[ValueError, {"x": 2}]):
+            result = resolver(obj, self.info, filter="bad", exclude=json.dumps({"x": 2}))
+            # filter should not be called; exclude should apply to original qs
+            qs.filter.assert_not_called()
+            qs.exclude.assert_called_once_with(x=2)
+            self.assertEqual(result["items"], qs.exclude())
+
+class AdditionalPermissionFilterTests(TestCase):
+    def setUp(self):
+        self.info = MagicMock()
+        self.info.context.user = AnonymousUser()
+
+    def test_get_read_permission_filter_no_permission_class(self):
+        class NoPermManager:
+            __name__ = "NoPermManager"
+        out = getReadPermissionFilter(NoPermManager, self.info)
+        self.assertEqual(out, [])
+
+    def test_get_read_permission_filter_permission_without_method(self):
+        class PermNoMethodManager:
+            __name__ = "PermNoMethodManager"
+            class Permission:
+                pass
+        out = getReadPermissionFilter(PermNoMethodManager, self.info)
+        self.assertEqual(out, [])
+
+    def test_get_read_permission_filter_multiple_sets(self):
+        class MultiPermManager:
+            __name__ = "MultiPermManager"
+            class Permission:
+                def getPermissionFilter(self):
+                    return [
+                        {"filter": {"a__gt": 1}},
+                        {"exclude": {"b__in": [1,2,3]}},
+                        {"filter": {"c": "x"}, "exclude": {"d__lte": 5}},
+                    ]
+        out = getReadPermissionFilter(MultiPermManager, self.info)
+        self.assertEqual(out, [
+            ({"a__gt": 1}, {}),
+            ({}, {"b__in": [1,2,3]}),
+            ({"c": "x"}, {"d__lte": 5}),
+        ])
+
+
+class AdditionalInterfaceCreationTests(TestCase):
+    def tearDown(self):
+        GraphQL.graphql_type_registry.pop("BadInterfaceManager", None)
+
+    def test_create_graphql_interface_not_subclass_returns_none(self):
+        class BadInterface:  # Not a subclass of InterfaceBase
+            @staticmethod
+            def getAttributeTypes():
+                return {"x": {"type": str}}
+
+        class BadInterfaceManager:
+            Interface = BadInterface
+        with patch("general_manager.api.graphql.issubclass", return_value=False):
+            res = GraphQL.createGraphqlInterface(BadInterfaceManager)
+            self.assertIsNone(res)
+            self.assertNotIn("BadInterfaceManager", GraphQL.graphql_type_registry)
+
+
+class AdditionalMutationMatrixTests(TestCase):
+    def setUp(self):
+        GraphQL._mutations = {}
+
+    @patch("general_manager.api.graphql.GraphQL.generateCreateMutationClass")
+    def test_only_create_mutation_generated(self, mock_create):
+        class OnlyCreate:
+            class Interface:
+                input_fields: ClassVar[dict] = {}
+            @classmethod
+            def create(cls, *_, **__):
+                return True
+        GraphQL.createGraphqlMutation(OnlyCreate)
+        mock_create.assert_called_once()
+        self.assertIn("createOnlyCreate", GraphQL._mutations)
+        self.assertNotIn("updateOnlyCreate", GraphQL._mutations)
+        self.assertNotIn("deleteOnlyCreate", GraphQL._mutations)
+
+    @patch("general_manager.api.graphql.GraphQL.generateUpdateMutationClass")
+    def test_only_update_mutation_generated(self, mock_update):
+        class OnlyUpdate:
+            class Interface:
+                input_fields: ClassVar[dict] = {}
+            @classmethod
+            def update(cls, *_, **__):
+                return True
+        GraphQL.createGraphqlMutation(OnlyUpdate)
+        mock_update.assert_called_once()
+        self.assertIn("updateOnlyUpdate", GraphQL._mutations)
+        self.assertNotIn("createOnlyUpdate", GraphQL._mutations)
+        self.assertNotIn("deleteOnlyUpdate", GraphQL._mutations)
+
+    @patch("general_manager.api.graphql.GraphQL.generateDeleteMutationClass")
+    def test_only_delete_mutation_generated(self, mock_del):
+        class OnlyDelete:
+            class Interface:
+                input_fields: ClassVar[dict] = {}
+            @classmethod
+            def deactivate(cls, *_, **__):
+                return True
+        GraphQL.createGraphqlMutation(OnlyDelete)
+        mock_del.assert_called_once()
+        self.assertIn("deleteOnlyDelete", GraphQL._mutations)
+        self.assertNotIn("createOnlyDelete", GraphQL._mutations)
+        self.assertNotIn("updateOnlyDelete", GraphQL._mutations)
+
+
+class AdditionalCreateWriteFieldsTests(TestCase):
+    def test_createWriteFields_datetime_and_required_flags(self):
+        class Iface:
+            @staticmethod
+            def getAttributeTypes():
+                return {
+                    "title": {"type": str, "is_required": True, "is_derived": False, "default": None, "is_editable": True},
+                    "when": {"type": datetime, "is_required": False, "is_derived": False, "default": None, "is_editable": True},
+                    "skip": {"type": int, "is_required": True, "is_derived": True, "default": None, "is_editable": True},
+                }
+        fields = GraphQL.createWriteFields(Iface)
+        self.assertIn("title", fields)
+        self.assertIn("when", fields)
+        self.assertNotIn("skip", fields)
+        self.assertIsInstance(fields["title"], graphene.String)
+        self.assertIsInstance(fields["when"], graphene.DateTime)
+
+    def test_createWriteFields_general_manager_list_uses_id_list(self):
+        class Iface:
+            @staticmethod
+            def getAttributeTypes():
+                return {
+                    "owners": {
+                        "type": GeneralManager,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    }
+                }
+        fields = GraphQL.createWriteFields(Iface)
+        self.assertIn("owners", fields)
+        self.assertIsInstance(fields["owners"], graphene.List)
+
+
+class AdditionalMutationBehaviorTests(TestCase):
+    def setUp(self):
+        self.info = MagicMock()
+        self.info.context.user = AnonymousUser()
+
+    def test_generateCreateMutationClass_uses_default_when_arg_missing(self):
+        class Mgr:
+            def __init__(self, **kwargs):
+                self.name = kwargs.get("name")
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+                @classmethod
+                def getAttributeTypes(cls):
+                    return {"name": {"type": str, "is_required": True, "is_editable": True, "is_derived": False, "default": "DEF"}}
+            @classmethod
+            def create(cls, **kwargs):
+                return Mgr(**kwargs)
+
+        defaults = {"success": graphene.Boolean(), "instance": graphene.Field(Mgr)}
+        Mutation = GraphQL.generateCreateMutationClass(Mgr, defaults)
+        out = Mutation.mutate(None, self.info)  # omit arg, should use default
+        self.assertTrue(out["success"])
+        self.assertEqual(out["Mgr"].name, "DEF")
+
+    def test_generateUpdateMutationClass_uses_default_when_arg_missing(self):
+        class Mgr:
+            def __init__(self, **kwargs):
+                self.q = kwargs.get("q")
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+                @classmethod
+                def getAttributeTypes(cls):
+                    return {"q": {"type": int, "is_required": False, "is_editable": True, "is_derived": False, "default": 7}}
+            @classmethod
+            def update(cls, **kwargs):
+                return Mgr(**kwargs)
+
+        defaults = {"success": graphene.Boolean(), "instance": graphene.Field(Mgr)}
+        Mutation = GraphQL.generateUpdateMutationClass(Mgr, defaults)
+        out = Mutation.mutate(None, self.info)  # omit arg
+        self.assertTrue(out["success"])
+        self.assertEqual(out["Mgr"].q, 7)
+
+    def test_generateDeleteMutationClass_missing_required_arg_raises(self):
+        class Mgr:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {"id": None}
+                @classmethod
+                def getAttributeTypes(cls):
+                    return {"id": {"type": int, "is_required": True, "is_editable": True, "is_derived": False, "default": None}}
+            @classmethod
+            def deactivate(cls, *_, **__):
+                return True
+
+        Mutation = GraphQL.generateDeleteMutationClass(Mgr, {"success": graphene.Boolean()})
+        with self.assertRaises(GraphQLError):
+            Mutation.mutate(None, self.info)  # no id provided
