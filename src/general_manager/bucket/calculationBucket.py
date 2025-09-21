@@ -222,7 +222,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             if origin in (Union, UnionType):
                 type_hint = type_hint.__args__[0] if type_hint.__args__ else str  # type: ignore
 
-            elif issubclass(type_hint, (list, tuple, set, dict)):
+            elif isinstance(type_hint, type) and issubclass(
+                type_hint, (list, tuple, set, dict)
+            ):
                 type_hint: type = (
                     type_hint.__args__[0] if hasattr(type_hint, "__args__") else str  # type: ignore
                 )
