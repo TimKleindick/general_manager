@@ -31,6 +31,13 @@ def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] =
     Returns:
         Callable: A decorator that registers the mutation and returns the original function.
     """
+    if (
+        _func is not None
+        and inspect.isclass(_func)
+        and issubclass(_func, MutationPermission)
+    ):
+        permission = _func
+        _func = None
 
     def decorator(fn):
         """
