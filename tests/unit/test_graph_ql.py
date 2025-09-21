@@ -587,7 +587,9 @@ class TestGrapQlMutation(TestCase):
         info = MagicMock()
         info.context.user = AnonymousUser()
 
-        mutation_result: dict = mutation_class.mutate(None, info, field1="test_value")
+        mutation_result: dict = mutation_class.mutate(
+            None, info, field1="test_value", id=1
+        )
         self.assertTrue(mutation_result["success"])
         self.assertIsInstance(mutation_result["DummyManager"], DummyManager)
         self.assertEqual(mutation_result["DummyManager"].field1, "test_value")
