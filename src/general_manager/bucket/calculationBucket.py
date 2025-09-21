@@ -569,8 +569,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if isinstance(result, list):
             new_bucket = CalculationBucket(
                 self._manager_class,
-                self._filters.copy(),
-                self._excludes.copy(),
+                self.filter_definitions.copy(),
+                self.exclude_definitions.copy(),
                 self.sort_key,
                 self.reverse,
             )
@@ -626,5 +626,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             A new CalculationBucket instance with the specified sorting applied.
         """
         return CalculationBucket(
-            self._manager_class, self._filters, self._excludes, key, reverse
+            self._manager_class,
+            self.filter_definitions,
+            self.exclude_definitions,
+            key,
+            reverse,
         )
