@@ -511,17 +511,25 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         # Apply property filters and exclusions
         filtered_combos = []
         for manager in manager_combinations:
-            breaker = False
-            for prop_name, prop_filter in prop_filters.items():
-                for func in prop_filter.get("filter_funcs", []):
+            keep = True
+            # include filters
+            for prop_name, defs in prop_filters.items():
+                for func in defs.get("filter_funcs", []):
                     if not func(getattr(manager, prop_name)):
-                        breaker = True
+                        keep = False
                         break
-                for func in prop_filter.get("exclude_funcs", []):
-                    if func(getattr(manager, prop_name)):
-                        breaker = True
+                if not keep:
+                    break
+            # excludes
+            if keep:
+                for prop_name, defs in prop_excludes.items():
+                    for func in defs.get("filter_funcs", []):
+                        if func(getattr(manager, prop_name)):
+                            keep = False
+                            break
+                    if not keep:
                         break
-            if not breaker:
+            if keep:
                 filtered_combos.append(manager)
         return filtered_combos
 
