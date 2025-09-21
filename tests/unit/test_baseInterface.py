@@ -2,6 +2,7 @@
 from django.test import SimpleTestCase, override_settings
 from general_manager.interface.baseInterface import InterfaceBase
 from general_manager.manager.generalManager import GeneralManager
+from typing import ClassVar
 
 
 # Dummy InputField implementation for testing
@@ -61,7 +62,7 @@ test_input_fields = {
 class DummyInterface(InterfaceBase):
     input_fields = test_input_fields
 
-    def getData(self, search_date=None):
+    def getData(self, _search_date=None):
         """
         Returns the identification value for this interface instance.
 
@@ -90,7 +91,7 @@ class DummyInterface(InterfaceBase):
         return {}
 
     @classmethod
-    def filter(cls, **kwargs):
+    def filter(cls, **_kwargs):
         """
         Filters items based on provided keyword arguments.
 
@@ -100,7 +101,7 @@ class DummyInterface(InterfaceBase):
         return None
 
     @classmethod
-    def exclude(cls, **kwargs):
+    def exclude(cls, **_kwargs):
         """
         Stub method for excluding items based on provided criteria.
 
@@ -116,7 +117,7 @@ class DummyInterface(InterfaceBase):
 
         The first returned function accepts any arguments and returns a tuple of the arguments, an empty dictionary, and None. The second returned function accepts any arguments and returns None.
         """
-        return (lambda *args: (args, {}, None), lambda *args: None)
+        return (lambda *args: (args, {}, None), lambda *_: None)
 
     @classmethod
     def getFieldType(cls, field_name):
@@ -225,12 +226,12 @@ class InterfaceBaseTests(SimpleTestCase):
         """
 
         class Circ(InterfaceBase):
-            input_fields = {
+            input_fields: ClassVar[dict] = {
                 "a": DummyInput(int, depends_on=["b"]),
                 "b": DummyInput(int, depends_on=["a"]),
             }
 
-            def getData(self, search_date=None):
+            def getData(self, _search_date=None):
                 return {}
 
             @classmethod
@@ -242,19 +243,19 @@ class InterfaceBaseTests(SimpleTestCase):
                 return {}
 
             @classmethod
-            def filter(cls, **kwargs):
+            def filter(cls, **_kwargs):
                 return None
 
             @classmethod
-            def exclude(cls, **kwargs):
+            def exclude(cls, **_kwargs):
                 return None
 
             @classmethod
             def handleInterface(cls):
-                return (lambda *args: (args, {}, None), lambda *args: None)
+                return (lambda *args: (args, {}, None), lambda *_: None)
 
             @classmethod
-            def getFieldType(cls, field_name):
+            def getFieldType(cls, _field_name):
                 return int
 
         with self.assertRaises(ValueError):
@@ -271,3 +272,84 @@ class InterfaceBaseTests(SimpleTestCase):
         inst.identification["mixed"] = [DummyGM({"id": 12}), 42]
         formatted = inst.formatIdentification()
         self.assertEqual(formatted["mixed"], [{"id": 12}, 42])
+
+
+# -----------------------------------------------------------------------------
+# Additional unit tests focused on edge cases, deeper coverage, and public APIs.
+# Testing library/framework: Django's unittest-based SimpleTestCase via django.test.
+# These tests are compatible with pytest-django if pytest is used in the repo.
+# -----------------------------------------------------------------------------
+
+class InterfaceBaseAdditionalTests(SimpleTestCase):
+    def test_get_field_type_returns_expected_types(self):
+        self.assertIs(DummyInterface.getFieldType("a"), int)
+        self.assertIs(DummyInterface.getFieldType("gm"), DummyGM)
+
+    def test_handle_interface_returns_valid_callables(self):
+        process, finalize = DummyInterface.handleInterface()
+        args = ("alpha", 123, None)
+        out_args, meta, err = process(*args)
+        self.assertEqual(out_args, args)
+        self.assertEqual(meta, {})
+        self.assertIsNone(err)
+        self.assertIsNone(finalize("beta"))
+
+    def test_gm_id_only_is_accepted(self):
+        inst = DummyInterface(a=1, b="x", vals=1, c=1, gm_id=DummyGM({"id": 200}))
+        self.assertEqual(inst.identification["gm"], {"id": 200})
+
+    def test_wrong_number_of_positional_args_raises(self):
+        gm = DummyGM({"id": 1})
+        # Missing last required positional ('c')
+        with self.assertRaises(TypeError):
+            DummyInterface(1, "foo", gm, 2)
+        # Too many positional args
+        with self.assertRaises(TypeError):
+            DummyInterface(1, "foo", gm, 2, 1, "extra")
+
+    def test_wrong_type_for_b_raises(self):
+        with self.assertRaises(TypeError):
+            DummyInterface(a=1, b=123, gm=DummyGM({"id": 1}), vals=1, c=1)
+
+    def test_wrong_type_for_gm_raises(self):
+        with self.assertRaises(TypeError):
+            DummyInterface(a=1, b="ok", gm="not_gm", vals=1, c=1)
+
+    def test_callable_possible_values_accepts_a_plus_one(self):
+        gm = DummyGM({"id": 2})
+        inst = DummyInterface(a=10, b="ok", gm=gm, vals=1, c=11)
+        self.assertEqual(inst.identification["c"], 11)
+
+    def test_missing_dependent_input_raises(self):
+        # 'b' depends on 'a' and is required in this interface layout
+        with self.assertRaises(TypeError):
+            DummyInterface(a=1, gm=DummyGM({"id": 3}), vals=1, c=1)
+
+    def test_format_identification_deep_nested_collections(self):
+        gm13 = DummyGM({"id": 13})
+        gm14 = DummyGM({"id": 14})
+        inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 11}), vals=2, c=1)
+        # deep/nested structure containing GeneralManager instances
+        inst.identification["deep"] = {"list": [gm13, {"inner": [gm14, 7]}]}
+        formatted = inst.formatIdentification()
+        self.assertEqual(
+            formatted["deep"],
+            {"list": [{"id": 13}, {"inner": [{"id": 14}, 7]}]},
+        )
+
+    def test_filter_and_exclude_return_none(self):
+        self.assertIsNone(DummyInterface.filter(name="x"))
+        self.assertIsNone(DummyInterface.exclude(name="x"))
+
+    def test_getData_returns_identification(self):
+        gm = DummyGM({"id": 9})
+        inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)
+        self.assertEqual(inst.getData(), inst.identification)
+
+    def test_vals_allowed_lower_and_upper_bounds(self):
+        # Lower bound
+        inst1 = DummyInterface(a=1, b="v", gm=DummyGM({"id": 21}), vals=1, c=1)
+        self.assertEqual(inst1.identification["vals"], 1)
+        # Upper bound
+        inst2 = DummyInterface(a=1, b="v", gm=DummyGM({"id": 22}), vals=3, c=1)
+        self.assertEqual(inst2.identification["vals"], 3)
