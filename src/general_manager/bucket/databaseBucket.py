@@ -178,7 +178,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if annotations:
             other_annotations: dict[str, Any] = {}
             for key, value in annotations.items():
-                if callable(value):
+                if not callable(value):
                     other_annotations[key] = value
                     continue
                 qs = value(qs)
