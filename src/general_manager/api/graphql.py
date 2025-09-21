@@ -872,6 +872,8 @@ class GraphQL:
             """
             try:
                 manager_id = kwargs.pop("id", None)
+                if manager_id is None:
+                    raise ValueError("id is required")
                 instance = generalManagerClass(id=manager_id).update(
                     creator_id=info.context.user.id, **kwargs
                 )
@@ -896,11 +898,14 @@ class GraphQL:
                     "Arguments",
                     (),
                     {
-                        field_name: field
-                        for field_name, field in cls.createWriteFields(
-                            interface_cls
-                        ).items()
-                        if field.editable
+                        "id": graphene.ID(required=True),
+                        **{
+                            field_name: field
+                            for field_name, field in cls.createWriteFields(
+                                interface_cls
+                            ).items()
+                            if field.editable
+                        },
                     },
                 ),
                 "mutate": update_mutation,
@@ -940,7 +945,9 @@ class GraphQL:
             """
             try:
                 manager_id = kwargs.pop("id", None)
-                instance = generalManagerClass(manager_id).deactivate(
+                if manager_id is None:
+                    raise ValueError("id is required")
+                instance = generalManagerClass(id=manager_id).deactivate(
                     creator_id=info.context.user.id
                 )
             except Exception as e:
