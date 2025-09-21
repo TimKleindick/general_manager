@@ -160,7 +160,9 @@ class GraphQL:
             attr_name,
             attr_value,
         ) in generalManagerClass.Interface.getGraphQLProperties().items():
-            type_hints = get_args(attr_value.graphql_type_hint)
+            type_hints = [
+                t for t in get_args(attr_value.graphql_type_hint) if t is not type(None)
+            ]
             field_type = (
                 type_hints[0]
                 if type_hints
@@ -200,7 +202,9 @@ class GraphQL:
         ) in generalManagerClass.Interface.getGraphQLProperties().items():
             if prop.sortable is False:
                 continue
-            type_hints = get_args(prop.graphql_type_hint)
+            type_hints = [
+                t for t in get_args(prop.graphql_type_hint) if t is not type(None)
+            ]
             field_type = (
                 type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
             )
