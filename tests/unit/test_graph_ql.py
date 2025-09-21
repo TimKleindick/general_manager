@@ -7,6 +7,7 @@ import graphene
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
+from typing import ClassVar
 
 from general_manager.api.graphql import (
     MeasurementType,
@@ -29,7 +30,7 @@ class GraphQLPropertyTests(TestCase):
             TypeError,
             msg="GraphQLProperty requires a return type hint for the property function.",
         ):
-            prop = GraphQLProperty(mock_getter)
+            GraphQLProperty(mock_getter)
 
     def test_graphql_property_with_type_hint(self):
         def mock_getter() -> str:
@@ -53,7 +54,7 @@ class GraphQLTests(TestCase):
         self.info.context.user = AnonymousUser()
 
     @patch("general_manager.interface.baseInterface.InterfaceBase")
-    def test_create_graphql_interface_no_interface(self, mock_interface):
+    def test_create_graphql_interface_no_interface(self, _mock_interface):
         self.general_manager_class.Interface = None
         result = GraphQL.createGraphqlInterface(self.general_manager_class)
         self.assertIsNone(result)
@@ -113,7 +114,7 @@ class GraphQLTests(TestCase):
 
         resolver = GraphQL._createResolver("abc_list", GeneralManager)
         with patch("json.loads", side_effect=json.loads):
-            result = resolver(
+            resolver(
                 mock_instance,
                 self.info,
                 filter=json.dumps({"field": "value"}),
@@ -130,7 +131,7 @@ class GraphQLTests(TestCase):
 
         class TestManager:
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @staticmethod
                 def getAttributeTypes():
@@ -145,7 +146,7 @@ class GraphQLTests(TestCase):
 
         mock_interface.getAttributeTypes.return_value = {"test_field": {"type": str}}
         with patch("general_manager.api.graphql.issubclass", return_value=True):
-            setattr(TestManager, "test_prop", GraphQLProperty(prop_func))
+            TestManager.test_prop = GraphQLProperty(prop_func)
             GraphQL.createGraphqlInterface(TestManager)
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
@@ -172,7 +173,7 @@ class GraphQLTests(TestCase):
             __name__ = "DummyManager"
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @staticmethod
                 def getAttributeTypes():
@@ -219,7 +220,7 @@ class GraphQLTests(TestCase):
             __name__ = "DummyManager2"
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @staticmethod
                 def getAttributeTypes():
@@ -241,7 +242,7 @@ class TestGetReadPermissionFilter(TestCase):
             __name__ = "DummyManager"
 
             class Permission:
-                def __init__(self, *args, **kwargs):
+                def __init__(self, *args, **_kwargs):
                     self.args = args
 
                 def getPermissionFilter(self):
@@ -264,16 +265,16 @@ class TestGrapQlMutation(TestCase):
 
         class DummyManager:
             class Interface:
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @classmethod
-                def create(cls, *args, **kwargs):
+                def create(cls, *_args, **kwargs):
                     pass
 
-                def update(self, *args, **kwargs):
+                def update(self, *_args, **kwargs):
                     pass
 
-                def deactivate(self, *args, **kwargs):
+                def deactivate(self, *_args, **kwargs):
                     pass
 
         class DummyManager2:
@@ -476,14 +477,14 @@ class TestGrapQlMutation(TestCase):
         """
 
         class DummyManager:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @classmethod
                 def getAttributeTypes(cls):
@@ -498,7 +499,7 @@ class TestGrapQlMutation(TestCase):
                     }
 
             @classmethod
-            def create(cls, *args, **kwargs):
+            def create(cls, *_args, **kwargs):
                 return DummyManager(**kwargs)
 
         default_return_values = {
@@ -542,14 +543,14 @@ class TestGrapQlMutation(TestCase):
         """
 
         class DummyManager:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields = {}
+                input_fields: ClassVar[dict] = {}
 
                 @classmethod
                 def getAttributeTypes(cls):
@@ -564,7 +565,7 @@ class TestGrapQlMutation(TestCase):
                     }
 
             @classmethod
-            def update(cls, *args, **kwargs):
+            def update(cls, *_args, **kwargs):
                 return DummyManager(**kwargs)
 
         default_return_values = {
@@ -610,14 +611,14 @@ class TestGrapQlMutation(TestCase):
         """
 
         class DummyManager:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields = {"id": None}
+                input_fields: ClassVar[dict] = {"id": None}
 
                 @classmethod
                 def getAttributeTypes(cls):
@@ -632,7 +633,7 @@ class TestGrapQlMutation(TestCase):
                     }
 
             @classmethod
-            def deactivate(cls, *args, **kwargs):
+            def deactivate(cls, *_args, **_kwargs):
                 return True
 
         default_return_values = {
@@ -653,3 +654,49 @@ class TestGrapQlMutation(TestCase):
         info = None
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info)
+
+
+# ===== Additional edge-case tests (appended) =====
+# Testing framework: unittest; Mocks: unittest.mock; GraphQL lib: graphene
+
+
+class GraphQLPropertyTypeHintTests(TestCase):
+    def test_graphql_property_stores_return_type(self):
+        def getter() -> int:
+            return 1
+        prop = GraphQLProperty(getter)
+        self.assertEqual(prop.graphql_type_hint, int)
+
+    def test_graphql_property_non_callable_raises_typeerror(self):
+        with self.assertRaises(TypeError):
+            GraphQLProperty(123)  # type: ignore[arg-type]
+
+
+class ListResolverInvalidDecodedTests(TestCase):
+    def setUp(self):
+        self.info = MagicMock()
+        self.info.context.user = AnonymousUser()
+
+    def test_filter_json_decodes_to_non_dict_is_ignored(self):
+        obj = MagicMock()
+        qs = MagicMock()
+        obj.abc_list = qs
+        resolver = GraphQL._createResolver("abc_list", GeneralManager)
+        with patch("json.loads", return_value=["not-a-dict"]):
+            out = resolver(obj, self.info, filter="[1,2]", exclude="[3,4]")
+        self.assertIn("items", out)
+        self.assertIs(out["items"], qs)
+
+    def test_measurement_none_value_returns_none(self):
+        holder = MagicMock()
+        holder.m = None
+        resolver = GraphQL._createResolver("m", Measurement)
+        out = resolver(holder, self.info)
+        self.assertIsNone(out)
+
+
+class MapFieldGeneralManagerListTests(TestCase):
+    def test_map_general_manager_list_like_name(self):
+        # When field name suggests a list, mapping should yield a list-like graphene type
+        field = GraphQL._mapFieldToGrapheneRead(GeneralManager, "manager_list")
+        self.assertTrue(isinstance(field, (graphene.List, graphene.Field)))

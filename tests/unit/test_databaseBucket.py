@@ -74,7 +74,7 @@ class DummyInterface(InterfaceBase):
         return DatabaseBucket(User.objects.filter(**kwargs), UserManager)
 
     @classmethod
-    def exclude(cls, **kwargs):  # type: ignore
+    def exclude(cls, **_kwargs):  # type: ignore
         """
         Returns an empty list, indicating no objects are excluded.
 
@@ -83,7 +83,7 @@ class DummyInterface(InterfaceBase):
         return []
 
     @classmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def getFieldType(cls, _field_name: str) -> type:
         """
         Returns the type associated with the specified field name.
 
@@ -102,7 +102,7 @@ class DummyInterface(InterfaceBase):
                 - postCreation: Sets a 'post_mark' flag on the newly created class.
         """
 
-        def preCreation(name, attrs, interface):
+        def preCreation(_name, attrs, _interface):
             """
             Adds a marker attribute to the class attributes before creation.
 
@@ -117,7 +117,7 @@ class DummyInterface(InterfaceBase):
             attrs["marker"] = "initialized_by_dummy"
             return attrs, cls, None
 
-        def postCreation(new_cls, interface_cls, model):
+        def postCreation(new_cls, _interface_cls, _model):
             """
             Sets a flag on the newly created class after its creation.
 
@@ -350,3 +350,135 @@ class DatabaseBucketTestCase(TestCase):
         sorted_bucket = bucket.sort("negative_length")
         first_id = sorted_bucket.first().identification["id"]
         self.assertIn(first_id, [self.u1.id, self.u3.id])
+
+    def test_getitem_negative_and_out_of_range(self):
+        """
+        Validates negative indexing and out-of-range behavior:
+        - Negative index returns correct manager
+        - Out-of-range index raises IndexError
+        """
+        # [-1] should be the last (carol)
+        mgr_last = self.bucket[-1]
+        self.assertIsInstance(mgr_last, UserManager)
+        self.assertEqual(mgr_last.identification["id"], self.u3.id)
+
+        with self.assertRaises(IndexError):
+            _ = self.bucket[999]
+
+        with self.assertRaises(IndexError):
+            _ = self.bucket[-10]
+
+    def test_slice_with_step_and_negative_slice(self):
+        """
+        Ensures slicing with steps and negative ranges behave consistently and preserve type.
+        """
+        step_bucket = self.bucket[0:3:2]
+        self.assertIsInstance(step_bucket, DatabaseBucket)
+        ids = [mgr.identification["id"] for mgr in step_bucket]
+        self.assertListEqual(ids, [self.u1.id, self.u3.id])
+
+        neg_slice = self.bucket[::-1]
+        self.assertIsInstance(neg_slice, DatabaseBucket)
+        ids_rev = [mgr.identification["id"] for mgr in neg_slice]
+        self.assertListEqual(ids_rev, [self.u3.id, self.u2.id, self.u1.id])
+
+    def test_union_deduplicates_and_handles_empty_bucket(self):
+        """
+        Union operator should:
+        - Deduplicate overlapping entries
+        - Work with empty right/left operands
+        """
+        only_alice = self.bucket.filter(username="alice")
+
+        dup_union = only_alice | only_alice
+        self.assertEqual(len(dup_union), 1)
+        self.assertEqual(dup_union.first().identification["id"], self.u1.id)
+
+        empty = DatabaseBucket(User.objects.none(), UserManager)
+
+        u1_union_empty = only_alice | empty
+        empty_union_u1 = empty | only_alice
+        self.assertEqual(len(u1_union_empty), 1)
+        self.assertEqual(len(empty_union_u1), 1)
+        self.assertEqual(u1_union_empty.first().identification["id"], self.u1.id)
+        self.assertEqual(empty_union_u1.first().identification["id"], self.u1.id)
+
+    def test_filter_chaining_merges_and_results_match(self):
+        """
+        Chaining filter calls should merge filter definitions and return OR of values for same key.
+        """
+        # Start with no filter then add multiple username filters
+        chained = self.bucket.filter(username="alice").filter(username="carol")
+        # Definitions merged
+        self.assertIn("username", chained.filters)
+        self.assertCountEqual(chained.filters["username"], ["alice", "carol"])
+        # Data should contain both alice and carol
+        ids = [mgr.identification["id"] for mgr in chained]
+        self.assertCountEqual(ids, [self.u1.id, self.u3.id])
+
+    def test_exclude_chaining_merges_and_results_match(self):
+        """
+        Chaining exclude calls should merge exclusion definitions and remove all specified values (OR semantics).
+        """
+        chained = self.bucket.exclude(username="alice").exclude(username="bob")
+        self.assertIn("username", chained.excludes)
+        self.assertCountEqual(chained.excludes["username"], ["alice", "bob"])
+        remaining_ids = [mgr.identification["id"] for mgr in chained]
+        self.assertCountEqual(remaining_ids, [self.u3.id])
+
+    def test_sort_invalid_key_raises(self):
+        """
+        Sorting by an unknown field/property should raise a ValueError.
+        """
+        with self.assertRaises(ValueError):
+            _ = self.bucket.sort("does_not_exist")
+
+    def test_filter_invalid_lookup_raises(self):
+        """
+        Filtering by an unknown attribute/property should raise a ValueError to surface misuse early.
+        """
+        with self.assertRaises(ValueError):
+            _ = self.bucket.filter(nonexistent_attr__gte=1)
+
+    def test_truthiness_and_bool_semantics(self):
+        """
+        Buckets should be truthy if non-empty and falsy if empty (via __len__).
+        """
+        self.assertTrue(bool(self.bucket))
+        empty = DatabaseBucket(User.objects.none(), UserManager)
+        self.assertFalse(bool(empty))
+
+    def test_repr_and_str_include_model_and_count(self):
+        """
+        __repr__/__str__ should include useful debugging info like model and size.
+        """
+        r = repr(self.bucket)
+        s = str(self.bucket)
+        # Heuristic checks to avoid over-specifying format
+        self.assertTrue("DatabaseBucket" in r or "DatabaseBucket" in s)
+        self.assertTrue("User" in r or "auth.User" in r or "User" in s or "auth.User" in s)
+        self.assertTrue("3" in r or "3" in s)
+
+    def test_property_filter_multiple_operators(self):
+        """
+        Validate property-based filtering with multiple operators against graphQlProperty fields.
+        """
+        # username_length values: alice=5, bob=3, carol=5
+        gte_five = self.bucket.filter(username_length__gte=5)
+        self.assertEqual(len(gte_five), 2)
+        lte_three = self.bucket.filter(username_length__lte=3)
+        self.assertEqual(len(lte_three), 1)
+        self.assertEqual(lte_three.first().identification["id"], self.u2.id)
+
+    def test_property_sort_desc_then_asc_stability(self):
+        """
+        Ensure property-based sort supports direction and returns consistent ordering.
+        """
+        desc_sorted = self.bucket.sort("username_length", reverse=True)
+        ids_desc = [m.identification["id"] for m in desc_sorted]
+        # Both alice and carol have same length; bob shortest
+        self.assertEqual(ids_desc[-1], self.u2.id)
+
+        asc_sorted = self.bucket.sort("username_length", reverse=False)
+        ids_asc = [m.identification["id"] for m in asc_sorted]
+        self.assertEqual(ids_asc[0], self.u2.id)
