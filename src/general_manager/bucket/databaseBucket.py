@@ -301,6 +301,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         for k in key:
             if k in properties:
                 prop = properties[k]
+                if not prop.sortable:
+                    raise ValueError(
+                        f"Property '{k}' is not sortable in {self._manager_class.__name__}"
+                    )
                 if prop.query_annotation is not None:
                     if callable(prop.query_annotation):
                         qs = prop.query_annotation(qs)
