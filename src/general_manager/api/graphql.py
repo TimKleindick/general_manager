@@ -298,15 +298,13 @@ class GraphQL:
         for prop_name, prop in field_type.Interface.getGraphQLProperties().items():
             if not prop.filterable:
                 continue
-            type_hints = get_args(prop.graphql_type_hint)
-            field_type = (
-                type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
-            )
+            hints = [t for t in get_args(prop.graphql_type_hint) if t is not type(None)]
+            prop_type = hints[0] if hints else cast(type, prop.graphql_type_hint)
             filter_fields = {
                 **filter_fields,
                 **{
                     k: v
-                    for k, v in GraphQL._getFilterOptions(field_type, prop_name)
+                    for k, v in GraphQL._getFilterOptions(prop_type, prop_name)
                     if v is not None
                 },
             }
