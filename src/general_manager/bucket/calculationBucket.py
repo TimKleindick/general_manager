@@ -239,10 +239,6 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         Merges the provided filter criteria with existing filters to further restrict valid input combinations.
         """
-        properties = self._manager_class.Interface.getGraphQLProperties()
-        possible_values = self.transformPropertiesToInputFields(
-            properties, self.input_fields
-        )
         return CalculationBucket(
             manager_class=self._manager_class,
             filter_definitions={
@@ -258,16 +254,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         Keyword arguments specify input values to exclude from the generated combinations.
         """
-        properties = self._manager_class.Interface.getGraphQLProperties()
-        possible_values = self.transformPropertiesToInputFields(
-            properties, self.input_fields
-        )
         return CalculationBucket(
             manager_class=self._manager_class,
             filter_definitions=self.filter_definitions.copy(),
             exclude_definitions={
                 **self.exclude_definitions.copy(),
-                **parse_filters(kwargs, possible_values),
+                **kwargs,
             },
         )
 
