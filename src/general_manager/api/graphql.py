@@ -371,10 +371,10 @@ class GraphQL:
             return graphene.Int
         elif issubclass(field_type, (float, Decimal)):
             return graphene.Float
-        elif issubclass(field_type, date):
-            return graphene.Date
         elif issubclass(field_type, datetime):
             return graphene.DateTime
+        elif issubclass(field_type, date):
+            return graphene.Date
         elif issubclass(field_type, Measurement):
             return MeasurementScalar
         else:
