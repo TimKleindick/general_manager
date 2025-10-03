@@ -137,7 +137,7 @@ class Derivative(GeneralManager):
         project = ForeignKey("Project", on_delete=CASCADE)
         price = MeasurementField(base_unit="EUR", null=True, blank=True)
 
-    @graphQlProperty
+    @graphQlProperty(sortable=True, filterable=True)
     def estimated_shipment(self) -> Optional[Measurement]:
         if self.estimated_weight is None or self.estimated_volume is None:
             return None
@@ -252,7 +252,7 @@ class ProjectCommercial(GeneralManager):
         )
         date = Input(date, possible_values=getPossibleDates)
 
-    @graphQlProperty
+    @graphQlProperty(sortable=True)
     def total_volume(self) -> int | float | Measurement:
         return sum(
             noneToZero(volume.volume)
@@ -260,7 +260,7 @@ class ProjectCommercial(GeneralManager):
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
 
-    @graphQlProperty
+    @graphQlProperty(filterable=True, sortable=True)
     def total_shipment(self) -> Optional[Measurement]:
         total = sum(
             noneToZero(derivative.estimated_weight) * noneToZero(volume.volume)
@@ -283,7 +283,7 @@ class ProjectCommercial(GeneralManager):
         return None
 
 
-@graphQlMutation()
+@graphQlMutation
 def startProject(
     info,
     project_name: str,

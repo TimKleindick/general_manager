@@ -13,7 +13,9 @@ from typing import (
 from datetime import datetime
 from django.conf import settings
 from django.db.models import Model
+
 from general_manager.utils import args_to_kwargs
+from general_manager.api.property import GraphQLProperty
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input
@@ -60,8 +62,8 @@ class InterfaceBase(ABC):
     input_fields: dict[str, Input]
 
     def __init__(self, *args: Any, **kwargs: Any):
-        self.identification = self.parseInputFieldsToIdentification(*args, **kwargs)
-        self.formatIdentification()
+        identification = self.parseInputFieldsToIdentification(*args, **kwargs)
+        self.identification = self.formatIdentification(identification)
 
     def parseInputFieldsToIdentification(
         self,
@@ -113,18 +115,27 @@ class InterfaceBase(ABC):
                 )
         return identification
 
-    def formatIdentification(self) -> dict[str, Any]:
+    @staticmethod
+    def formatIdentification(identification: dict[str, Any]) -> dict[str, Any]:
         from general_manager.manager.generalManager import GeneralManager
 
-        for key, value in self.identification.items():
+        for key, value in identification.items():
             if isinstance(value, GeneralManager):
-                self.identification[key] = value.identification
+                identification[key] = value.identification
             elif isinstance(value, (list, tuple)):
-                self.identification[key] = [
-                    v.identification if isinstance(v, GeneralManager) else v
-                    for v in value
-                ]
-        return self.identification
+                identification[key] = []
+                for v in value:
+                    if isinstance(v, GeneralManager):
+                        identification[key].append(v.identification)
+                    elif isinstance(v, dict):
+                        identification[key].append(
+                            InterfaceBase.formatIdentification(v)
+                        )
+                    else:
+                        identification[key].append(v)
+            elif isinstance(value, dict):
+                identification[key] = InterfaceBase.formatIdentification(value)
+        return identification
 
     def _process_input(
         self, name: str, value: Any, identification: dict[str, Any]
@@ -183,6 +194,17 @@ class InterfaceBase(ABC):
     @abstractmethod
     def getAttributes(cls) -> dict[str, Any]:
         raise NotImplementedError
+
+    @classmethod
+    def getGraphQLProperties(cls) -> dict[str, GraphQLProperty]:
+        """Return GraphQL properties defined on the parent manager."""
+        if not hasattr(cls, "_parent_class"):
+            return {}
+        return {
+            name: prop
+            for name, prop in vars(cls._parent_class).items()
+            if isinstance(prop, GraphQLProperty)
+        }
 
     @classmethod
     @abstractmethod

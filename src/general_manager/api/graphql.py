@@ -1,6 +1,18 @@
 from __future__ import annotations
 import graphene
-from typing import Any, Callable, get_args, TYPE_CHECKING, cast, Type
+from typing import (
+    Any,
+    Callable,
+    get_args,
+    get_origin,
+    TYPE_CHECKING,
+    cast,
+    Type,
+    Generator,
+    Union,
+)
+from types import UnionType
+
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -156,18 +168,45 @@ class GraphQL:
             fields[resolver_name] = cls._createResolver(field_name, field_type)
 
         # handle GraphQLProperty attributes
-        for attr_name, attr_value in generalManagerClass.__dict__.items():
-            if isinstance(attr_value, GraphQLProperty):
-                type_hints = get_args(attr_value.graphql_type_hint)
-                field_type = (
-                    type_hints[0]
-                    if type_hints
-                    else cast(type, attr_value.graphql_type_hint)
+        for (
+            attr_name,
+            attr_value,
+        ) in generalManagerClass.Interface.getGraphQLProperties().items():
+            raw_hint = attr_value.graphql_type_hint
+            origin = get_origin(raw_hint)
+            type_args = [t for t in get_args(raw_hint) if t is not type(None)]
+
+            if origin in (Union, UnionType) and type_args:
+                raw_hint = type_args[0]
+                origin = get_origin(raw_hint)
+                type_args = [t for t in get_args(raw_hint) if t is not type(None)]
+
+            if origin in (list, tuple, set):
+                element = type_args[0] if type_args else Any
+                if isinstance(element, type) and issubclass(element, GeneralManager):  # type: ignore
+                    graphene_field = graphene.List(
+                        lambda elem=element: GraphQL.graphql_type_registry[
+                            elem.__name__
+                        ]
+                    )
+                else:
+                    base_type = GraphQL._mapFieldToGrapheneBaseType(
+                        cast(type, element if isinstance(element, type) else str)
+                    )
+                    graphene_field = graphene.List(base_type)
+                resolved_type = cast(
+                    type, element if isinstance(element, type) else str
                 )
-                fields[attr_name] = cls._mapFieldToGrapheneRead(field_type, attr_name)
-                fields[f"resolve_{attr_name}"] = cls._createResolver(
-                    attr_name, field_type
+            else:
+                resolved_type = (
+                    cast(type, type_args[0]) if type_args else cast(type, raw_hint)
                 )
+                graphene_field = cls._mapFieldToGrapheneRead(resolved_type, attr_name)
+
+            fields[attr_name] = graphene_field
+            fields[f"resolve_{attr_name}"] = cls._createResolver(
+                attr_name, resolved_type
+            )
 
         graphene_type = type(graphene_type_name, (graphene.ObjectType,), fields)
         cls.graphql_type_registry[generalManagerClass.__name__] = graphene_type
@@ -194,6 +233,20 @@ class GraphQL:
             else:
                 sort_options.append(field_name)
 
+        for (
+            prop_name,
+            prop,
+        ) in generalManagerClass.Interface.getGraphQLProperties().items():
+            if prop.sortable is False:
+                continue
+            type_hints = [
+                t for t in get_args(prop.graphql_type_hint) if t is not type(None)
+            ]
+            field_type = (
+                type_hints[0] if type_hints else cast(type, prop.graphql_type_hint)
+            )
+            sort_options.append(prop_name)
+
         if not sort_options:
             return None
 
@@ -204,21 +257,13 @@ class GraphQL:
         )
 
     @staticmethod
-    def _createFilterOptions(
-        field_name: str, field_type: GeneralManagerMeta
-    ) -> type[graphene.InputObjectType] | None:
-        """
-        Dynamically generates a Graphene InputObjectType for filtering fields of a GeneralManager subclass.
-
-        Creates filter fields for each attribute based on its type, supporting numeric and string filter operations, and specialized handling for Measurement attributes. Returns the generated InputObjectType, or None if no applicable filter fields exist.
-
-        Parameters:
-            field_name (str): The name of the field to generate filter options for.
-            field_type (GeneralManagerMeta): The manager class whose attributes are used to build filter fields.
-
-        Returns:
-            type[graphene.InputObjectType] | None: The generated filter input type, or None if no filter fields are applicable.
-        """
+    def _getFilterOptions(attribute_type: type, attribute_name: str) -> Generator[
+        tuple[
+            str, type[graphene.ObjectType] | MeasurementScalar | graphene.List | None
+        ],
+        None,
+        None,
+    ]:
         number_options = ["exact", "gt", "gte", "lt", "lte"]
         string_options = [
             "exact",
@@ -229,6 +274,49 @@ class GraphQL:
             "endswith",
         ]
 
+        if issubclass(attribute_type, GeneralManager):
+            yield attribute_name, None
+        elif issubclass(attribute_type, Measurement):
+            yield attribute_name, MeasurementScalar()
+            for option in number_options:
+                yield f"{attribute_name}__{option}", MeasurementScalar()
+        else:
+            yield attribute_name, GraphQL._mapFieldToGrapheneRead(
+                attribute_type, attribute_name
+            )
+            if issubclass(attribute_type, (int, float, Decimal, date, datetime)):
+                for option in number_options:
+                    yield f"{attribute_name}__{option}", (
+                        GraphQL._mapFieldToGrapheneRead(attribute_type, attribute_name)
+                    )
+            elif issubclass(attribute_type, str):
+                base_type = GraphQL._mapFieldToGrapheneBaseType(attribute_type)
+                for option in string_options:
+                    if option == "in":
+                        yield f"{attribute_name}__in", graphene.List(base_type)
+                    else:
+                        yield f"{attribute_name}__{option}", (
+                            GraphQL._mapFieldToGrapheneRead(
+                                attribute_type, attribute_name
+                            )
+                        )
+
+    @staticmethod
+    def _createFilterOptions(
+        field_type: GeneralManagerMeta,
+    ) -> type[graphene.InputObjectType] | None:
+        """
+        Dynamically generates a Graphene InputObjectType for filtering fields of a GeneralManager subclass.
+
+        Creates filter fields for each attribute based on its type, supporting numeric and string filter operations, and specialized handling for Measurement attributes. Returns the generated InputObjectType, or None if no applicable filter fields exist.
+
+        Parameters:
+            field_type (GeneralManagerMeta): The manager class whose attributes are used to build filter fields.
+
+        Returns:
+            type[graphene.InputObjectType] | None: The generated filter input type, or None if no filter fields are applicable.
+        """
+
         graphene_filter_type_name = f"{field_type.__name__}FilterType"
         if graphene_filter_type_name in GraphQL.graphql_filter_type_registry:
             return GraphQL.graphql_filter_type_registry[graphene_filter_type_name]
@@ -236,26 +324,28 @@ class GraphQL:
         filter_fields = {}
         for attr_name, attr_info in field_type.Interface.getAttributeTypes().items():
             attr_type = attr_info["type"]
-            if issubclass(attr_type, GeneralManager):
+            filter_fields = {
+                **filter_fields,
+                **{
+                    k: v
+                    for k, v in GraphQL._getFilterOptions(attr_type, attr_name)
+                    if v is not None
+                },
+            }
+        for prop_name, prop in field_type.Interface.getGraphQLProperties().items():
+            if not prop.filterable:
                 continue
-            elif issubclass(attr_type, Measurement):
-                filter_fields[f"{attr_name}"] = MeasurementScalar()
-                for option in number_options:
-                    filter_fields[f"{attr_name}__{option}"] = MeasurementScalar()
-            else:
-                filter_fields[attr_name] = GraphQL._mapFieldToGrapheneRead(
-                    attr_type, attr_name
-                )
-                if issubclass(attr_type, (int, float, Decimal, date, datetime)):
-                    for option in number_options:
-                        filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
-                        )
-                elif issubclass(attr_type, str):
-                    for option in string_options:
-                        filter_fields[f"{attr_name}__{option}"] = (
-                            GraphQL._mapFieldToGrapheneRead(attr_type, attr_name)
-                        )
+            hints = [t for t in get_args(prop.graphql_type_hint) if t is not type(None)]
+            prop_type = hints[0] if hints else cast(type, prop.graphql_type_hint)
+            filter_fields = {
+                **filter_fields,
+                **{
+                    k: v
+                    for k, v in GraphQL._getFilterOptions(prop_type, prop_name)
+                    if v is not None
+                },
+            }
+
         if not filter_fields:
             return None
 
@@ -284,14 +374,14 @@ class GraphQL:
                     "page_size": graphene.Int(),
                     "group_by": graphene.List(graphene.String),
                 }
-                filter_options = GraphQL._createFilterOptions(field_name, field_type)
+                filter_options = GraphQL._createFilterOptions(field_type)
                 if filter_options:
-                    attributes["filter"] = filter_options()
-                    attributes["exclude"] = filter_options()
+                    attributes["filter"] = graphene.Argument(filter_options)
+                    attributes["exclude"] = graphene.Argument(filter_options)
 
                 sort_by_options = GraphQL._sortByOptions(field_type)
                 if sort_by_options:
-                    attributes["sort_by"] = sort_by_options()
+                    attributes["sort_by"] = graphene.Argument(sort_by_options)
 
                 page_type = GraphQL._getOrCreatePageType(
                     field_type.__name__ + "Page",
@@ -299,10 +389,6 @@ class GraphQL:
                 )
                 return graphene.Field(page_type, **attributes)
 
-                return graphene.List(
-                    lambda: GraphQL.graphql_type_registry[field_type.__name__],
-                    **attributes,
-                )
             return graphene.Field(
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
             )
@@ -314,6 +400,8 @@ class GraphQL:
         """
         Ordnet einen Python-Typ einem entsprechenden Graphene-Feld zu.
         """
+        if issubclass(field_type, dict):
+            raise TypeError("GraphQL does not support dict fields")
         if issubclass(field_type, str):
             return graphene.String
         elif issubclass(field_type, bool):
@@ -322,7 +410,9 @@ class GraphQL:
             return graphene.Int
         elif issubclass(field_type, (float, Decimal)):
             return graphene.Float
-        elif issubclass(field_type, (date, datetime)):
+        elif issubclass(field_type, datetime):
+            return graphene.DateTime
+        elif issubclass(field_type, date):
             return graphene.Date
         elif issubclass(field_type, Measurement):
             return MeasurementScalar
@@ -385,7 +475,7 @@ class GraphQL:
     ) -> Bucket:
         """
         Applies permission-based filters to a queryset according to the permission interface of the given manager class.
-        
+
         Returns:
             A queryset containing only the items allowed by the user's read permissions. If no permission filters are defined, returns the original queryset unchanged.
         """
@@ -541,7 +631,7 @@ class GraphQL:
                 result = result.to(target_unit)
             return {
                 "value": result.quantity.magnitude,
-                "unit": result.quantity.units,
+                "unit": str(result.quantity.units),
             }
 
         return resolver
@@ -621,15 +711,13 @@ class GraphQL:
             "page_size": graphene.Int(),
             "group_by": graphene.List(graphene.String),
         }
-        filter_options = cls._createFilterOptions(
-            generalManagerClass.__name__.lower(), generalManagerClass
-        )
+        filter_options = cls._createFilterOptions(generalManagerClass)
         if filter_options:
-            attributes["filter"] = filter_options()
-            attributes["exclude"] = filter_options()
+            attributes["filter"] = graphene.Argument(filter_options)
+            attributes["exclude"] = graphene.Argument(filter_options)
         sort_by_options = cls._sortByOptions(generalManagerClass)
         if sort_by_options:
-            attributes["sort_by"] = sort_by_options()
+            attributes["sort_by"] = graphene.Argument(sort_by_options)
 
         page_type = cls._getOrCreatePageType(
             graphene_type.__name__ + "Page", graphene_type
@@ -829,7 +917,9 @@ class GraphQL:
             """
             try:
                 manager_id = kwargs.pop("id", None)
-                instance = generalManagerClass(manager_id).update(
+                if manager_id is None:
+                    raise ValueError("id is required")
+                instance = generalManagerClass(id=manager_id).update(
                     creator_id=info.context.user.id, **kwargs
                 )
             except Exception as e:
@@ -844,7 +934,7 @@ class GraphQL:
             }
 
         return type(
-            f"Create{generalManagerClass.__name__}",
+            f"Update{generalManagerClass.__name__}",
             (graphene.Mutation,),
             {
                 **default_return_values,
@@ -853,11 +943,14 @@ class GraphQL:
                     "Arguments",
                     (),
                     {
-                        field_name: field
-                        for field_name, field in cls.createWriteFields(
-                            interface_cls
-                        ).items()
-                        if field.editable
+                        "id": graphene.ID(required=True),
+                        **{
+                            field_name: field
+                            for field_name, field in cls.createWriteFields(
+                                interface_cls
+                            ).items()
+                            if field.editable
+                        },
                     },
                 ),
                 "mutate": update_mutation,
@@ -897,7 +990,9 @@ class GraphQL:
             """
             try:
                 manager_id = kwargs.pop("id", None)
-                instance = generalManagerClass(manager_id).deactivate(
+                if manager_id is None:
+                    raise ValueError("id is required")
+                instance = generalManagerClass(id=manager_id).deactivate(
                     creator_id=info.context.user.id
                 )
             except Exception as e:
@@ -946,7 +1041,7 @@ class GraphQL:
                     "code": "PERMISSION_DENIED",
                 },
             )
-        elif isinstance(error, (ValueError, ValidationError)):
+        elif isinstance(error, (ValueError, ValidationError, TypeError)):
             raise GraphQLError(
                 str(error),
                 extensions={

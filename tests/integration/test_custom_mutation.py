@@ -129,13 +129,13 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
         class ResetToDoPermission(MutationPermission):
             __mutate__ = ["isAuthenticated"]
 
-        @graphQlMutation()
+        @graphQlMutation
         def mark_todo_as_finished(info, id: int) -> ToDo:
             todo = ToDo(id)
             creator_id = info.context.user.id if info.context.user else None
             return todo.update(finished=True, creator_id=creator_id)
 
-        @graphQlMutation(ResetToDoPermission)
+        @graphQlMutation(permission=ResetToDoPermission)
         def reset_todo(info, id: int) -> ToDo:
             todo = ToDo(id)
             creator_id = info.context.user.id if info.context.user else None
@@ -170,7 +170,7 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
     def test_reset_todo(self):
         """
         Tests that marking a ToDo as finished succeeds for any user, while resetting a ToDo requires authentication and fails for unauthenticated users.
-        
+
         Creates a finished ToDo, verifies the public mutation to mark as finished is idempotent and successful, then attempts to reset the ToDo without authentication and asserts that permission is denied.
         """
         todo = self.ToDo.create(headline="Test ToDo", finished=True)

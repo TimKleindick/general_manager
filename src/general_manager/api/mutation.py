@@ -19,23 +19,30 @@ from typing import TypeAliasType
 from general_manager.permission.mutationPermission import MutationPermission
 
 
-def graphQlMutation(permission: Optional[Type[MutationPermission]] = None):
+def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] = None):
     """
     Decorator that converts a function into a GraphQL mutation class for use with Graphene, automatically generating argument and output fields from the function's signature and type annotations.
-    
+
     The decorated function must provide type hints for all parameters (except `info`) and a return annotation. The decorator dynamically constructs a mutation class with appropriate Graphene fields, enforces permission checks if a `permission` class is provided, and registers the mutation for use in the GraphQL API.
-    
+
     Parameters:
         permission (Optional[Type[MutationPermission]]): An optional permission class to enforce access control on the mutation.
-    
+
     Returns:
         Callable: A decorator that registers the mutation and returns the original function.
     """
+    if (
+        _func is not None
+        and inspect.isclass(_func)
+        and issubclass(_func, MutationPermission)
+    ):
+        permission = _func
+        _func = None
 
     def decorator(fn):
         """
         Decorator that transforms a function into a GraphQL mutation class compatible with Graphene.
-        
+
         Analyzes the decorated function's signature and type hints to dynamically generate a mutation class with appropriate argument and output fields. Handles permission checks if a permission class is provided, manages mutation execution, and registers the mutation for use in the GraphQL API. On success, returns output fields and a `success` flag; on error, returns only `success=False`.
         """
         sig = inspect.signature(fn)
@@ -122,10 +129,9 @@ def graphQlMutation(permission: Optional[Type[MutationPermission]] = None):
 
         # Define mutate method
         def _mutate(root, info, **kwargs):
-
             """
             Handles the execution of a GraphQL mutation, including permission checks, result unpacking, and error handling.
-            
+
             Returns:
                 An instance of the mutation class with output fields populated from the mutation result and a success status.
             """
@@ -169,4 +175,6 @@ def graphQlMutation(permission: Optional[Type[MutationPermission]] = None):
 
         return fn
 
+    if _func is not None and inspect.isfunction(_func):
+        return decorator(_func)
     return decorator
