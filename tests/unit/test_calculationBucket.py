@@ -400,6 +400,7 @@ class TestCalculationBucketAdditional(TestCase):
         """
         Ensure iteration yields manager instances populated with the exact combination kwargs.
         """
+
         class DynInterface(CalculationInterface):
             input_fields: ClassVar[dict] = {
                 "a": Input(type=int, possible_values=[1, 2]),
@@ -466,6 +467,7 @@ class TestCalculationBucketAdditional(TestCase):
         """
         A callable possible_values that returns an empty list should result in zero combinations.
         """
+
         def pv_empty(_):
             return []
 
@@ -486,13 +488,41 @@ class TestCalculationBucketAdditional(TestCase):
         self.assertEqual(bucket.generate_combinations(), [])
 
     @patch("general_manager.bucket.calculationBucket.parse_filters", return_value={})
+    def test_generate_combinations_callable_returning_empty_2(self, _mock_parse):
+        """
+        A callable possible_values that returns an empty list should result in zero combinations.
+        """
+
+        def pv_empty(a):
+            return []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "a": Input(type=int, possible_values=[1, 2]),
+                "b": Input(type=int, possible_values=pv_empty),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        DynInterface._parent_class = DynManager
+        bucket = CalculationBucket(DynManager)
+        self.assertEqual(bucket.generate_combinations(), [])
+
+    @patch("general_manager.bucket.calculationBucket.parse_filters", return_value={})
     def test_generate_combinations_missing_dependency(self, _mock_parse):
         """
         If a field declares depends_on referencing a non-existent field, generation should raise a ValueError.
         """
+
         class DynInterface(CalculationInterface):
             input_fields: ClassVar[dict] = {
-                "b": Input(type=int, possible_values=lambda x: [x], depends_on=["a"]),  # 'a' missing
+                "b": Input(
+                    type=int, possible_values=lambda x: [x], depends_on=["a"]
+                ),  # 'a' missing
             }
 
         class DynManager:
@@ -511,11 +541,25 @@ class TestCalculationBucketAdditional(TestCase):
         """
         When multiple filter functions are provided, they should be combined with logical AND semantics.
         """
-        fields = {"n": Input(type=int, possible_values=[0, 1, 2, 3, 4, 5, 6])}
-        bucket = CalculationBucket(DummyGeneralManager)
-        bucket._manager_class.Interface.input_fields = fields  # Inject fields into dummy interface
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=[0, 1, 2, 3, 4, 5, 6])
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = kwargs
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
         # Two filters: even numbers AND greater than 2 -> {4,6}
-        bucket._filters = {"n": {"filter_funcs": [lambda x: x % 2 == 0, lambda x: x > 2]}}
+        bucket._filters = {
+            "n": {"filter_funcs": [lambda x: x % 2 == 0, lambda x: x > 2]}
+        }
         bucket._excludes = {}
         combos = bucket.generate_combinations()
         self.assertCountEqual(combos, [{"n": 4}, {"n": 6}])
@@ -525,9 +569,21 @@ class TestCalculationBucketAdditional(TestCase):
         """
         Exclude functions should remove any matching values from the candidate set.
         """
-        fields = {"n": Input(type=int, possible_values=[1, 2, 3, 4, 5])}
-        bucket = CalculationBucket(DummyGeneralManager)
-        bucket._manager_class.Interface.input_fields = fields
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "n": Input(type=int, possible_values=[1, 2, 3, 4, 5])
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = kwargs
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
         bucket._filters = {}
         bucket._excludes = {"n": {"filter_funcs": [lambda x: x in (2, 5)]}}
         combos = bucket.generate_combinations()
@@ -542,19 +598,32 @@ class TestCalculationBucketAdditional(TestCase):
         bucket._data = [{"a": 1}, {"b": 2}]
         sorted_bucket = bucket.sort(key="a", reverse=False)
         with self.assertRaises((KeyError, TypeError, AttributeError)):
-            _ = sorted_bucket.generate_combinations() if hasattr(sorted_bucket, "generate_combinations") and sorted_bucket._data is None else sorted_bucket._data.sort(key=lambda d: d["a"])  # Fallback if implementation sorts on generation
+            _ = (
+                sorted_bucket.generate_combinations()
+                if hasattr(sorted_bucket, "generate_combinations")
+                and sorted_bucket._data is None
+                else sorted_bucket._data.sort(key=lambda d: d["a"])
+            )  # Fallback if implementation sorts on generation
 
     @patch("general_manager.bucket.calculationBucket.parse_filters", return_value={})
     def test_or_operator_preserves_common_nested_structures(self, _mock_parse):
         """
         __or__ should preserve only filters/excludes with identical nested structures.
         """
-        f1 = {"field": {"filter_kwargs": {"gte": 1, "lte": 5}, "filter_funcs": [lambda _: True]}}
-        f2 = {"field": {"filter_kwargs": {"gte": 1, "lte": 5}, "filter_funcs": [lambda _: True]}}
-        e1 = {"field": {"filter_kwargs": {"ne": 3}}}
-        e2 = {"field": {"filter_kwargs": {"ne": 3, "dummy": None}}}  # not identical
-        b1 = CalculationBucket(DummyGeneralManager, filter_definitions=f1, exclude_definitions=e1)
-        b2 = CalculationBucket(DummyGeneralManager, filter_definitions=f2, exclude_definitions=e2)
+        f1 = {
+            "field": {"gte": 1, "lte": 5},
+        }
+        f2 = {
+            "field": {"gte": 1, "lte": 5},
+        }
+        e1 = {"field": {"ne": 3}}
+        e2 = {"field": {"ne": 3, "dummy": None}}  # not identical
+        b1 = CalculationBucket(
+            DummyGeneralManager, filter_definitions=f1, exclude_definitions=e1
+        )
+        b2 = CalculationBucket(
+            DummyGeneralManager, filter_definitions=f2, exclude_definitions=e2
+        )
         combined = b1 | b2
         self.assertEqual(combined.filter_definitions, f1)  # identical preserved
         self.assertEqual(combined.exclude_definitions, {})  # non-identical removed
