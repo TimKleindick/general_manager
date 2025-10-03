@@ -645,7 +645,7 @@ class PathMappingUnitTests(SimpleTestCase):
             Interface = DisconnectedInterface
 
             @GraphQLProperty
-            def unrelated_connection(self) -> type["DisconnectedManager"]:  # type: ignore
+            def unrelated_connection(self) -> "DisconnectedManager":  # type: ignore
                 return self.__class__()
 
         pm = PathMap(DisconnectedManager)
