@@ -48,7 +48,9 @@ class MutationPermission:
             PermissionError: If the user does not have permission.
         """
         errors = []
-        Permission = cls(data, BasePermission.getUserWithId(request_user))
+        if not isinstance(request_user, (AbstractUser, AnonymousUser)):
+            request_user = BasePermission.getUserWithId(request_user)
+        Permission = cls(data, request_user)
         for key in data:
             if not Permission.checkPermission(key):
                 errors.append(
