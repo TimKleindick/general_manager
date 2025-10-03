@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.14.0 (2025-10-03)
+
+### Bug Fixes
+
+- Enhance GraphQLProperty to enforce return type hints and improve type resolution
+  ([`d771f2d`](https://github.com/TimKleindick/general_manager/commit/d771f2d95690fd5f34cc70b0052d475526cea827))
+
+- Improve type handling in GraphQL class for Union types
+  ([`477599b`](https://github.com/TimKleindick/general_manager/commit/477599bde1492862752229aa385f5cdd23ec0e2e))
+
+- Remove unnecessary type hint resolution in GraphQLProperty initialization
+  ([`a0a1337`](https://github.com/TimKleindick/general_manager/commit/a0a13375e2237d2953471faf0f9cf121cc1d9fa6))
+
+### Testing
+
+- Implement type hints for graphQlProperties
+  ([`67c364b`](https://github.com/TimKleindick/general_manager/commit/67c364b6cb0e6ffb9bbbadb3c2cede6370a1434d))
+
+- Simplify type hint for unrelated_connection in PathMappingUnitTests
+  ([`623b4b1`](https://github.com/TimKleindick/general_manager/commit/623b4b1fc181d43a5c42cd399671fe35eddae6f1))
+
+
 ## v0.13.1 (2025-08-05)
 
 ### Bug Fixes
