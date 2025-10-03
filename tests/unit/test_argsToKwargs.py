@@ -26,7 +26,7 @@ class TestArgsToKwargs(TestCase):
 
     def test_more_args_than_keys(self):
         """Test case where more args than keys are provided."""
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             args_to_kwargs((1, 2, 3, 4), self.keys)
 
     def test_empty_args_and_keys(self):
@@ -41,5 +41,5 @@ class TestArgsToKwargs(TestCase):
 
     def test_conflicts_in_existing_kwargs(self):
         """Test case with conflicts in existing kwargs."""
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             args_to_kwargs((5,), ["x"], {"x": 42, "y": 43})
