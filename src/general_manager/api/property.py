@@ -41,13 +41,6 @@ class GraphQLProperty(property):
         self._owner = owner
         self._name = name
 
-        self._try_resolve_type_hint()
-
-        if self._graphql_type_hint is None:
-            raise TypeError(
-                "GraphQLProperty requires a return type hint for the property function."
-            )
-
     def _try_resolve_type_hint(self) -> None:
         if self._graphql_type_hint is not None:
             return
