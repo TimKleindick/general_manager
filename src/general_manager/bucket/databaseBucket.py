@@ -259,11 +259,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         return self._data.count()
 
+    def __str__(self) -> str:
+        """
+        Returns a string representation of the bucket, showing the manager class name and the underlying queryset.
+        """
+        return f"{self._manager_class.__name__}Bucket {self._data} ({len(self._data)} items)"
+
     def __repr__(self) -> str:
         """
         Returns a string representation of the bucket, showing the manager class name and the underlying queryset.
         """
-        return f"{self._manager_class.__name__}Bucket ({self._data})"
+        return f"DatabaseBucket ({self._data}, manager_class={self._manager_class.__name__}, filters={self.filters}, excludes={self.excludes})"
 
     def __contains__(self, item: GeneralManagerType | models.Model) -> bool:
         """
