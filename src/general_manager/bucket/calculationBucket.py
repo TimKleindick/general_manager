@@ -419,8 +419,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         if callable(input_field.possible_values):
             depends_on = input_field.depends_on
-            dep_values = {dep_name: current_combo[dep_name] for dep_name in depends_on}
-            possible_values = input_field.possible_values(**dep_values)
+            dep_values = [current_combo[dep_name] for dep_name in depends_on]
+            possible_values = input_field.possible_values(*dep_values)
         elif isinstance(input_field.possible_values, (Iterable, Bucket)):
             possible_values = input_field.possible_values
         else:
