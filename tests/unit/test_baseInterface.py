@@ -270,17 +270,9 @@ class InterfaceBaseTests(SimpleTestCase):
         inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)
         # inject a mixed list
         inst.identification["mixed"] = [DummyGM({"id": 12}), 42]
-        formatted = inst.formatIdentification()
+        formatted = InterfaceBase.formatIdentification(inst.identification)
         self.assertEqual(formatted["mixed"], [{"id": 12}, 42])
 
-
-# -----------------------------------------------------------------------------
-# Additional unit tests focused on edge cases, deeper coverage, and public APIs.
-# Testing library/framework: Django's unittest-based SimpleTestCase via django.test.
-# These tests are compatible with pytest-django if pytest is used in the repo.
-# -----------------------------------------------------------------------------
-
-class InterfaceBaseAdditionalTests(SimpleTestCase):
     def test_get_field_type_returns_expected_types(self):
         self.assertIs(DummyInterface.getFieldType("a"), int)
         self.assertIs(DummyInterface.getFieldType("gm"), DummyGM)
@@ -331,7 +323,7 @@ class InterfaceBaseAdditionalTests(SimpleTestCase):
         inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 11}), vals=2, c=1)
         # deep/nested structure containing GeneralManager instances
         inst.identification["deep"] = {"list": [gm13, {"inner": [gm14, 7]}]}
-        formatted = inst.formatIdentification()
+        formatted = InterfaceBase.formatIdentification(inst.identification)
         self.assertEqual(
             formatted["deep"],
             {"list": [{"id": 13}, {"inner": [{"id": 14}, 7]}]},
