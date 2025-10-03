@@ -177,7 +177,9 @@ class GraphQL:
                 element = type_args[0] if type_args else Any
                 if isinstance(element, type) and issubclass(element, GeneralManager):  # type: ignore
                     graphene_field = graphene.List(
-                        lambda: GraphQL.graphql_type_registry[element.__name__]
+                        lambda elem=element: GraphQL.graphql_type_registry[
+                            elem.__name__
+                        ]
                     )
                 else:
                     base_type = GraphQL._mapFieldToGrapheneBaseType(
