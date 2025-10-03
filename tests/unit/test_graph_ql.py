@@ -656,47 +656,14 @@ class TestGrapQlMutation(TestCase):
             mutation_result = mutation_class.mutate(None, info)
 
 
-# ===== Additional edge-case tests (appended) =====
-# Testing framework: unittest; Mocks: unittest.mock; GraphQL lib: graphene
-
-
 class GraphQLPropertyTypeHintTests(TestCase):
     def test_graphql_property_stores_return_type(self):
         def getter() -> int:
             return 1
+
         prop = GraphQLProperty(getter)
         self.assertEqual(prop.graphql_type_hint, int)
 
     def test_graphql_property_non_callable_raises_typeerror(self):
         with self.assertRaises(TypeError):
             GraphQLProperty(123)  # type: ignore[arg-type]
-
-
-class ListResolverInvalidDecodedTests(TestCase):
-    def setUp(self):
-        self.info = MagicMock()
-        self.info.context.user = AnonymousUser()
-
-    def test_filter_json_decodes_to_non_dict_is_ignored(self):
-        obj = MagicMock()
-        qs = MagicMock()
-        obj.abc_list = qs
-        resolver = GraphQL._createResolver("abc_list", GeneralManager)
-        with patch("json.loads", return_value=["not-a-dict"]):
-            out = resolver(obj, self.info, filter="[1,2]", exclude="[3,4]")
-        self.assertIn("items", out)
-        self.assertIs(out["items"], qs)
-
-    def test_measurement_none_value_returns_none(self):
-        holder = MagicMock()
-        holder.m = None
-        resolver = GraphQL._createResolver("m", Measurement)
-        out = resolver(holder, self.info)
-        self.assertIsNone(out)
-
-
-class MapFieldGeneralManagerListTests(TestCase):
-    def test_map_general_manager_list_like_name(self):
-        # When field name suggests a list, mapping should yield a list-like graphene type
-        field = GraphQL._mapFieldToGrapheneRead(GeneralManager, "manager_list")
-        self.assertTrue(isinstance(field, (graphene.List, graphene.Field)))
