@@ -363,6 +363,8 @@ class GraphQL:
         """
         Ordnet einen Python-Typ einem entsprechenden Graphene-Feld zu.
         """
+        if issubclass(field_type, dict):
+            raise TypeError("GraphQL does not support dict fields")
         if issubclass(field_type, str):
             return graphene.String
         elif issubclass(field_type, bool):
@@ -996,7 +998,7 @@ class GraphQL:
                     "code": "PERMISSION_DENIED",
                 },
             )
-        elif isinstance(error, (ValueError, ValidationError)):
+        elif isinstance(error, (ValueError, ValidationError, TypeError)):
             raise GraphQLError(
                 str(error),
                 extensions={
