@@ -156,7 +156,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             if not isinstance(qs, models.QuerySet):
                 raise TypeError("Query annotation must return a Django QuerySet")
             qs = qs.annotate(**other_annotations)
-        qs = qs.filter(**orm_kwargs)
+        try:
+            qs = qs.filter(**orm_kwargs)
+        except Exception as e:
+            raise ValueError(f"Error filtering queryset: {e}")
 
         if python_filters:
             ids = self.__parsePythonFilters(qs, python_filters)
@@ -342,6 +345,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.filter(pk__in=ordered_ids).annotate(_order=case).order_by("_order")
         else:
             order_fields = [f"-{k}" if reverse else k for k in key]
-            qs = qs.order_by(*order_fields)
+            try:
+                qs = qs.order_by(*order_fields)
+            except Exception as e:
+                raise ValueError(f"Error ordering queryset: {e}")
 
         return self.__class__(qs, self._manager_class)
