@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 
-from general_manager.interface.baseInterface import Bucket
+from general_manager.bucket.baseBucket import Bucket
 from general_manager.manager.generalManager import GeneralManager
 
 
@@ -26,7 +26,7 @@ class PathMap:
     def createPathMapping(cls):
         """
         Builds the mapping of paths between all pairs of distinct managed classes.
-        
+
         Iterates over all registered managed classes and creates a PathTracer for each unique start and destination class pair, storing them in the mapping dictionary.
         """
         all_managed_classes = GeneralManagerMeta.all_classes
@@ -38,10 +38,9 @@ class PathMap:
                     ] = PathTracer(start_class, destination_class)
 
     def __init__(self, path_start: PathStart | GeneralManager | type[GeneralManager]):
-
         """
         Initializes a PathMap with a specified starting point.
-        
+
         The starting point can be a class name (string), a GeneralManager instance, or a GeneralManager subclass. Sets internal attributes for the start instance, class, and class name based on the input.
         """
         if isinstance(path_start, GeneralManager):
@@ -86,9 +85,11 @@ class PathMap:
         Returns a list of all classes that are connected to the start class.
         """
         connected_classes: set[str] = set()
-        for path_tuple in self.mapping.keys():
+        for path_tuple, path_obj in self.mapping.items():
             if path_tuple[0] == self.start_class_name:
                 destination_class_name = path_tuple[1]
+                if path_obj.path is None:
+                    continue
                 connected_classes.add(destination_class_name)
         return connected_classes
 
@@ -107,14 +108,13 @@ class PathTracer:
     def createPath(
         self, current_manager: type[GeneralManager], path: list[str]
     ) -> list[str] | None:
-
         """
         Recursively constructs a path of attribute names from the current manager class to the destination class.
-        
+
         Args:
             current_manager: The current GeneralManager subclass being inspected.
             path: The list of attribute names traversed so far.
-        
+
         Returns:
             A list of attribute names representing the path to the destination class, or None if no path exists.
         """
@@ -135,6 +135,8 @@ class PathTracer:
         for attr, attr_type in current_connections.items():
             if attr in path or attr_type == self.start_class:
                 continue
+            if attr_type is None:
+                continue
             if not issubclass(attr_type, GeneralManager):
                 continue
             if attr_type == self.destination_class:
@@ -148,13 +150,12 @@ class PathTracer:
     def traversePath(
         self, start_instance: GeneralManager | Bucket
     ) -> GeneralManager | Bucket | None:
-
         """
         Traverses the stored path from a starting instance to reach the destination instance or bucket.
-        
+
         Args:
             start_instance: The initial GeneralManager or Bucket instance from which to begin traversal.
-        
+
         Returns:
             The resulting GeneralManager or Bucket instance at the end of the path, or None if the path is empty.
         """

@@ -34,6 +34,11 @@ permission_functions: dict[str, PermissionDict] = {
         "permission_method": lambda instance, user, config: True,
         "permission_filter": lambda user, config: None,
     },
+    "matches": {
+        "permission_method": lambda instance, user, config: getattr(instance, config[0])
+        == config[1],
+        "permission_filter": lambda user, config: {"filter": {config[0]: config[1]}},
+    },
     "ends_with": {
         "permission_method": lambda instance, user, config: getattr(
             instance, config[0]

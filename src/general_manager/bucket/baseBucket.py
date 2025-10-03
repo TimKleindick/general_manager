@@ -61,13 +61,13 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> Bucket[GeneralManagerType]:
         """
-        Return a new bucket containing the union of this bucket and another bucket or manager instance.
+        Return a new bucket representing the union of this bucket and another bucket or a single manager instance.
         
         Parameters:
-            other: Another bucket or a single manager instance to combine with this bucket.
+            other: Another bucket or a single manager instance to include in the union.
         
         Returns:
-            A new bucket containing all unique items from both sources.
+            A new bucket containing all unique items from both this bucket and the provided argument.
         """
         raise NotImplementedError
 
@@ -229,14 +229,23 @@ class Bucket(ABC, Generic[GeneralManagerType]):
 
     def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
         """
-        Groups the bucket's data by one or more specified keys.
-
-        Args:
-            *group_by_keys: One or more attribute names to group the data by.
-
+        Return a GroupBucket that groups the items in this bucket by the specified attribute keys.
+        
+        Parameters:
+            *group_by_keys (str): Attribute names to group the items by.
+        
         Returns:
-            A GroupBucket instance containing the grouped data.
+            GroupBucket[GeneralManagerType]: A bucket containing items grouped by the given keys.
         """
         from general_manager.bucket.groupBucket import GroupBucket
 
         return GroupBucket(self._manager_class, group_by_keys, self)
+
+    def none(self) -> Bucket[GeneralManagerType]:
+        """
+        Raise NotImplementedError to indicate that subclasses must implement a method returning an empty bucket.
+        """
+        raise NotImplementedError(
+            "The 'none' method is not implemented in the base Bucket class. "
+            "Subclasses should implement this method to return an empty bucket."
+        )

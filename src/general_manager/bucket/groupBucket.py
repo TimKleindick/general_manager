@@ -285,12 +285,22 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
         """
-        Returns a new GroupBucket grouped by the current and additional specified attribute keys.
-
+        Return a new GroupBucket grouped by the current and additional attribute keys.
+        
         Additional group-by keys are appended to the existing grouping, and the new GroupBucket is constructed from the same underlying data.
         """
         return GroupBucket(
             self._manager_class,
             tuple([*self._group_by_keys, *group_by_keys]),
             self._basis_data,
+        )
+
+    def none(self) -> GroupBucket[GeneralManagerType]:
+        """
+        Return a new empty GroupBucket with the same manager class and group-by keys as the current instance.
+        
+        This method creates a GroupBucket containing no items, preserving the grouping configuration of the original.
+        """
+        return GroupBucket(
+            self._manager_class, self._group_by_keys, self._basis_data.none()
         )

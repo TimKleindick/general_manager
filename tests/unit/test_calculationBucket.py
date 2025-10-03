@@ -33,7 +33,7 @@ class DummyGeneralManager:
         Checks equality with another DummyGeneralManager based on initialization arguments.
 
         Returns:
-            True if the other object is a DummyGeneralManager with identical kwargs; otherwise, False.
+            bool: True if the other object is a DummyGeneralManager and has the same kwargs; otherwise, False.
         """
         if not isinstance(value, DummyGeneralManager):
             return False
@@ -185,7 +185,7 @@ class TestCalculationBucket(TestCase):
         # Set a single empty combination so manager(**{}) works
         bucket._data = [{}] * 4
         # all() returns self
-        self.assertIs(bucket.all(), bucket)
+        self.assertEqual(bucket.all(), bucket)
         # Iteration yields one manager per combo
         items = list(bucket)
         self.assertEqual(len(items), 4)
@@ -254,7 +254,7 @@ class TestGenerateCombinations(TestCase):
             fields: A list of input field definitions to assign to the generated interface.
 
         Returns:
-            A CalculationBucket instance using a dynamically created manager and interface with the specified input fields.
+        	CalculationBucket: An instance configured with a manager and interface using the specified input fields.
         """
 
         class DynInterface(CalculationInterface):
@@ -319,6 +319,15 @@ class TestGenerateCombinations(TestCase):
         """
 
         def pv_func(a):
+            """
+            Return a list containing the input value multiplied by 10.
+            
+            Parameters:
+            	a (int or float): The value to be multiplied.
+            
+            Returns:
+            	list: A single-element list with the result of a * 10.
+            """
             return [a * 10]
 
         fields = {

@@ -466,10 +466,16 @@ class GraphQL:
         info: GraphQLResolveInfo,
     ) -> Bucket:
         """
-        Wendet die vom Permission-Interface vorgegebenen Filter auf das Queryset an.
+        Applies permission-based filters to a queryset according to the permission interface of the given manager class.
+        
+        Returns:
+            A queryset containing only the items allowed by the user's read permissions. If no permission filters are defined, returns the original queryset unchanged.
         """
         permission_filters = getReadPermissionFilter(general_manager_class, info)
-        filtered_queryset = queryset
+        if not permission_filters:
+            return queryset
+
+        filtered_queryset = queryset.none()
         for perm_filter, perm_exclude in permission_filters:
             qs_perm = queryset.exclude(**perm_exclude).filter(**perm_filter)
             filtered_queryset = filtered_queryset | qs_perm

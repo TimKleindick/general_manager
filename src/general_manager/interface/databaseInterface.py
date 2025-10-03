@@ -84,14 +84,17 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance: GeneralManagerModel, many_to_many_kwargs: dict[str, list[Any]]
     ) -> GeneralManagerModel:
         """
-        Set many-to-many relationship fields on a model instance using provided values.
-
-        Converts lists of `GeneralManager` instances to their corresponding IDs before updating the relationships. Returns the updated instance.
+        Set many-to-many relationship fields on a model instance using the provided values.
+        
+        For each field, converts lists of `GeneralManager` instances to their IDs if necessary, and updates the corresponding many-to-many relationship on the instance. Fields with values of `None` or `NOT_PROVIDED` are ignored.
+        
+        Returns:
+            GeneralManagerModel: The updated model instance with many-to-many relationships set.
         """
         from general_manager.manager.generalManager import GeneralManager
 
         for key, value in many_to_many_kwargs.items():
-            if not value:
+            if value is None or value is NOT_PROVIDED:
                 continue
             field_name = key.removesuffix("_id_list")
             if isinstance(value, list) and all(

@@ -292,14 +292,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ) -> DatabaseBucket:
         """
-        Return a new DatabaseBucket sorted by the specified field or fields.
-
+        Return a new DatabaseBucket with items sorted by the specified field or fields.
+        
         Parameters:
             key (str or tuple of str): Field name or tuple of field names to sort by.
             reverse (bool): If True, sort in descending order.
-
+        
         Returns:
-            DatabaseBucket: A new bucket instance containing the sorted queryset.
+            DatabaseBucket: A new bucket containing the sorted items.
         """
         if isinstance(key, str):
             key = (key,)
@@ -357,3 +357,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 raise ValueError(f"Error ordering queryset: {e}")
 
         return self.__class__(qs, self._manager_class)
+
+
+    def none(self) -> DatabaseBucket[GeneralManagerType]:
+        """
+        Return a new DatabaseBucket instance of the same type containing no items.
+        
+        This method creates an empty bucket while preserving the current manager class and bucket type.
+        """
+        own = self.all()
+        own._data = own._data.none()
+        return own
+

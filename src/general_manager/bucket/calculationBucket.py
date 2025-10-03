@@ -13,6 +13,7 @@ from typing import (
     get_origin,
 )
 from operator import attrgetter
+from copy import deepcopy
 from general_manager.interface.baseInterface import (
     generalManagerClassName,
     GeneralManagerType,
@@ -265,17 +266,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def all(self) -> CalculationBucket:
         """
-        Returns the current CalculationBucket instance.
-
-        This method allows for compatibility with interfaces expecting an `all()` method that returns the full set of items.
+        Return a deep copy of the current CalculationBucket instance.
+        
+        Use this method to obtain an independent copy of the bucket, ensuring that modifications to the returned instance do not affect the original.
         """
-        return self
+        return deepcopy(self)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
-        Yields manager instances for each valid combination of input parameters.
-
-        Iterates over all generated input combinations, instantiating the manager class with each set of parameters.
+        Iterate over all valid input combinations, yielding a manager instance for each.
+        
+        Yields:
+            Manager instances created with each valid set of input parameters.
         """
         combinations = self.generate_combinations()
         for combo in combinations:
@@ -624,14 +626,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self, key: str | tuple[str], reverse: bool = False
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Returns a new CalculationBucket with updated sorting parameters.
-
-        Args:
-            key: The field name or tuple of field names to sort combinations by.
-            reverse: If True, sorts in descending order.
-
+        Return a new CalculationBucket instance with updated sorting criteria.
+        
+        Parameters:
+            key (str or tuple of str): Field name(s) to sort the combinations by.
+            reverse (bool): Whether to sort in descending order.
+        
         Returns:
-            A new CalculationBucket instance with the specified sorting applied.
+            CalculationBucket: A new bucket instance sorted according to the specified key and order.
         """
         return CalculationBucket(
             self._manager_class,
@@ -640,3 +642,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             key,
             reverse,
         )
+
+    def none(self) -> CalculationBucket[GeneralManagerType]:
+        """
+        Return a new CalculationBucket instance of the same type containing no items.
+        
+        The returned bucket has all filters, excludes, and cached combinations cleared, representing an empty set of combinations.
+        """
+        own = self.all()
+        own._current_combinations = None
+        own.filters = {}
+        own.excludes = {}
+        return own
