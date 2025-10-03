@@ -354,18 +354,17 @@ class DatabaseBucketTestCase(TestCase):
     def test_getitem_negative_and_out_of_range(self):
         """
         Validates negative indexing and out-of-range behavior:
-        - Negative index returns correct manager
+        - Negative index returns ValueError
         - Out-of-range index raises IndexError
         """
         # [-1] should be the last (carol)
-        mgr_last = self.bucket[-1]
-        self.assertIsInstance(mgr_last, UserManager)
-        self.assertEqual(mgr_last.identification["id"], self.u3.id)
+        with self.assertRaises(ValueError):
+            _ = self.bucket[-1]
 
         with self.assertRaises(IndexError):
             _ = self.bucket[999]
 
-        with self.assertRaises(IndexError):
+        with self.assertRaises(ValueError):
             _ = self.bucket[-10]
 
     def test_slice_with_step_and_negative_slice(self):
@@ -412,9 +411,8 @@ class DatabaseBucketTestCase(TestCase):
         # Definitions merged
         self.assertIn("username", chained.filters)
         self.assertCountEqual(chained.filters["username"], ["alice", "carol"])
-        # Data should contain both alice and carol
-        ids = [mgr.identification["id"] for mgr in chained]
-        self.assertCountEqual(ids, [self.u1.id, self.u3.id])
+        # Data should contain no results because no user is both alice and carol
+        self.assertEqual(len(chained), 0)
 
     def test_exclude_chaining_merges_and_results_match(self):
         """
@@ -456,7 +454,9 @@ class DatabaseBucketTestCase(TestCase):
         s = str(self.bucket)
         # Heuristic checks to avoid over-specifying format
         self.assertTrue("DatabaseBucket" in r or "DatabaseBucket" in s)
-        self.assertTrue("User" in r or "auth.User" in r or "User" in s or "auth.User" in s)
+        self.assertTrue(
+            "User" in r or "auth.User" in r or "User" in s or "auth.User" in s
+        )
         self.assertTrue("3" in r or "3" in s)
 
     def test_property_filter_multiple_operators(self):
