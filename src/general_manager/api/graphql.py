@@ -1,6 +1,15 @@
 from __future__ import annotations
 import graphene
-from typing import Any, Callable, get_args, TYPE_CHECKING, cast, Type, Generator
+from typing import (
+    Any,
+    Callable,
+    get_args,
+    get_origin,
+    TYPE_CHECKING,
+    cast,
+    Type,
+    Generator,
+)
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -160,16 +169,34 @@ class GraphQL:
             attr_name,
             attr_value,
         ) in generalManagerClass.Interface.getGraphQLProperties().items():
-            type_hints = [
-                t for t in get_args(attr_value.graphql_type_hint) if t is not type(None)
-            ]
-            field_type = (
-                type_hints[0]
-                if type_hints
-                else cast(type, attr_value.graphql_type_hint)
+            raw_hint = attr_value.graphql_type_hint
+            origin = get_origin(raw_hint)
+            type_args = [t for t in get_args(raw_hint) if t is not type(None)]
+
+            if origin in (list, tuple, set):
+                element = type_args[0] if type_args else Any
+                if isinstance(element, type) and issubclass(element, GeneralManager):  # type: ignore
+                    graphene_field = graphene.List(
+                        lambda: GraphQL.graphql_type_registry[element.__name__]
+                    )
+                else:
+                    base_type = GraphQL._mapFieldToGrapheneBaseType(
+                        cast(type, element if isinstance(element, type) else str)
+                    )
+                    graphene_field = graphene.List(base_type)
+                resolved_type = cast(
+                    type, element if isinstance(element, type) else str
+                )
+            else:
+                resolved_type = (
+                    cast(type, type_args[0]) if type_args else cast(type, raw_hint)
+                )
+                graphene_field = cls._mapFieldToGrapheneRead(resolved_type, attr_name)
+
+            fields[attr_name] = graphene_field
+            fields[f"resolve_{attr_name}"] = cls._createResolver(
+                attr_name, resolved_type
             )
-            fields[attr_name] = cls._mapFieldToGrapheneRead(field_type, attr_name)
-            fields[f"resolve_{attr_name}"] = cls._createResolver(attr_name, field_type)
 
         graphene_type = type(graphene_type_name, (graphene.ObjectType,), fields)
         cls.graphql_type_registry[generalManagerClass.__name__] = graphene_type
