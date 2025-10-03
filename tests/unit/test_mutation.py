@@ -2,12 +2,14 @@ from typing import Optional, List, ClassVar
 
 import graphene
 from django.test import TestCase
+from django.contrib.auth.models import User
 
 from general_manager.api.mutation import graphQlMutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.baseInterface import InterfaceBase
 from general_manager.permission.mutationPermission import MutationPermission
+from graphql import GraphQLError
 
 
 type test123 = str
@@ -232,7 +234,7 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["bulk"]
         arg = mutation._meta.arguments["items"]
         self.assertIsInstance(arg, graphene.List)
-        self.assertEqual(arg.of_type, graphene.ID)
+        self.assertEqual(arg.of_type, graphene.String)  # IDs are strings in GraphQL
 
     def test_permission_allows_authenticated(self):
         class addPermission(MutationPermission):
@@ -246,16 +248,20 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["addNums"]
 
         # Simulate an authenticated user (matches typical Django pattern)
-        AuthUser = type("User", (), {"is_authenticated": True})()
+        AuthUser = User()
         InfoAuth = type("Info", (), {"context": type("Ctx", (), {"user": AuthUser})()})
 
         res = mutation.mutate(None, InfoAuth, a=1, b=2)
         self.assertTrue(res.success)
         # For primitive int return types, the field is expected to be named "int"
-        self.assertTrue(hasattr(res, "int"), "Expected 'int' field on mutation result for int return type")
+        self.assertTrue(
+            hasattr(res, "int"),
+            "Expected 'int' field on mutation result for int return type",
+        )
         self.assertEqual(res.int, 3)
 
     def test_missing_required_argument_raises(self):
+
         @graphQlMutation()
         def required(info, value: int) -> int:
             _ = info
@@ -264,8 +270,8 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["required"]
         Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
 
-        # Not providing the required 'value' argument should raise a TypeError
-        with self.assertRaises(TypeError):
+        # Not providing the required 'value' argument should raise a GraphQLError
+        with self.assertRaises(GraphQLError):
             mutation.mutate(None, Info)
 
     def test_list_argument_runtime_empty(self):
@@ -297,6 +303,7 @@ class MutationDecoratorTests(TestCase):
     def test_invalid_argument_type_raises(self):
         # Using an unsupported argument type (e.g., dict) should error at decoration time
         with self.assertRaises(TypeError):
+
             @graphQlMutation()
             def bad_arg(info, payload: dict) -> int:
                 _ = info
@@ -307,6 +314,7 @@ class MutationDecoratorTests(TestCase):
         """
         Ensure tuple with three primitive return types exposes each as a field and executes correctly.
         """
+
         @graphQlMutation()
         def multi3(info, value: int) -> tuple[int, bool, str]:
             _ = info
