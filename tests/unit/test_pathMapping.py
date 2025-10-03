@@ -338,7 +338,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return CircularBManager()
 
         # Create circular reference by adding property to B that points back to A
-        def get_circular_a(self):
+        def get_circular_a(self) -> CircularAManager:  # type: ignore
             return CircularAManager()
 
         # Simulate adding GraphQLProperty decorator
@@ -415,6 +415,7 @@ class PathMappingUnitTests(SimpleTestCase):
         Covers scenarios like self-referencing managers and other unusual
         but valid configurations.
         """
+        EndManager = self.EndManager  # For use in inner classes
 
         class SelfRefInterface(BaseTestInterface):
             pass
@@ -423,11 +424,11 @@ class PathMappingUnitTests(SimpleTestCase):
             Interface = SelfRefInterface
 
             @GraphQLProperty
-            def self_ref(self):  # type: ignore
+            def self_ref(self) -> "SelfReferencingManager":  # type: ignore
                 return self.__class__()
 
             @GraphQLProperty
-            def end_ref(self) -> self.EndManager:  # type: ignore
+            def end_ref(self) -> EndManager:  # type: ignore
                 return self.EndManager()
 
         pm = PathMap(SelfReferencingManager)
@@ -644,7 +645,7 @@ class PathMappingUnitTests(SimpleTestCase):
             Interface = DisconnectedInterface
 
             @GraphQLProperty
-            def unrelated_connection(self):  # type: ignore
+            def unrelated_connection(self) -> type["DisconnectedManager"]:  # type: ignore
                 return self.__class__()
 
         pm = PathMap(DisconnectedManager)
