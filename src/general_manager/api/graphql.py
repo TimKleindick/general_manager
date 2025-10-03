@@ -9,7 +9,10 @@ from typing import (
     cast,
     Type,
     Generator,
+    Union,
 )
+from types import UnionType
+
 from decimal import Decimal
 from datetime import date, datetime
 import json
@@ -172,6 +175,11 @@ class GraphQL:
             raw_hint = attr_value.graphql_type_hint
             origin = get_origin(raw_hint)
             type_args = [t for t in get_args(raw_hint) if t is not type(None)]
+
+            if origin in (Union, UnionType) and type_args:
+                raw_hint = type_args[0]
+                origin = get_origin(raw_hint)
+                type_args = [t for t in get_args(raw_hint) if t is not type(None)]
 
             if origin in (list, tuple, set):
                 element = type_args[0] if type_args else Any
@@ -467,7 +475,7 @@ class GraphQL:
     ) -> Bucket:
         """
         Applies permission-based filters to a queryset according to the permission interface of the given manager class.
-        
+
         Returns:
             A queryset containing only the items allowed by the user's read permissions. If no permission filters are defined, returns the original queryset unchanged.
         """
