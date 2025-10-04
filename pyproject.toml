@@ -12,7 +12,9 @@ license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Framework :: Django",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -48,7 +50,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src", "general_manager"]
+where = ["src"]
 
 [tool.semantic_release]
 allow_zero_version = true
