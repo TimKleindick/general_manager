@@ -145,4 +145,4 @@ query {
 
 ## License
 
-This project is distributed under the **Non-Commercial MIT License**. It may only be used for non-commercial purposes. For further details see the [LICENSE](./LICENSE) file.
+This project is distributed under the **MIT License**. For further details see the [LICENSE](./LICENSE) file.
