@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.14.1 (2025-10-04)
+
+### Bug Fixes
+
+- Update Django dependency version to 5.2.7 in pyproject.toml
+  ([`a996ce0`](https://github.com/TimKleindick/general_manager/commit/a996ce06e47d0111e6ecbd5d594b6ba71d81f121))
+
+- Update Django version to 5.2.7 in requirements
+  ([`9b70d59`](https://github.com/TimKleindick/general_manager/commit/9b70d5970cdd93323cea0b65b2137868c6a53d80))
+
+
 ## v0.14.0 (2025-10-03)
 
 ### Bug Fixes
