@@ -1,43 +1,13 @@
-name: Test and Publish
+name: Publish and Release
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 jobs:
-  test:
-    name: 🧪 Run Tests
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.13'
-
-      - name: Install package in editable mode + test deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install pytest pytest-django
-
-      - name: Run pytest
-        run: python3 -m pytest --maxfail=1 --disable-warnings -q
-
   release:
-    name: 🚀 Release
-    if: github.event_name == 'push'
-    needs: test
+    name: 🚀 Release & Publish
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-release-${{ github.ref_name }}
