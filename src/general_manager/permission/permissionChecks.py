@@ -1,3 +1,5 @@
+"""Registry of reusable permission checks and their queryset filters."""
+
 from typing import Any, Callable, TYPE_CHECKING, TypedDict, Literal
 
 if TYPE_CHECKING:
@@ -25,6 +27,8 @@ type permission_method = Callable[
 
 
 class PermissionDict(TypedDict):
+    """Typed dictionary describing a registered permission function."""
+
     permission_method: permission_method
     permission_filter: permission_filter
 

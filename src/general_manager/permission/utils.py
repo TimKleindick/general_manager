@@ -1,3 +1,5 @@
+"""Utility helpers for evaluating permission expressions."""
+
 from general_manager.permission.permissionChecks import (
     permission_functions,
 )
@@ -13,9 +15,18 @@ def validatePermissionString(
     data: PermissionDataManager | GeneralManager | GeneralManagerMeta,
     request_user: AbstractUser | AnonymousUser,
 ) -> bool:
-    # permission can be a combination of multiple permissions
-    # separated by "&" (e.g. "isAuthenticated&isMatchingKeyAccount")
-    # this means that all sub_permissions must be true
+    """
+    Evaluate a compound permission expression joined by ``&`` operators.
+
+    Parameters:
+        permission (str): Permission expression (for example, ``isAuthenticated&admin``).
+        data (PermissionDataManager | GeneralManager | GeneralManagerMeta): Object evaluated by the permission functions.
+        request_user (AbstractUser | AnonymousUser): User performing the action.
+
+    Returns:
+        bool: True if every sub-permission evaluates to True.
+    """
+
     def _validateSinglePermission(
         permission: str,
     ) -> bool:

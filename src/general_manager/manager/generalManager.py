@@ -17,9 +17,14 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     def __init__(self, *args: Any, **kwargs: Any):
         """
-        Initialize the manager by creating an interface instance with the provided arguments and storing its identification.
+        Instantiate the manager by delegating to the interface and record its identification.
 
-        The identification is registered with the dependency tracker for tracking purposes.
+        Parameters:
+            *args: Positional arguments forwarded to the interface constructor.
+            **kwargs: Keyword arguments forwarded to the interface constructor.
+
+        Returns:
+            None
         """
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
@@ -27,15 +32,20 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             self.__class__.__name__, "identification", f"{self.__id}"
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return a user-friendly representation showing the identification."""
         return f"{self.__class__.__name__}(**{self.__id})"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
+        """Return a detailed representation of the manager instance."""
         return f"{self.__class__.__name__}(**{self.__id})"
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         """
-        Support object serialization by returning a tuple containing the class and identification values for pickling.
+        Provide pickling support for the manager instance.
+
+        Returns:
+            tuple[Any, ...]: Reconstruction data consisting of the class and identification tuple.
         """
         return (self.__class__, tuple(self.__id.values()))
 
@@ -44,12 +54,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         other: Self | Bucket[Self],
     ) -> Bucket[Self]:
         """
-        Returns a Bucket containing the union of this manager and another manager of the same class or a Bucket.
+        Merge this manager with another manager or bucket.
 
-        If `other` is a Bucket, the result is the union of the Bucket and this manager. If `other` is a manager of the same class, the result is a Bucket containing both managers. Raises a TypeError if `other` is not a supported type.
+        Parameters:
+            other (Self | Bucket[Self]): Manager instance or bucket to combine.
 
         Returns:
-            Bucket[Self]: A Bucket containing the combined managers.
+            Bucket[Self]: Bucket containing the union of both inputs.
+
+        Raises:
+            TypeError: If `other` is neither a compatible bucket nor manager.
         """
         if isinstance(other, Bucket):
             return other | self
@@ -63,19 +77,25 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         other: object,
     ) -> bool:
         """
-        Check equality based on the identification dictionary.
+        Compare managers based on their identification values.
 
-        Returns True if the other object is a GeneralManager with the same identification, otherwise False.
+        Parameters:
+            other (object): Object to compare against this manager.
+
+        Returns:
+            bool: True when `other` is a manager with the same identification.
         """
         if not isinstance(other, GeneralManager):
             return False
         return self.identification == other.identification
 
     @property
-    def identification(self):
+    def identification(self) -> dict[str, Any]:
+        """Return the identification dictionary used to fetch the managed object."""
         return self.__id
 
     def __iter__(self):
+        """Iterate over attribute names and resolved values for the managed object."""
         for key, value in self._attributes.items():
             if callable(value):
                 yield key, value(self._interface)
@@ -95,17 +115,19 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         **kwargs: Any,
     ) -> Self:
         """
-        Create a new managed object via the underlying interface and return a manager instance representing it.
-
-        Performs a permission check unless `ignore_permission` is True. All additional keyword arguments are passed to the interface's `create` method.
+        Create a new managed object through the interface.
 
         Parameters:
-            creator_id (int | None): Optional ID of the user creating the object.
-            history_comment (str | None): Optional comment for audit or history purposes.
-            ignore_permission (bool): If True, bypasses the permission check.
+            creator_id (int | None): Optional identifier of the creating user.
+            history_comment (str | None): Audit comment stored with the change.
+            ignore_permission (bool): When True, skip permission validation.
+            **kwargs (Any): Additional fields forwarded to the interface `create` method.
 
         Returns:
-            Self: Manager instance for the newly created object.
+            Self: Manager instance representing the created object.
+
+        Raises:
+            PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
             cls.Permission.checkCreatePermission(kwargs, cls, creator_id)
@@ -123,16 +145,19 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         **kwargs: Any,
     ) -> Self:
         """
-        Update the managed object with new data and return a new manager instance reflecting the changes.
+        Update the managed object and return a fresh manager representing the new state.
 
         Parameters:
-            creator_id (int | None): Identifier of the user performing the update, if applicable.
-            history_comment (str | None): Optional comment describing the update.
-            ignore_permission (bool): If True, bypasses permission checks.
-            **kwargs: Fields and values to update on the managed object.
+            creator_id (int | None): Optional identifier of the user performing the update.
+            history_comment (str | None): Audit comment recorded with the update.
+            ignore_permission (bool): When True, skip permission validation.
+            **kwargs (Any): Field updates forwarded to the interface.
 
         Returns:
-            Self: A new manager instance representing the updated object.
+            Self: Manager instance reflecting the updated object.
+
+        Raises:
+            PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
             self.Permission.checkUpdatePermission(kwargs, self, creator_id)
@@ -151,15 +176,18 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ignore_permission: bool = False,
     ) -> Self:
         """
-        Deactivate the managed object and return a new manager instance representing its deactivated state.
+        Deactivate the managed object and return a manager for the resulting state.
 
         Parameters:
-            creator_id (int | None): Optional ID of the user performing the deactivation.
-            history_comment (str | None): Optional comment explaining the deactivation.
-            ignore_permission (bool): If True, bypasses permission checks.
+            creator_id (int | None): Optional identifier of the user performing the action.
+            history_comment (str | None): Audit comment recorded with the deactivation.
+            ignore_permission (bool): When True, skip permission validation.
 
         Returns:
-            Self: A new manager instance for the deactivated object.
+            Self: Manager instance representing the deactivated object.
+
+        Raises:
+            PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
             self.Permission.checkDeletePermission(self, creator_id)
@@ -171,13 +199,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[Self]:
         """
-        Return a bucket of managed objects matching the specified filter criteria.
+        Return a bucket containing managers that satisfy the provided lookups.
 
         Parameters:
-            kwargs: Field lookups used to filter the managed objects.
+            **kwargs (Any): Django-style filter expressions forwarded to the interface.
 
         Returns:
-            Bucket[Self]: A collection of manager instances matching the filter conditions.
+            Bucket[Self]: Bucket of matching manager instances.
         """
         DependencyTracker.track(
             cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}"
@@ -187,13 +215,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[Self]:
         """
-        Return a bucket of managed objects excluding those that match the specified criteria.
+        Return a bucket excluding managers that match the provided lookups.
 
         Parameters:
-            kwargs: Field-value pairs used to determine which objects to exclude.
+            **kwargs (Any): Django-style exclusion expressions forwarded to the interface.
 
         Returns:
-            Bucket[Self]: A collection of managed objects not matching the exclusion criteria.
+            Bucket[Self]: Bucket of manager instances that do not satisfy the lookups.
         """
         DependencyTracker.track(
             cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}"
@@ -202,23 +230,19 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     @classmethod
     def all(cls) -> Bucket[Self]:
-        """
-        Return a bucket containing all managed objects of this class.
-        """
+        """Return a bucket containing every managed object of this class."""
         return cls.Interface.filter()
 
     @staticmethod
     def __parse_identification(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         """
-        Return a dictionary with all GeneralManager instances in the input replaced by their identification dictionaries.
-
-        For each key-value pair in the input, any GeneralManager instance is replaced by its identification. Lists and tuples are processed recursively, substituting contained GeneralManager instances with their identifications. Returns None if the resulting dictionary is empty.
+        Replace manager instances within a filter mapping by their identifications.
 
         Parameters:
-            kwargs (dict[str, Any]): Dictionary to process.
+            kwargs (dict[str, Any]): Mapping containing potential manager instances.
 
         Returns:
-            dict[str, Any] | None: Processed dictionary with identifications, or None if empty.
+            dict[str, Any] | None: Mapping with managers substituted by identification dictionaries, or None if no substitutions occurred.
         """
         output = {}
         for key, value in kwargs.items():

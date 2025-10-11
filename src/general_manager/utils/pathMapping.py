@@ -1,3 +1,5 @@
+"""Utilities for tracing relationships between GeneralManager classes."""
+
 from __future__ import annotations
 from typing import TYPE_CHECKING, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
@@ -12,11 +14,22 @@ type PathDestination = str
 
 
 class PathMap:
+    """Maintain cached traversal paths between GeneralManager classes."""
 
     instance: PathMap
     mapping: dict[tuple[PathStart, PathDestination], PathTracer] = {}
 
     def __new__(cls, *args, **kwargs):
+        """
+        Create or return the singleton PathMap instance and ensure the path mapping is initialised.
+
+        Parameters:
+            args (tuple): Positional arguments ignored by the constructor.
+            kwargs (dict): Keyword arguments ignored by the constructor.
+
+        Returns:
+            PathMap: The singleton PathMap instance.
+        """
         if not hasattr(cls, "instance"):
             cls.instance = super().__new__(cls)
             cls.createPathMapping()
@@ -25,9 +38,12 @@ class PathMap:
     @classmethod
     def createPathMapping(cls):
         """
-        Builds the mapping of paths between all pairs of distinct managed classes.
+        Populate the path mapping with tracers for every distinct pair of managed classes.
 
-        Iterates over all registered managed classes and creates a PathTracer for each unique start and destination class pair, storing them in the mapping dictionary.
+        The generated tracers capture the attribute sequence needed to navigate from the start class to the destination class and are cached on the singleton instance.
+
+        Returns:
+            None
         """
         all_managed_classes = GeneralManagerMeta.all_classes
         for start_class in all_managed_classes:
@@ -39,9 +55,13 @@ class PathMap:
 
     def __init__(self, path_start: PathStart | GeneralManager | type[GeneralManager]):
         """
-        Initializes a PathMap with a specified starting point.
+        Create a new traversal context rooted at the provided manager class or instance.
 
-        The starting point can be a class name (string), a GeneralManager instance, or a GeneralManager subclass. Sets internal attributes for the start instance, class, and class name based on the input.
+        Parameters:
+            path_start (PathStart | GeneralManager | type[GeneralManager]): Name, instance, or class that serves as the origin for future path lookups. The value determines both the stored starting instance and the class metadata used for path resolution.
+
+        Returns:
+            None
         """
         if isinstance(path_start, GeneralManager):
             self.start_instance = path_start
@@ -59,6 +79,15 @@ class PathMap:
     def to(
         self, path_destination: PathDestination | type[GeneralManager] | str
     ) -> PathTracer | None:
+        """
+        Retrieve the cached path tracer from the start class to the desired destination.
+
+        Parameters:
+            path_destination (PathDestination | type[GeneralManager] | str): Target manager identifier, either as a class, instance name, or class name.
+
+        Returns:
+            PathTracer | None: The tracer describing how to traverse to the destination, or None if no path is known.
+        """
         if isinstance(path_destination, type):
             path_destination = path_destination.__name__
 
@@ -70,6 +99,18 @@ class PathMap:
     def goTo(
         self, path_destination: PathDestination | type[GeneralManager] | str
     ) -> GeneralManager | Bucket | None:
+        """
+        Follow the cached path from the starting point to the requested destination.
+
+        Parameters:
+            path_destination (PathDestination | type[GeneralManager] | str): Target manager identifier, either as a class, instance, or class name.
+
+        Returns:
+            GeneralManager | Bucket | None: The resolved manager instance, a bucket of instances, or None when no path exists.
+
+        Raises:
+            ValueError: If no starting instance was supplied when constructing the PathMap.
+        """
         if isinstance(path_destination, type):
             path_destination = path_destination.__name__
 
@@ -82,7 +123,10 @@ class PathMap:
 
     def getAllConnected(self) -> set[str]:
         """
-        Returns a list of all classes that are connected to the start class.
+        List the class names that are reachable from the configured starting point.
+
+        Returns:
+            set[str]: Collection of destination class names that have a valid traversal path.
         """
         connected_classes: set[str] = set()
         for path_tuple, path_obj in self.mapping.items():
@@ -95,9 +139,21 @@ class PathMap:
 
 
 class PathTracer:
+    """Resolve attribute paths linking one manager class to another."""
+
     def __init__(
         self, start_class: type[GeneralManager], destination_class: type[GeneralManager]
     ):
+        """
+        Initialise a path tracer between two manager classes.
+
+        Parameters:
+            start_class (type[GeneralManager]): Origin manager class where traversal begins.
+            destination_class (type[GeneralManager]): Target manager class to reach.
+
+        Returns:
+            None
+        """
         self.start_class = start_class
         self.destination_class = destination_class
         if self.start_class == self.destination_class:
@@ -109,14 +165,14 @@ class PathTracer:
         self, current_manager: type[GeneralManager], path: list[str]
     ) -> list[str] | None:
         """
-        Recursively constructs a path of attribute names from the current manager class to the destination class.
+        Recursively compute the traversal path from `current_manager` to the destination class.
 
-        Args:
-            current_manager: The current GeneralManager subclass being inspected.
-            path: The list of attribute names traversed so far.
+        Parameters:
+            current_manager (type[GeneralManager]): Manager class used as the current traversal node.
+            path (list[str]): Sequence of attribute names accumulated along the traversal.
 
         Returns:
-            A list of attribute names representing the path to the destination class, or None if no path exists.
+            list[str] | None: Updated list of attribute names leading to the destination, or None if no route exists.
         """
         current_connections = {
             attr_name: attr_value["type"]
@@ -151,13 +207,13 @@ class PathTracer:
         self, start_instance: GeneralManager | Bucket
     ) -> GeneralManager | Bucket | None:
         """
-        Traverses the stored path from a starting instance to reach the destination instance or bucket.
+        Traverse the stored path starting from the provided manager or bucket instance.
 
-        Args:
-            start_instance: The initial GeneralManager or Bucket instance from which to begin traversal.
+        Parameters:
+            start_instance (GeneralManager | Bucket): Object used as the traversal root.
 
         Returns:
-            The resulting GeneralManager or Bucket instance at the end of the path, or None if the path is empty.
+            GeneralManager | Bucket | None: The resolved destination object, a merged bucket, or None when no traversal is required.
         """
         current_instance = start_instance
         if not self.path:

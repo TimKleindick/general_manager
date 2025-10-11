@@ -1,3 +1,5 @@
+"""Helpers that derive cache dependency metadata from GeneralManager objects."""
+
 from typing import Generator
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.bucket.baseBucket import Bucket
@@ -9,21 +11,20 @@ from general_manager.cache.dependencyIndex import (
 
 
 class ModelDependencyCollector:
+    """Collect dependency tuples from cached arguments."""
 
     @staticmethod
     def collect(
-        obj,
+        obj: object,
     ) -> Generator[tuple[general_manager_name, filter_type, str], None, None]:
         """
-        Recursively extracts dependency information from Django model-related objects.
+        Traverse arbitrary objects and yield cache dependency tuples.
 
-        Inspects the input object and its nested structures to identify instances of GeneralManager and Bucket, yielding a tuple for each dependency found. Each tuple contains the manager class name, the dependency type ("identification", "filter", or "exclude"), and the string representation of the dependency value.
-
-        Args:
-            obj: The object or collection to inspect for model dependencies.
+        Parameters:
+            obj (object): Object that may contain GeneralManager instances, buckets, or nested collections.
 
         Yields:
-            Tuples of (manager class name, dependency type, dependency value) for each dependency discovered.
+            tuple[str, filter_type, str]: Dependency descriptors combining manager name, dependency type, and lookup data.
         """
         if isinstance(obj, GeneralManager):
             yield (
@@ -44,7 +45,15 @@ class ModelDependencyCollector:
     @staticmethod
     def addArgs(dependencies: set[Dependency], args: tuple, kwargs: dict) -> None:
         """
-        Add dependencies to the dependency set.
+        Enrich the dependency set with values discovered in positional and keyword arguments.
+
+        Parameters:
+            dependencies (set[Dependency]): Target collection that accumulates dependency tuples.
+            args (tuple): Positional arguments from the cached function.
+            kwargs (dict): Keyword arguments from the cached function.
+
+        Returns:
+            None
         """
         if args and isinstance(args[0], GeneralManager):
             inner_self = args[0]

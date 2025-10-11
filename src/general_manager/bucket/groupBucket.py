@@ -1,3 +1,5 @@
+"""Grouping bucket implementation for aggregating GeneralManager instances."""
+
 from __future__ import annotations
 from typing import (
     Type,
@@ -13,6 +15,7 @@ from general_manager.bucket.baseBucket import (
 
 
 class GroupBucket(Bucket[GeneralManagerType]):
+    """Bucket variant that groups managers by specified attributes."""
 
     def __init__(
         self,
@@ -21,16 +24,19 @@ class GroupBucket(Bucket[GeneralManagerType]):
         data: Bucket[GeneralManagerType],
     ):
         """
-        Initializes a GroupBucket by grouping data based on specified attribute keys.
+        Build a grouping bucket from the provided base data.
 
-        Args:
-            manager_class: The class type of the manager objects to be grouped.
-            group_by_keys: Tuple of attribute names to group the data by.
-            data: The underlying Bucket containing manager instances to be grouped.
+        Parameters:
+            manager_class (type[GeneralManagerType]): GeneralManager subclass represented by the bucket.
+            group_by_keys (tuple[str, ...]): Attribute names used to define each group.
+            data (Bucket[GeneralManagerType]): Source bucket whose entries are grouped.
+
+        Returns:
+            None
 
         Raises:
-            TypeError: If any group-by key is not a string.
-            ValueError: If any group-by key is not a valid attribute of the manager class.
+            TypeError: If a group-by key is not a string.
+            ValueError: If a group-by key is not a valid manager attribute.
         """
         super().__init__(manager_class)
         self.__checkGroupByArguments(group_by_keys)
@@ -40,10 +46,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __eq__(self, other: object) -> bool:
         """
-        Checks whether this GroupBucket is equal to another by comparing grouped data, manager class, and group-by keys.
+        Compare two grouping buckets for equality.
+
+        Parameters:
+            other (object): Object compared against the current bucket.
 
         Returns:
-            True if both instances have identical grouped data, manager class, and group-by keys; otherwise, False.
+            bool: True when grouped data, manager class, and grouping keys match.
         """
         if not isinstance(other, self.__class__):
             return False
@@ -55,11 +64,17 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __checkGroupByArguments(self, group_by_keys: tuple[str, ...]) -> None:
         """
-        Checks that each group-by key is a string and a valid attribute of the manager class.
+        Validate the supplied group-by keys.
+
+        Parameters:
+            group_by_keys (tuple[str, ...]): Attribute names requested for grouping.
+
+        Returns:
+            None
 
         Raises:
-            TypeError: If any group-by key is not a string.
-            ValueError: If any group-by key is not a valid attribute of the manager class.
+            TypeError: If a key is not a string.
+            ValueError: If a key is not an attribute exposed by the manager interface.
         """
         if not all(isinstance(arg, str) for arg in group_by_keys):
             raise TypeError("groupBy() arguments must be a strings")
@@ -76,13 +91,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
         data: Bucket[GeneralManagerType],
     ) -> list[GroupManager[GeneralManagerType]]:
         """
-        Constructs a list of GroupManager instances, each representing a unique group of entries from the provided data bucket based on the current group-by keys.
+        Construct grouped manager objects for every unique combination of key values.
 
-        Args:
-            data: The bucket of manager instances to be grouped.
+        Parameters:
+            data (Bucket[GeneralManagerType]): Source bucket that will be partitioned by the configured keys.
 
         Returns:
-            A list of GroupManager objects, each corresponding to a unique combination of group-by attribute values found in the data.
+            list[GroupManager[GeneralManagerType]]: Group managers covering all key combinations.
         """
         group_by_values: set[tuple[tuple[str, Any], ...]] = set()
         for entry in data:
@@ -102,10 +117,16 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __or__(self, other: object) -> GroupBucket[GeneralManagerType]:
         """
-        Returns a new GroupBucket representing the union of this bucket and another, combining their underlying data.
+        Combine two grouping buckets produced from the same manager class.
+
+        Parameters:
+            other (object): Another grouping bucket to merge.
+
+        Returns:
+            GroupBucket[GeneralManagerType]: Bucket representing the union of both inputs.
 
         Raises:
-            ValueError: If the other object is not a GroupBucket of the same type or uses a different manager class.
+            ValueError: If `other` is not a compatible GroupBucket instance.
         """
         if not isinstance(other, self.__class__):
             raise ValueError("Cannot combine different bucket types")
@@ -119,18 +140,22 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __iter__(self) -> Generator[GroupManager[GeneralManagerType], None, None]:
         """
-        Yields each grouped manager in the current GroupBucket.
+        Iterate over the grouped managers produced by this bucket.
 
-        Returns:
-            A generator yielding GroupManager instances representing each group.
+        Yields:
+            GroupManager[GeneralManagerType]: Individual group manager instances.
         """
         yield from self._data
 
     def filter(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
         """
-        Returns a new GroupBucket containing only the entries from the underlying data that match the specified filter criteria.
+        Return a grouped bucket filtered by the provided lookups.
 
-        Keyword arguments correspond to attribute-value pairs used for filtering.
+        Parameters:
+            **kwargs: Field lookups evaluated against the underlying bucket.
+
+        Returns:
+            GroupBucket[GeneralManagerType]: Grouped bucket containing only matching records.
         """
         new_basis_data = self._basis_data.filter(**kwargs)
         return GroupBucket(
@@ -141,9 +166,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def exclude(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
         """
-        Returns a new GroupBucket excluding entries from the underlying data that match the given criteria.
+        Return a grouped bucket that excludes records matching the provided lookups.
 
-        Keyword arguments specify attribute-value pairs to exclude from the basis data. The resulting GroupBucket retains the same grouping keys and manager class.
+        Parameters:
+            **kwargs: Field lookups whose matches should be removed from the underlying bucket.
+
+        Returns:
+            GroupBucket[GeneralManagerType]: Grouped bucket built from the filtered base data.
         """
         new_basis_data = self._basis_data.exclude(**kwargs)
         return GroupBucket(
@@ -154,7 +183,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def first(self) -> GroupManager[GeneralManagerType] | None:
         """
-        Returns the first grouped manager in the collection, or None if the collection is empty.
+        Return the first grouped manager in the collection.
+
+        Returns:
+            GroupManager[GeneralManagerType] | None: First group when available.
         """
         try:
             return next(iter(self))
@@ -163,7 +195,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def last(self) -> GroupManager[GeneralManagerType] | None:
         """
-        Returns the last grouped manager in the collection, or None if the collection is empty.
+        Return the last grouped manager in the collection.
+
+        Returns:
+            GroupManager[GeneralManagerType] | None: Last group when available.
         """
         items = list(self)
         if items:
@@ -172,30 +207,34 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def count(self) -> int:
         """
-        Returns the number of grouped managers in the bucket.
+        Count the number of grouped managers in the bucket.
+
+        Returns:
+            int: Number of groups.
         """
         return sum(1 for _ in self)
 
     def all(self) -> Bucket[GeneralManagerType]:
         """
-        Returns the current GroupBucket instance.
+        Return the current grouping bucket.
 
-        This method provides compatibility with interfaces expecting an `all()` method to retrieve the full collection.
+        Returns:
+            Bucket[GeneralManagerType]: This instance.
         """
         return self
 
     def get(self, **kwargs: Any) -> GroupManager[GeneralManagerType]:
         """
-        Returns the first grouped manager matching the specified filter criteria.
+        Retrieve the first grouped manager matching the supplied filters.
 
-        Args:
-            **kwargs: Attribute-value pairs to filter grouped managers.
+        Parameters:
+            **kwargs: Field lookups applied to the grouped data.
 
         Returns:
-            The first GroupManager instance matching the filter criteria.
+            GroupManager[GeneralManagerType]: Matching grouped manager.
 
         Raises:
-            ValueError: If no grouped manager matches the provided criteria.
+            ValueError: If no grouped manager matches the filters.
         """
         first_value = self.filter(**kwargs).first()
         if first_value is None:
@@ -208,13 +247,18 @@ class GroupBucket(Bucket[GeneralManagerType]):
         self, item: int | slice
     ) -> GroupManager[GeneralManagerType] | GroupBucket[GeneralManagerType]:
         """
-        Returns a grouped manager by index or a new GroupBucket by slice.
+        Access a specific group or a slice of groups.
 
-        If an integer index is provided, returns the corresponding GroupManager. If a slice is provided, returns a new GroupBucket containing the union of the basis data from the selected groups.
+        Parameters:
+            item (int | slice): Index or slice describing the desired groups.
+
+        Returns:
+            GroupManager[GeneralManagerType] | GroupBucket[GeneralManagerType]:
+                Group at the specified index or a new bucket built from the selected groups.
 
         Raises:
-            ValueError: If slicing results in no groups.
-            TypeError: If the argument is not an int or slice.
+            ValueError: If the requested slice contains no groups.
+            TypeError: If the argument is not an integer or slice.
         """
         if isinstance(item, int):
             return self._data[item]
@@ -233,19 +277,22 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def __len__(self) -> int:
         """
-        Returns the number of grouped managers in the GroupBucket.
+        Return the number of grouped managers.
+
+        Returns:
+            int: Number of groups.
         """
         return self.count()
 
     def __contains__(self, item: GeneralManagerType) -> bool:
         """
-        Checks if the given manager instance is present in the underlying basis data.
+        Determine whether the given manager instance exists in the underlying data.
 
-        Args:
-            item: The manager instance to check for membership.
+        Parameters:
+            item (GeneralManagerType): Manager instance checked for membership.
 
         Returns:
-            True if the item exists in the basis data; otherwise, False.
+            bool: True if the instance is present in the basis data.
         """
         return item in self._basis_data
 
@@ -255,14 +302,14 @@ class GroupBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ) -> Bucket[GeneralManagerType]:
         """
-        Returns a new GroupBucket with grouped managers sorted by the specified attribute keys.
+        Return a new GroupBucket sorted by the specified attributes.
 
-        Args:
-            key: A string or tuple of strings specifying the attribute(s) to sort by.
-            reverse: If True, sorts in descending order. Defaults to False.
+        Parameters:
+            key (str | tuple[str, ...]): Attribute name(s) used for sorting.
+            reverse (bool): Whether to apply descending order.
 
         Returns:
-            A new GroupBucket instance with grouped managers sorted by the given keys.
+            Bucket[GeneralManagerType]: Sorted grouping bucket.
         """
         if isinstance(key, str):
             key = (key,)
@@ -285,9 +332,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
         """
-        Return a new GroupBucket grouped by the current and additional attribute keys.
-        
-        Additional group-by keys are appended to the existing grouping, and the new GroupBucket is constructed from the same underlying data.
+        Extend the grouping with additional attribute keys.
+
+        Parameters:
+            *group_by_keys (str): Attribute names appended to the current grouping.
+
+        Returns:
+            GroupBucket[GeneralManagerType]: New bucket grouped by the combined key set.
         """
         return GroupBucket(
             self._manager_class,
@@ -297,9 +348,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
 
     def none(self) -> GroupBucket[GeneralManagerType]:
         """
-        Return a new empty GroupBucket with the same manager class and group-by keys as the current instance.
-        
-        This method creates a GroupBucket containing no items, preserving the grouping configuration of the original.
+        Produce an empty grouping bucket that preserves the current configuration.
+
+        Returns:
+            GroupBucket[GeneralManagerType]: Empty grouping bucket with identical manager class and grouping keys.
         """
         return GroupBucket(
             self._manager_class, self._group_by_keys, self._basis_data.none()

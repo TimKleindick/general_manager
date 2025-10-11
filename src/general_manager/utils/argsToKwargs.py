@@ -5,12 +5,18 @@ def args_to_kwargs(
     args: tuple[Any, ...], keys: Iterable[Any], existing_kwargs: dict | None = None
 ):
     """
-    Converts *args into **kwargs and combines them with existing **kwargs.
+    Convert positional arguments to keyword arguments and merge them into an existing mapping.
 
-    :param args: Tuple of positional arguments (e.g., *args).
-    :param keys: List of keys to associate with the arguments.
-    :param existing_kwargs: Optional dictionary of already existing key-value mappings.
-    :return: Dictionary of combined **kwargs.
+    Parameters:
+        args (tuple[Any, ...]): Positional arguments that should be mapped to keyword arguments.
+        keys (Iterable[Any]): Keys used to map each positional argument within `args`.
+        existing_kwargs (dict | None): Optional keyword argument mapping to merge with the generated values.
+
+    Returns:
+        dict[Any, Any]: A dictionary containing the merged keyword arguments.
+
+    Raises:
+        TypeError: If the number of positional arguments exceeds the number of provided keys, or if any generated keyword collides with `existing_kwargs`.
     """
     keys = list(keys)
     if len(args) > len(keys):

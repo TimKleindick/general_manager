@@ -1,3 +1,5 @@
+"""Utilities for parsing filter keyword arguments into structured callables."""
+
 from __future__ import annotations
 from typing import Any, Callable
 from general_manager.manager.input import Input
@@ -7,16 +9,17 @@ def parse_filters(
     filter_kwargs: dict[str, Any], possible_values: dict[str, Input]
 ) -> dict[str, dict]:
     """
-    Parses filter keyword arguments and constructs filter criteria for input fields.
-    
-    For each filter key-value pair, determines the target field and lookup type, validates the field, and generates either filter keyword arguments or filter functions depending on the field's type. Returns a dictionary mapping field names to filter criteria, supporting both direct lookups and dynamic filter functions.
-    
-    Args:
-        filter_kwargs: Dictionary of filter keys and their corresponding values.
-        possible_values: Mapping of field names to Input definitions used for validation and casting.
-    
+    Parse raw filter keyword arguments into structured criteria for the configured input fields.
+
+    Parameters:
+        filter_kwargs (dict[str, Any]): Filter expressions keyed by `<field>[__lookup]` strings.
+        possible_values (dict[str, Input]): Input definitions that validate, cast, and describe dependencies for each field.
+
     Returns:
-        A dictionary where each key is a field name and each value is a dictionary containing either 'filter_kwargs' for direct lookups or 'filter_funcs' for dynamic filtering.
+        dict[str, dict[str, Any]]: Mapping of input field names to dictionaries containing either `filter_kwargs` or `filter_funcs` entries used when evaluating filters.
+
+    Raises:
+        ValueError: If a filter references an input field that is not defined in `possible_values`.
     """
     from general_manager.manager.generalManager import GeneralManager
 
@@ -57,16 +60,14 @@ def parse_filters(
 
 def create_filter_function(lookup_str: str, value: Any) -> Callable[[Any], bool]:
     """
-    Creates a filter function based on an attribute path and lookup operation.
-    
-    The returned function checks whether an object's nested attribute(s) satisfy a specified comparison or matching operation against a given value.
-    
-    Args:
-        lookup_str: Attribute path and lookup operation, separated by double underscores (e.g., "age__gte", "name__contains").
-        value: The value to compare against.
-    
+    Build a callable that evaluates whether an object's attribute satisfies a lookup expression.
+
+    Parameters:
+        lookup_str (str): Attribute path and lookup operator separated by double underscores (for example, `age__gte`).
+        value (Any): Reference value used when applying the lookup comparison.
+
     Returns:
-        A function that takes an object and returns True if the object's attribute(s) match the filter condition, otherwise False.
+        Callable[[Any], bool]: Function returning True when the target object's attribute value passes the lookup test.
     """
     parts = lookup_str.split("__") if lookup_str else []
     if parts and parts[-1] in [
@@ -99,17 +100,15 @@ def create_filter_function(lookup_str: str, value: Any) -> Callable[[Any], bool]
 
 def apply_lookup(value_to_check: Any, lookup: str, filter_value: Any) -> bool:
     """
-    Evaluates whether a value satisfies a specified lookup condition against a filter value.
-    
-    Supports comparison and string operations such as "exact", "lt", "lte", "gt", "gte", "contains", "startswith", "endswith", and "in". Returns False for unsupported lookups or if a TypeError occurs.
-    
-    Args:
-        value_to_check: The value to be compared or checked.
-        lookup: The lookup operation to perform.
-        filter_value: The value to compare against.
-    
+    Evaluate a lookup operation against a candidate value.
+
+    Parameters:
+        value_to_check (Any): Value that will be compared using the lookup expression.
+        lookup (str): Name of the comparison operation (for example, `exact`, `gte`, or `contains`).
+        filter_value (Any): Reference value supplied by the filter expression.
+
     Returns:
-        True if the lookup condition is satisfied; otherwise, False.
+        bool: True if the comparison succeeds; otherwise, False.
     """
     try:
         if lookup == "exact":

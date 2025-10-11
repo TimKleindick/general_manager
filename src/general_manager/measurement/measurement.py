@@ -1,3 +1,5 @@
+"""Utility types and helpers for unit-aware measurements."""
+
 # units.py
 from __future__ import annotations
 from typing import Any, Callable
@@ -22,12 +24,17 @@ for currency in currency_units:
 class Measurement:
     def __init__(self, value: Decimal | float | int | str, unit: str):
         """
-        Initialize a Measurement with a numeric value and unit.
-        
-        Converts the provided value to a Decimal and associates it with the specified unit, creating a unit-aware measurement.
-        
+        Create a measurement from a numeric value and a unit string.
+
+        Parameters:
+            value (Decimal | float | int | str): Numeric value, which will be coerced to `Decimal` if needed.
+            unit (str): Unit name registered in the unit registry, including currencies and physical units.
+
+        Returns:
+            None
+
         Raises:
-            ValueError: If the value cannot be converted to a Decimal.
+            ValueError: If the numeric value cannot be converted to `Decimal`.
         """
         if not isinstance(value, (Decimal, float, int)):
             try:
@@ -40,10 +47,10 @@ class Measurement:
 
     def __getstate__(self):
         """
-        Return a dictionary representing the serializable state of the measurement, including its magnitude and unit as strings.
+        Produce a serialisable representation of the measurement.
 
         Returns:
-            dict: Contains 'magnitude' and 'unit' keys for serialization purposes.
+            dict[str, str]: Mapping with `magnitude` and `unit` entries for pickling.
         """
         state = {
             "magnitude": str(self.magnitude),
@@ -53,10 +60,13 @@ class Measurement:
 
     def __setstate__(self, state):
         """
-        Restore the Measurement object from a serialized state.
+        Recreate the internal quantity from a serialized representation.
 
         Parameters:
-            state (dict): Dictionary with 'magnitude' (as a string) and 'unit' (as a string) representing the measurement.
+            state (dict[str, str]): Serialized state containing `magnitude` and `unit` values.
+
+        Returns:
+            None
         """
         value = Decimal(state["magnitude"])
         unit = state["unit"]
@@ -65,30 +75,46 @@ class Measurement:
     @property
     def quantity(self) -> PlainQuantity:
         """
-        Return the internal quantity as a `PlainQuantity` object from the `pint` library.
+        Access the underlying pint quantity for advanced operations.
+
+        Returns:
+            PlainQuantity: Pint quantity representing the measurement value and unit.
         """
         return self.__quantity
 
     @property
     def magnitude(self) -> Decimal:
+        """
+        Fetch the numeric component of the measurement.
+
+        Returns:
+            Decimal: Magnitude of the measurement in its current unit.
+        """
         return self.__quantity.magnitude
 
     @property
     def unit(self) -> str:
+        """
+        Retrieve the unit label associated with the measurement.
+
+        Returns:
+            str: Canonical unit string as provided by the unit registry.
+        """
         return str(self.__quantity.units)
 
     @classmethod
     def from_string(cls, value: str) -> Measurement:
         """
-        Creates a Measurement instance from a string containing a numeric value and a unit.
+        Create a measurement from a textual representation of magnitude and unit.
 
-        If the string contains only a value, it is treated as dimensionless. If the string contains both a value and a unit separated by a space, both are used to construct the Measurement. Raises ValueError if the format is invalid or the value cannot be parsed.
+        Parameters:
+            value (str): String formatted as `"<number> <unit>"`; a single numeric value is treated as dimensionless.
 
         Returns:
-            Measurement: The constructed Measurement object.
+            Measurement: Measurement parsed from the provided string.
 
         Raises:
-            ValueError: If the string format is invalid or the value cannot be parsed as a number.
+            ValueError: If the string lacks a unit, has too many tokens, or contains a non-numeric magnitude.
         """
         splitted = value.split(" ")
         if len(splitted) == 1:
@@ -104,6 +130,15 @@ class Measurement:
 
     @staticmethod
     def formatDecimal(value: Decimal) -> Decimal:
+        """
+        Normalise decimals so integers have no fractional component.
+
+        Parameters:
+            value (Decimal): Decimal value that should be normalised.
+
+        Returns:
+            Decimal: Normalised decimal with insignificant trailing zeros removed.
+        """
         value = value.normalize()
         if value == value.to_integral_value():
             try:
@@ -147,21 +182,28 @@ class Measurement:
             unit = str(converted_quantity.units)
             return Measurement(value, unit)
 
-    def is_currency(self):
-        # Check if the unit is a defined currency
+    def is_currency(self) -> bool:
         """
-        Return True if the measurement's unit is one of the defined currency units.
+        Determine whether the measurement's unit represents a configured currency.
+
+        Returns:
+            bool: True if the unit matches one of the registered currency codes.
         """
         return str(self.unit) in currency_units
 
     def __add__(self, other: Any) -> Measurement:
         """
-        Add this measurement to another, supporting both currency and physical units.
+        Add another measurement while enforcing currency and dimensional rules.
 
-        Addition is permitted only if both operands are currencies of the same unit or both are physical units with compatible dimensions. Raises a TypeError if operands are of different types (currency vs. physical unit) or not Measurement instances, and raises a ValueError if units are incompatible.
+        Parameters:
+            other (Any): Measurement or compatible value used as the addend.
 
         Returns:
-            Measurement: A new Measurement representing the sum.
+            Measurement: Measurement representing the sum.
+
+        Raises:
+            TypeError: If the operand is not a measurement or mixes currency with non-currency units.
+            ValueError: If the operands use incompatible currency codes or physical dimensions.
         """
         if not isinstance(other, Measurement):
             raise TypeError("Addition is only allowed between Measurement instances.")
@@ -194,12 +236,17 @@ class Measurement:
 
     def __sub__(self, other: Any) -> Measurement:
         """
-        Subtracts another Measurement from this one, enforcing unit compatibility.
+        Subtract another measurement while enforcing unit compatibility.
 
-        Subtraction is permitted only between two currency measurements of the same unit or two physical measurements with compatible dimensions. Raises a TypeError if the operand is not a Measurement or if subtracting between a currency and a physical unit. Raises a ValueError if subtracting different currencies or incompatible physical units.
+        Parameters:
+            other (Any): Measurement or compatible value that should be subtracted.
 
         Returns:
-            Measurement: A new Measurement representing the result of the subtraction.
+            Measurement: Measurement representing the difference.
+
+        Raises:
+            TypeError: If the operand is not a measurement or mixes currency with non-currency units.
+            ValueError: If the operands use incompatible currency codes or physical dimensions.
         """
         if not isinstance(other, Measurement):
             raise TypeError(
@@ -226,15 +273,16 @@ class Measurement:
 
     def __mul__(self, other: Any) -> Measurement:
         """
-        Multiply this measurement by another measurement or a numeric value.
-        
-        Multiplication between two currency measurements is not allowed. When multiplying by another measurement, the resulting measurement combines their units. When multiplying by a numeric value, only the magnitude is scaled.
-        
+        Multiply the measurement by another measurement or scalar.
+
+        Parameters:
+            other (Any): Measurement or numeric value used as the multiplier.
+
         Returns:
-            Measurement: The product as a new Measurement instance.
-        
+            Measurement: Product expressed as a measurement.
+
         Raises:
-            TypeError: If both operands are currency measurements, or if the operand is neither a Measurement nor a numeric value.
+            TypeError: If multiplying two currency amounts or using an unsupported type.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():
@@ -257,17 +305,16 @@ class Measurement:
 
     def __truediv__(self, other: Any) -> Measurement:
         """
-        Divide this measurement by another measurement or a numeric value.
+        Divide the measurement by another measurement or scalar value.
 
-        If dividing by another `Measurement`:
-          - Division between two *different* currencies is disallowed (raises TypeError).
-          - Division between the *same* currency is allowed and yields a dimensionless result.
-        Returns a new `Measurement` with the resulting value and unit.
+        Parameters:
+            other (Any): Measurement or numeric divisor.
+
+        Returns:
+            Measurement: Quotient expressed as a measurement.
 
         Raises:
-            TypeError: If dividing two currency measurements with different units, or if the operand is not a `Measurement` or numeric value.
-        Returns:
-            Measurement: The result of the division as a new `Measurement` instance.
+            TypeError: If dividing currency amounts with different units or using an unsupported type.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency() and self.unit != other.unit:
@@ -288,32 +335,40 @@ class Measurement:
                 "Division is only allowed with Measurement or numeric values."
             )
 
-    def __str__(self):
+    def __str__(self) -> str:
         """
-        Return a string representation of the measurement, including the unit unless it is dimensionless.
+        Format the measurement as a string, including the unit when present.
+
+        Returns:
+            str: Text representation of the magnitude and unit.
         """
         if not str(self.unit) == "dimensionless":
             return f"{self.magnitude} {self.unit}"
         return f"{self.magnitude}"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
-        Return a string representation of the Measurement instance for debugging, showing its magnitude and unit.
+        Return a detailed representation suitable for debugging.
+
+        Returns:
+            str: Debug-friendly notation including magnitude and unit.
         """
         return f"Measurement({self.magnitude}, '{self.unit}')"
 
     def _compare(self, other: Any, operation: Callable[..., bool]) -> bool:
         """
-        Compare this Measurement to another using a specified comparison operation.
-        
-        If `other` is a string, it is parsed as a Measurement. Returns `False` if `other` is `None` or an empty value. Raises `TypeError` if `other` is not a Measurement or a valid string. Raises `ValueError` if the measurements have incompatible dimensions.
-        
+        Normalise operands into comparable measurements before applying a comparison.
+
         Parameters:
-            other: The object to compare, which can be a Measurement instance or a string in the format "value unit".
-            operation: A callable that takes two magnitudes and returns a boolean result.
-        
+            other (Any): Measurement instance or string representation used for the comparison.
+            operation (Callable[..., bool]): Callable that consumes two magnitudes and returns a comparison result.
+
         Returns:
-            bool: The result of applying the comparison operation to the magnitudes.
+            bool: Outcome of the supplied comparison function.
+
+        Raises:
+            TypeError: If `other` cannot be interpreted as a measurement.
+            ValueError: If the operands use incompatible dimensions.
         """
         if other is None or other in ("", [], (), {}):
             return False
@@ -332,6 +387,15 @@ class Measurement:
             raise ValueError("Cannot compare measurements with different dimensions.")
 
     def __radd__(self, other: Any) -> Measurement:
+        """
+        Support sum() by treating zero as a neutral element.
+
+        Parameters:
+            other (Any): Left operand supplied by Python's arithmetic machinery.
+
+        Returns:
+            Measurement: Either `self` or the result of addition.
+        """
         if other == 0:
             return self
         return self.__add__(other)
@@ -354,16 +418,25 @@ class Measurement:
 
     def __ge__(self, other: Any) -> bool:
         """
-        Return True if this measurement is greater than or equal to another measurement or compatible value.
+        Check whether the measurement is greater than or equal to another value.
 
-        The comparison converts the other operand to this measurement's unit before evaluating. Raises TypeError if the operand is not a Measurement or convertible string, or ValueError if units are incompatible.
+        Parameters:
+            other (Any): Measurement or compatible representation used in the comparison.
+
+        Returns:
+            bool: True when the measurement is greater than or equal to `other`.
+
+        Raises:
+            TypeError: If `other` cannot be interpreted as a measurement.
+            ValueError: If units are incompatible.
         """
         return self._compare(other, ge)
 
     def __hash__(self) -> int:
         """
-        Return a hash based on the measurement's magnitude and unit.
+        Compute a hash using the measurement's magnitude and unit.
 
-        Enables Measurement instances to be used in hash-based collections.
+        Returns:
+            int: Stable hash suitable for use in dictionaries and sets.
         """
         return hash((self.magnitude, str(self.unit)))
