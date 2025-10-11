@@ -1,3 +1,5 @@
+"""Concrete interface providing CRUD operations via Django ORM."""
+
 from __future__ import annotations
 from typing import (
     Type,
@@ -13,6 +15,7 @@ from django.db.models import NOT_PROVIDED
 
 
 class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
+    """CRUD-capable interface backed by a concrete Django model."""
     _interface_type = "database"
 
     @classmethod
@@ -20,16 +23,19 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         cls, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> int:
         """
-        Create a new model instance with the provided attributes and optional history tracking.
-
-        Validates input attributes, separates and sets many-to-many relationships, saves the instance with optional creator and history comment, and returns the primary key of the created instance.
+        Create a new model instance and return its primary key.
 
         Parameters:
-            creator_id (int | None): The ID of the user creating the instance, or None if not applicable.
-            history_comment (str | None): Optional comment to record in the instance's history.
+            creator_id (int | None): Identifier of the user creating the instance.
+            history_comment (str | None): Optional comment stored in the history log.
+            **kwargs (Any): Field values used to populate the model.
 
         Returns:
-            int: The primary key of the newly created instance.
+            int: Primary key of the newly created instance.
+
+        Raises:
+            ValueError: If unknown fields are supplied.
+            ValidationError: Propagated when model validation fails.
         """
         cls._checkForInvalidKwargs(cls._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls._sortKwargs(cls._model, kwargs)
@@ -42,14 +48,19 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         self, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> int:
         """
-        Update the current model instance with new attribute values and many-to-many relationships, saving changes with optional history tracking.
+        Update the current model instance and return its primary key.
 
         Parameters:
-            creator_id (int | None): The ID of the user making the update, or None if not specified.
-            history_comment (str | None): An optional comment describing the reason for the update.
+            creator_id (int | None): Identifier of the user performing the update.
+            history_comment (str | None): Optional comment stored in the history log.
+            **kwargs (Any): Field updates applied to the model.
 
         Returns:
-            int: The primary key of the updated instance.
+            int: Primary key of the updated instance.
+
+        Raises:
+            ValueError: If unknown fields are supplied.
+            ValidationError: Propagated when model validation fails.
         """
         self._checkForInvalidKwargs(self._model, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self._sortKwargs(self._model, kwargs)
@@ -62,14 +73,14 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         self, creator_id: int | None, history_comment: str | None = None
     ) -> int:
         """
-        Deactivate the current model instance by setting its `is_active` flag to `False` and recording the change with an optional history comment.
+        Mark the current model instance as inactive and record the change.
 
         Parameters:
-            creator_id (int | None): The ID of the user performing the deactivation, or None if not specified.
-            history_comment (str | None): An optional comment to include in the instance's history log.
+            creator_id (int | None): Identifier of the user performing the action.
+            history_comment (str | None): Optional comment stored in the history log.
 
         Returns:
-            int: The primary key of the deactivated instance.
+            int: Primary key of the deactivated instance.
         """
         instance = self._model.objects.get(pk=self.pk)
         instance.is_active = False
@@ -84,12 +95,14 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance: GeneralManagerModel, many_to_many_kwargs: dict[str, list[Any]]
     ) -> GeneralManagerModel:
         """
-        Set many-to-many relationship fields on a model instance using the provided values.
-        
-        For each field, converts lists of `GeneralManager` instances to their IDs if necessary, and updates the corresponding many-to-many relationship on the instance. Fields with values of `None` or `NOT_PROVIDED` are ignored.
-        
+        Set many-to-many relationship values on the provided instance.
+
+        Parameters:
+            instance (GeneralManagerModel): Model instance whose relations are updated.
+            many_to_many_kwargs (dict[str, list[Any]]): Mapping of relation names to values.
+
         Returns:
-            GeneralManagerModel: The updated model instance with many-to-many relationships set.
+            GeneralManagerModel: Updated instance.
         """
         from general_manager.manager.generalManager import GeneralManager
 
@@ -113,6 +126,16 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance: GeneralManagerModel,
         kwargs: dict[str, Any],
     ) -> GeneralManagerModel:
+        """
+        Populate non-relational fields on the instance before saving.
+
+        Parameters:
+            instance (GeneralManagerModel): Model instance that will receive the values.
+            kwargs (dict[str, Any]): Key-value pairs to assign to the instance.
+
+        Returns:
+            GeneralManagerModel: Instance with updated attributes.
+        """
         from general_manager.manager.generalManager import GeneralManager
 
         for key, value in kwargs.items():
@@ -131,6 +154,16 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
 
     @staticmethod
     def _checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[str, Any]):
+        """
+        Ensure provided keyword arguments map to known fields or attributes.
+
+        Parameters:
+            model (type[models.Model]): Django model being validated.
+            kwargs (dict[str, Any]): Keyword arguments supplied by the caller.
+
+        Raises:
+            ValueError: If an unknown field name is encountered.
+        """
         attributes = vars(model)
         field_names = {f.name for f in model._meta.get_fields()}
         for key in kwargs:
@@ -142,6 +175,16 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     def _sortKwargs(
         model: Type[models.Model], kwargs: dict[Any, Any]
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
+        """
+        Split keyword arguments into simple fields and many-to-many relations.
+
+        Parameters:
+            model (type[models.Model]): Model whose relation metadata is inspected.
+            kwargs (dict[Any, Any]): Keyword arguments supplied by the caller.
+
+        Returns:
+            tuple[dict[str, Any], dict[str, list[Any]]]: Tuple containing simple-field kwargs and many-to-many kwargs.
+        """
         many_to_many_fields = [field.name for field in model._meta.many_to_many]
         many_to_many_kwargs: dict[Any, Any] = {}
         for key, value in list(kwargs.items()):

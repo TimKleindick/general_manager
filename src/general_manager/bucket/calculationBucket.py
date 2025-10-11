@@ -1,3 +1,5 @@
+"""Bucket implementation that enumerates calculation interface combinations."""
+
 from __future__ import annotations
 from types import UnionType
 from typing import (
@@ -34,6 +36,7 @@ class SortedFilters(TypedDict):
 
 
 class CalculationBucket(Bucket[GeneralManagerType]):
+    """Bucket that builds cartesian products of calculation input fields."""
     def __init__(
         self,
         manager_class: Type[GeneralManagerType],
@@ -43,17 +46,20 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ):
         """
-        Initializes a CalculationBucket for managing calculation input combinations.
+        Prepare a calculation bucket that enumerates all input combinations.
 
-        Args:
-            manager_class: The manager class whose interface must inherit from CalculationInterface.
-            filter_definitions: Optional filters to apply to input combinations.
-            exclude_definitions: Optional exclusions to remove certain input combinations.
-            sort_key: Optional key or tuple of keys to sort the generated combinations.
-            reverse: If True, reverses the sorting order.
+        Parameters:
+            manager_class (type[GeneralManagerType]): Manager subclass whose interface derives from `CalculationInterface`.
+            filter_definitions (dict[str, dict] | None): Optional filter constraints applied to generated combinations.
+            exclude_definitions (dict[str, dict] | None): Optional exclude constraints removing combinations.
+            sort_key (str | tuple[str, ...] | None): Key(s) used to order generated combinations.
+            reverse (bool): When True, reverse the ordering defined by `sort_key`.
+
+        Returns:
+            None
 
         Raises:
-            TypeError: If the manager class interface does not inherit from CalculationInterface.
+            TypeError: If the interface does not inherit from `CalculationInterface`.
         """
         from general_manager.interface.calculationInterface import (
             CalculationInterface,
@@ -88,10 +94,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __eq__(self, other: object) -> bool:
         """
-        Checks if this Bucket is equal to another by comparing class, data, and manager class.
+        Compare two calculation buckets for structural equality.
+
+        Parameters:
+            other (object): Candidate bucket.
 
         Returns:
-            True if both objects are of the same class and have equal internal data and manager class; otherwise, False.
+            bool: True when both buckets share the same manager class and identical filter/exclude state.
         """
         if not isinstance(other, self.__class__):
             return False
@@ -103,10 +112,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __reduce__(self) -> generalManagerClassName | tuple[Any, ...]:
         """
-        Prepares the CalculationBucket instance for pickling by returning its reconstruction data.
+        Provide pickling support for calculation buckets.
 
         Returns:
-            A tuple containing the class and a tuple of initialization arguments needed to recreate the instance.
+            tuple[Any, ...]: Reconstruction data representing the class, arguments, and state.
         """
         return (
             self.__class__,
@@ -122,10 +131,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """
-        Restores the CalculationBucket instance from its pickled state.
+        Restore the bucket after unpickling.
 
-        Args:
-            state: A dictionary containing the state of the instance, including current combinations.
+        Parameters:
+            state (dict[str, Any]): Pickled state containing cached combination data.
+
+        Returns:
+            None
         """
         self._data = state.get("data")
 
@@ -134,15 +146,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Combine this CalculationBucket with another bucket or manager instance of the same manager class.
+        Merge two calculation buckets or intersect with a single manager instance.
 
-        If combined with a manager instance, returns a bucket filtered to that manager's identification. If combined with another CalculationBucket of the same manager class, returns a new bucket containing only the filters and excludes that are present and identical in both buckets.
-
-        Raises:
-            ValueError: If the other object is not a CalculationBucket or manager of the same class.
+        Parameters:
+            other (Bucket[GeneralManagerType] | GeneralManagerType): Calculation bucket or manager instance to merge.
 
         Returns:
-            CalculationBucket[GeneralManagerType]: A new CalculationBucket representing the intersection of filters and excludes, or a filtered bucket for the given manager instance.
+            CalculationBucket[GeneralManagerType]: Bucket reflecting the combined constraints.
+
+        Raises:
+            ValueError: If `other` is incompatible or uses a different manager class.
         """
         from general_manager.manager.generalManager import GeneralManager
 
@@ -175,9 +188,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __str__(self) -> str:
         """
-        Returns a string representation of the bucket, listing up to five calculation manager instances with their input combinations.
+        Return a compact preview of the generated combinations.
 
-        If more than five combinations exist, an ellipsis is appended to indicate additional entries.
+        Returns:
+            str: Human-readable summary of up to five combinations.
         """
         PRINT_MAX = 5
         combinations = self.generate_combinations()
@@ -196,7 +210,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __repr__(self) -> str:
         """
-        Returns a concise string representation of the CalculationBucket, including the manager class name, filters, excludes, sort key, and sort order.
+        Return a detailed representation of the bucket configuration.
+
+        Returns:
+            str: Debug string listing filters, excludes, sort key, and ordering.
         """
         return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filter_definitions}, {self.exclude_definitions}, {self.sort_key}, {self.reverse})"
 
@@ -205,16 +222,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         properties: dict[str, GraphQLProperty], input_fields: dict[str, Input]
     ) -> dict[str, Input]:
         """
-        Returns a dictionary of possible values for each input field based on the provided properties.
+        Derive input-field definitions for GraphQL properties without explicit inputs.
 
-        This method analyzes the properties and input fields to determine valid values for each input parameter.
-
-        Args:
-            properties (dict[str, Any]): The GraphQL properties of the manager class.
-            input_fields (dict[str, Any]): The input fields to analyze.
+        Parameters:
+            properties (dict[str, GraphQLProperty]): GraphQL properties declared on the manager.
+            input_fields (dict[str, Input]): Existing input field definitions.
 
         Returns:
-            dict[str, Any]: A dictionary mapping input field names to their possible values.
+            dict[str, Input]: Combined mapping of input field names to `Input` definitions.
         """
         parsed_inputs = {**input_fields}
         for prop_name, prop in properties.items():
@@ -236,9 +251,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def filter(self, **kwargs: Any) -> CalculationBucket:
         """
-        Returns a new CalculationBucket with additional filters applied.
+        Add additional filters and return a new calculation bucket.
 
-        Merges the provided filter criteria with existing filters to further restrict valid input combinations.
+        Parameters:
+            **kwargs (Any): Filter expressions applied to generated combinations.
+
+        Returns:
+            CalculationBucket: Bucket reflecting the updated filter definitions.
         """
         return CalculationBucket(
             manager_class=self._manager_class,
@@ -251,9 +270,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def exclude(self, **kwargs: Any) -> CalculationBucket:
         """
-        Returns a new CalculationBucket with additional exclusion criteria applied.
+        Add additional exclusion rules and return a new calculation bucket.
 
-        Keyword arguments specify input values to exclude from the generated combinations.
+        Parameters:
+            **kwargs (Any): Exclusion expressions removing combinations from the result.
+
+        Returns:
+            CalculationBucket: Bucket reflecting the updated exclusion definitions.
         """
         return CalculationBucket(
             manager_class=self._manager_class,
@@ -266,24 +289,34 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def all(self) -> CalculationBucket:
         """
-        Return a deep copy of the current CalculationBucket instance.
-        
-        Use this method to obtain an independent copy of the bucket, ensuring that modifications to the returned instance do not affect the original.
+        Return a deep copy of this calculation bucket.
+
+        Returns:
+            CalculationBucket: Independent copy that can be mutated without affecting the original.
         """
         return deepcopy(self)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
-        Iterate over all valid input combinations, yielding a manager instance for each.
-        
+        Iterate over every generated combination as a manager instance.
+
         Yields:
-            Manager instances created with each valid set of input parameters.
+            GeneralManagerType: Manager constructed from each valid set of inputs.
         """
         combinations = self.generate_combinations()
         for combo in combinations:
             yield self._manager_class(**combo)
 
     def _sortFilters(self, sorted_inputs: List[str]) -> SortedFilters:
+        """
+        Partition filters into input- and property-based buckets.
+
+        Parameters:
+            sorted_inputs (list[str]): Input names ordered by dependency.
+
+        Returns:
+            SortedFilters: Mapping that separates filters/excludes for inputs and properties.
+        """
         input_filters: dict[str, dict] = {}
         prop_filters: dict[str, dict] = {}
         input_excludes: dict[str, dict] = {}
@@ -309,10 +342,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def generate_combinations(self) -> List[dict[str, Any]]:
         """
-        Generates and caches all valid input combinations based on filters, exclusions, and sorting.
+        Compute (and cache) the list of valid input combinations.
 
         Returns:
-            A list of dictionaries, each representing a unique combination of input values that satisfy the current filters, exclusions, and sorting order.
+            list[dict[str, Any]]: Cached list of input dictionaries satisfying filters, excludes, and ordering.
         """
 
         def key_func(manager_obj: GeneralManagerType) -> tuple:
@@ -349,13 +382,13 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def topological_sort_inputs(self) -> List[str]:
         """
-        Performs a topological sort of input fields based on their dependencies.
+        Produce a dependency-respecting order of input fields.
 
         Returns:
-            A list of input field names ordered so that each field appears after its dependencies.
+            list[str]: Input names ordered so each dependency appears before dependants.
 
         Raises:
-            ValueError: If a cyclic dependency is detected among the input fields.
+            ValueError: If the dependency graph contains a cycle.
         """
         from collections import defaultdict
 
@@ -370,16 +403,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         visited = set()
         sorted_inputs = []
 
-        def visit(node, temp_mark):
+        def visit(node: str, temp_mark: set[str]) -> None:
             """
-            Performs a depth-first traversal to topologically sort nodes, detecting cycles.
+            Perform DFS while detecting cycles in the dependency graph.
 
-            Args:
-                node: The current node to visit.
-                temp_mark: A set tracking nodes in the current traversal path to detect cycles.
+            Parameters:
+                node (str): Input field currently being processed.
+                temp_mark (set[str]): Nodes visited along the current path.
+
+            Returns:
+                None
 
             Raises:
-                ValueError: If a cyclic dependency is detected involving the current node.
+                ValueError: If a cyclic dependency involves `node`.
             """
             if node in visited:
                 return
@@ -402,22 +438,20 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     def get_possible_values(
         self, key_name: str, input_field: Input, current_combo: dict
     ) -> Union[Iterable[Any], Bucket[Any]]:
-        # Hole mögliche Werte
+        # Retrieve possible values
         """
-        Retrieves the possible values for a given input field based on its definition and current dependencies.
+        Resolve the potential values for an input field given the current combination.
 
-        If the input field's `possible_values` is a callable, it is invoked with the current values of its dependencies. If it is an iterable or a `Bucket`, it is returned directly. Raises a `TypeError` if `possible_values` is not a valid type.
-
-        Args:
-            key_name: The name of the input field.
-            input_field: The input field object whose possible values are to be determined.
-            current_combo: The current combination of input values, used to resolve dependencies.
+        Parameters:
+            key_name (str): Name of the input field.
+            input_field (Input): Input definition describing type and dependencies.
+            current_combo (dict): Current partial assignment of input values.
 
         Returns:
-            An iterable or `Bucket` containing the possible values for the input field.
+            Iterable[Any] | Bucket[Any]: Collection of permissible values.
 
         Raises:
-            TypeError: If `possible_values` is neither callable, iterable, nor a `Bucket`.
+            TypeError: If the configured `possible_values` cannot be evaluated.
         """
         if callable(input_field.possible_values):
             depends_on = input_field.depends_on
@@ -436,23 +470,27 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         excludes: dict[str, dict],
     ) -> List[dict[str, Any]]:
         """
-        Recursively generates all valid input combinations for the specified input fields, applying filters and exclusions.
+        Generate all valid input combinations while honouring filters and excludes.
 
-        Args:
-            sorted_inputs: Input field names ordered to respect dependency constraints.
-            filters: Mapping of input field names to filter definitions.
-            excludes: Mapping of input field names to exclusion definitions.
+        Parameters:
+            sorted_inputs (list[str]): Input names ordered by dependency.
+            filters (dict[str, dict]): Filter definitions keyed by input name.
+            excludes (dict[str, dict]): Exclusion definitions keyed by input name.
 
         Returns:
-            A list of dictionaries, each representing a valid combination of input values that satisfy all filters and exclusions.
+            list[dict[str, Any]]: Valid input combinations.
         """
 
-        def helper(index, current_combo):
+        def helper(index: int, current_combo: dict[str, Any]):
             """
-            Recursively generates all valid input combinations for calculation inputs.
+            Recursively emit input combinations that satisfy filters and excludes.
+
+            Parameters:
+                index (int): Position within `sorted_inputs` currently being assigned.
+                current_combo (dict[str, Any]): Partial assignment of inputs built so far.
 
             Yields:
-                Dict[str, Any]: A dictionary representing a valid combination of input values, filtered and excluded according to the provided criteria.
+                dict[str, Any]: Completed combination of input values.
             """
             if index == len(sorted_inputs):
                 yield current_combo.copy()
@@ -502,6 +540,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         prop_filters: dict[str, Any],
         prop_excludes: dict[str, Any],
     ) -> list[GeneralManagerType]:
+        """
+        Apply property-level filters and excludes to manager combinations.
+
+        Parameters:
+            current_combos (list[dict[str, Any]]): Input combinations already passing input filters.
+            prop_filters (dict[str, Any]): Filter definitions keyed by property name.
+            prop_excludes (dict[str, Any]): Exclude definitions keyed by property name.
+
+        Returns:
+            list[GeneralManagerType]: Manager instances that satisfy property constraints.
+        """
 
         prop_filter_needed = set(prop_filters.keys()) | set(prop_excludes.keys())
         manager_combinations = [
@@ -537,7 +586,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def first(self) -> GeneralManagerType | None:
         """
-        Returns the first generated manager instance, or None if no combinations exist.
+        Return the first generated manager instance.
+
+        Returns:
+            GeneralManagerType | None: First instance or None when no combinations exist.
         """
         try:
             return next(iter(self))
@@ -546,7 +598,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def last(self) -> GeneralManagerType | None:
         """
-        Returns the last generated manager instance, or None if no combinations exist.
+        Return the last generated manager instance.
+
+        Returns:
+            GeneralManagerType | None: Last instance or None when no combinations exist.
         """
         items = list(self)
         if items:
@@ -555,13 +610,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def count(self) -> int:
         """
-        Returns the number of calculation combinations in the bucket.
+        Return the number of calculation combinations.
+
+        Returns:
+            int: Number of generated combinations.
         """
         return self.__len__()
 
     def __len__(self) -> int:
         """
-        Returns the number of generated calculation combinations in the bucket.
+        Return the number of generated combinations.
+
+        Returns:
+            int: Cached number of combinations.
         """
         return len(self.generate_combinations())
 
@@ -569,10 +630,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self, item: int | slice
     ) -> GeneralManagerType | CalculationBucket[GeneralManagerType]:
         """
-        Returns a manager instance or a new bucket for the specified index or slice.
+        Retrieve a manager instance or subset of combinations.
 
-        If an integer index is provided, returns the corresponding manager instance.
-        If a slice is provided, returns a new CalculationBucket representing the sliced subset.
+        Parameters:
+            item (int | slice): Index or slice specifying which combinations to return.
+
+        Returns:
+            GeneralManagerType | CalculationBucket[GeneralManagerType]:
+                Manager instance for single indices or bucket wrapping the sliced combinations.
         """
         items = self.generate_combinations()
         result = items[item]
@@ -590,28 +655,28 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def __contains__(self, item: GeneralManagerType) -> bool:
         """
-        Checks if the specified manager instance is present in the generated combinations.
+        Determine whether the provided manager instance exists among generated combinations.
 
-        Args:
-                item: The manager instance to check for membership.
+        Parameters:
+            item (GeneralManagerType): Manager instance to test for membership.
 
         Returns:
-                True if the instance is among the generated combinations, False otherwise.
+            bool: True when the instance matches one of the generated combinations.
         """
         return any(item == mgr for mgr in self)
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
         """
-        Retrieves a single calculation manager instance matching the specified filters.
+        Retrieve a single manager instance that satisfies the given filters.
 
-        Args:
-            **kwargs: Filter criteria to apply.
+        Parameters:
+            **kwargs (Any): Filter expressions narrowing the calculation results.
 
         Returns:
-            The unique manager instance matching the filters.
+            GeneralManagerType: Matching manager instance.
 
         Raises:
-            ValueError: If no matching calculation is found or if multiple matches exist.
+            ValueError: If zero or multiple calculations match the filters.
         """
         filtered_bucket = self.filter(**kwargs)
         items = list(filtered_bucket)
@@ -626,14 +691,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self, key: str | tuple[str], reverse: bool = False
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Return a new CalculationBucket instance with updated sorting criteria.
-        
+        Return a new bucket with updated sorting preferences.
+
         Parameters:
-            key (str or tuple of str): Field name(s) to sort the combinations by.
-            reverse (bool): Whether to sort in descending order.
-        
+            key (str | tuple[str, ...]): Attribute name(s) used for ordering combinations.
+            reverse (bool): Whether to apply descending order.
+
         Returns:
-            CalculationBucket: A new bucket instance sorted according to the specified key and order.
+            CalculationBucket[GeneralManagerType]: Bucket configured with the provided sorting options.
         """
         return CalculationBucket(
             self._manager_class,
@@ -645,9 +710,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def none(self) -> CalculationBucket[GeneralManagerType]:
         """
-        Return a new CalculationBucket instance of the same type containing no items.
-        
-        The returned bucket has all filters, excludes, and cached combinations cleared, representing an empty set of combinations.
+        Return an empty calculation bucket with the same configuration.
+
+        Returns:
+            CalculationBucket[GeneralManagerType]: Bucket with no combinations and cleared cached data.
         """
         own = self.all()
         own._current_combinations = None

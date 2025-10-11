@@ -1,3 +1,5 @@
+"""Utilities for building deterministic cache keys from function calls."""
+
 import inspect
 import json
 from general_manager.utils.jsonEncoder import CustomJSONEncoder
@@ -6,18 +8,15 @@ from hashlib import sha256
 
 def make_cache_key(func, args, kwargs):
     """
-    Generates a unique, deterministic cache key for a specific function call.
+    Build a deterministic cache key that uniquely identifies a function invocation.
 
-    The key is derived from the function's module, qualified name, and bound arguments,
-    serialized to JSON and hashed with SHA-256 to ensure uniqueness for each call signature.
-
-    Args:
-        func: The target function to be identified.
-        args: Positional arguments for the function call.
-        kwargs: Keyword arguments for the function call.
+    Parameters:
+        func (Callable[..., Any]): The function whose invocation should be cached.
+        args (tuple[Any, ...]): Positional arguments supplied to the function.
+        kwargs (dict[str, Any]): Keyword arguments supplied to the function.
 
     Returns:
-        A hexadecimal SHA-256 hash string uniquely representing the function call.
+        str: Hexadecimal SHA-256 digest representing the call signature.
     """
     sig = inspect.signature(func)
     bound = sig.bind_partial(*args, **kwargs)

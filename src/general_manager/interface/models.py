@@ -1,3 +1,5 @@
+"""Django model mixins and helpers backing GeneralManager interfaces."""
+
 from __future__ import annotations
 from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar
 from django.db import models
@@ -53,6 +55,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
 
 
 class GeneralManagerBasisModel(models.Model):
+    """Abstract base model providing shared fields for GeneralManager storage."""
     _general_manager_class: ClassVar[Type[GeneralManager]]
     is_active = models.BooleanField(default=True)
     history = HistoricalRecords(inherit=True)
@@ -62,6 +65,7 @@ class GeneralManagerBasisModel(models.Model):
 
 
 class GeneralManagerModel(GeneralManagerBasisModel):
+    """Abstract model adding change-tracking metadata for writeable managers."""
     changed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
     )

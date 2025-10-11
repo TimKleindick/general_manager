@@ -1,3 +1,5 @@
+"""Read-only interface that mirrors JSON datasets into Django models."""
+
 from __future__ import annotations
 import json
 
@@ -25,15 +27,20 @@ logger = logging.getLogger(__name__)
 
 
 class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
+    """Interface that reads static JSON data into a managed read-only model."""
     _interface_type = "readonly"
     _parent_class: Type[GeneralManager]
 
     @staticmethod
     def getUniqueFields(model: Type[models.Model]) -> set[str]:
         """
-        Return a set of field names that uniquely identify instances of the specified Django model.
-        
-        Considers fields marked as unique (excluding "id"), as well as fields defined in `unique_together` and `UniqueConstraint` constraints.
+        Return names of fields that uniquely identify instances of ``model``.
+
+        Parameters:
+            model (type[models.Model]): Django model inspected for uniqueness metadata.
+
+        Returns:
+            set[str]: Field names that participate in unique constraints.
         """
         opts = model._meta
         unique_fields: set[str] = set()
@@ -55,11 +62,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
 
     @classmethod
     def syncData(cls) -> None:
-        """
-        Synchronizes the associated Django model with JSON data from the parent class, ensuring the database records match the provided data exactly.
-        
-        Parses the JSON data, creates or updates model instances based on unique fields, and deactivates any database records not present in the JSON data. Raises a ValueError if required attributes are missing, if the JSON data is invalid, or if no unique fields are defined.
-        """
+        """Synchronise the backing model with the class-level JSON data."""
         if cls.ensureSchemaIsUpToDate(cls._parent_class, cls._model):
             logger.warning(
                 f"Schema for ReadOnlyInterface '{cls._parent_class.__name__}' is not up to date."
@@ -74,7 +77,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                 f"For ReadOnlyInterface '{parent_class.__name__}' must set '_data'"
             )
 
-        # JSON-Daten parsen
+        # Parse JSON into Python structures
         if isinstance(json_data, str):
             data_list = json.loads(json_data)
         elif isinstance(json_data, list):
@@ -137,10 +140,14 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         new_manager_class: Type[GeneralManager], model: Type[models.Model]
     ) -> list[Warning]:
         """
-        Check if the database schema for a Django model matches its model definition.
-        
+        Check whether the database schema matches the model definition.
+
+        Parameters:
+            new_manager_class (type[GeneralManager]): Manager class owning the interface.
+            model (type[models.Model]): Django model whose table should be inspected.
+
         Returns:
-            A list of Django Warning objects describing schema issues, such as missing tables or column mismatches. Returns an empty list if the schema is up to date.
+            list[Warning]: Warnings describing schema mismatches; empty when up to date.
         """
 
         def table_exists(table_name: str) -> bool:

@@ -1,3 +1,5 @@
+"""Helpers for caching GeneralManager computations with dependency tracking."""
+
 from typing import Any, Callable, Optional, Protocol, Set
 from functools import wraps
 from django.core.cache import cache as django_cache
@@ -10,25 +12,28 @@ from general_manager.utils.makeCacheKey import make_cache_key
 class CacheBackend(Protocol):
     def get(self, key: str, default: Optional[Any] = None) -> Any:
         """
-        Retrieves a value from the cache by key, returning a default if the key is not found.
+        Retrieve a value from the cache, falling back to a default.
 
-        Args:
-            key: The cache key to look up.
-            default: Value to return if the key is not present in the cache.
+        Parameters:
+            key (str): Cache key identifying the stored entry.
+            default (Any | None): Value returned when the key is absent.
 
         Returns:
-            The cached value if found; otherwise, the provided default.
+            Any: Cached value when available; otherwise, `default`.
         """
         ...
 
     def set(self, key: str, value: Any, timeout: Optional[int] = None) -> None:
         """
-        Stores a value in the cache under the specified key with an optional expiration timeout.
+        Store a value in the cache with an optional expiration timeout.
 
-        Args:
-            key: The cache key to associate with the value.
-            value: The value to store in the cache.
-            timeout: Optional expiration time in seconds. If None, the value is cached indefinitely.
+        Parameters:
+            key (str): Cache key identifying the stored entry.
+            value (Any): Object written to the cache.
+            timeout (int | None): Expiration in seconds; `None` stores the value indefinitely.
+
+        Returns:
+            None
         """
         ...
 
@@ -44,9 +49,15 @@ def cached(
     record_fn: RecordFn = record_dependencies,
 ) -> Callable:
     """
-    Decorator that caches function results and tracks their dependencies.
+    Cache a function call while registering its data dependencies.
 
-    When applied to a function, this decorator caches the function's output using a generated cache key based on its arguments. It also tracks dependencies accessed during the function's execution and stores them alongside the cached result. On cache hits, previously stored dependencies are re-tracked to maintain dependency tracking continuity. If dependencies exist and no timeout is set, an external recording function is invoked to persist the dependency information.
+    Parameters:
+        timeout (int | None): Expiration in seconds for cached values; `None` stores results until invalidated.
+        cache_backend (CacheBackend): Backend used to read and write cached results.
+        record_fn (RecordFn): Callback invoked to persist dependency metadata when no timeout is defined.
+
+    Returns:
+        Callable: Decorator that wraps the target function with caching behaviour.
     """
 
     def decorator(func: Callable) -> Callable:

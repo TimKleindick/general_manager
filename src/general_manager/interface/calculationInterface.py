@@ -1,3 +1,5 @@
+"""Interface implementation for calculation-style GeneralManager classes."""
+
 from __future__ import annotations
 from datetime import datetime
 from typing import Any
@@ -18,6 +20,7 @@ from general_manager.bucket.calculationBucket import CalculationBucket
 
 
 class CalculationInterface(InterfaceBase):
+    """Interface exposing calculation inputs without persisting data."""
     _interface_type = "calculation"
     input_fields: dict[str, Input]
 
@@ -44,6 +47,7 @@ class CalculationInterface(InterfaceBase):
 
     @classmethod
     def getAttributes(cls) -> dict[str, Any]:
+        """Return attribute accessors that cast values using the configured inputs."""
         return {
             name: lambda self, name=name: cls.input_fields[name].cast(
                 self.identification.get(name)
@@ -53,14 +57,17 @@ class CalculationInterface(InterfaceBase):
 
     @classmethod
     def filter(cls, **kwargs: Any) -> CalculationBucket:
+        """Return a calculation bucket filtered by the given parameters."""
         return CalculationBucket(cls._parent_class).filter(**kwargs)
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> CalculationBucket:
+        """Return a calculation bucket excluding items matching the parameters."""
         return CalculationBucket(cls._parent_class).exclude(**kwargs)
 
     @classmethod
     def all(cls) -> CalculationBucket:
+        """Return a calculation bucket containing all combinations."""
         return CalculationBucket(cls._parent_class).all()
 
     @staticmethod
@@ -68,12 +75,15 @@ class CalculationInterface(InterfaceBase):
         name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
-        Prepare and return updated attributes and a new interface class for GeneralManager creation.
+        Prepare interface attributes prior to GeneralManager class creation.
 
-        Collects all `Input` instances from the provided interface class, sets the interface type in the attributes, dynamically creates a new interface class with an `input_fields` attribute, and adds this class to the attributes dictionary.
+        Parameters:
+            name (generalManagerClassName): Name of the new manager class.
+            attrs (attributes): Attribute dictionary for the manager being created.
+            interface (interfaceBaseClass): Base interface definition.
 
         Returns:
-            tuple: A tuple containing the updated attributes dictionary, the new interface class, and None.
+            tuple[attributes, interfaceBaseClass, None]: Updated attributes, interface class, and related model (None).
         """
         input_fields: dict[str, Input[Any]] = {}
         for key, value in vars(interface).items():
@@ -96,18 +106,16 @@ class CalculationInterface(InterfaceBase):
         interface_class: newlyCreatedInterfaceClass,
         model: relatedClass,
     ) -> None:
+        """Link the generated interface to the manager class after creation."""
         interface_class._parent_class = new_class
 
     @classmethod
     def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
-        This method returns a pre and a post GeneralManager creation method
-        and is called inside the GeneralManagerMeta class to initialize the
-        Interface.
-        The pre creation method is called before the GeneralManager instance
-        is created to modify the kwargs.
-        The post creation method is called after the GeneralManager instance
-        is created to modify the instance and add additional data.
+        Return the pre- and post-creation hooks used by ``GeneralManagerMeta``.
+
+        Returns:
+            tuple[classPreCreationMethod, classPostCreationMethod]: Hook functions invoked around manager creation.
         """
         return cls._preCreate, cls._postCreate
 

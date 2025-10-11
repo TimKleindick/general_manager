@@ -1,3 +1,5 @@
+"""Decorator utilities for building GraphQL mutations from manager functions."""
+
 import inspect
 from typing import (
     get_type_hints,
@@ -41,9 +43,13 @@ def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] =
 
     def decorator(fn):
         """
-        Decorator that transforms a function into a GraphQL mutation class compatible with Graphene.
+        Transform ``fn`` into a Graphene-compatible mutation class.
 
-        Analyzes the decorated function's signature and type hints to dynamically generate a mutation class with appropriate argument and output fields. Handles permission checks if a permission class is provided, manages mutation execution, and registers the mutation for use in the GraphQL API. On success, returns output fields and a `success` flag; on error, returns only `success=False`.
+        Parameters:
+            fn (Callable[..., Any]): Resolver implementing the mutation behaviour.
+
+        Returns:
+            Callable[..., Any]: Original function after registration.
         """
         sig = inspect.signature(fn)
         hints = get_type_hints(fn)
@@ -130,10 +136,15 @@ def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] =
         # Define mutate method
         def _mutate(root, info, **kwargs):
             """
-            Handles the execution of a GraphQL mutation, including permission checks, result unpacking, and error handling.
+            Execute the mutation resolver, enforcing permissions and formatting output.
+
+            Parameters:
+                root: Graphene root object (unused).
+                info: GraphQL execution info passed by Graphene.
+                **kwargs: Mutation arguments provided by the client.
 
             Returns:
-                An instance of the mutation class with output fields populated from the mutation result and a success status.
+                mutation_class: Instance populated with resolver results and a success flag.
             """
             if permission:
                 permission.check(kwargs, info.context.user)

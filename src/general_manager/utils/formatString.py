@@ -1,3 +1,5 @@
+"""Utility helpers for converting between common string casing styles."""
+
 def snake_to_pascal(s: str) -> str:
     """
     Convert a snake_case string to PascalCase.

@@ -1,3 +1,5 @@
+"""Dependency index management for cached GeneralManager query results."""
+
 from __future__ import annotations
 import time
 import ast
@@ -33,22 +35,35 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # CONFIG
 # -----------------------------------------------------------------------------
-INDEX_KEY = "dependency_index"  # Key unter dem der gesamte Index liegt
-LOCK_KEY = "dependency_index_lock"  # Key für das Sperr‑Mutex
-LOCK_TIMEOUT = 5  # Sekunden TTL für den Lock
-UNDEFINED = object()  # Dummy für nicht definierte Werte
+INDEX_KEY = "dependency_index"  # Cache key storing the complete dependency index
+LOCK_KEY = "dependency_index_lock"  # Cache key used for the dependency lock
+LOCK_TIMEOUT = 5  # Lock TTL in seconds
+UNDEFINED = object()  # Sentinel for undefined values
 
 
 # -----------------------------------------------------------------------------
 # LOCKING HELPERS
 # -----------------------------------------------------------------------------
 def acquire_lock(timeout: int = LOCK_TIMEOUT) -> bool:
-    """Atomar: create Lock key if it doesn't exist."""
+    """
+    Attempt to acquire the cache-backed lock guarding dependency writes.
+
+    Parameters:
+        timeout (int): Expiration time for the lock entry in seconds.
+
+    Returns:
+        bool: True if the lock was acquired; otherwise, False.
+    """
     return cache.add(LOCK_KEY, "1", timeout)
 
 
 def release_lock() -> None:
-    """Release Lock key."""
+    """
+    Release the cache-backed lock guarding dependency writes.
+
+    Returns:
+        None
+    """
     cache.delete(LOCK_KEY)
 
 
@@ -56,7 +71,12 @@ def release_lock() -> None:
 # INDEX ACCESS
 # -----------------------------------------------------------------------------
 def get_full_index() -> dependency_index:
-    """Load or initialize the full index."""
+    """
+    Fetch the dependency index from cache, initialising it on first access.
+
+    Returns:
+        dependency_index: Mapping of tracked filters and excludes keyed by manager name.
+    """
     idx = cache.get(INDEX_KEY, None)
     if idx is None:
         idx: dependency_index = {"filter": {}, "exclude": {}}
@@ -65,7 +85,15 @@ def get_full_index() -> dependency_index:
 
 
 def set_full_index(idx: dependency_index) -> None:
-    """Write the complete index back to the cache."""
+    """
+    Persist the dependency index to cache.
+
+    Parameters:
+        idx (dependency_index): Updated index that should replace the cached value.
+
+    Returns:
+        None
+    """
     cache.set(INDEX_KEY, idx, None)
 
 
@@ -82,6 +110,20 @@ def record_dependencies(
         ]
     ],
 ) -> None:
+    """
+    Register cache keys against the filters and exclusions they depend on.
+
+    Parameters:
+        cache_key (str): Cache key produced for the cached queryset.
+        dependencies (Iterable[tuple[str, Literal["filter", "exclude", "identification"], str]]):
+            Collection describing manager name, dependency type, and identifying data.
+
+    Returns:
+        None
+
+    Raises:
+        TimeoutError: If the dependency lock cannot be acquired within `LOCK_TIMEOUT`.
+    """
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
@@ -100,7 +142,7 @@ def record_dependencies(
                     lookup_map.setdefault(val_key, set()).add(cache_key)
 
             else:
-                # director ID Lookup as simple filter on 'id'
+                # Treat identification lookups as a simple filter on `id`
                 section = idx["filter"].setdefault(model_name, {})
                 lookup_map = section.setdefault("identification", {})
                 val_key = identifier
@@ -116,7 +158,18 @@ def record_dependencies(
 # INDEX CLEANUP
 # -----------------------------------------------------------------------------
 def remove_cache_key_from_index(cache_key: str) -> None:
-    """Remove a cache key from the index."""
+    """
+    Remove a cache entry from all dependency mappings.
+
+    Parameters:
+        cache_key (str): Cache key that should be expunged from the index.
+
+    Returns:
+        None
+
+    Raises:
+        TimeoutError: If the dependency lock cannot be acquired within `LOCK_TIMEOUT`.
+    """
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
@@ -147,6 +200,15 @@ def remove_cache_key_from_index(cache_key: str) -> None:
 # CACHE INVALIDATION
 # -----------------------------------------------------------------------------
 def invalidate_cache_key(cache_key: str) -> None:
+    """
+    Delete the cached result associated with the provided key.
+
+    Parameters:
+        cache_key (str): Key referencing the cached queryset.
+
+    Returns:
+        None
+    """
     cache.delete(cache_key)
 
 
@@ -154,6 +216,17 @@ def invalidate_cache_key(cache_key: str) -> None:
 def capture_old_values(
     sender: Type[GeneralManager], instance: GeneralManager | None, **kwargs
 ) -> None:
+    """
+    Cache the field values referenced by tracked filters before an update.
+
+    Parameters:
+        sender (type[GeneralManager]): Manager class dispatching the signal.
+        instance (GeneralManager | None): Manager instance about to change.
+        **kwargs: Additional signal metadata.
+
+    Returns:
+        None
+    """
     if instance is None:
         return
     manager_name = sender.__name__
@@ -185,9 +258,16 @@ def generic_cache_invalidation(
     **kwargs,
 ):
     """
-    Invalidates cached query results related to a model instance when its data changes.
-    
-    This function is intended to be used as a Django signal handler. It compares old and new values of relevant fields on a model instance against registered cache dependencies (filters and excludes). If a change affects any cached queryset result, the corresponding cache keys are invalidated and removed from the dependency index.
+    Invalidate cached query results affected by a data change.
+
+    Parameters:
+        sender (type[GeneralManager]): Manager class that triggered the signal.
+        instance (GeneralManager): Updated manager instance.
+        old_relevant_values (dict[str, Any]): Previously captured values for tracked lookups.
+        **kwargs: Additional signal metadata.
+
+    Returns:
+        None
     """
     manager_name = sender.__name__
     idx = get_full_index()
@@ -208,7 +288,7 @@ def generic_cache_invalidation(
             except:
                 return False
 
-        # range
+        # range comparisons
         if op in ("gt", "gte", "lt", "lte"):
             try:
                 thr = type(value)(ast.literal_eval(val_key))
@@ -223,7 +303,7 @@ def generic_cache_invalidation(
             if op == "lte":
                 return value <= thr
 
-        # wildcard / regex
+        # wildcard / regex comparisons
         if op in ("contains", "startswith", "endswith", "regex"):
             try:
                 literal = ast.literal_eval(val_key)
@@ -238,7 +318,7 @@ def generic_cache_invalidation(
                 return text.startswith(literal)
             if op == "endswith":
                 return text.endswith(literal)
-            # regex: val_key selbst als Pattern benutzen
+            # regex: treat the stored key as the regex pattern
             if op == "regex":
                 try:
                     pattern = re.compile(val_key)

@@ -1,3 +1,5 @@
+"""Input field metadata used by GeneralManager interfaces."""
+
 from __future__ import annotations
 from typing import Iterable, Optional, Callable, List, TypeVar, Generic, Any
 import inspect
@@ -11,6 +13,8 @@ INPUT_TYPE = TypeVar("INPUT_TYPE", bound=type)
 
 
 class Input(Generic[INPUT_TYPE]):
+    """Descriptor describing the expected type and constraints for an interface input."""
+
     def __init__(
         self,
         type: INPUT_TYPE,
@@ -19,35 +23,39 @@ class Input(Generic[INPUT_TYPE]):
     ):
         """
         Create an Input specification with type information, allowed values, and dependency metadata.
-        
+
         Parameters:
-            type: The expected Python type for the input value.
-            possible_values: Optional; an iterable of allowed values or a callable returning allowed values.
-            depends_on: Optional; a list of dependency names. If not provided and possible_values is callable, dependencies are inferred from the callable's parameter names.
+            type (INPUT_TYPE): Expected Python type for the input value.
+            possible_values (Callable | Iterable | None): Allowed values as an iterable or callable returning allowed values.
+            depends_on (list[str] | None): Names of other inputs required for computing possible values.
         """
         self.type = type
         self.possible_values = possible_values
         self.is_manager = issubclass(type, GeneralManager)
 
         if depends_on is not None:
-            # Verwende die angegebenen Abhängigkeiten
+            # Use the provided dependency list when available
             self.depends_on = depends_on
         elif callable(possible_values):
-            # Ermittele Abhängigkeiten automatisch aus den Parametern der Funktion
+            # Derive dependencies automatically from the callable signature
             sig = inspect.signature(possible_values)
             self.depends_on = list(sig.parameters.keys())
         else:
-            # Keine Abhängigkeiten
+            # Default to no dependencies when none are provided
             self.depends_on = []
 
     def cast(self, value: Any) -> Any:
         """
-        Converts the input value to the type specified by this Input instance, handling special cases for dates, datetimes, GeneralManager subclasses, and Measurement types.
-        
-        If the value is already of the target type, it is returned unchanged. For date and datetime types, string and cross-type conversions are supported. For GeneralManager subclasses, instances are constructed from a dictionary or an ID. For Measurement, string values are parsed accordingly. Otherwise, the value is cast using the target type's constructor.
-        
+        Convert a raw value to the configured input type.
+
+        Parameters:
+            value (Any): Raw value supplied by the caller.
+
         Returns:
-            The value converted to the target type, or an instance of the target type.
+            Any: Value converted to the target type.
+
+        Raises:
+            ValueError: If the value cannot be converted to the target type.
         """
         if self.type == date:
             if isinstance(value, datetime) and type(value) is not date:

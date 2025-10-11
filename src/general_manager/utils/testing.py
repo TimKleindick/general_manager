@@ -1,3 +1,5 @@
+"""Test utilities for GeneralManager GraphQL integrations."""
+
 from graphene_django.utils.testing import GraphQLTransactionTestCase
 from general_manager.apps import GeneralmanagerConfig
 from importlib import import_module
@@ -25,13 +27,13 @@ _original_get_app = global_apps.get_containing_app_config
 
 def createFallbackGetApp(fallback_app: str):
     """
-    Creates a fallback function for getting the app config, which returns the specified fallback app if the original lookup fails.
+    Create an app-config lookup that falls back to a specific Django app.
 
     Parameters:
-        fallback_app (str): The name of the app to return if the original lookup fails.
+        fallback_app (str): App label used when the default lookup cannot resolve the object.
 
     Returns:
-        function: A function that attempts to get the app config for a given object name, falling back to the specified app if not found.
+        Callable[[str], Any]: Function returning either the resolved configuration or the fallback app configuration when available.
     """
 
     def _fallback_get_app(object_name: str):
@@ -48,9 +50,12 @@ def createFallbackGetApp(fallback_app: str):
 
 def _default_graphql_url_clear():
     """
-    Removes the first URL pattern for the GraphQL view from the project's root URL configuration.
+    Remove the default GraphQL URL pattern from Django's root URL configuration.
 
-    This function searches the root URL patterns for a pattern whose callback is a `GraphQLView` and removes it, effectively clearing the default GraphQL endpoint from the URL configuration.
+    The lookup searches for the first URL pattern whose view class is `GraphQLView` and removes it from the URL list.
+
+    Returns:
+        None
     """
     urlconf = import_module(settings.ROOT_URLCONF)
     for pattern in urlconf.urlpatterns:
@@ -71,9 +76,15 @@ class GMTestCaseMeta(type):
 
     def __new__(mcs, name, bases, attrs):
         """
-        Creates a new test case class with a customized setUpClass method for GeneralManager and GraphQL integration tests.
+        Construct a new test case class that wires GeneralManager-specific initialisation into `setUpClass`.
 
-        The generated setUpClass ensures the test environment is properly initialized by resetting GraphQL registries, applying any user-defined setup, clearing default GraphQL URL patterns, creating missing database tables for specified GeneralManager models and their history, initializing GeneralManager and GraphQL configurations, and invoking the base GraphQLTransactionTestCase setup.
+        Parameters:
+            name (str): Name of the dynamically created test case class.
+            bases (tuple[type, ...]): Base classes that the new test case should inherit.
+            attrs (dict[str, Any]): Namespace containing class attributes, potentially including a custom `setUpClass`.
+
+        Returns:
+            type: Newly constructed class with an augmented `setUpClass` implementation.
         """
         user_setup = attrs.get("setUpClass")
         fallback_app = attrs.get("fallback_app", "general_manager")
@@ -82,9 +93,15 @@ class GMTestCaseMeta(type):
 
         def wrapped_setUpClass(cls):
             """
-            Performs setup for a test case class by resetting GraphQL internals, configuring fallback app lookup, clearing default GraphQL URL patterns, ensuring database tables exist for specified GeneralManager models and their history, initializing GeneralManager and GraphQL configurations, and invoking the base test case setup.
+            Prepare the test harness with GeneralManager-specific setup prior to executing tests.
 
-            Skips database table creation for any GeneralManager class lacking an `Interface` or `_model` attribute.
+            The method resets GraphQL registries, configures optional fallback app lookups, synchronises database tables for managed models, and finally invokes the parent `setUpClass`.
+
+            Parameters:
+                cls (type[GeneralManagerTransactionTestCase]): Test case subclass whose environment is being initialised.
+
+            Returns:
+                None
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
@@ -131,24 +148,33 @@ class GMTestCaseMeta(type):
 
 
 class LoggingCache(LocMemCache):
+    """An in-memory cache backend that records its get and set operations."""
+
     def __init__(self, *args, **kwargs):
         """
-        Initialize the LoggingCache and set up an empty list to record cache operations.
+        Instantiate the cache backend and initialise the operation log.
+
+        Parameters:
+            args (tuple): Positional arguments forwarded to `LocMemCache`.
+            kwargs (dict): Keyword arguments forwarded to `LocMemCache`.
+
+        Returns:
+            None
         """
         super().__init__(*args, **kwargs)
         self.ops = []
 
     def get(self, key, default=None, version=None):
         """
-        Retrieve a value from the cache and log whether it was a cache hit or miss.
+        Retrieve a value from the cache and record whether it was a hit or miss.
 
         Parameters:
-            key (str): The cache key to retrieve.
-            default: The value to return if the key is not found.
-            version: Optional cache version.
+            key (str): Cache key identifying the stored value.
+            default (Any): Fallback returned when the key is absent.
+            version (int | None): Optional cache version used for the lookup.
 
         Returns:
-            The cached value if found; otherwise, the default value.
+            Any: Cached value when present; otherwise, the provided default.
         """
         val = super().get(key, default)
         self.ops.append(("get", key, val is not _SENTINEL))
@@ -156,13 +182,16 @@ class LoggingCache(LocMemCache):
 
     def set(self, key, value, timeout=None, version=None):
         """
-        Store a value in the cache and log the set operation.
+        Store a value in the cache and append the operation to the log.
 
         Parameters:
-            key (str): The cache key to set.
-            value (Any): The value to store in the cache.
-            timeout (Optional[int]): The cache timeout in seconds.
-            version (Optional[int]): The cache version (unused).
+            key (str): Cache key identifying the entry to write.
+            value (Any): Object stored under the given key.
+            timeout (int | None): Expiration time in seconds.
+            version (int | None): Optional cache version identifier.
+
+        Returns:
+            None
         """
         super().set(key, value, timeout)
         self.ops.append(("set", key))
@@ -185,7 +214,12 @@ class GeneralManagerTransactionTestCase(
 
     def setUp(self) -> None:
         """
-        Prepares the test environment by replacing the default cache with a LoggingCache and resetting the cache operations log.
+        Prepare the test environment with a cache backend that records operations.
+
+        The method installs `LoggingCache` as the default cache and clears any previous operation history so tests can assert cache behaviour.
+
+        Returns:
+            None
         """
         super().setUp()
         setattr(caches._connections, "default", LoggingCache("test-cache", {}))  # type: ignore
@@ -193,7 +227,12 @@ class GeneralManagerTransactionTestCase(
 
     @classmethod
     def tearDownClass(cls) -> None:
-        """Clean up dynamic managers and restore patched globals."""
+        """
+        Remove dynamically registered managers and restore patched global state.
+
+        Returns:
+            None
+        """
         # remove GraphQL URL pattern added during setUpClass
         _default_graphql_url_clear()
 
@@ -251,9 +290,12 @@ class GeneralManagerTransactionTestCase(
     #
     def assertCacheMiss(self):
         """
-        Assert that a cache miss occurred, followed by a cache set operation.
+        Assert that a cache retrieval missed and was followed by a write.
 
-        Checks that the cache's `get` method was called and did not find a value, and that the `set` method was subsequently called to store a value. Resets the cache operation log after the assertion.
+        The expectation is a `get` operation returning no value and a subsequent `set` operation storing the computed result. The cache operation log is cleared afterwards.
+
+        Returns:
+            None
         """
         ops = getattr(caches["default"], "ops")
         self.assertIn(
@@ -266,9 +308,12 @@ class GeneralManagerTransactionTestCase(
 
     def assertCacheHit(self):
         """
-        Assert that a cache get operation resulted in a cache hit and no cache set operation occurred.
+        Assert that a cache lookup succeeded without triggering a write.
 
-        Raises an assertion error if the cache did not return a value for a get operation or if a set operation was performed. Resets the cache operation log after the check.
+        The expectation is a `get` operation that returns a cached value and no recorded `set` operation. The cache operation log is cleared afterwards.
+
+        Returns:
+            None
         """
         ops = getattr(caches["default"], "ops")
         self.assertIn(
@@ -287,5 +332,8 @@ class GeneralManagerTransactionTestCase(
     def __resetCacheCounter(self):
         """
         Clear the log of cache operations recorded by the LoggingCache instance.
+
+        Returns:
+            None
         """
         caches["default"].ops = []  # type: ignore

@@ -1,3 +1,5 @@
+"""Database-backed interface implementation for GeneralManager classes."""
+
 from __future__ import annotations
 from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic, cast
 from django.db import models
@@ -37,6 +39,7 @@ MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
 
 
 class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
+    """Interface implementation that persists data using Django ORM models."""
     _model: Type[MODEL_TYPE]
     input_fields: dict[str, Input] = {"id": Input(int)}
 
@@ -47,9 +50,15 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         **kwargs: Any,
     ):
         """
-        Initialize the interface and load the associated model instance by primary key.
+        Build the interface and hydrate the underlying model instance.
 
-        If a `search_date` is provided, retrieves the historical record as of that date; otherwise, loads the current record.
+        Parameters:
+            *args (list[Any]): Positional identification arguments forwarded to the parent interface.
+            search_date (datetime | None): When provided, load historical data for the given timestamp.
+            **kwargs (Any): Keyword identification arguments forwarded to the parent interface.
+
+        Returns:
+            None
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
@@ -57,9 +66,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     def getData(self, search_date: datetime | None = None) -> GeneralManagerBasisModel:
         """
-        Retrieves the model instance by primary key, optionally as of a specified historical date.
+        Fetch the underlying model instance, optionally as of a historical date.
 
-        If a `search_date` is provided and is not within the last 5 seconds, returns the historical record of the instance as of that date; otherwise, returns the current instance.
+        Parameters:
+            search_date (datetime | None): When provided, retrieve the state closest to this timestamp.
+
+        Returns:
+            GeneralManagerBasisModel: Current or historical instance matching the primary key.
         """
         model = self._model
         instance = model.objects.get(pk=self.pk)
@@ -70,9 +83,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @staticmethod
     def __parseKwargs(**kwargs: Any) -> dict[str, Any]:
         """
-        Parses keyword arguments to ensure they are compatible with the model's fields.
+        Convert keyword arguments into ORM-friendly values.
 
-        Converts GeneralManager instances to their primary key values and returns a dictionary of parsed arguments.
+        Parameters:
+            **kwargs (Any): Filter or update arguments potentially containing manager instances.
+
+        Returns:
+            dict[str, Any]: Arguments ready to be passed to Django ORM methods.
         """
         from general_manager.manager.generalManager import GeneralManager
 
@@ -89,13 +106,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def filter(cls, **kwargs: Any) -> DatabaseBucket:
         """
-        Returns a DatabaseBucket containing model instances filtered by the given criteria.
+        Return a bucket of model instances filtered by the provided lookups.
 
-        Args:
-            **kwargs: Field lookups to filter the queryset.
+        Parameters:
+            **kwargs (Any): Django-style filter expressions.
 
         Returns:
-            A DatabaseBucket wrapping the filtered queryset and associated metadata.
+            DatabaseBucket: Bucket wrapping the filtered queryset.
         """
 
         kwargs = cls.__parseKwargs(**kwargs)
@@ -109,13 +126,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def exclude(cls, **kwargs: Any) -> DatabaseBucket:
         """
-        Returns a DatabaseBucket containing model instances that do not match the given filter criteria.
+        Return a bucket excluding model instances that match the provided lookups.
 
-        Args:
-            **kwargs: Field lookups to exclude from the queryset.
+        Parameters:
+            **kwargs (Any): Django-style exclusion expressions.
 
         Returns:
-            A DatabaseBucket wrapping the queryset of excluded model instances.
+            DatabaseBucket: Bucket wrapping the excluded queryset.
         """
         kwargs = cls.__parseKwargs(**kwargs)
 
@@ -128,13 +145,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @staticmethod
     def __createFilterDefinitions(**kwargs: Any) -> dict[str, Any]:
         """
-        Creates a dictionary of filter definitions from the provided keyword arguments.
+        Build a filter-definition mapping from Django-style kwargs.
 
-        Args:
-            **kwargs: Key-value pairs representing filter criteria.
+        Parameters:
+            **kwargs (Any): Filter expressions provided by the caller.
 
         Returns:
-            A dictionary mapping filter keys to their corresponding values.
+            dict[str, Any]: Mapping of filter names to their values.
         """
         filter_definitions: dict[str, Any] = {}
         for key, value in kwargs.items():
@@ -148,12 +165,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         """
         Retrieves the most recent historical record of a model instance at or before a specified date.
 
-        Args:
-            instance: The model instance whose history is queried.
-            search_date: The cutoff datetime; returns the last record at or before this date.
+        Parameters:
+            instance (GeneralManagerBasisModel): Model instance whose history is queried.
+            search_date (datetime | None): Cutoff datetime used to select the historical record.
 
         Returns:
-            The historical model instance as of the specified date, or None if no such record exists.
+            GeneralManagerBasisModel | None: Historical instance as of the specified date, if available.
         """
         return instance.history.filter(history_date__lte=search_date).last()  # type: ignore
 
@@ -363,11 +380,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         model: Type[models.Model] | models.Model,
     ) -> tuple[list[str], list[str]]:
         """
-        Identifies custom fields on a model and their associated utils fields to ignore.
+        Identify custom fields on a model and related helper fields to ignore.
+
+        Parameters:
+            model (type[models.Model] | models.Model): Model class or instance to inspect.
 
         Returns:
-            A tuple containing a list of custom field names and a list of related field names
-            (typically suffixed with '_value' and '_unit') that should be ignored.
+            tuple[list[str], list[str]]: Names of custom fields and associated helper fields to ignore.
         """
         field_name_list: list[str] = []
         to_ignore_list: list[str] = []
@@ -381,13 +400,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @staticmethod
     def _getCustomFields(model: Type[models.Model] | models.Model) -> list[str]:
         """
-        Return a list of custom field names defined directly as class attributes on the given Django model.
+        Return names of fields declared directly on the model class.
 
         Parameters:
-            model: The Django model class or instance to inspect.
+            model (type[models.Model] | models.Model): Model class or instance to inspect.
 
         Returns:
-            A list of field names for fields declared directly on the model class, excluding those defined via Django's meta system.
+            list[str]: Field names declared as class attributes.
         """
         return [
             field.name
@@ -397,11 +416,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     @classmethod
     def __getModelFields(cls) -> list[str]:
-        """
-        Return a list of field names for the model that are neither many-to-many nor related fields.
-
-        Fields representing many-to-many relationships or relations to other models are excluded from the result.
-        """
+        """Return names of non-relational fields defined on the model."""
         return [
             field.name
             for field in cls._model._meta.get_fields()
@@ -410,9 +425,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     @classmethod
     def __getForeignKeyFields(cls) -> list[str]:
-        """
-        Return a list of field names for all foreign key and one-to-one relations on the model, excluding generic foreign keys.
-        """
+        """Return names of foreign-key and one-to-one relations on the model."""
         return [
             field.name
             for field in cls._model._meta.get_fields()
@@ -421,11 +434,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     @classmethod
     def __getManyToManyFields(cls) -> list[tuple[str, str]]:
-        """
-        Return a list of tuples representing all many-to-many fields on the model.
-
-        Each tuple contains the field name twice. Fields that are generic foreign keys are excluded.
-        """
+        """Return (field_name, accessor_name) tuples for many-to-many fields."""
         return [
             (field.name, field.name)
             for field in cls._model._meta.get_fields()
@@ -434,11 +443,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     @classmethod
     def __getReverseRelations(cls) -> list[tuple[str, str]]:
-        """
-        Return a list of reverse one-to-many relations for the model, excluding generic foreign keys.
-
-        Each tuple contains the related field's name and its default related accessor name (e.g., `fieldname_set`).
-        """
+        """Return (field_name, accessor_name) tuples for reverse one-to-many relations."""
         return [
             (field.name, f"{field.name}_set")
             for field in cls._model._meta.get_fields()
@@ -452,35 +457,35 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         interface: interfaceBaseClass,
         base_model_class=GeneralManagerModel,
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
-        # Felder aus der Interface-Klasse sammeln
+        # Collect fields defined directly on the interface class
         """
         Dynamically generates a Django model class, its associated interface class, and a factory class from an interface definition.
 
         This method collects fields and metadata from the provided interface class, creates a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and constructs corresponding interface and factory classes. The updated attributes dictionary, the new interface class, and the newly created model class are returned for integration into the general manager framework.
 
         Parameters:
-            name: The name for the dynamically created model class.
-            attrs: The attributes dictionary to be updated with the new interface and factory classes.
-            interface: The interface base class defining the model structure and metadata.
-            base_model_class: The base class to use for the new model (defaults to GeneralManagerModel).
+            name (generalManagerClassName): Name for the dynamically created model class.
+            attrs (attributes): Attribute dictionary updated with interface and factory definitions.
+            interface (interfaceBaseClass): Interface definition used to derive the model.
+            base_model_class (type[GeneralManagerBasisModel]): Base Django model class (defaults to GeneralManagerModel).
 
         Returns:
-            tuple: A tuple containing the updated attributes dictionary, the new interface class, and the newly created model class.
+            tuple[attributes, interfaceBaseClass, relatedClass]: Updated attributes, interface class, and the generated model.
         """
         model_fields: dict[str, Any] = {}
         meta_class = None
         for attr_name, attr_value in interface.__dict__.items():
             if not attr_name.startswith("__"):
                 if attr_name == "Meta" and isinstance(attr_value, type):
-                    # Meta-Klasse speichern
+                    # Store the Meta class definition for later use
                     meta_class = attr_value
                 elif attr_name == "Factory":
-                    # Factory nicht in model_fields speichern
+                    # Do not register the factory on the model
                     pass
                 else:
                     model_fields[attr_name] = attr_value
         model_fields["__module__"] = attrs.get("__module__")
-        # Meta-Klasse hinzufügen oder erstellen
+        # Attach the Meta class or create a default one
         rules: list[Rule] | None = None
         if meta_class:
             model_fields["Meta"] = meta_class
@@ -489,7 +494,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 rules = getattr(meta_class, "rules")
                 delattr(meta_class, "rules")
 
-        # Modell erstellen
+        # Create the concrete Django model dynamically
         model = type(name, (base_model_class,), model_fields)
         if meta_class and rules:
             setattr(model._meta, "rules", rules)
@@ -501,7 +506,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         setattr(interface_cls, "_model", model)
         attrs["Interface"] = interface_cls
 
-        # add factory class
+        # Build the associated factory class
         factory_definition = getattr(interface, "Factory", None)
         factory_attributes: dict[str, Any] = {}
         if factory_definition:
@@ -526,6 +531,11 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Finalizes the setup of dynamically created classes by linking the interface and model to the new general manager class.
 
         This method sets the `_parent_class` attribute on the interface class and attaches the new general manager class to the model via the `_general_manager_class` attribute.
+
+        Parameters:
+            new_class (newlyCreatedGeneralManagerClass): Generated GeneralManager subclass.
+            interface_class (newlyCreatedInterfaceClass): Concrete interface class created for the model.
+            model (relatedClass): Django model linked to the manager.
         """
         interface_class._parent_class = new_class
         setattr(model, "_general_manager_class", new_class)
@@ -538,6 +548,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns the pre- and post-creation hooks for initializing the interface.
 
         The pre-creation method is called before the GeneralManager class is created to allow customization, while the post-creation method is called after creation to finalize setup.
+
+        Returns:
+            tuple[classPreCreationMethod, classPostCreationMethod]: Hooks used during manager class creation.
         """
         return cls._preCreate, cls._postCreate
 
@@ -547,6 +560,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Return the type associated with a given model field name.
 
         If the field is a relation and its related model has a `_general_manager_class` attribute, that class is returned; otherwise, returns the Django field type.
+
+        Parameters:
+            field_name (str): Name of the model field.
+
+        Returns:
+            type: Type or GeneralManager class representing the field.
         """
         field = cls._model._meta.get_field(field_name)
         if (

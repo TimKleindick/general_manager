@@ -1,3 +1,5 @@
+"""GraphQL-aware property descriptor used by GeneralManager classes."""
+
 from typing import Any, Callable, get_type_hints, overload, TypeVar
 import sys
 
@@ -5,6 +7,7 @@ T = TypeVar("T", bound=Callable[..., Any])
 
 
 class GraphQLProperty(property):
+    """Descriptor that exposes a property with GraphQL metadata and type hints."""
     sortable: bool
     filterable: bool
     query_annotation: Any | None
@@ -18,6 +21,16 @@ class GraphQLProperty(property):
         filterable: bool = False,
         query_annotation: Any | None = None,
     ) -> None:
+        """
+        Initialise the descriptor with GraphQL-specific configuration.
+
+        Parameters:
+            fget (Callable): Underlying resolver function.
+            doc (str | None): Optional documentation string.
+            sortable (bool): Whether the property participates in sorting.
+            filterable (bool): Whether the property participates in filtering.
+            query_annotation (Any | None): Optional annotation applied to querysets.
+        """
         super().__init__(fget, doc=doc)
         self.is_graphql_resolver = True
         self._owner: type | None = None
@@ -38,10 +51,12 @@ class GraphQLProperty(property):
             )
 
     def __set_name__(self, owner: type, name: str) -> None:
+        """Store the owning class and attribute name for later introspection."""
         self._owner = owner
         self._name = name
 
     def _try_resolve_type_hint(self) -> None:
+        """Resolve the return type hint of the wrapped resolver, if available."""
         if self._graphql_type_hint is not None:
             return
 
@@ -61,6 +76,7 @@ class GraphQLProperty(property):
 
     @property
     def graphql_type_hint(self) -> Any | None:
+        """Return the cached GraphQL type hint resolved from annotations."""
         if self._graphql_type_hint is None:
             self._try_resolve_type_hint()
         return self._graphql_type_hint
@@ -86,10 +102,17 @@ def graphQlProperty(
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
     from general_manager.cache.cacheDecorator import cached
 
-    """Decorator to create a :class:`GraphQLProperty`.
+    """
+    Decorate a resolver to return a cached ``GraphQLProperty`` descriptor.
 
-    It can be used without arguments or with optional configuration for
-    filtering, sorting and queryset annotation.
+    Parameters:
+        func (Callable[..., Any] | None): Resolver function when used without arguments.
+        sortable (bool): Whether the property can participate in sorting.
+        filterable (bool): Whether the property can be used in filtering.
+        query_annotation (Any | None): Optional queryset annotation callable or expression.
+
+    Returns:
+        GraphQLProperty | Callable[[Callable[..., Any]], GraphQLProperty]: Decorated property or decorator factory.
     """
 
     def wrapper(f: Callable[..., Any]) -> GraphQLProperty:

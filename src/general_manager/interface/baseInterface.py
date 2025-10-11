@@ -1,3 +1,5 @@
+"""Abstract interface layer shared by all GeneralManager implementations."""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import (
@@ -43,11 +45,7 @@ type classPostCreationMethod = Callable[
 
 
 class AttributeTypedDict(TypedDict):
-    """
-    This class is used to define the type of the attributes dictionary.
-    It is used to define the type of the attributes dictionary in the
-    GeneralManager class.
-    """
+    """Describe metadata captured for each interface attribute."""
 
     type: type
     default: Any
@@ -57,11 +55,22 @@ class AttributeTypedDict(TypedDict):
 
 
 class InterfaceBase(ABC):
+    """Common base API for interfaces backing GeneralManager classes."""
     _parent_class: Type[GeneralManager]
     _interface_type: ClassVar[str]
     input_fields: dict[str, Input]
 
     def __init__(self, *args: Any, **kwargs: Any):
+        """
+        Construct the interface using the supplied identification arguments.
+
+        Parameters:
+            *args: Positional arguments passed to the interface constructor.
+            **kwargs: Keyword arguments passed to the interface constructor.
+
+        Returns:
+            None
+        """
         identification = self.parseInputFieldsToIdentification(*args, **kwargs)
         self.identification = self.formatIdentification(identification)
 
@@ -71,12 +80,18 @@ class InterfaceBase(ABC):
         **kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Parse and validate input arguments into a dictionary of input field values.
+        Parse raw arguments into a validated identification mapping.
 
-        Positional and keyword arguments are mapped to input field names, with normalization of argument names (e.g., removing trailing `_id`). Ensures all required fields are present and no unexpected arguments are provided. Processes input fields in dependency order, casting and validating each value. Raises a `TypeError` for missing or unexpected arguments and a `ValueError` if circular dependencies are detected.
+        Parameters:
+            *args (Any): Positional arguments matched to the interface's input field order.
+            **kwargs (dict[str, Any]): Keyword arguments supplied by the caller.
 
         Returns:
-            dict[str, Any]: A dictionary mapping input field names to their validated and cast values.
+            dict[str, Any]: Mapping of input field names to validated values.
+
+        Raises:
+            TypeError: If required inputs are missing, unexpected inputs are provided, or a value fails type checking.
+            ValueError: If circular dependencies prevent resolution of the inputs.
         """
         identification = {}
         kwargs = args_to_kwargs(args, self.input_fields.keys(), kwargs)
@@ -117,6 +132,15 @@ class InterfaceBase(ABC):
 
     @staticmethod
     def formatIdentification(identification: dict[str, Any]) -> dict[str, Any]:
+        """
+        Normalise identification data by replacing manager instances with their IDs.
+
+        Parameters:
+            identification (dict[str, Any]): Raw identification mapping possibly containing manager instances.
+
+        Returns:
+            dict[str, Any]: Identification mapping with nested managers replaced by their identifications.
+        """
         from general_manager.manager.generalManager import GeneralManager
 
         for key, value in identification.items():
@@ -141,9 +165,19 @@ class InterfaceBase(ABC):
         self, name: str, value: Any, identification: dict[str, Any]
     ) -> None:
         """
-        Validates the type and allowed values of an input field.
+        Validate a single input value against its definition.
 
-        Ensures that the provided value matches the expected type for the specified input field. In debug mode, also checks that the value is among the allowed possible values if defined, supporting both callables and iterables. Raises a TypeError for invalid types or possible value definitions, and a ValueError if the value is not permitted.
+        Parameters:
+            name (str): Input field name being processed.
+            value (Any): Value provided by the caller.
+            identification (dict[str, Any]): Partially resolved identification mapping used to evaluate dependencies.
+
+        Returns:
+            None
+
+        Raises:
+            TypeError: If the value has the wrong type or possible values are misconfigured.
+            ValueError: If the value is not permitted by the configured `possible_values`.
         """
         input_field = self.input_fields[name]
         if not isinstance(value, input_field.type):
@@ -173,31 +207,37 @@ class InterfaceBase(ABC):
 
     @classmethod
     def create(cls, *args: Any, **kwargs: Any) -> Any:
+        """Create a new record via the underlying data source."""
         raise NotImplementedError
 
     def update(self, *args: Any, **kwargs: Any) -> Any:
+        """Update the underlying record."""
         raise NotImplementedError
 
     def deactivate(self, *args: Any, **kwargs: Any) -> Any:
+        """Deactivate the underlying record."""
         raise NotImplementedError
 
     @abstractmethod
     def getData(self, search_date: datetime | None = None) -> Any:
+        """Return data materialised for the manager object."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
+        """Return metadata describing each attribute exposed on the manager."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def getAttributes(cls) -> dict[str, Any]:
+        """Return attribute values exposed via the interface."""
         raise NotImplementedError
 
     @classmethod
     def getGraphQLProperties(cls) -> dict[str, GraphQLProperty]:
-        """Return GraphQL properties defined on the parent manager."""
+        """Return GraphQLProperty descriptors defined on the parent manager class."""
         if not hasattr(cls, "_parent_class"):
             return {}
         return {
@@ -209,11 +249,13 @@ class InterfaceBase(ABC):
     @classmethod
     @abstractmethod
     def filter(cls, **kwargs: Any) -> Bucket[Any]:
+        """Return a bucket filtered by the provided lookup expressions."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def exclude(cls, **kwargs: Any) -> Bucket[Any]:
+        """Return a bucket excluding records that match the provided lookup expressions."""
         raise NotImplementedError
 
     @classmethod
@@ -225,13 +267,11 @@ class InterfaceBase(ABC):
         classPostCreationMethod,
     ]:
         """
-        This method returns a pre and a post GeneralManager creation method
-        and is called inside the GeneralManagerMeta class to initialize the
-        Interface.
-        The pre creation method is called before the GeneralManager instance
-        is created to modify the kwargs.
-        The post creation method is called after the GeneralManager instance
-        is created to modify the instance and add additional data.
+        Return hooks executed around GeneralManager class creation.
+
+        Returns:
+            tuple[classPreCreationMethod, classPostCreationMethod]:
+                Callables executed before and after the manager class is created.
         """
         raise NotImplementedError
 
@@ -239,13 +279,13 @@ class InterfaceBase(ABC):
     @abstractmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        Returns the type of the specified input field.
+        Return the declared Python type for an input field.
 
-        Args:
-            field_name: The name of the input field.
+        Parameters:
+            field_name (str): Name of the input field.
 
         Returns:
-            The Python type associated with the given field name.
+            type: Python type associated with the field.
 
         Raises:
             NotImplementedError: This method must be implemented by subclasses.

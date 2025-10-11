@@ -1,3 +1,5 @@
+"""Base permission contract used by GeneralManager instances."""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Literal
@@ -16,21 +18,25 @@ if TYPE_CHECKING:
 
 
 class BasePermission(ABC):
+    """Abstract base class defining CRUD permission checks for managers."""
 
     def __init__(
         self,
         instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
         request_user: AbstractUser | AnonymousUser,
     ) -> None:
+        """Initialise the permission context for a specific manager and user."""
         self._instance = instance
         self._request_user = request_user
 
     @property
     def instance(self) -> PermissionDataManager | GeneralManager | GeneralManagerMeta:
+        """Return the object against which permission checks are performed."""
         return self._instance
 
     @property
     def request_user(self) -> AbstractUser | AnonymousUser:
+        """Return the user being evaluated for permission checks."""
         return self._request_user
 
     @classmethod
@@ -40,6 +46,7 @@ class BasePermission(ABC):
         manager: type[GeneralManager],
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
+        """Validate create permissions for the supplied payload."""
         request_user = cls.getUserWithId(request_user)
         errors = []
         permission_data = PermissionDataManager(permission_data=data, manager=manager)
@@ -62,6 +69,7 @@ class BasePermission(ABC):
         old_manager_instance: GeneralManager,
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
+        """Validate update permissions for the supplied payload."""
         request_user = cls.getUserWithId(request_user)
 
         errors = []
@@ -86,6 +94,7 @@ class BasePermission(ABC):
         manager_instance: GeneralManager,
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
+        """Validate delete permissions for the supplied manager instance."""
         request_user = cls.getUserWithId(request_user)
 
         errors = []
@@ -106,9 +115,7 @@ class BasePermission(ABC):
     def getUserWithId(
         user: Any | AbstractUser | AnonymousUser,
     ) -> AbstractUser | AnonymousUser:
-        """
-        Returns the user with the given id
-        """
+        """Return a ``User`` instance given a primary key or user object."""
         from django.contrib.auth.models import User
 
         if isinstance(user, (AbstractUser, AnonymousUser)):
@@ -124,22 +131,28 @@ class BasePermission(ABC):
         action: Literal["create", "read", "update", "delete"],
         attriubte: str,
     ) -> bool:
+        """
+        Determine whether the given action is permitted on the specified attribute.
+
+        Parameters:
+            action (Literal["create", "read", "update", "delete"]): Operation being checked.
+            attriubte (str): Attribute name subject to the permission check.
+
+        Returns:
+            bool: True when the action is allowed.
+        """
         raise NotImplementedError
 
     def getPermissionFilter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
-        """
-        Returns the filter for the permission
-        """
+        """Return the filter/exclude constraints associated with this permission."""
         raise NotImplementedError
 
     def _getPermissionFilter(
         self, permission: str
     ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
-        """
-        Returns the filter for the permission
-        """
+        """Resolve a filter definition for the given permission string."""
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise ValueError(f"Permission {permission} not found")
@@ -155,8 +168,12 @@ class BasePermission(ABC):
         permission: str,
     ) -> bool:
         """
-        Validates a permission string which can be a combination of multiple permissions
-        separated by "&" (e.g. "isAuthenticated&isMatchingKeyAccount").
-        This means that all sub_permissions must be true.
+        Validate complex permission expressions joined by ``&`` operators.
+
+        Parameters:
+            permission (str): Permission expression (for example, ``isAuthenticated&isMatchingKeyAccount``).
+
+        Returns:
+            bool: True when every sub-permission evaluates to True for the current user.
         """
         return validatePermissionString(permission, self.instance, self.request_user)

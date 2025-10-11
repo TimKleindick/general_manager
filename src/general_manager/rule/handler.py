@@ -1,4 +1,4 @@
-# generalManager/src/rule/handlers.py
+"""Rule handler implementations that craft error messages from AST nodes."""
 
 from __future__ import annotations
 import ast
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 class BaseRuleHandler(ABC):
-    """Schnittstelle für Rule-Handler."""
+    """Define the protocol for generating rule-specific error messages."""
 
     function_name: str  # ClassVar, der Name, unter dem dieser Handler registriert wird
 
@@ -25,14 +25,25 @@ class BaseRuleHandler(ABC):
         rule: Rule,
     ) -> Dict[str, str]:
         """
-        Erstelle Fehlermeldungen für den Vergleichs- oder Funktionsaufruf.
+        Produce error messages for a comparison or function call node.
+
+        Parameters:
+            node (ast.AST): AST node representing the expression being evaluated.
+            left (ast.expr | None): Left operand when applicable.
+            right (ast.expr | None): Right operand when applicable.
+            op (ast.cmpop | None): Comparison operator node.
+            var_values (dict[str, object | None]): Resolved variable values used during evaluation.
+            rule (Rule): Rule invoking the handler.
+
+        Returns:
+            dict[str, str]: Mapping of variable names to error messages.
         """
         pass
 
 
 class FunctionHandler(BaseRuleHandler, ABC):
     """
-    Handler für Funktionsaufrufe wie len(), max(), min(), sum().
+    Base class for handlers that evaluate function-call expressions such as len(), max(), or sum().
     """
 
     def handle(
@@ -74,7 +85,17 @@ class FunctionHandler(BaseRuleHandler, ABC):
         rule: Rule,
     ) -> Dict[str, str]:
         """
-        Aggregiere die Werte und erstelle eine Fehlermeldung.
+        Analyse the call arguments and construct an error message payload.
+
+        Parameters:
+            arg_node (ast.expr): AST node representing the function argument.
+            right_node (ast.expr): Node representing the comparison threshold.
+            op_symbol (str): Symbolic representation of the comparison operator.
+            var_values (dict[str, object | None]): Resolved values used during evaluation.
+            rule (Rule): Rule requesting the aggregation.
+
+        Returns:
+            dict[str, str]: Mapping of variable names to error messages.
         """
         raise NotImplementedError("Subclasses should implement this method")
 
@@ -90,6 +111,22 @@ class LenHandler(FunctionHandler):
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
+        """
+        Evaluate length-based limits and craft an error message when violated.
+
+        Parameters:
+            arg_node (ast.expr): AST node representing the iterable passed to `len`.
+            right_node (ast.expr): Comparison threshold node.
+            op_symbol (str): Operator symbol describing the comparison.
+            var_values (dict[str, object | None]): Evaluated variable values.
+            rule (Rule): Calling rule used for helper evaluations.
+
+        Returns:
+            dict[str, str]: Mapping containing a single error message keyed by variable name.
+
+        Raises:
+            ValueError: If the argument is invalid or the threshold is not numeric.
+        """
 
         var_name = rule._get_node_name(arg_node)
         var_value = var_values.get(var_name)
@@ -133,6 +170,22 @@ class SumHandler(FunctionHandler):
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
+        """
+        Compute the sum of an iterable and compare it to the threshold.
+
+        Parameters:
+            arg_node (ast.expr): AST node representing the iterable passed to `sum`.
+            right_node (ast.expr): Node describing the threshold value.
+            op_symbol (str): Operator symbol describing the comparison.
+            var_values (dict[str, object | None]): Evaluated variable values.
+            rule (Rule): Calling rule used for helper evaluations.
+
+        Returns:
+            dict[str, str]: Mapping containing a single error message keyed by variable name.
+
+        Raises:
+            ValueError: If the argument is not a numeric iterable or the threshold is invalid.
+        """
 
         # Name und Wert holen
         var_name = rule._get_node_name(arg_node)
@@ -175,6 +228,22 @@ class MaxHandler(FunctionHandler):
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
+        """
+        Compare the maximum element of an iterable against the provided threshold.
+
+        Parameters:
+            arg_node (ast.expr): AST node representing the iterable passed to `max`.
+            right_node (ast.expr): Node describing the threshold value.
+            op_symbol (str): Operator symbol describing the comparison.
+            var_values (dict[str, object | None]): Evaluated variable values.
+            rule (Rule): Calling rule used for helper evaluations.
+
+        Returns:
+            dict[str, str]: Mapping containing a single error message keyed by variable name.
+
+        Raises:
+            ValueError: If the iterable is empty, non-numeric, or the threshold is invalid.
+        """
 
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)
@@ -210,6 +279,22 @@ class MinHandler(FunctionHandler):
         var_values: Dict[str, Optional[object]],
         rule: Rule,
     ) -> Dict[str, str]:
+        """
+        Compare the minimum element of an iterable against the provided threshold.
+
+        Parameters:
+            arg_node (ast.expr): AST node representing the iterable passed to `min`.
+            right_node (ast.expr): Node describing the threshold value.
+            op_symbol (str): Operator symbol describing the comparison.
+            var_values (dict[str, object | None]): Evaluated variable values.
+            rule (Rule): Calling rule used for helper evaluations.
+
+        Returns:
+            dict[str, str]: Mapping containing a single error message keyed by variable name.
+
+        Raises:
+            ValueError: If the iterable is empty, non-numeric, or the threshold is invalid.
+        """
 
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)

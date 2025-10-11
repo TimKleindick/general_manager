@@ -1,3 +1,5 @@
+"""Abstract bucket primitives for managing GeneralManager collections."""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import (
@@ -19,13 +21,17 @@ if TYPE_CHECKING:
 
 
 class Bucket(ABC, Generic[GeneralManagerType]):
+    """Abstract interface for lazily evaluated GeneralManager collections."""
 
     def __init__(self, manager_class: Type[GeneralManagerType]):
         """
-        Initializes the Bucket with a specified manager class.
+        Create a bucket bound to a specific manager class.
 
-        Args:
-            manager_class: The class of manager objects this bucket will manage.
+        Parameters:
+            manager_class (type[GeneralManagerType]): GeneralManager subclass whose instances this bucket represents.
+
+        Returns:
+            None
         """
         self._manager_class = manager_class
         self._data = None
@@ -34,10 +40,13 @@ class Bucket(ABC, Generic[GeneralManagerType]):
 
     def __eq__(self, other: object) -> bool:
         """
-        Checks if this Bucket is equal to another by comparing class, data, and manager class.
+        Compare two buckets for equality.
+
+        Parameters:
+            other (object): Object tested for equality with this bucket.
 
         Returns:
-            True if both objects are of the same class and have equal internal data and manager class; otherwise, False.
+            bool: True when the buckets share the same class, manager class, and data payload.
         """
         if not isinstance(other, self.__class__):
             return False
@@ -45,10 +54,10 @@ class Bucket(ABC, Generic[GeneralManagerType]):
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         """
-        Prepares the object for pickling by returning the class and initialization arguments.
+        Provide pickling support by returning the constructor and arguments.
 
         Returns:
-            A tuple containing the class and a tuple of arguments needed to reconstruct the object during unpickling.
+            tuple[Any, ...]: Data allowing the bucket to be reconstructed during unpickling.
         """
         return (
             self.__class__,
@@ -61,13 +70,13 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> Bucket[GeneralManagerType]:
         """
-        Return a new bucket representing the union of this bucket and another bucket or a single manager instance.
-        
+        Return a bucket containing the union of this bucket and another input.
+
         Parameters:
-            other: Another bucket or a single manager instance to include in the union.
-        
+            other (Bucket[GeneralManagerType] | GeneralManagerType): Bucket or single manager instance to merge.
+
         Returns:
-            A new bucket containing all unique items from both this bucket and the provided argument.
+            Bucket[GeneralManagerType]: New bucket with the combined contents.
         """
         raise NotImplementedError
 
@@ -76,74 +85,76 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         self,
     ) -> Generator[GeneralManagerType | GroupManager[GeneralManagerType], None, None]:
         """
-        Returns an iterator over the items in the bucket.
+        Iterate over items in the bucket.
 
         Yields:
-            Instances of the managed type or group manager contained in the bucket.
+            GeneralManagerType | GroupManager[GeneralManagerType]: Items stored in the bucket.
         """
         raise NotImplementedError
 
     @abstractmethod
     def filter(self, **kwargs: Any) -> Bucket[GeneralManagerType]:
         """
-        Returns a new bucket containing only items that match the specified filter criteria.
+        Return a bucket reduced to items matching the provided filters.
 
-        Args:
-            **kwargs: Field-value pairs used to filter items in the bucket.
+        Parameters:
+            **kwargs: Field lookups applied to the underlying query.
 
         Returns:
-            A new Bucket instance with items matching the given criteria.
+            Bucket[GeneralManagerType]: Filtered bucket instance.
         """
         raise NotImplementedError
 
     @abstractmethod
     def exclude(self, **kwargs: Any) -> Bucket[GeneralManagerType]:
         """
-        Returns a new Bucket excluding items that match the specified criteria.
+        Return a bucket that excludes items matching the provided filters.
 
-        Args:
-            **kwargs: Field-value pairs specifying the exclusion criteria.
+        Parameters:
+            **kwargs: Field lookups specifying records to remove from the result.
 
         Returns:
-            A new Bucket instance with items matching the criteria excluded.
+            Bucket[GeneralManagerType]: Bucket with the specified records excluded.
         """
         raise NotImplementedError
 
     @abstractmethod
     def first(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
         """
-        Returns the first item in the bucket, or None if the bucket is empty.
+        Return the first item contained in the bucket.
 
         Returns:
-            The first GeneralManager or GroupManager instance, or None if no items exist.
+            GeneralManagerType | GroupManager[GeneralManagerType] | None: First entry if present, otherwise None.
         """
         raise NotImplementedError
 
     @abstractmethod
     def last(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
         """
-        Returns the last item in the bucket, or None if the bucket is empty.
+        Return the last item contained in the bucket.
 
         Returns:
-            The last GeneralManager or GroupManager instance, or None if no items exist.
+            GeneralManagerType | GroupManager[GeneralManagerType] | None: Last entry if present, otherwise None.
         """
         raise NotImplementedError
 
     @abstractmethod
     def count(self) -> int:
         """
-        Returns the number of items in the bucket.
+        Return the number of items represented by the bucket.
 
-        Subclasses must implement this method to provide the count of contained elements.
+        Returns:
+            int: Count of items.
         """
         raise NotImplementedError
 
     @abstractmethod
     def all(self) -> Bucket[GeneralManagerType]:
         """
-        Returns a bucket containing all items managed by this instance.
+        Return a bucket encompassing every item managed by this instance.
 
-        Subclasses must implement this method to provide access to the complete collection without filters or exclusions applied.
+        Returns:
+            Bucket[GeneralManagerType]: Bucket without filters or exclusions.
         """
         raise NotImplementedError
 
@@ -152,16 +163,13 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         self, **kwargs: Any
     ) -> GeneralManagerType | GroupManager[GeneralManagerType]:
         """
-        Retrieves a single item matching the specified criteria.
+        Retrieve a single item matching the provided criteria.
 
-        Args:
-            **kwargs: Field-value pairs used to identify the item.
+        Parameters:
+            **kwargs: Field lookups identifying the target record.
 
         Returns:
-            The matching GeneralManager or GroupManager instance.
-
-        Raises:
-            NotImplementedError: If the method is not implemented by a subclass.
+            GeneralManagerType | GroupManager[GeneralManagerType]: Matching item.
         """
         raise NotImplementedError
 
@@ -174,25 +182,23 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         | Bucket[GeneralManagerType]
     ):
         """
-        Retrieves an item or a slice from the bucket.
+        Retrieve an item or slice from the bucket.
 
-        Args:
-            item: An integer index to retrieve a single element, or a slice to retrieve a subset.
+        Parameters:
+            item (int | slice): Index or slice specifying the desired record(s).
 
         Returns:
-            A single manager instance if an integer is provided, or a new Bucket containing the sliced elements if a slice is provided.
-
-        Raises:
-            NotImplementedError: This method must be implemented by subclasses.
+            GeneralManagerType | GroupManager[GeneralManagerType] | Bucket[GeneralManagerType]: Resulting item or bucket slice.
         """
         raise NotImplementedError
 
     @abstractmethod
     def __len__(self) -> int:
         """
-        Returns the number of items in the bucket.
+        Return the number of items contained in the bucket.
 
-        Subclasses must implement this method to provide the count of contained elements.
+        Returns:
+            int: Count of elements.
         """
         raise NotImplementedError
 
@@ -201,11 +207,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         """
         Checks whether the specified item is present in the bucket.
 
-        Args:
-                item: The manager instance to check for membership.
+        Parameters:
+            item (GeneralManagerType): Manager instance evaluated for membership.
 
         Returns:
-                True if the item is contained in the bucket, otherwise False.
+            bool: True if the bucket contains the provided instance.
         """
         raise NotImplementedError
 
@@ -216,26 +222,26 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         reverse: bool = False,
     ) -> Bucket[GeneralManagerType]:
         """
-        Returns a new Bucket with items sorted by the specified key or keys.
+        Return a sorted bucket.
 
-        Args:
-            key: A string or tuple of strings specifying the attribute(s) to sort by.
-            reverse: If True, sorts in descending order. Defaults to False.
+        Parameters:
+            key (str | tuple[str, ...]): Attribute name(s) used for sorting.
+            reverse (bool): Whether to sort in descending order.
 
         Returns:
-            A new Bucket instance with items sorted according to the given key(s).
+            Bucket[GeneralManagerType]: Sorted bucket instance.
         """
         raise NotImplementedError
 
     def group_by(self, *group_by_keys: str) -> GroupBucket[GeneralManagerType]:
         """
-        Return a GroupBucket that groups the items in this bucket by the specified attribute keys.
-        
+        Materialise a grouped view of the bucket.
+
         Parameters:
-            *group_by_keys (str): Attribute names to group the items by.
-        
+            *group_by_keys (str): Attribute names used to form groups.
+
         Returns:
-            GroupBucket[GeneralManagerType]: A bucket containing items grouped by the given keys.
+            GroupBucket[GeneralManagerType]: Bucket grouping items by the provided keys.
         """
         from general_manager.bucket.groupBucket import GroupBucket
 
@@ -243,7 +249,13 @@ class Bucket(ABC, Generic[GeneralManagerType]):
 
     def none(self) -> Bucket[GeneralManagerType]:
         """
-        Raise NotImplementedError to indicate that subclasses must implement a method returning an empty bucket.
+        Return an empty bucket instance.
+
+        Returns:
+            Bucket[GeneralManagerType]: Empty bucket.
+
+        Raises:
+            NotImplementedError: Always raised by the base implementation; subclasses must provide a concrete version.
         """
         raise NotImplementedError(
             "The 'none' method is not implemented in the base Bucket class. "

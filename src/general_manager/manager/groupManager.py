@@ -1,3 +1,5 @@
+"""Utility manager that aggregates grouped GeneralManager data."""
+
 from __future__ import annotations
 from typing import (
     Type,
@@ -17,10 +19,7 @@ from general_manager.bucket.baseBucket import (
 
 
 class GroupManager(Generic[GeneralManagerType]):
-    """
-    This class is used to group the data of a GeneralManager.
-    It is used to create a new GeneralManager with the grouped data.
-    """
+    """Represent aggregated results for grouped GeneralManager records."""
 
     def __init__(
         self,
@@ -28,12 +27,29 @@ class GroupManager(Generic[GeneralManagerType]):
         group_by_value: dict[str, Any],
         data: Bucket[GeneralManagerType],
     ):
+        """
+        Initialise a grouped manager with the underlying bucket and grouping keys.
+
+        Parameters:
+            manager_class (type[GeneralManagerType]): Manager subclass whose records were grouped.
+            group_by_value (dict[str, Any]): Key values describing this group.
+            data (Bucket[GeneralManagerType]): Bucket of records belonging to the group.
+
+        Returns:
+            None
+        """
         self._manager_class = manager_class
         self._group_by_value = group_by_value
         self._data = data
         self._grouped_data: dict[str, Any] = {}
 
     def __hash__(self) -> int:
+        """
+        Return a stable hash based on the manager class, keys, and grouped data.
+
+        Returns:
+            int: Hash value combining class, keys, and data.
+        """
         return hash(
             (
                 self._manager_class,
@@ -43,6 +59,15 @@ class GroupManager(Generic[GeneralManagerType]):
         )
 
     def __eq__(self, other: object) -> bool:
+        """
+        Compare grouped managers by manager class, keys, and grouped data.
+
+        Parameters:
+            other (object): Object to compare against.
+
+        Returns:
+            bool: True when both grouped managers describe the same data.
+        """
         return (
             isinstance(other, self.__class__)
             and self._manager_class == other._manager_class
@@ -51,9 +76,21 @@ class GroupManager(Generic[GeneralManagerType]):
         )
 
     def __repr__(self) -> str:
+        """
+        Return a debug representation showing grouped keys and data.
+
+        Returns:
+            str: Debug string summarising the grouped manager.
+        """
         return f"{self.__class__.__name__}({self._manager_class}, {self._group_by_value}, {self._data})"
 
     def __iter__(self):
+        """
+        Iterate over attribute names and their aggregated values.
+
+        Yields:
+            tuple[str, Any]: Attribute name and aggregated value pairs.
+        """
         for attribute in self._manager_class.Interface.getAttributes().keys():
             yield attribute, getattr(self, attribute)
         for attribute, attr_value in self._manager_class.__dict__.items():
@@ -61,6 +98,18 @@ class GroupManager(Generic[GeneralManagerType]):
                 yield attribute, getattr(self, attribute)
 
     def __getattr__(self, item: str) -> Any:
+        """
+        Lazily compute aggregated attribute values when accessed.
+
+        Parameters:
+            item (str): Attribute name requested by the caller.
+
+        Returns:
+            Any: Aggregated value stored for the given attribute.
+
+        Raises:
+            AttributeError: If the attribute cannot be resolved from group data.
+        """
         if item in self._group_by_value:
             return self._group_by_value[item]
         if item not in self._grouped_data.keys():
@@ -68,6 +117,18 @@ class GroupManager(Generic[GeneralManagerType]):
         return self._grouped_data[item]
 
     def combineValue(self, item: str) -> Any:
+        """
+        Aggregate attribute values across the grouped records.
+
+        Parameters:
+            item (str): Name of the attribute to aggregate.
+
+        Returns:
+            Any: Aggregated value corresponding to `item`.
+
+        Raises:
+            AttributeError: If the attribute is not defined on the manager or property set.
+        """
         if item == "id":
             return None
 

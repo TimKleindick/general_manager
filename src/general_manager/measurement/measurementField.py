@@ -1,3 +1,5 @@
+"""Custom Django model field storing values as unit-aware measurements."""
+
 from __future__ import annotations
 
 from django.db import models
@@ -14,18 +16,27 @@ class MeasurementField(models.Field):
     empty_values = (None, "", [], (), {})
 
     def __init__(
-        self, base_unit: str, *args, null=False, blank=False, editable=True, **kwargs
-    ):
+        self,
+        base_unit: str,
+        *args,
+        null: bool = False,
+        blank: bool = False,
+        editable: bool = True,
+        **kwargs,
+    ) -> None:
         """
-        Initialize a MeasurementField to store a numeric value and its unit with unit-aware validation.
+        Configure a measurement field backed by separate value and unit columns.
 
         Parameters:
-            base_unit (str): The canonical unit for the measurement, used for conversions and validation.
-            null (bool, optional): Whether the field allows NULL values. Defaults to False.
-            blank (bool, optional): Whether the field allows blank values. Defaults to False.
-            editable (bool, optional): Whether the field is editable in forms and admin. Defaults to True.
+            base_unit (str): Canonical unit used when normalising stored measurements.
+            args (tuple): Positional arguments forwarded to the base `Field` implementation.
+            null (bool): If True, the measurement may be stored as NULL.
+            blank (bool): If True, forms may submit an empty value.
+            editable (bool): If False, assignments through the API raise a validation error.
+            kwargs (dict): Additional keyword arguments forwarded to the base `Field`.
 
-        The field internally manages a DecimalField for the value and a CharField for the unit, both configured according to the provided options.
+        Returns:
+            None
         """
         self.base_unit = base_unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
@@ -44,12 +55,20 @@ class MeasurementField(models.Field):
 
         super().__init__(*args, null=null, blank=blank, editable=editable, **kwargs)
 
-    def contribute_to_class(self, cls, name, private_only=False, **kwargs):
-        # Register myself first (so opts.get_field('height') works)
+    def contribute_to_class(
+        self, cls, name, private_only: bool = False, **kwargs
+    ) -> None:
         """
-        Registers the MeasurementField with the model class and attaches internal value and unit fields.
+        Attach the measurement field and its backing columns to a Django model.
 
-        This method sets up the composite field by creating and adding separate fields for the numeric value and unit to the model class, ensuring they are not duplicated. It also overrides the model attribute with the MeasurementField descriptor itself to manage access and assignment.
+        Parameters:
+            cls (type[models.Model]): Model class receiving the field.
+            name (str): Attribute name of the field on the model.
+            private_only (bool): Whether the field should be treated as private.
+            kwargs (dict): Additional options forwarded to the base implementation.
+
+        Returns:
+            None
         """
         super().contribute_to_class(cls, name, private_only=private_only, **kwargs)
         self.concrete = False
@@ -78,45 +97,62 @@ class MeasurementField(models.Field):
     # ---- ORM Delegation ----
     def get_col(self, alias, output_field=None):
         """
-        Returns a Django ORM column expression for the internal value field, enabling queries on the numeric part of the measurement.
+        Produce a column expression referencing the underlying value field.
+
+        Parameters:
+            alias (str): Table alias used within the query.
+            output_field (models.Field | None): Optional output field override.
+
+        Returns:
+            Col: ORM expression targeting the numeric component.
         """
         return Col(alias, self.value_field, output_field or self.value_field)  # type: ignore
 
     def get_lookup(self, lookup_name):
         """
-        Return the lookup class for the specified lookup name, delegating to the internal value field.
+        Retrieve a lookup class from the underlying decimal field.
 
         Parameters:
-                lookup_name (str): The name of the lookup to retrieve.
+            lookup_name (str): Name of the lookup to resolve.
 
         Returns:
-                The lookup class corresponding to the given name, as provided by the internal decimal value field.
+            type[models.Lookup]: Lookup class implementing the requested comparison.
         """
         return self.value_field.get_lookup(lookup_name)
 
     def get_transform(self, lookup_name) -> models.Transform | None:
         """
-        Delegates retrieval of a transform operation to the internal value field.
+        Return a transform callable provided by the underlying decimal field.
+
+        Parameters:
+            lookup_name (str): Name of the transform to resolve.
 
         Returns:
-            The transform corresponding to the given lookup name, or None if not found.
+            models.Transform | None: Transform class when available; otherwise None.
         """
         return self.value_field.get_transform(lookup_name)
 
     def db_type(self, connection) -> None:  # type: ignore
         """
-        Return None to indicate that MeasurementField does not correspond to a single database column.
+        Signal to Django that the field does not map to a single column.
 
-        This field manages its data using separate internal fields and does not require a direct database type.
+        Parameters:
+            connection (BaseDatabaseWrapper): Database connection used for schema generation.
+
+        Returns:
+            None
         """
         return None
 
     def run_validators(self, value: Measurement | None) -> None:
         """
-        Runs all validators on the provided Measurement value if it is not None.
+        Execute all configured validators when a measurement is provided.
 
         Parameters:
-            value (Measurement | None): The measurement to validate, or None to skip validation.
+            value (Measurement | None): Measurement instance that should satisfy field validators.
+
+        Returns:
+            None
         """
         if value is None:
             return
@@ -127,16 +163,17 @@ class MeasurementField(models.Field):
         self, value: Measurement | None, model_instance: models.Model | None = None
     ) -> Measurement | None:
         """
-        Validates and cleans a Measurement value for use in the model field.
-
-        Runs field-level validation and all configured validators on the provided value, returning it unchanged if valid.
+        Validate a measurement value before it is saved to the model.
 
         Parameters:
-            value (Measurement | None): The measurement value to validate and clean.
-            model_instance (models.Model | None): The model instance this value is associated with, if any.
+            value (Measurement | None): Measurement provided by forms or assignment.
+            model_instance (models.Model | None): Instance associated with the field, when available.
 
         Returns:
             Measurement | None: The validated measurement value, or None if the input was None.
+
+        Raises:
+            ValidationError: If validation fails due to null/blank constraints or validator errors.
         """
         self.validate(value, model_instance)
         self.run_validators(value)
@@ -144,23 +181,28 @@ class MeasurementField(models.Field):
 
     def to_python(self, value):
         """
-        Returns the input value unchanged.
+        Convert database values back into Python objects.
 
-        This method is required by Django custom fields to convert database values to Python objects, but no conversion is performed for this field.
+        Parameters:
+            value (Any): Value retrieved from the database.
+
+        Returns:
+            Any: Original value without modification.
         """
         return value
 
     def get_prep_value(self, value):
         """
-        Prepare a value for database storage by converting a Measurement to its decimal magnitude in the base unit.
+        Serialise a measurement for storage by converting it to the base unit magnitude.
 
-        If the input is a string, it is parsed into a Measurement. If the value cannot be converted to the base unit due to dimensionality mismatch, a ValidationError is raised. Only Measurement instances or None are accepted.
+        Parameters:
+            value (Measurement | str | None): Value provided by the model or form.
 
         Returns:
-            Decimal: The numeric value of the measurement in the base unit, or None if the input is None.
+            Decimal | None: Decimal magnitude in the base unit, or None when no value is supplied.
 
         Raises:
-            ValidationError: If the value is not a Measurement or cannot be converted to the base unit.
+            ValidationError: If the value cannot be interpreted as a compatible measurement.
         """
         if value is None:
             return None
@@ -182,12 +224,14 @@ class MeasurementField(models.Field):
         self, instance: models.Model | None, owner: None = None
     ) -> MeasurementField | Measurement | None:
         """
-        Retrieve the measurement value from the model instance, reconstructing it as a `Measurement` object with the stored unit.
+        Resolve the field value on an instance, reconstructing the measurement when possible.
+
+        Parameters:
+            instance (models.Model | None): Model instance owning the field, or None when accessed on the class.
+            owner (type[models.Model] | None): Model class owning the descriptor.
 
         Returns:
-            Measurement: The measurement with its original unit if both value and unit are present.
-            None: If either the value or unit is missing.
-            MeasurementField: If accessed from the class rather than an instance.
+            MeasurementField | Measurement | None: Descriptor when accessed on the class, reconstructed measurement for instances, or None when incomplete.
         """
         if instance is None:
             return self
@@ -204,9 +248,17 @@ class MeasurementField(models.Field):
 
     def __set__(self, instance, value):
         """
-        Assigns a measurement value to the model instance, validating type, unit compatibility, and editability.
+        Assign a measurement to the model instance after validating compatibility.
 
-        If the value is a string, attempts to parse it as a Measurement. Ensures the unit matches the expected base unit's dimensionality or currency status. Stores the numeric value (converted to the base unit) and the original unit string in the instance. Raises ValidationError if the value is invalid or incompatible.
+        Parameters:
+            instance (models.Model): Model instance receiving the value.
+            value (Measurement | str | None): Measurement value supplied by the caller.
+
+        Returns:
+            None
+
+        Raises:
+            ValidationError: If the field is not editable, the value is invalid, or the units are incompatible.
         """
         if not self.editable:
             raise ValidationError(f"{self.name} is not editable.")
@@ -253,10 +305,17 @@ class MeasurementField(models.Field):
         self, value: Measurement | None, model_instance: models.Model | None = None
     ) -> None:
         """
-        Validates a measurement value against null and blank constraints and applies all field validators.
+        Enforce null/blank constraints and run validators on the provided value.
+
+        Parameters:
+            value (Measurement | None): Measurement value under validation.
+            model_instance (models.Model | None): Instance owning the field; unused but provided for API compatibility.
+
+        Returns:
+            None
 
         Raises:
-            ValidationError: If the value is None and the field does not allow nulls, or if the value is blank and the field does not allow blanks, or if any validator fails.
+            ValidationError: If the value violates constraint or validator requirements.
         """
         if value is None:
             if not self.null:

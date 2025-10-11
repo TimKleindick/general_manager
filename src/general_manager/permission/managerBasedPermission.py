@@ -1,3 +1,5 @@
+"""Default permission implementation leveraging manager configuration."""
+
 from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Optional, Dict
 from general_manager.permission.basePermission import BasePermission
@@ -22,6 +24,7 @@ class notExistent:
 
 
 class ManagerBasedPermission(BasePermission):
+    """Permission implementation driven by class-level configuration lists."""
     __based_on__: Optional[str] = None
     __read__: list[str]
     __create__: list[str]
@@ -34,9 +37,11 @@ class ManagerBasedPermission(BasePermission):
         request_user: AbstractUser,
     ) -> None:
         """
-        Initializes the ManagerBasedPermission with a manager instance and the requesting user.
-        
-        Configures default CRUD permissions, collects attribute-specific permissions, and sets up any related "based on" permission for cascading checks.
+        Initialise the permission object and gather default and attribute-level rules.
+
+        Parameters:
+            instance (PermissionDataManager | GeneralManager): Target data used for permission evaluation.
+            request_user (AbstractUser): User whose permissions are being checked.
         """
         super().__init__(instance, request_user)
         self.__setPermissions()
@@ -51,12 +56,7 @@ class ManagerBasedPermission(BasePermission):
         }
 
     def __setPermissions(self, skip_based_on: bool = False) -> None:
-
-        """
-        Assigns default permission lists for CRUD actions based on the presence of a related permission attribute.
-        
-        If the permission is based on another attribute and `skip_based_on` is False, all default permissions are set to empty lists. Otherwise, read permissions default to `["public"]` and write permissions to `["isAuthenticated"]`. Class-level overrides are respected if present.
-        """
+        """Populate CRUD permissions using class-level defaults and overrides."""
         default_read = ["public"]
         default_write = ["isAuthenticated"]
 
@@ -71,14 +71,14 @@ class ManagerBasedPermission(BasePermission):
 
     def __getBasedOnPermission(self) -> Optional[BasePermission]:
         """
-        Retrieves the permission object associated with the `__based_on__` attribute, if present and valid.
-        
+        Retrieve the permission object referenced by ``__based_on__`` when configured.
+
         Returns:
-            An instance of the related `BasePermission` subclass if the `__based_on__` attribute exists on the instance and its `Permission` class is a subclass of `BasePermission`; otherwise, returns `None`.
-        
+            BasePermission | None: Permission instance for the related object, if applicable.
+
         Raises:
-            ValueError: If the `__based_on__` attribute is missing from the instance.
-            TypeError: If the `__based_on__` attribute is not a `GeneralManager` or its subclass.
+            ValueError: If the configured attribute does not exist on the instance.
+            TypeError: If the attribute does not resolve to a `GeneralManager`.
         """
         from general_manager.manager.generalManager import GeneralManager
 
@@ -115,6 +115,7 @@ class ManagerBasedPermission(BasePermission):
     def __getAttributePermissions(
         self,
     ) -> dict[str, dict[permission_type, list[str]]]:
+        """Collect attribute-level permission overrides defined on the class."""
         attribute_permissions = {}
         for attribute in self.__class__.__dict__:
             if not attribute.startswith("__"):
@@ -126,6 +127,16 @@ class ManagerBasedPermission(BasePermission):
         action: permission_type,
         attriubte: str,
     ) -> bool:
+        """
+        Determine whether the user has permission to perform ``action`` on ``attribute``.
+
+        Parameters:
+            action (permission_type): CRUD operation being evaluated.
+            attriubte (str): Attribute name subject to the permission check.
+
+        Returns:
+            bool: True when the action is permitted.
+        """
         if (
             self.__based_on_permission
             and not self.__based_on_permission.checkPermission(action, attriubte)
@@ -166,11 +177,7 @@ class ManagerBasedPermission(BasePermission):
         self,
         permissions: list[str],
     ) -> bool:
-        """
-        Return True if no permissions are required or if at least one permission string is valid for the user.
-        
-        If the permissions list is empty, access is granted. Otherwise, returns True if any permission string in the list is validated for the user; returns False if none are valid.
-        """
+        """Return True if any permission expression in the list evaluates to True."""
         if not permissions:
             return True
         for permission in permissions:
@@ -181,9 +188,7 @@ class ManagerBasedPermission(BasePermission):
     def getPermissionFilter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
-        """
-        Returns the filter for the permission
-        """
+        """Return queryset filters inferred from class-level permission configuration."""
         __based_on__ = getattr(self, "__based_on__")
         filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
 
