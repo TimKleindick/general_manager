@@ -1,0 +1,133 @@
+site_name: GeneralManager
+site_description: Modular Django-based framework (ORM, GraphQL, Permissions, Units)
+site_url: https://timkleindick.github.io/general_manager/
+repo_name: TimKleindick/general_manager
+repo_url: https://github.com/TimKleindick/general_manager
+
+theme:
+  name: material
+  logo: images/logo.svg
+  favicon: images/logo.svg
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: light mode
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.inlinehilite
+  - pymdownx.critic
+  - pymdownx.snippets
+  - pymdownx.magiclink
+  - attr_list
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - awesome-pages
+  - section-index
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_source: false
+            docstring_style: google
+            separate_signature: true
+            show_root_heading: true
+            members_order: source
+  - git-revision-date-localized:
+      type: date
+      fallback_to_build_date: true
+  - minify:
+      minify_html: true
+  - glightbox
+
+nav:
+  - Overview:
+      - index.md
+      - quickstart.md
+      - installation.md
+      - roadmap.md
+      - faq.md
+  - Concepts:
+      - GeneralManager (Core):
+          - concepts/index.md
+          - concepts/architecture.md
+          - concepts/models_entities.md
+          - concepts/caching.md
+          - concepts/rules_validation.md
+      - Measurement & Currency:
+          - concepts/measurement/index.md
+          - concepts/measurement/units_currency.md
+          - concepts/measurement/field_design.md
+          - concepts/measurement/filtering_sorting.md
+      - Permissions (ABAC):
+          - concepts/permission/index.md
+          - concepts/permission/manager_based_permission.md
+          - concepts/permission/object_level.md
+          - concepts/permission/examples.md
+      - Interfaces:
+          - concepts/interfaces/index.md
+          - concepts/interfaces/db_based_interface.md
+          - concepts/interfaces/computed_data_interfaces.md
+          - concepts/interfaces/dependency_graph.md
+      - GraphQL:
+          - concepts/graphql/index.md
+          - concepts/graphql/schema_autogen.md
+          - concepts/graphql/filters_pagination.md
+          - concepts/graphql/security.md
+      - Factories & Testing:
+          - concepts/factories/index.md
+          - concepts/factories/performance_caching.md
+          - concepts/factories/validation_clean.md
+  - Tutorials:
+      - howto/index.md
+      - howto/create_project.md
+      - howto/add_model_with_measurement.md
+      - howto/add_permission_rule.md
+      - howto/expose_via_graphql.md
+      - howto/cache_dependent_calculation.md
+      - howto/write_custom_interface.md
+      - howto/factory_bulk_generate.md
+      - howto/testing_guides.md
+      - howto/migrations_gotchas.md
+  - Examples (Cookbook):
+      - examples/index.md
+      - examples/project_volume_curve.md
+      - examples/nested_set_bom.md
+      - examples/derivatives_groups.md
+      - examples/graphql_queries.md
+      - examples/permission_patterns.md
+  - API-Reference:
+      - api/core.md
+      - api/measurement.md
+      - api/interface.md
+      - api/permission.md
+  - Architecture & Operations:
+      - ops/index.md
+      - ops/settings.md
+      - ops/docker_compose.md
+      - ops/celery_redis_health.md
+      - ops/observability.md
+      - ops/security_hardening.md
+      - ops/ci_cd.md
