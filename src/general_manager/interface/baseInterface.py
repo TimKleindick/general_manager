@@ -11,6 +11,7 @@ from typing import (
     ClassVar,
     Callable,
     TypedDict,
+    cast,
 )
 from datetime import datetime
 from django.conf import settings
@@ -56,11 +57,12 @@ class AttributeTypedDict(TypedDict):
 
 class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
+
     _parent_class: Type[GeneralManager]
     _interface_type: ClassVar[str]
     input_fields: dict[str, Input]
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
         Construct the interface using the supplied identification arguments.
 
@@ -93,8 +95,10 @@ class InterfaceBase(ABC):
             TypeError: If required inputs are missing, unexpected inputs are provided, or a value fails type checking.
             ValueError: If circular dependencies prevent resolution of the inputs.
         """
-        identification = {}
-        kwargs = args_to_kwargs(args, self.input_fields.keys(), kwargs)
+        identification: dict[str, Any] = {}
+        kwargs = cast(
+            dict[str, Any], args_to_kwargs(args, self.input_fields.keys(), kwargs)
+        )
         # Check for extra arguments
         extra_args = set(kwargs.keys()) - set(self.input_fields.keys())
         if extra_args:
@@ -109,7 +113,7 @@ class InterfaceBase(ABC):
             raise TypeError(f"Missing required arguments: {', '.join(missing_args)}")
 
         # process input fields with dependencies
-        processed = set()
+        processed: set[str] = set()
         while len(processed) < len(self.input_fields):
             progress_made = False
             for name, input_field in self.input_fields.items():

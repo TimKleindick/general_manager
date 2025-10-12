@@ -25,6 +25,7 @@ class notExistent:
 
 class ManagerBasedPermission(BasePermission):
     """Permission implementation driven by class-level configuration lists."""
+
     __based_on__: Optional[str] = None
     __read__: list[str]
     __create__: list[str]
@@ -194,9 +195,9 @@ class ManagerBasedPermission(BasePermission):
 
         if self.__based_on_permission is not None:
             base_permissions = self.__based_on_permission.getPermissionFilter()
-            for permission in base_permissions:
-                filter = permission.get("filter", {})
-                exclude = permission.get("exclude", {})
+            for base_permission in base_permissions:
+                filter = base_permission.get("filter", {})
+                exclude = base_permission.get("exclude", {})
                 filters.append(
                     {
                         "filter": {

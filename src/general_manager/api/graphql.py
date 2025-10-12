@@ -1,7 +1,7 @@
 """GraphQL schema utilities for exposing GeneralManager models via Graphene."""
 
 from __future__ import annotations
-import graphene
+import graphene  # type: ignore[import]
 from typing import (
     Any,
     Callable,
@@ -123,7 +123,7 @@ class GraphQL:
             generalManagerClass, "Interface", None
         )
         if not interface_cls:
-            return
+            return None
 
         default_return_values = {
             "success": graphene.Boolean(),
@@ -161,7 +161,7 @@ class GraphQL:
             generalManagerClass, "Interface", None
         )
         if not interface_cls:
-            return
+            return None
 
         graphene_type_name = f"{generalManagerClass.__name__}Type"
         fields: dict[str, Any] = {}
@@ -338,7 +338,7 @@ class GraphQL:
         if graphene_filter_type_name in GraphQL.graphql_filter_type_registry:
             return GraphQL.graphql_filter_type_registry[graphene_filter_type_name]
 
-        filter_fields = {}
+        filter_fields: dict[str, Any] = {}
         for attr_name, attr_info in field_type.Interface.getAttributeTypes().items():
             attr_type = attr_info["type"]
             filter_fields = {
@@ -745,7 +745,7 @@ class GraphQL:
             )
 
         if not hasattr(cls, "_query_fields"):
-            cls._query_fields: dict[str, Any] = {}
+            cls._query_fields = cast(dict[str, Any], {})
 
         # resolver and field for the list query
         list_field_name = f"{generalManagerClass.__name__.lower()}_list"
@@ -872,7 +872,7 @@ class GraphQL:
             generalManagerClass, "Interface", None
         )
         if not interface_cls:
-            return
+            return None
 
         def create_mutation(
             self,
@@ -943,7 +943,7 @@ class GraphQL:
             generalManagerClass, "Interface", None
         )
         if not interface_cls:
-            return
+            return None
 
         def update_mutation(
             self,
@@ -1020,7 +1020,7 @@ class GraphQL:
             generalManagerClass, "Interface", None
         )
         if not interface_cls:
-            return
+            return None
 
         def delete_mutation(
             self,

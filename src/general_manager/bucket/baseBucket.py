@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class Bucket(ABC, Generic[GeneralManagerType]):
     """Abstract interface for lazily evaluated GeneralManager collections."""
 
-    def __init__(self, manager_class: Type[GeneralManagerType]):
+    def __init__(self, manager_class: Type[GeneralManagerType]) -> None:
         """
         Create a bucket bound to a specific manager class.
 
@@ -34,9 +34,9 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             None
         """
         self._manager_class = manager_class
-        self._data = None
-        self.excludes = {}
-        self.filters = {}
+        self._data: Any = None
+        self.excludes: dict[str, Any] = {}
+        self.filters: dict[str, Any] = {}
 
     def __eq__(self, other: object) -> bool:
         """

@@ -80,7 +80,7 @@ class Rule(Generic[GeneralManagerType]):
         # 4) Register handlers
         self._handlers = {}  # type: Dict[str, BaseRuleHandler]
         for cls in (LenHandler, MaxHandler, MinHandler, SumHandler):
-            inst = cls()
+            inst: BaseRuleHandler = cls()
             self._handlers[inst.function_name] = inst
         for path in getattr(settings, "RULE_HANDLERS", []):
             handler_cls: type[BaseRuleHandler] = import_string(path)
@@ -284,6 +284,8 @@ class Rule(Generic[GeneralManagerType]):
         return {v: f"{combo} combination is not valid" for v in self._variables}
 
     def _get_op_symbol(self, op: Optional[ast.cmpop]) -> str:
+        if op is None:
+            return "?"
         return {
             ast.Lt: "<",
             ast.LtE: "<=",

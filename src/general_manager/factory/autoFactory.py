@@ -37,7 +37,6 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Returns:
             models.Model | list[models.Model]: Generated instance(s) matching the requested strategy.
         """
-        cls._original_params = params
         model = cls._meta.model
         if not issubclass(model, models.Model):
             raise ValueError("Model must be a type")

@@ -8,7 +8,7 @@ from general_manager.manager.generalManager import GeneralManager
 class CustomJSONEncoder(json.JSONEncoder):
     """Serialise complex objects that appear within GeneralManager payloads."""
 
-    def default(self, o):
+    def default(self, o: object) -> object:
         """
         Convert unsupported objects into JSON-friendly representations.
 

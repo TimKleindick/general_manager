@@ -26,7 +26,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         filter_definitions: dict[str, list[Any]] | None = None,
         exclude_definitions: dict[str, list[Any]] | None = None,
-    ):
+    ) -> None:
         """
         Instantiate a database-backed bucket with optional filter state.
 
@@ -106,7 +106,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             kwarg_filter[key].append(value)
         return kwarg_filter
 
-    def __parseFilterDeifintions(self, **kwargs: Any):
+    def __parseFilterDeifintions(
+        self,
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], dict[str, list[Any]], list[tuple[str, Any, str]]]:
         """
         Separate ORM-compatible filters from Python-side property filters.
 
@@ -408,7 +411,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if python_keys:
             objs = list(qs)
 
-            def key_func(obj):
+            def key_func(obj: models.Model) -> tuple[object, ...]:
                 inst = self._manager_class(obj.pk)
                 values = []
                 for k in key:
@@ -437,7 +440,6 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         return self.__class__(qs, self._manager_class)
 
-
     def none(self) -> DatabaseBucket[GeneralManagerType]:
         """
         Return an empty bucket sharing the same manager class.
@@ -448,4 +450,3 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         own = self.all()
         own._data = own._data.none()
         return own
-

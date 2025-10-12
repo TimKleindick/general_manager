@@ -1,13 +1,7 @@
 """Utility manager that aggregates grouped GeneralManager data."""
 
 from __future__ import annotations
-from typing import (
-    Type,
-    Any,
-    Generic,
-    get_args,
-    cast,
-)
+from typing import Any, Generic, Iterator, Type, cast, get_args
 from datetime import datetime, date, time
 from general_manager.api.graphql import GraphQLProperty
 from general_manager.measurement import Measurement
@@ -26,7 +20,7 @@ class GroupManager(Generic[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         group_by_value: dict[str, Any],
         data: Bucket[GeneralManagerType],
-    ):
+    ) -> None:
         """
         Initialise a grouped manager with the underlying bucket and grouping keys.
 
@@ -84,7 +78,7 @@ class GroupManager(Generic[GeneralManagerType]):
         """
         return f"{self.__class__.__name__}({self._manager_class}, {self._group_by_value}, {self._data})"
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
         """
         Iterate over attribute names and their aggregated values.
 
@@ -132,9 +126,9 @@ class GroupManager(Generic[GeneralManagerType]):
         if item == "id":
             return None
 
-        data_type = (
-            self._manager_class.Interface.getAttributeTypes().get(item, {}).get("type")
-        )
+        attribute_types = self._manager_class.Interface.getAttributeTypes()
+        attr_info = attribute_types.get(item)
+        data_type = attr_info["type"] if attr_info else None
         if data_type is None and item in self._manager_class.__dict__:
             attr_value = self._manager_class.__dict__[item]
             if isinstance(attr_value, GraphQLProperty):
@@ -144,7 +138,7 @@ class GroupManager(Generic[GeneralManagerType]):
                     if type_hints
                     else cast(type, attr_value.graphql_type_hint)
                 )
-        if data_type is None:
+        if data_type is None or not isinstance(data_type, type):
             raise AttributeError(f"{self.__class__.__name__} has no attribute {item}")
 
         total_data = []

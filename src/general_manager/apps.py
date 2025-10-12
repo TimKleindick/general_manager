@@ -1,17 +1,17 @@
 from __future__ import annotations
 from django.apps import AppConfig
-import graphene
+import graphene  # type: ignore[import]
 import os
 from django.conf import settings
 from django.urls import path
-from graphene_django.views import GraphQLView
+from graphene_django.views import GraphQLView  # type: ignore[import]
 from importlib import import_module
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty
 from general_manager.api.graphql import GraphQL
-from typing import TYPE_CHECKING, Type, Any, cast
+from typing import TYPE_CHECKING, Type, cast
 from django.core.checks import register
 import logging
 from django.core.management.base import BaseCommand
@@ -27,7 +27,7 @@ class GeneralmanagerConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "general_manager"
 
-    def ready(self):
+    def ready(self) -> None:
         """
         Performs initialization tasks for the general_manager app when Django starts.
 
@@ -44,10 +44,10 @@ class GeneralmanagerConfig(AppConfig):
     @staticmethod
     def handleReadOnlyInterface(
         read_only_classes: list[Type[GeneralManager]],
-    ):
+    ) -> None:
         """
         Configures synchronization and schema validation for the given read-only GeneralManager classes.
-        
+
         For each provided class, ensures that its data is synchronized before any Django management command executes, and registers a system check to verify that the associated schema remains up to date.
         """
         GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
@@ -69,17 +69,20 @@ class GeneralmanagerConfig(AppConfig):
     @staticmethod
     def patchReadOnlyInterfaceSync(
         general_manager_classes: list[Type[GeneralManager]],
-    ):
+    ) -> None:
         """
         Monkey-patches Django's management command runner to synchronize all provided read-only interfaces before executing any management command, except during autoreload subprocesses of 'runserver'.
-        
+
         For each class in `general_manager_classes`, the associated read-only interface's `syncData` method is called prior to command execution, ensuring data consistency before management operations.
         """
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
         original_run_from_argv = BaseCommand.run_from_argv
 
-        def run_from_argv_with_sync(self, argv):
+        def run_from_argv_with_sync(
+            self: BaseCommand,
+            argv: list[str],
+        ) -> None:
             # Ensure syncData is only called at real run of runserver
             """
             Executes a Django management command, synchronizing all registered read-only interfaces before execution unless running in an autoreload subprocess of 'runserver'.
@@ -102,15 +105,16 @@ class GeneralmanagerConfig(AppConfig):
 
                 logger.debug("finished syncing ReadOnlyInterface data.")
 
-            return original_run_from_argv(self, argv)
+            result = original_run_from_argv(self, argv)
+            return result
 
-        BaseCommand.run_from_argv = run_from_argv_with_sync
+        setattr(BaseCommand, "run_from_argv", run_from_argv_with_sync)
 
     @staticmethod
     def initializeGeneralManagerClasses(
         pending_attribute_initialization: list[Type[GeneralManager]],
         all_classes: list[Type[GeneralManager]],
-    ):
+    ) -> None:
         """
         Initializes attributes and establishes dynamic relationships for GeneralManager classes.
 
@@ -150,7 +154,7 @@ class GeneralmanagerConfig(AppConfig):
     @staticmethod
     def handleGraphQL(
         pending_graphql_interfaces: list[Type[GeneralManager]],
-    ):
+    ) -> None:
         """
         Creates GraphQL interfaces and mutations for the provided general manager classes, builds the GraphQL schema, and registers the GraphQL endpoint in the Django URL configuration.
         """
@@ -166,7 +170,10 @@ class GeneralmanagerConfig(AppConfig):
             mutation_class = type(
                 "Mutation",
                 (graphene.ObjectType,),
-                {name: mutation.Field() for name, mutation in GraphQL._mutations.items()},
+                {
+                    name: mutation.Field()
+                    for name, mutation in GraphQL._mutations.items()
+                },
             )
             GraphQL._mutation_class = mutation_class
             schema = graphene.Schema(
@@ -179,7 +186,7 @@ class GeneralmanagerConfig(AppConfig):
         GeneralmanagerConfig.addGraphqlUrl(schema)
 
     @staticmethod
-    def addGraphqlUrl(schema):
+    def addGraphqlUrl(schema: graphene.Schema) -> None:
         """
         Adds a GraphQL endpoint to the Django URL configuration using the provided schema.
 
@@ -203,7 +210,7 @@ class GeneralmanagerConfig(AppConfig):
         )
 
     @staticmethod
-    def checkPermissionClass(general_manager_class: Type[GeneralManager]):
+    def checkPermissionClass(general_manager_class: Type[GeneralManager]) -> None:
         """
         Checks if the class has a Permission attribute and if it is a subclass of BasePermission.
         If so, it sets the Permission attribute on the class.

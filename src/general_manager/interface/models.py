@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar
 from django.db import models
+from django.contrib.auth.models import AbstractUser
 from django.conf import settings
 from simple_history.models import HistoricalRecords  # type: ignore
 from django.core.exceptions import ValidationError
@@ -10,7 +11,6 @@ from django.core.exceptions import ValidationError
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
-    from django.contrib.auth.models import AbstractUser
     from general_manager.rule.rule import Rule
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
@@ -29,7 +29,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
         Callable[..., None]: A `full_clean` method that can be assigned to the model class.
     """
 
-    def full_clean(self: models.Model, *args: Any, **kwargs: Any):
+    def full_clean(self: models.Model, *args: Any, **kwargs: Any) -> None:
         """
         Performs full validation on the model instance, including both standard Django validation and custom rule-based checks.
 
@@ -56,6 +56,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
 
 class GeneralManagerBasisModel(models.Model):
     """Abstract base model providing shared fields for GeneralManager storage."""
+
     _general_manager_class: ClassVar[Type[GeneralManager]]
     is_active = models.BooleanField(default=True)
     history = HistoricalRecords(inherit=True)
@@ -66,6 +67,7 @@ class GeneralManagerBasisModel(models.Model):
 
 class GeneralManagerModel(GeneralManagerBasisModel):
     """Abstract model adding change-tracking metadata for writeable managers."""
+
     changed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
     )
@@ -79,14 +81,14 @@ class GeneralManagerModel(GeneralManagerBasisModel):
         return self.changed_by
 
     @_history_user.setter
-    def _history_user(self, value: AbstractUser) -> None:
+    def _history_user(self, value: AbstractUser | None) -> None:
         """
         Set the user responsible for the most recent change to the model instance.
 
         Parameters:
             value (AbstractUser): The user to associate with the latest modification.
         """
-        self.changed_by = value
+        setattr(self, "changed_by", value)
 
     class Meta:  # type: ignore
         abstract = True

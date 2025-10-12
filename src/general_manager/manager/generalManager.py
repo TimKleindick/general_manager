@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Type, Any, TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Any, Iterator, Self, Type
 from general_manager.manager.meta import GeneralManagerMeta
 
 from general_manager.api.property import GraphQLProperty
@@ -9,13 +9,15 @@ from general_manager.bucket.baseBucket import Bucket
 
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission
+    from general_manager.interface.baseInterface import InterfaceBase
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
     Permission: Type[BasePermission]
     _attributes: dict[str, Any]
+    Interface: Type["InterfaceBase"]
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
         Instantiate the manager by delegating to the interface and record its identification.
 
@@ -94,7 +96,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """Return the identification dictionary used to fetch the managed object."""
         return self.__id
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
         """Iterate over attribute names and resolved values for the managed object."""
         for key, value in self._attributes.items():
             if callable(value):
@@ -244,7 +246,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Returns:
             dict[str, Any] | None: Mapping with managers substituted by identification dictionaries, or None if no substitutions occurred.
         """
-        output = {}
+        output: dict[str, Any] = {}
         for key, value in kwargs.items():
             if isinstance(value, GeneralManager):
                 output[key] = value.identification

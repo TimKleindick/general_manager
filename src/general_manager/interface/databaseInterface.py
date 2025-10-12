@@ -16,6 +16,7 @@ from django.db.models import NOT_PROVIDED
 
 class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     """CRUD-capable interface backed by a concrete Django model."""
+
     _interface_type = "database"
 
     @classmethod
@@ -153,7 +154,9 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         return instance
 
     @staticmethod
-    def _checkForInvalidKwargs(model: Type[models.Model], kwargs: dict[str, Any]):
+    def _checkForInvalidKwargs(
+        model: Type[models.Model], kwargs: dict[str, Any]
+    ) -> None:
         """
         Ensure provided keyword arguments map to known fields or attributes.
 

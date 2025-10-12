@@ -11,6 +11,7 @@ from general_manager.permission.utils import validatePermissionString
 
 class MutationPermission:
     """Evaluate mutation permissions using class-level configuration."""
+
     __mutate__: list[str]
 
     def __init__(
@@ -23,7 +24,7 @@ class MutationPermission:
             data (dict[str, Any]): Input payload for the mutation.
             request_user (AbstractUser | AnonymousUser): User attempting the mutation.
         """
-        self._data = PermissionDataManager(data)
+        self._data: PermissionDataManager = PermissionDataManager(data)
         self._request_user = request_user
         self.__attribute_permissions = self.__getAttributePermissions()
 

@@ -1,31 +1,30 @@
 """Test utilities for GeneralManager GraphQL integrations."""
 
-from graphene_django.utils.testing import GraphQLTransactionTestCase
-from general_manager.apps import GeneralmanagerConfig
-from importlib import import_module
-from django.db import connection
-from django.conf import settings
-from typing import cast
-from django.db import models
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.api.graphql import GraphQL
-from django.apps import apps as global_apps
 from contextlib import suppress
+from importlib import import_module
+from typing import Any, Callable, cast
 
-
-from unittest.mock import ANY
-from general_manager.cache.cacheDecorator import _SENTINEL
-
-
-from django.test import override_settings
+from django.apps import AppConfig, apps as global_apps
+from django.conf import settings
 from django.core.cache import caches
 from django.core.cache.backends.locmem import LocMemCache
+from django.db import connection, models
+from django.test import override_settings
+from graphene_django.utils.testing import GraphQLTransactionTestCase  # type: ignore[import]
+from unittest.mock import ANY
 
-_original_get_app = global_apps.get_containing_app_config
+from general_manager.api.graphql import GraphQL
+from general_manager.apps import GeneralmanagerConfig
+from general_manager.cache.cacheDecorator import _SENTINEL
+from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
+
+_original_get_app: Callable[[str], AppConfig | None] = (
+    global_apps.get_containing_app_config
+)
 
 
-def createFallbackGetApp(fallback_app: str):
+def createFallbackGetApp(fallback_app: str) -> Callable[[str], AppConfig | None]:
     """
     Create an app-config lookup that falls back to a specific Django app.
 
@@ -36,7 +35,7 @@ def createFallbackGetApp(fallback_app: str):
         Callable[[str], Any]: Function returning either the resolved configuration or the fallback app configuration when available.
     """
 
-    def _fallback_get_app(object_name: str):
+    def _fallback_get_app(object_name: str) -> AppConfig | None:
         cfg = _original_get_app(object_name)
         if cfg is not None:
             return cfg
@@ -48,7 +47,7 @@ def createFallbackGetApp(fallback_app: str):
     return _fallback_get_app
 
 
-def _default_graphql_url_clear():
+def _default_graphql_url_clear() -> None:
     """
     Remove the default GraphQL URL pattern from Django's root URL configuration.
 
@@ -74,7 +73,12 @@ class GMTestCaseMeta(type):
     then performs GM environment initialization, then super().setUpClass().
     """
 
-    def __new__(mcs, name, bases, attrs):
+    def __new__(
+        mcs: type["GMTestCaseMeta"],
+        name: str,
+        bases: tuple[type, ...],
+        attrs: dict[str, object],
+    ) -> type:
         """
         Construct a new test case class that wires GeneralManager-specific initialisation into `setUpClass`.
 
@@ -87,11 +91,13 @@ class GMTestCaseMeta(type):
             type: Newly constructed class with an augmented `setUpClass` implementation.
         """
         user_setup = attrs.get("setUpClass")
-        fallback_app = attrs.get("fallback_app", "general_manager")
+        fallback_app = cast(str | None, attrs.get("fallback_app", "general_manager"))
         # MERKE dir das echte GraphQLTransactionTestCase.setUpClass
         base_setup = GraphQLTransactionTestCase.setUpClass
 
-        def wrapped_setUpClass(cls):
+        def wrapped_setUpClass(
+            cls: type["GeneralManagerTransactionTestCase"],
+        ) -> None:
             """
             Prepare the test harness with GeneralManager-specific setup prior to executing tests.
 
@@ -111,13 +117,21 @@ class GMTestCaseMeta(type):
             GraphQL.graphql_filter_type_registry = {}
 
             if fallback_app is not None:
-                global_apps.get_containing_app_config = createFallbackGetApp(
-                    fallback_app
+                setattr(
+                    global_apps,
+                    "get_containing_app_config",
+                    createFallbackGetApp(fallback_app),
                 )
 
             # 1) user-defined setUpClass (if any)
             if user_setup:
-                user_setup.__func__(cls)
+                if isinstance(user_setup, classmethod):
+                    user_setup.__func__(cls)
+                else:
+                    cast(
+                        Callable[[type["GeneralManagerTransactionTestCase"]], None],
+                        user_setup,
+                    )(cls)
             # 2) clear URL patterns
             _default_graphql_url_clear()
             # 3) register models & create tables
@@ -150,21 +164,17 @@ class GMTestCaseMeta(type):
 class LoggingCache(LocMemCache):
     """An in-memory cache backend that records its get and set operations."""
 
-    def __init__(self, *args, **kwargs):
-        """
-        Instantiate the cache backend and initialise the operation log.
+    def __init__(self, location: str, params: dict[str, Any]) -> None:
+        """Initialise the cache backend and the operation log store."""
+        super().__init__(location, params)
+        self.ops: list[tuple[str, object, bool] | tuple[str, object]] = []
 
-        Parameters:
-            args (tuple): Positional arguments forwarded to `LocMemCache`.
-            kwargs (dict): Keyword arguments forwarded to `LocMemCache`.
-
-        Returns:
-            None
-        """
-        super().__init__(*args, **kwargs)
-        self.ops = []
-
-    def get(self, key, default=None, version=None):
+    def get(
+        self,
+        key: str,
+        default: object = None,
+        version: int | None = None,
+    ) -> object:
         """
         Retrieve a value from the cache and record whether it was a hit or miss.
 
@@ -180,7 +190,13 @@ class LoggingCache(LocMemCache):
         self.ops.append(("get", key, val is not _SENTINEL))
         return val
 
-    def set(self, key, value, timeout=None, version=None):
+    def set(
+        self,
+        key: str,
+        value: object,
+        timeout: int | None = None,
+        version: int | None = None,
+    ) -> None:
         """
         Store a value in the cache and append the operation to the log.
 
@@ -222,7 +238,7 @@ class GeneralManagerTransactionTestCase(
             None
         """
         super().setUp()
-        setattr(caches._connections, "default", LoggingCache("test-cache", {}))  # type: ignore
+        setattr(caches._connections, "default", LoggingCache("test-cache", {}))  # type: ignore[attr-defined]
         self.__resetCacheCounter()
 
     @classmethod
@@ -283,12 +299,12 @@ class GeneralManagerTransactionTestCase(
         ]
 
         # reset fallback app lookup
-        global_apps.get_containing_app_config = _original_get_app
+        setattr(global_apps, "get_containing_app_config", _original_get_app)
 
         super().tearDownClass()
 
     #
-    def assertCacheMiss(self):
+    def assertCacheMiss(self) -> None:
         """
         Assert that a cache retrieval missed and was followed by a write.
 
@@ -297,7 +313,8 @@ class GeneralManagerTransactionTestCase(
         Returns:
             None
         """
-        ops = getattr(caches["default"], "ops")
+        cache_backend = cast(LoggingCache, caches["default"])
+        ops = cache_backend.ops
         self.assertIn(
             ("get", ANY, False),
             ops,
@@ -306,7 +323,7 @@ class GeneralManagerTransactionTestCase(
         self.assertIn(("set", ANY), ops, "Cache.set should have stored the value")
         self.__resetCacheCounter()
 
-    def assertCacheHit(self):
+    def assertCacheHit(self) -> None:
         """
         Assert that a cache lookup succeeded without triggering a write.
 
@@ -315,7 +332,8 @@ class GeneralManagerTransactionTestCase(
         Returns:
             None
         """
-        ops = getattr(caches["default"], "ops")
+        cache_backend = cast(LoggingCache, caches["default"])
+        ops = cache_backend.ops
         self.assertIn(
             ("get", ANY, True),
             ops,
@@ -329,11 +347,11 @@ class GeneralManagerTransactionTestCase(
         )
         self.__resetCacheCounter()
 
-    def __resetCacheCounter(self):
+    def __resetCacheCounter(self) -> None:
         """
         Clear the log of cache operations recorded by the LoggingCache instance.
 
         Returns:
             None
         """
-        caches["default"].ops = []  # type: ignore
+        cast(LoggingCache, caches["default"]).ops = []
