@@ -2,6 +2,87 @@
 
 <!-- version list -->
 
+## v0.15.0 (2025-10-12)
+
+### Bug Fixes
+
+- Avoid zero-arg super() inside the nested helper.
+  ([`521e511`](https://github.com/TimKleindick/general_manager/commit/521e511916aa3ca47a8b76edbffe7e15a5d38db7))
+
+- Enforce JSON data type validation in ReadOnlyInterface
+  ([`3432f56`](https://github.com/TimKleindick/general_manager/commit/3432f567e4358313f6bd72938fea58eca2d51279))
+
+- Improve random value generation in LazyMeasurement and handle date range in LazyDateBetween and
+  LazyDateTimeBetween
+  ([`4c20389`](https://github.com/TimKleindick/general_manager/commit/4c20389adb308c2b2eee227676dcf7c00c0598e9))
+
+- Lazy-loading public API utilities and update module exports
+  ([`bd169a1`](https://github.com/TimKleindick/general_manager/commit/bd169a1d276404e3d5c19b38f3c688cec9152a5c))
+
+- Refactor and enhance type hints across the GeneralManager module
+  ([`41149de`](https://github.com/TimKleindick/general_manager/commit/41149dee92253e505b65d115a0f85a29f6b0dc39))
+
+- Remove redundant docstring and unused imports in measurement module
+  ([`e9f2d81`](https://github.com/TimKleindick/general_manager/commit/e9f2d8121390b9ed829edff71e720b26ff4ffcd0))
+
+- Rename 'admin' permission to 'isAdmin' and add 'isSelf' permission check
+  ([`0a51970`](https://github.com/TimKleindick/general_manager/commit/0a51970f4aea7610b6cd7ac96cf8780d01b3d963))
+
+- Simplify source extraction in Rule class constructor
+  ([`a7cf2ac`](https://github.com/TimKleindick/general_manager/commit/a7cf2ac7d0cfc84cec63c62e256491cce0942809))
+
+### Continuous Integration
+
+- Add Codecov configuration for coverage reporting
+  ([`f0942b5`](https://github.com/TimKleindick/general_manager/commit/f0942b55656f0289ca95ce2fb9fa2338132ffab9))
+
+- Add GitHub Actions workflow for publishing and releasing the project
+  ([`d4d6aa9`](https://github.com/TimKleindick/general_manager/commit/d4d6aa982abbf0099ecbaea73ad7c8d3e36c97f5))
+
+- Add GitHub Actions workflow for testing with Python
+  ([`97ae011`](https://github.com/TimKleindick/general_manager/commit/97ae011af78345d9c4a5a9dc0a76790d5b92c312))
+
+- Remove unused target parameter from Codecov configuration
+  ([`999ab53`](https://github.com/TimKleindick/general_manager/commit/999ab53555d3d7e18f8d936bde90909fb90e6723))
+
+- Update Codecov action to version 5.5.1
+  ([`cba447f`](https://github.com/TimKleindick/general_manager/commit/cba447fc5bc77372a59b79a5db0917900d87953b))
+
+- Update Codecov action to version 5.5.1
+  ([`ec2f747`](https://github.com/TimKleindick/general_manager/commit/ec2f7475fd066ef4f70ef6957d1f02c8f2e0fd90))
+
+### Documentation
+
+- Add logo.svg and mkdocs configuration for documentation
+  ([`7c82605`](https://github.com/TimKleindick/general_manager/commit/7c82605d2e27aaf422461f9eba250c9f1a4a79c7))
+
+- Init mkdocs documentation
+  ([`570bb94`](https://github.com/TimKleindick/general_manager/commit/570bb949c185f85bb0ca730afe9ccd47a3478ddf))
+
+- Update docstrings for every function
+  ([`ceca046`](https://github.com/TimKleindick/general_manager/commit/ceca04652a648dd68dc94cb4620629f95571f861))
+
+- Update license description in README.md to reflect MIT License
+  ([`504469e`](https://github.com/TimKleindick/general_manager/commit/504469e9fb6ffc1dbded77136a1c3097cf3201ce))
+
+- Update type hints for ClassVar in GeneralManagerMeta
+  ([`f22fddf`](https://github.com/TimKleindick/general_manager/commit/f22fddffc5576fac03302e78b4b9b2b8d143f42d))
+
+### Features
+
+- Add easier core components and utilities imports for GeneralManager, including API, bucket, cache,
+  factory, interface, measurement, permission, rule, and utility modules
+  ([`5e76383`](https://github.com/TimKleindick/general_manager/commit/5e7638364834e73f954c91389ddae891b24fe97d))
+
+### Testing
+
+- Add UTC timezone to old date in DBBasedInterfaceTestCase and update docstrings for clarity
+  ([`f7f0266`](https://github.com/TimKleindick/general_manager/commit/f7f0266b2487370a519c8abb55adc708242e37cc))
+
+- Update permission checks from 'admin' to 'isAdmin' in CustomManagerBasedPermission classes
+  ([`4a5dfd9`](https://github.com/TimKleindick/general_manager/commit/4a5dfd9bbce0a29d566fb5c3a552068ca7e77236))
+
+
 ## v0.14.1 (2025-10-04)
 
 ### Bug Fixes
