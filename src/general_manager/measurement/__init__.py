@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 """Public API for measurement utilities."""
-"""Measurement helpers exposed for convenience."""
 
 
 from importlib import import_module
@@ -38,7 +37,3 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(list(globals().keys()) + __all__)
-
-
-from .measurement import Measurement
-from .measurementField import MeasurementField
