@@ -97,7 +97,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 getattr(obj, field.name).set(m2m_values)
 
     @classmethod
-    def _adjust_kwargs(cls, **kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
         """
         Remove many-to-many keys from kwargs prior to model instantiation.
 
@@ -115,7 +115,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _create(
-        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], *args: Any, **kwargs: Any
     ) -> models.Model | list[models.Model]:
         """
         Create and save model instance(s), applying adjustment hooks when defined.
@@ -135,7 +135,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _build(
-        cls, model_class: Type[models.Model], *args: list[Any], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], *args: Any, **kwargs: Any
     ) -> models.Model | list[models.Model]:
         """
         Build (without saving) model instance(s), applying adjustment hooks when defined.
@@ -157,7 +157,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _modelCreation(
-        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], **kwargs: Any
     ) -> models.Model:
         """
         Instantiate, validate, and save a model instance.
@@ -178,7 +178,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _modelBuilding(
-        cls, model_class: Type[models.Model], **kwargs: dict[str, Any]
+        cls, model_class: Type[models.Model], **kwargs: Any
     ) -> models.Model:
         """Construct an unsaved model instance with the provided field values."""
         obj = model_class()
