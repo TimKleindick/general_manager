@@ -24,7 +24,7 @@ def LazyMeasurement(
         unit (str): Measurement unit.
     """
     return LazyFunction(
-        lambda: Measurement(str(random.uniform(min_value, max_value))[:10], unit)
+        lambda: Measurement(f"{random.uniform(min_value, max_value):.6f}", unit)
     )
 
 
@@ -61,6 +61,9 @@ def LazyDateToday() -> LazyFunction:
 def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
     """Return a lazy attribute producing dates within the supplied range."""
     delta = (end_date - start_date).days
+    if delta < 0:
+        start_date, end_date = end_date, start_date
+        delta = -delta
     return LazyAttribute(
         lambda obj: start_date + timedelta(days=random.randint(0, delta))
     )
@@ -69,6 +72,9 @@ def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
 def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
     """Return a lazy attribute producing datetimes within the supplied range."""
     span = (end - start).total_seconds()
+    if span < 0:
+        start, end = end, start
+        span = -span
     return LazyAttribute(
         lambda obj: start + timedelta(seconds=random.randint(0, int(span)))
     )
