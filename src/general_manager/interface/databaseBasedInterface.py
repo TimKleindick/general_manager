@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic, cast
 from django.db import models
 
-from datetime import datetime, timedelta
+from datetime import datetime, date, time, timedelta
+from django.utils import timezone
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
 from decimal import Decimal
@@ -46,7 +47,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     def __init__(
         self,
-        *args: list[Any],
+        *args: Any,
         search_date: datetime | None = None,
         **kwargs: Any,
     ) -> None:
@@ -73,14 +74,18 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             search_date (datetime | None): When provided, retrieve the state closest to this timestamp.
 
         Returns:
-            GeneralManagerBasisModel: Current or historical instance matching the primary key.
+            MODEL_TYPE: Current or historical instance matching the primary key.
         """
         model = self._model
         instance = cast(MODEL_TYPE, model.objects.get(pk=self.pk))
-        if search_date and not search_date > datetime.now() - timedelta(seconds=5):
-            historical = self.getHistoricalRecord(instance, search_date)
-            if historical is not None:
-                instance = historical
+        if search_date is not None:
+            # Normalize to aware datetime if needed
+            if timezone.is_naive(search_date):
+                search_date = timezone.make_aware(search_date)
+            if search_date <= timezone.now() - timedelta(seconds=5):
+                historical = self.getHistoricalRecord(instance, search_date)
+                if historical is not None:
+                    instance = historical
         return instance
 
     @staticmethod

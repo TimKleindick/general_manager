@@ -174,7 +174,7 @@ def generate_volume_distribution(years: int, total_volume: float) -> list[float]
     return cast(list[float], volumes.tolist())
 
 
-def generateVolume(**kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+def generateVolume(**kwargs: Any) -> list[dict[str, Any]]:
     """
     Generates a list of derivative volume records distributed across the years of a project's duration.
 

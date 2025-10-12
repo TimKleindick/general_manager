@@ -79,7 +79,7 @@ class InterfaceBase(ABC):
     def parseInputFieldsToIdentification(
         self,
         *args: Any,
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """
         Parse raw arguments into a validated identification mapping.
