@@ -8,129 +8,89 @@
 
 ## Overview
 
-GeneralManager is a powerful and flexible framework designed for managing and processing data. It provides a modular structure that enables developers to implement complex business logic efficiently. The module is written entirely in Python and uses Django as the backend framework.
+GeneralManager helps teams ship complex, data-driven products on top of Django without rewriting the same plumbing for every project. It combines domain modelling, GraphQL APIs, calculations, and permission logic in one toolkit so that you can focus on business rules instead of infrastructure.
+
+## Documentation
+
+The full documentation, is published on GitHub Pages: [GeneralManager Documentation](https://timkleindick.github.io/general_manager/). It covers tutorials, concept guides, API reference, and examples.
 
 ## Key Features
 
-### 1. **Data Management**
-- **Flexibility**: Supports managing all kinds of data, not just projects and derivatives.
-- **Database Integration**: Seamless integration with the Django ORM for database operations.
-- **External Interfaces**: Support for interfaces to other programs, such as Excel.
+- **Domain-first modelling**: Describe rich business entities in plain Python and let GeneralManager project them onto the Django ORM.
+- **GraphQL without boilerplate**: Generate a complete API, then extend it with custom queries and mutations when needed.
+- **Attribute-based access control**: Enforce permissions with `ManagerBasedPermission` down to single fields and operations.
+- **Deterministic calculations**: Ship reusable interfaces e.g. for volume distributions, KPI calculations, and derived data.
+- **Factory-powered testing**: Create large, realistic datasets quickly for demos, QA, and load tests.
+- **Composable interfaces**: Connect to databases, spreadsheets, or computed sources with the same consistent abstractions.
 
-### 2. **Data Modeling**
-- **Django Models**: The data structure is based on Django models, extended by custom fields like `MeasurementField`.
-- **Rules and Validations**: Define rules for data validation, e.g., ensuring that a project's start date is before its end date.
-
-### 3. **GraphQL Integration**
-- Automatic generation of GraphQL interfaces for all models.
-- Support for custom queries and mutations.
-
-### 4. **Permission System**
-- **ManagerBasedPermission**: A flexible permission system based on user roles and attributes.
-- Attribute-level CRUD permissions.
-
-### 5. **Interfaces**
-- **CalculationInterface**: Allows the implementation of calculation logic.
-- **DatabaseInterface**: Provides a standardized interface for database operations.
-- **ReadOnlyInterface**: For read-only data access.
-
-### 6. **Data Distribution and Calculations**
-- **Volume Distribution**: Automatically calculates and distributes volume over multiple years.
-- **Commercial Calculations**: Calculates total volume, shipping costs, and revenue for projects.
-
-## Usage
+## Quick Start
 
 ### Installation
 
-Install the module via `pip`:
+Install the package from PyPI:
 
 ```bash
 pip install GeneralManager
 ```
 
-### Example Code
-
-The following example demonstrates how to create a GeneralManager and generate sample data (in this case 10 projects):
+### Minimal example
 
 ```python
+from datetime import date
+from typing import Optional
+
+from django.db.models import CharField, DateField
+
 from general_manager import GeneralManager
 from general_manager.interface.database import DatabaseInterface
-from general_manager.measurement import MeasurementField, Measurement
+from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission import ManagerBasedPermission
+
 
 class Project(GeneralManager):
     name: str
     start_date: Optional[date]
     end_date: Optional[date]
     total_capex: Optional[Measurement]
-    derivative_list: DatabaseBucket[Derivative]
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=50)
-        number = CharField(max_length=7, validators=[RegexValidator(r"^AP\d{4,5}$")])
-        description = TextField(null=True, blank=True)
         start_date = DateField(null=True, blank=True)
         end_date = DateField(null=True, blank=True)
         total_capex = MeasurementField(base_unit="EUR", null=True, blank=True)
 
-        class Meta:
-            constraints = [
-                constraints.UniqueConstraint(
-                    fields=["name", "number"], name="unique_booking"
-                )
-            ]
-
-            rules = [
-                Rule["Project"](
-                    lambda x: cast(date, x.start_date) < cast(date, x.end_date)
-                ),
-                Rule["Project"](lambda x: cast(Measurement, x.total_capex) >= "0 EUR"),
-            ]
-
-        class Factory:
-            name = LazyProjectName()
-            end_date = LazyDeltaDate(365 * 6, "start_date")
-            total_capex = LazyMeasurement(75_000, 1_000_000, "EUR")
-
     class Permission(ManagerBasedPermission):
-        __read__ = ["ends_with:name:X-771", "public"]
-        __create__ = ["admin", "isMatchingKeyAccount"]
-        __update__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
-        __delete__ = ["admin", "isMatchingKeyAccount", "isProjectTeamMember"]
+        __read__ = ["public"]
+        __create__ = ["isAdmin"]
+        __update__ = ["isAdmin"]
 
-        total_capex = {"update": ["isSalesResponsible", "isProjectManager"]}
 
 Project.Factory.createBatch(10)
 ```
 
-### GraphQL Integration
+The example above defines a project model, exposes it through the auto-generated GraphQL schema, and produces ten sample records with a single call. The full documentation walks through extending this setup with custom rules, interfaces, and queries.
 
-The module automatically generates GraphQL endpoints for all models. You can run queries and mutations through the GraphQL URL defined in your Django settings.
+## Core Building Blocks
 
-Example of a GraphQL query:
+- **Entities & interfaces**: Compose domain entities with database-backed or computed interfaces to control persistence and data flows.
+- **Rules & validation**: Protect your data with declarative constraints and business rules that run automatically.
+- **Permissions**: Implement attribute-based access control with reusable policies that match your organisation’s roles.
+- **GraphQL layer**: Serve a typed schema that mirrors your models and stays in sync as you iterate.
+- **Caching & calculations**: Use the built-in caching decorator and calculation helpers to keep derived data fast and reliable.
 
-```graphql
-query {
-  projectList {
-    name
-    startDate
-    endDate
-    totalCapex {
-      value
-      unit
-    }
-  }
-}
-```
+## Production-Ready Extras
 
-## Benefits
+- Works with Postgres, SQLite, and any database supported by Django.
+- Plays nicely with CI thanks to deterministic factories, typing, and code coverage.
+- Ships with MkDocs documentation, auto-generated API reference, and a growing cookbook of recipes.
+- Designed for teams: opinionated defaults without blocking custom extensions or overrides.
 
-- **Modularity**: Easy to extend and adapt.
-- **Flexibility**: Supports complex business logic and calculations.
-- **Integration**: Seamless integration with Django and GraphQL.
-- **Permissions**: Fine-grained permissions for users and attributes.
-- **Data Validation**: Automatic validation of data through rules and constraints.
-- **Caching**: Automatic cache generation with the `@cached` decorator to improve performance.
+## Use Cases
+
+- Internal tooling that mirrors real-world workflows, pricing models, or asset hierarchies.
+- Customer-facing platforms that combine transactional data with live calculations.
+- Analytics products that need controlled data sharing between teams or clients.
+- Proof-of-concept projects that must scale into production without a rewrite.
 
 ## Requirements
 
