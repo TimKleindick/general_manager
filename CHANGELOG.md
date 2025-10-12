@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.15.1 (2025-10-12)
+
+### Bug Fixes
+
+- Update GitPython version to 3.1.44 in requirements
+  ([`615b388`](https://github.com/TimKleindick/general_manager/commit/615b388f3067571430fa328a5741cf669bb5d07b))
+
+### Continuous Integration
+
+- Add missing installation of development requirements in workflow
+  ([`32caf7a`](https://github.com/TimKleindick/general_manager/commit/32caf7a62d649810836b65c710917f9f991cf3a6))
+
+
 ## v0.15.0 (2025-10-12)
 
 ### Bug Fixes
