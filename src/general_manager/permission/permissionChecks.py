@@ -51,9 +51,13 @@ permission_functions: dict[str, PermissionDict] = {
             "filter": {f"{config[0]}__endswith": config[1]}
         },
     },
-    "admin": {
+    "isAdmin": {
         "permission_method": lambda instance, user, config: user.is_staff,
         "permission_filter": lambda user, config: None,
+    },
+    "isSelf": {
+        "permission_method": lambda instance, user, config: instance.creator == user,  # type: ignore
+        "permission_filter": lambda user, config: {"filter": {"creator_id": user.id}},  # type: ignore
     },
     "isAuthenticated": {
         "permission_method": lambda instance, user, config: user.is_authenticated,
