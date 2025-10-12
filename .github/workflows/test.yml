@@ -39,4 +39,5 @@ jobs:
         with:
           files: coverage.xml
           flags: unittests
+          target: base
           fail_ci_if_error: true
