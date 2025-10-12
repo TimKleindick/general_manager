@@ -86,7 +86,7 @@ class GeneralManagerMeta(type):
             new_class (Type[GeneralManager]): Class receiving the generated descriptors.
         """
 
-        def desciptorMethod(
+        def descriptorMethod(
             attr_name: str,
             new_class: type,
         ) -> object:
@@ -124,4 +124,4 @@ class GeneralManagerMeta(type):
             return Descriptor(attr_name, cast(Type[Any], new_class))
 
         for attr_name in attributes:
-            setattr(new_class, attr_name, desciptorMethod(attr_name, new_class))
+            setattr(new_class, attr_name, descriptorMethod(attr_name, new_class))
