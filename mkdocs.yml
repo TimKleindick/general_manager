@@ -49,12 +49,18 @@ plugins:
       default_handler: python
       handlers:
         python:
+          paths:
+            - .
+            - src
+          load_external_modules:
+            - docs.api._django_setup
           options:
             show_source: false
             docstring_style: google
             separate_signature: true
             show_root_heading: true
             members_order: source
+            allow_inspection: true
   - git-revision-date-localized:
       type: date
       fallback_to_build_date: true
@@ -123,11 +129,3 @@ nav:
       - api/measurement.md
       - api/interface.md
       - api/permission.md
-  - Architecture & Operations:
-      - ops/index.md
-      - ops/settings.md
-      - ops/docker_compose.md
-      - ops/celery_redis_health.md
-      - ops/observability.md
-      - ops/security_hardening.md
-      - ops/ci_cd.md
