@@ -41,17 +41,17 @@ class CustomManagerBasedPermission(ManagerBasedPermission):
     __based_on__: Optional[str] = "manager"
     __read__: list[str] = ["public"]
     __create__: list[str] = ["isAuthenticated"]
-    __update__: list[str] = ["admin"]
-    __delete__: list[str] = ["isAuthenticated&admin"]
+    __update__: list[str] = ["isAdmin"]
+    __delete__: list[str] = ["isAuthenticated&isAdmin"]
 
     # Test attribute-specific permissions
     specific_attribute: Dict[
         Literal["create", "read", "update", "delete"], list[str]
     ] = {
-        "create": ["admin"],
+        "create": ["isAdmin"],
         "read": ["public"],
-        "update": ["admin"],
-        "delete": ["admin"],
+        "update": ["isAdmin"],
+        "delete": ["isAdmin"],
     }
 
 
@@ -61,8 +61,8 @@ class CustomManagerBasedPermissionNoBasis(ManagerBasedPermission):
     __based_on__: Optional[str] = None
     __read__: list[str] = ["public"]
     __create__: list[str] = ["isAuthenticated"]
-    __update__: list[str] = ["admin"]
-    __delete__: list[str] = ["isAuthenticated&admin"]
+    __update__: list[str] = ["isAdmin"]
+    __delete__: list[str] = ["isAuthenticated&isAdmin"]
 
 
 class ManagerBasedPermissionTests(TestCase):
@@ -124,16 +124,16 @@ class ManagerBasedPermissionTests(TestCase):
 
         self.assertIn("specific_attribute", attribute_permissions)
         self.assertEqual(
-            attribute_permissions["specific_attribute"]["create"], ["admin"]
+            attribute_permissions["specific_attribute"]["create"], ["isAdmin"]
         )
         self.assertEqual(
             attribute_permissions["specific_attribute"]["read"], ["public"]
         )
         self.assertEqual(
-            attribute_permissions["specific_attribute"]["update"], ["admin"]
+            attribute_permissions["specific_attribute"]["update"], ["isAdmin"]
         )
         self.assertEqual(
-            attribute_permissions["specific_attribute"]["delete"], ["admin"]
+            attribute_permissions["specific_attribute"]["delete"], ["isAdmin"]
         )
 
     def test_check_permission_read_with_public_access(self):
@@ -278,7 +278,7 @@ class ManagerBasedPermissionTests(TestCase):
         with patch.object(
             CustomManagerBasedPermission,
             "validatePermissionString",
-            side_effect=lambda x: x == "admin",
+            side_effect=lambda x: x == "isAdmin",
         ) as mock_validate:
 
             # First call should call validatePermissionString
