@@ -12,7 +12,7 @@ GeneralManager helps teams ship complex, data-driven products on top of Django w
 
 ## Documentation
 
-The full documentation, is published on GitHub Pages: [GeneralManager Documentation](https://timkleindick.github.io/general_manager/). It covers tutorials, concept guides, API reference, and examples.
+The full documentation is published on GitHub Pages: [GeneralManager Documentation](https://timkleindick.github.io/general_manager/). It covers tutorials, concept guides, API reference, and examples.
 
 ## Key Features
 
