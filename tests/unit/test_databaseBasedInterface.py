@@ -3,7 +3,7 @@
 from django.test import TransactionTestCase
 from django.db import connection
 from django.contrib.auth.models import User
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from django.db import models
@@ -673,7 +673,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
             mock_hist.assert_not_called()
 
         # Test with very old date
-        old_date = datetime(1900, 1, 1)
+        old_date = datetime(1900, 1, 1, tzinfo=UTC)
         with patch.object(
             PersonInterface, "getHistoricalRecord", return_value=None
         ) as mock_hist:

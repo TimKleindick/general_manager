@@ -21,7 +21,7 @@ class FakeInstance:
         # initialisiere alle übergebenen Attribute
         """
         Initialize a fake instance with dynamic attributes.
-        
+
         All keyword arguments are set as attributes on the instance. The instance is marked as active and not yet saved.
         """
         for k, v in kwargs.items():
@@ -47,12 +47,12 @@ class FakeManager:
         # Suche nach bestehendem Objekt
         """
         Return an existing instance matching the given lookup parameters, or create and return a new one.
-        
+
         Parameters:
-        	lookup: Arbitrary keyword arguments used to match instance attributes.
-        
+                lookup: Arbitrary keyword arguments used to match instance attributes.
+
         Returns:
-        	A tuple of (instance, created), where `instance` is the found or newly created FakeInstance, and `created` is True if a new instance was created, False otherwise.
+                A tuple of (instance, created), where `instance` is the found or newly created FakeInstance, and `created` is True if a new instance was created, False otherwise.
         """
         for inst in self._instances:
             if all(getattr(inst, k) == v for k, v in lookup.items()):
@@ -66,7 +66,7 @@ class FakeManager:
         # nur aktive Instanzen
         """
         Return a list of active instances managed by this manager.
-        
+
         Returns:
             List of instances where `is_active` is True.
         """
@@ -246,7 +246,7 @@ class SyncDataTests(SimpleTestCase):
         Test that syncData raises a ValueError when _data is neither a string nor a list.
         """
         DummyManager._data = 123  # weder str noch list
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaises(TypeError) as cm:
             DummyInterface.syncData()
         self.assertIn("_data must be a JSON string or a list", str(cm.exception))
 
@@ -285,7 +285,7 @@ class SyncDataTests(SimpleTestCase):
         # Setup: schon ein Eintrag a vorhanden
         """
         Tests that syncData creates new instances, updates existing ones, and does not deactivate any when all input data matches active instances.
-        
+
         Verifies that:
         - Existing instances are updated with new data.
         - New instances are created for unmatched input.
@@ -332,7 +332,7 @@ class DecoratorTests(SimpleTestCase):
             # setze eine Marke
             """
             Marks the given class to indicate that the post hook has been called.
-            
+
             Parameters:
                 new_cls: The class to be marked.
                 interface_cls: The interface class associated with the hook.
@@ -351,6 +351,7 @@ class DecoratorTests(SimpleTestCase):
         """
         Tests that the readOnlyPreCreate decorator delegates to the original function and sets the base model class to ReadOnlyModel.
         """
+
         def pre_hook(name, attrs, interface, base_model_class=None):
             return (name, attrs, interface, base_model_class)
 
