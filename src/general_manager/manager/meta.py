@@ -51,9 +51,7 @@ class GeneralManagerMeta(type):
             attrs: dict[str, Any],
         ) -> Type["GeneralManager"]:
             """Helper to instantiate the class via the default ``type.__new__``."""
-            return cast(
-                Type["GeneralManager"], super().__new__(mcs, name, bases, attrs)
-            )
+            return cast(Type["GeneralManager"], type.__new__(mcs, name, bases, attrs))
 
         if "Interface" in attrs:
             interface = attrs.pop("Interface")
