@@ -1,7 +1,7 @@
 """Input field metadata used by GeneralManager interfaces."""
 
 from __future__ import annotations
-from typing import Iterable, Optional, Callable, List, TypeVar, Generic, Any
+from typing import Iterable, Optional, Callable, List, TypeVar, Generic, Any, Type, cast
 import inspect
 
 from general_manager.manager.generalManager import GeneralManager
@@ -20,7 +20,7 @@ class Input(Generic[INPUT_TYPE]):
         type: INPUT_TYPE,
         possible_values: Optional[Callable | Iterable] = None,
         depends_on: Optional[List[str]] = None,
-    ):
+    ) -> None:
         """
         Create an Input specification with type information, allowed values, and dependency metadata.
 
@@ -29,7 +29,7 @@ class Input(Generic[INPUT_TYPE]):
             possible_values (Callable | Iterable | None): Allowed values as an iterable or callable returning allowed values.
             depends_on (list[str] | None): Names of other inputs required for computing possible values.
         """
-        self.type = type
+        self.type: Type[Any] = cast(Type[Any], type)
         self.possible_values = possible_values
         self.is_manager = issubclass(type, GeneralManager)
 

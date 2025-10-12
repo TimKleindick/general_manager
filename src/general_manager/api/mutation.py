@@ -2,16 +2,20 @@
 
 import inspect
 from typing import (
-    get_type_hints,
+    Callable,
     Optional,
+    TypeVar,
     Union,
     List,
     Tuple,
     get_origin,
     get_args,
     Type,
+    get_type_hints,
+    cast,
 )
-import graphene
+import graphene  # type: ignore[import]
+from graphql import GraphQLResolveInfo
 
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.generalManager import GeneralManager
@@ -21,7 +25,13 @@ from typing import TypeAliasType
 from general_manager.permission.mutationPermission import MutationPermission
 
 
-def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] = None):
+FuncT = TypeVar("FuncT", bound=Callable[..., object])
+
+
+def graphQlMutation(
+    _func: FuncT | type[MutationPermission] | None = None,
+    permission: Optional[Type[MutationPermission]] = None,
+) -> FuncT | Callable[[FuncT], FuncT]:
     """
     Decorator that converts a function into a GraphQL mutation class for use with Graphene, automatically generating argument and output fields from the function's signature and type annotations.
 
@@ -41,7 +51,7 @@ def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] =
         permission = _func
         _func = None
 
-    def decorator(fn):
+    def decorator(fn: FuncT) -> FuncT:
         """
         Transform ``fn`` into a Graphene-compatible mutation class.
 
@@ -134,7 +144,11 @@ def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] =
             )
 
         # Define mutate method
-        def _mutate(root, info, **kwargs):
+        def _mutate(
+            root: object,
+            info: GraphQLResolveInfo,
+            **kwargs: object,
+        ) -> graphene.Mutation:
             """
             Execute the mutation resolver, enforcing permissions and formatting output.
 
@@ -187,5 +201,5 @@ def graphQlMutation(_func=None, permission: Optional[Type[MutationPermission]] =
         return fn
 
     if _func is not None and inspect.isfunction(_func):
-        return decorator(_func)
+        return decorator(cast(FuncT, _func))
     return decorator

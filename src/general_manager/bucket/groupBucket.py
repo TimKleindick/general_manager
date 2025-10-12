@@ -6,7 +6,6 @@ from typing import (
     Generator,
     Any,
 )
-import json
 from general_manager.manager.groupManager import GroupManager
 from general_manager.bucket.baseBucket import (
     Bucket,
@@ -22,7 +21,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         group_by_keys: tuple[str, ...],
         data: Bucket[GeneralManagerType],
-    ):
+    ) -> None:
         """
         Build a grouping bucket from the provided base data.
 
@@ -41,8 +40,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
         super().__init__(manager_class)
         self.__checkGroupByArguments(group_by_keys)
         self._group_by_keys = group_by_keys
-        self._data = self.__buildGroupedManager(data)
-        self._basis_data = data
+        self._data: list[GroupManager[GeneralManagerType]] = self.__buildGroupedManager(
+            data
+        )
+        self._basis_data: Bucket[GeneralManagerType] = data
 
     def __eq__(self, other: object) -> bool:
         """
@@ -104,7 +105,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             key = tuple((arg, getattr(entry, arg)) for arg in self._group_by_keys)
             group_by_values.add(key)
 
-        groups = []
+        groups: list[GroupManager[GeneralManagerType]] = []
         for group_by_value in sorted(group_by_values, key=str):
             group_by_dict = {key: value for key, value in group_by_value}
             grouped_manager_objects = data.filter(**group_by_dict)

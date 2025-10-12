@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from django.conf import settings
-from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar, Iterable
+from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar, Iterable, cast
 from general_manager.interface.baseInterface import InterfaceBase
 
 if TYPE_CHECKING:
@@ -20,13 +20,19 @@ class _nonExistent:
 
 class GeneralManagerMeta(type):
     """Metaclass responsible for wiring GeneralManager interfaces and registries."""
+
     all_classes: list[Type[GeneralManager]] = []
     read_only_classes: list[Type[GeneralManager]] = []
     pending_graphql_interfaces: list[Type[GeneralManager]] = []
     pending_attribute_initialization: list[Type[GeneralManager]] = []
     Interface: type[InterfaceBase]
 
-    def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
+    def __new__(
+        mcs: type["GeneralManagerMeta"],
+        name: str,
+        bases: tuple[type, ...],
+        attrs: dict[str, Any],
+    ) -> type:
         """
         Create a new GeneralManager subclass and register its interface hooks.
 
@@ -40,10 +46,15 @@ class GeneralManagerMeta(type):
         """
 
         def createNewGeneralManagerClass(
-            mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]
-        ) -> Type[GeneralManager]:
+            mcs: type["GeneralManagerMeta"],
+            name: str,
+            bases: tuple[type, ...],
+            attrs: dict[str, Any],
+        ) -> Type["GeneralManager"]:
             """Helper to instantiate the class via the default ``type.__new__``."""
-            return super().__new__(mcs, name, bases, attrs)
+            return cast(
+                Type["GeneralManager"], super().__new__(mcs, name, bases, attrs)
+            )
 
         if "Interface" in attrs:
             interface = attrs.pop("Interface")
@@ -69,7 +80,7 @@ class GeneralManagerMeta(type):
     @staticmethod
     def createAtPropertiesForAttributes(
         attributes: Iterable[str], new_class: Type[GeneralManager]
-    ):
+    ) -> None:
         """
         Attach descriptor-based properties for each attribute declared on the interface.
 
@@ -78,37 +89,42 @@ class GeneralManagerMeta(type):
             new_class (Type[GeneralManager]): Class receiving the generated descriptors.
         """
 
-        def desciptorMethod(attr_name: str, new_class: type):
+        def desciptorMethod(
+            attr_name: str,
+            new_class: type,
+        ) -> object:
             """Create a descriptor that resolves attribute values from the interface at runtime."""
 
-            class Descriptor(Generic[GeneralManagerType]):
-                def __init__(self, attr_name: str, new_class: Type[GeneralManager]):
-                    self.attr_name = attr_name
-                    self.new_class = new_class
+            class Descriptor:
+                def __init__(
+                    self, descriptor_attr_name: str, descriptor_class: Type[Any]
+                ) -> None:
+                    self._attr_name = descriptor_attr_name
+                    self._class = descriptor_class
 
                 def __get__(
                     self,
-                    instance: GeneralManagerType | None,
+                    instance: Any | None,
                     owner: type | None = None,
-                ):
+                ) -> Any:
                     """Return the field type on the class or the stored value on an instance."""
                     if instance is None:
-                        return self.new_class.Interface.getFieldType(self.attr_name)
-                    attribute = instance._attributes.get(attr_name, _nonExistent)
+                        return self._class.Interface.getFieldType(self._attr_name)
+                    attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
                         raise AttributeError(
-                            f"{self.attr_name} not found in {instance.__class__.__name__}"
+                            f"{self._attr_name} not found in {instance.__class__.__name__}"
                         )
                     if callable(attribute):
                         try:
                             attribute = attribute(instance._interface)
                         except Exception as e:
                             raise AttributeError(
-                                f"Error calling attribute {self.attr_name}: {e}"
+                                f"Error calling attribute {self._attr_name}: {e}"
                             ) from e
                     return attribute
 
-            return Descriptor(attr_name, new_class)
+            return Descriptor(attr_name, cast(Type[Any], new_class))
 
         for attr_name in attributes:
             setattr(new_class, attr_name, desciptorMethod(attr_name, new_class))

@@ -1,10 +1,12 @@
 """Context manager utilities for tracking cache dependencies per thread."""
 
 import threading
+from types import TracebackType
+
 from general_manager.cache.dependencyIndex import (
-    general_manager_name,
     Dependency,
     filter_type,
+    general_manager_name,
 )
 
 # Thread-local storage for tracking dependencies
@@ -29,7 +31,12 @@ class DependencyTracker:
         _dependency_storage.dependencies.append(set())
         return _dependency_storage.dependencies[_dependency_storage._depth]
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """
         Leave the dependency tracking context and perform nested-scope cleanup.
 
@@ -46,7 +53,7 @@ class DependencyTracker:
                 self.reset_thread_local_storage()
 
             else:
-                # Ansonsten reduzieren wir nur die Tiefe
+                # For nested contexts only reduce depth and pop one level.
                 _dependency_storage._depth -= 1
                 _dependency_storage.dependencies.pop()
 
@@ -71,7 +78,6 @@ class DependencyTracker:
             for dep_set in _dependency_storage.dependencies[
                 : _dependency_storage._depth + 1
             ]:
-                dep_set: set[Dependency]
                 dep_set.add((class_name, operation, identifier))
 
     @staticmethod

@@ -9,7 +9,7 @@ import logging
 from django.core.cache import cache
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.dispatch import receiver
-from typing import Literal, Any, Iterable, TYPE_CHECKING, Type, Tuple
+from typing import Literal, Any, Iterable, TYPE_CHECKING, Type, Tuple, cast
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
@@ -77,11 +77,12 @@ def get_full_index() -> dependency_index:
     Returns:
         dependency_index: Mapping of tracked filters and excludes keyed by manager name.
     """
-    idx = cache.get(INDEX_KEY, None)
-    if idx is None:
+    cached_index = cache.get(INDEX_KEY, None)
+    if cached_index is None:
         idx: dependency_index = {"filter": {}, "exclude": {}}
         cache.set(INDEX_KEY, idx, None)
-    return idx
+        return idx
+    return cast(dependency_index, cached_index)
 
 
 def set_full_index(idx: dependency_index) -> None:
@@ -134,8 +135,9 @@ def record_dependencies(
         idx = get_full_index()
         for model_name, action, identifier in dependencies:
             if action in ("filter", "exclude"):
+                action_key = cast(Literal["filter", "exclude"], action)
                 params = ast.literal_eval(identifier)
-                section = idx[action].setdefault(model_name, {})
+                section = idx[action_key].setdefault(model_name, {})
                 for lookup, val in params.items():
                     lookup_map = section.setdefault(lookup, {})
                     val_key = repr(val)
@@ -214,7 +216,9 @@ def invalidate_cache_key(cache_key: str) -> None:
 
 @receiver(pre_data_change)
 def capture_old_values(
-    sender: Type[GeneralManager], instance: GeneralManager | None, **kwargs
+    sender: Type[GeneralManager],
+    instance: GeneralManager | None,
+    **kwargs: object,
 ) -> None:
     """
     Cache the field values referenced by tracked filters before an update.
@@ -237,16 +241,16 @@ def capture_old_values(
         lookups |= set(idx.get(action, {}).get(manager_name, {}))
     if lookups and instance.identification:
         # save old values for later comparison
-        vals = {}
+        vals: dict[str, object] = {}
         for lookup in lookups:
             attr_path = lookup.split("__")
-            obj = instance
+            current: object = instance
             for i, attr in enumerate(attr_path):
-                if getattr(obj, attr, UNDEFINED) is UNDEFINED:
+                if getattr(current, attr, UNDEFINED) is UNDEFINED:
                     lookup = "__".join(attr_path[:i])
                     break
-                obj = getattr(obj, attr, None)
-            vals[lookup] = obj
+                current = getattr(current, attr, None)
+            vals[lookup] = current
         setattr(instance, "_old_values", vals)
 
 
@@ -255,8 +259,8 @@ def generic_cache_invalidation(
     sender: type[GeneralManager],
     instance: GeneralManager,
     old_relevant_values: dict[str, Any],
-    **kwargs,
-):
+    **kwargs: object,
+) -> None:
     """
     Invalidate cached query results affected by a data change.
 
@@ -353,12 +357,12 @@ def generic_cache_invalidation(
             # 2) get old & new value
             old_val = old_relevant_values.get("__".join(attr_path))
 
-            obj = instance
+            current: object = instance
             for attr in attr_path:
-                obj = getattr(obj, attr, None)
-                if obj is None:
+                current = getattr(current, attr, None)
+                if current is None:
                     break
-            new_val = obj
+            new_val = current
 
             # 3) check against all cache_keys
             for val_key, cache_keys in list(lookup_map.items()):

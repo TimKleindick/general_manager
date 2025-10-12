@@ -1,6 +1,6 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
-from typing import Any, Callable, Optional, Protocol, Set
+from typing import Any, Callable, Optional, Protocol, Set, TypeVar, cast
 from functools import wraps
 from django.core.cache import cache as django_cache
 from general_manager.cache.cacheTracker import DependencyTracker
@@ -39,6 +39,7 @@ class CacheBackend(Protocol):
 
 
 RecordFn = Callable[[str, Set[Dependency]], None]
+FuncT = TypeVar("FuncT", bound=Callable[..., object])
 
 _SENTINEL = object()
 
@@ -47,7 +48,7 @@ def cached(
     timeout: Optional[int] = None,
     cache_backend: CacheBackend = django_cache,
     record_fn: RecordFn = record_dependencies,
-) -> Callable:
+) -> Callable[[FuncT], FuncT]:
     """
     Cache a function call while registering its data dependencies.
 
@@ -60,9 +61,9 @@ def cached(
         Callable: Decorator that wraps the target function with caching behaviour.
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: FuncT) -> FuncT:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs: object) -> object:
             key = make_cache_key(func, args, kwargs)
             deps_key = f"{key}:deps"
 
@@ -87,6 +88,6 @@ def cached(
 
             return result
 
-        return wrapper
+        return cast(FuncT, wrapper)
 
     return decorator

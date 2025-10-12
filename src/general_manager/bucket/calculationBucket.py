@@ -13,6 +13,7 @@ from typing import (
     List,
     TypedDict,
     get_origin,
+    get_args,
 )
 from operator import attrgetter
 from copy import deepcopy
@@ -37,6 +38,7 @@ class SortedFilters(TypedDict):
 
 class CalculationBucket(Bucket[GeneralManagerType]):
     """Bucket that builds cartesian products of calculation input fields."""
+
     def __init__(
         self,
         manager_class: Type[GeneralManagerType],
@@ -44,7 +46,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         exclude_definitions: Optional[dict[str, dict]] = None,
         sort_key: Optional[Union[str, tuple[str]]] = None,
         reverse: bool = False,
-    ):
+    ) -> None:
         """
         Prepare a calculation bucket that enumerates all input combinations.
 
@@ -233,18 +235,27 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         parsed_inputs = {**input_fields}
         for prop_name, prop in properties.items():
-            type_hint = prop.graphql_type_hint
-            origin = get_origin(type_hint)
-            if origin in (Union, UnionType):
-                type_hint = type_hint.__args__[0] if type_hint.__args__ else str  # type: ignore
+            current_hint = prop.graphql_type_hint
+            origin = get_origin(current_hint)
+            args = list(get_args(current_hint))
 
-            elif isinstance(type_hint, type) and issubclass(
-                type_hint, (list, tuple, set, dict)
-            ):
-                type_hint: type = (
-                    type_hint.__args__[0] if hasattr(type_hint, "__args__") else str  # type: ignore
-                )
-            prop_input = Input(type=type_hint, possible_values=None, depends_on=None)
+            if origin in (Union, UnionType):
+                non_none_args = [arg for arg in args if arg is not type(None)]
+                current_hint = non_none_args[0] if non_none_args else object
+                origin = get_origin(current_hint)
+                args = list(get_args(current_hint))
+
+            if origin in (list, tuple, set):
+                inner = args[0] if args else object
+                resolved_type = inner if isinstance(inner, type) else object
+            elif isinstance(current_hint, type):
+                resolved_type = current_hint
+            else:
+                resolved_type = object
+
+            prop_input = Input(
+                type=resolved_type, possible_values=None, depends_on=None
+            )
             parsed_inputs[prop_name] = prop_input
 
         return parsed_inputs
@@ -481,7 +492,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             list[dict[str, Any]]: Valid input combinations.
         """
 
-        def helper(index: int, current_combo: dict[str, Any]):
+        def helper(
+            index: int,
+            current_combo: dict[str, Any],
+        ) -> Generator[dict[str, Any], None, None]:
             """
             Recursively emit input combinations that satisfy filters and excludes.
 
@@ -716,7 +730,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             CalculationBucket[GeneralManagerType]: Bucket with no combinations and cleared cached data.
         """
         own = self.all()
-        own._current_combinations = None
+        own._data = []
         own.filters = {}
         own.excludes = {}
         return own

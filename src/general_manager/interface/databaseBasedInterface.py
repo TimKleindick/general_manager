@@ -40,6 +40,7 @@ MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
 
 class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     """Interface implementation that persists data using Django ORM models."""
+
     _model: Type[MODEL_TYPE]
     input_fields: dict[str, Input] = {"id": Input(int)}
 
@@ -48,7 +49,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         *args: list[Any],
         search_date: datetime | None = None,
         **kwargs: Any,
-    ):
+    ) -> None:
         """
         Build the interface and hydrate the underlying model instance.
 
@@ -62,9 +63,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
-        self._instance = self.getData(search_date)
+        self._instance: MODEL_TYPE = self.getData(search_date)
 
-    def getData(self, search_date: datetime | None = None) -> GeneralManagerBasisModel:
+    def getData(self, search_date: datetime | None = None) -> MODEL_TYPE:
         """
         Fetch the underlying model instance, optionally as of a historical date.
 
@@ -75,9 +76,11 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             GeneralManagerBasisModel: Current or historical instance matching the primary key.
         """
         model = self._model
-        instance = model.objects.get(pk=self.pk)
+        instance = cast(MODEL_TYPE, model.objects.get(pk=self.pk))
         if search_date and not search_date > datetime.now() - timedelta(seconds=5):
-            instance = self.getHistoricalRecord(instance, search_date)
+            historical = self.getHistoricalRecord(instance, search_date)
+            if historical is not None:
+                instance = historical
         return instance
 
     @staticmethod
@@ -160,19 +163,20 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     @classmethod
     def getHistoricalRecord(
-        cls, instance: GeneralManagerBasisModel, search_date: datetime | None = None
-    ) -> GeneralManagerBasisModel:
+        cls, instance: MODEL_TYPE, search_date: datetime | None = None
+    ) -> MODEL_TYPE | None:
         """
         Retrieves the most recent historical record of a model instance at or before a specified date.
 
         Parameters:
-            instance (GeneralManagerBasisModel): Model instance whose history is queried.
+            instance (MODEL_TYPE): Model instance whose history is queried.
             search_date (datetime | None): Cutoff datetime used to select the historical record.
 
         Returns:
-            GeneralManagerBasisModel | None: Historical instance as of the specified date, if available.
+            MODEL_TYPE | None: Historical instance as of the specified date, if available.
         """
-        return instance.history.filter(history_date__lte=search_date).last()  # type: ignore
+        historical = instance.history.filter(history_date__lte=search_date).last()  # type: ignore[attr-defined]
+        return cast(MODEL_TYPE | None, historical)
 
     @classmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
@@ -455,7 +459,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         name: generalManagerClassName,
         attrs: attributes,
         interface: interfaceBaseClass,
-        base_model_class=GeneralManagerModel,
+        base_model_class: type[GeneralManagerBasisModel] = GeneralManagerModel,
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Collect fields defined directly on the interface class
         """
@@ -495,11 +499,14 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 delattr(meta_class, "rules")
 
         # Create the concrete Django model dynamically
-        model = type(name, (base_model_class,), model_fields)
+        model = cast(
+            type[GeneralManagerBasisModel],
+            type(name, (base_model_class,), model_fields),
+        )
         if meta_class and rules:
             setattr(model._meta, "rules", rules)
             # full_clean Methode hinzufügen
-            model.full_clean = getFullCleanMethode(model)
+            setattr(model, "full_clean", getFullCleanMethode(model))
         # Interface-Typ bestimmen
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(interface.__name__, (interface,), {})

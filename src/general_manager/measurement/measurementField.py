@@ -8,21 +8,24 @@ from django.db.models.expressions import Col
 from decimal import Decimal
 import pint
 from general_manager.measurement.measurement import Measurement, ureg, currency_units
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.models import Lookup, Transform
+from typing import Any, ClassVar, cast
 
 
 class MeasurementField(models.Field):
     description = "Stores a measurement (value + unit) but exposes a single field API"
 
-    empty_values = (None, "", [], (), {})
+    empty_values: ClassVar[tuple[object, ...]] = (None, "", [], (), {})
 
     def __init__(
         self,
         base_unit: str,
-        *args,
+        *args: object,
         null: bool = False,
         blank: bool = False,
         editable: bool = True,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         """
         Configure a measurement field backed by separate value and unit columns.
@@ -41,22 +44,48 @@ class MeasurementField(models.Field):
         self.base_unit = base_unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
 
-        nb = {}
-        if null:
-            nb["null"] = True
-        if blank:
-            nb["blank"] = True
-
         self.editable = editable
-        self.value_field = models.DecimalField(
-            max_digits=30, decimal_places=10, db_index=True, editable=editable, **nb
-        )
-        self.unit_field = models.CharField(max_length=30, editable=editable, **nb)
+        self.value_field: models.DecimalField[Any]
+        self.unit_field: models.CharField[Any]
+        if null:
+            self.value_field = models.DecimalField(
+                max_digits=30,
+                decimal_places=10,
+                db_index=True,
+                editable=editable,
+                null=True,
+                blank=blank,
+            )
+            self.unit_field = models.CharField(
+                max_length=30,
+                editable=editable,
+                null=True,
+                blank=blank,
+            )
+        else:
+            self.value_field = models.DecimalField(
+                max_digits=30,
+                decimal_places=10,
+                db_index=True,
+                editable=editable,
+                null=False,
+                blank=blank,
+            )
+            self.unit_field = models.CharField(
+                max_length=30,
+                editable=editable,
+                null=False,
+                blank=blank,
+            )
 
         super().__init__(*args, null=null, blank=blank, editable=editable, **kwargs)
 
     def contribute_to_class(
-        self, cls, name, private_only: bool = False, **kwargs
+        self,
+        cls: type[models.Model],
+        name: str,
+        private_only: bool = False,
+        **kwargs: object,
     ) -> None:
         """
         Attach the measurement field and its backing columns to a Django model.
@@ -95,7 +124,11 @@ class MeasurementField(models.Field):
         setattr(cls, name, self)
 
     # ---- ORM Delegation ----
-    def get_col(self, alias, output_field=None):
+    def get_col(
+        self,
+        alias: str,
+        output_field: models.Field[object, object] | None = None,
+    ) -> Col:
         """
         Produce a column expression referencing the underlying value field.
 
@@ -108,7 +141,7 @@ class MeasurementField(models.Field):
         """
         return Col(alias, self.value_field, output_field or self.value_field)  # type: ignore
 
-    def get_lookup(self, lookup_name):
+    def get_lookup(self, lookup_name: str) -> type[Lookup]:
         """
         Retrieve a lookup class from the underlying decimal field.
 
@@ -118,9 +151,12 @@ class MeasurementField(models.Field):
         Returns:
             type[models.Lookup]: Lookup class implementing the requested comparison.
         """
-        return self.value_field.get_lookup(lookup_name)
+        return cast(type[Lookup], self.value_field.get_lookup(lookup_name))
 
-    def get_transform(self, lookup_name) -> models.Transform | None:
+    def get_transform(
+        self,
+        lookup_name: str,
+    ) -> type[Transform] | None:
         """
         Return a transform callable provided by the underlying decimal field.
 
@@ -130,9 +166,10 @@ class MeasurementField(models.Field):
         Returns:
             models.Transform | None: Transform class when available; otherwise None.
         """
-        return self.value_field.get_transform(lookup_name)
+        transform = self.value_field.get_transform(lookup_name)
+        return cast(type[Transform] | None, transform)
 
-    def db_type(self, connection) -> None:  # type: ignore
+    def db_type(self, connection: BaseDatabaseWrapper) -> None:  # type: ignore[override]
         """
         Signal to Django that the field does not map to a single column.
 
@@ -179,7 +216,7 @@ class MeasurementField(models.Field):
         self.run_validators(value)
         return value
 
-    def to_python(self, value):
+    def to_python(self, value: Measurement | str | None) -> Measurement | str | None:
         """
         Convert database values back into Python objects.
 
@@ -191,7 +228,7 @@ class MeasurementField(models.Field):
         """
         return value
 
-    def get_prep_value(self, value):
+    def get_prep_value(self, value: Measurement | str | None) -> Decimal | None:
         """
         Serialise a measurement for storage by converting it to the base unit magnitude.
 
@@ -246,7 +283,11 @@ class MeasurementField(models.Field):
             qty_orig = qty_base
         return Measurement(qty_orig.magnitude, str(qty_orig.units))
 
-    def __set__(self, instance, value):
+    def __set__(
+        self,
+        instance: models.Model,
+        value: Measurement | str | None,
+    ) -> None:
         """
         Assign a measurement to the model instance after validating compatibility.
 

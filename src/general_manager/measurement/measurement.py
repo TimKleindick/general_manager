@@ -22,7 +22,7 @@ for currency in currency_units:
 
 
 class Measurement:
-    def __init__(self, value: Decimal | float | int | str, unit: str):
+    def __init__(self, value: Decimal | float | int | str, unit: str) -> None:
         """
         Create a measurement from a numeric value and a unit string.
 
@@ -45,7 +45,7 @@ class Measurement:
             value = Decimal(str(value))
         self.__quantity = ureg.Quantity(self.formatDecimal(value), unit)
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, str]:
         """
         Produce a serialisable representation of the measurement.
 
@@ -58,7 +58,7 @@ class Measurement:
         }
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, str]) -> None:
         """
         Recreate the internal quantity from a serialized representation.
 
@@ -148,7 +148,11 @@ class Measurement:
         else:
             return value
 
-    def to(self, target_unit: str, exchange_rate: float | None = None):
+    def to(
+        self,
+        target_unit: str,
+        exchange_rate: float | None = None,
+    ) -> Measurement:
         """
         Convert this measurement to a specified target unit, supporting both currency and physical unit conversions.
 

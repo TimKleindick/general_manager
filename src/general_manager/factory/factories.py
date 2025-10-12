@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, cast, TYPE_CHECKING
 from factory.declarations import LazyFunction
 from factory.faker import Faker
-import exrex
+import exrex  # type: ignore[import-untyped]
 from django.db import models
 from django.core.validators import RegexValidator
 import random
@@ -38,7 +38,7 @@ def getFieldValue(
 
     if isinstance(field, MeasurementField):
 
-        def _measurement():
+        def _measurement() -> Measurement:
             value = Decimal(random.randrange(0, 10_000_000)) / Decimal("100")  # two dp
             return Measurement(value, field.base_unit)
 
@@ -160,7 +160,13 @@ def getRelatedModel(
         raise ValueError(f"Field {field.name} does not have a related model defined.")
     if related_model == "self":
         related_model = field.model
-    return related_model  # For unsupported field types
+    if not isinstance(related_model, type) or not issubclass(
+        related_model, models.Model
+    ):
+        raise TypeError(
+            f"Related model for {field.name} must be a Django model class, got {related_model!r}"
+        )
+    return cast(type[models.Model], related_model)
 
 
 def getManyToManyFieldValue(

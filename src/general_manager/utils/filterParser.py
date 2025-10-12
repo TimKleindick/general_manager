@@ -23,7 +23,7 @@ def parse_filters(
     """
     from general_manager.manager.generalManager import GeneralManager
 
-    filters = {}
+    filters: dict[str, dict[str, Any]] = {}
     for kwarg, value in filter_kwargs.items():
         parts = kwarg.split("__")
         field_name = parts[0]
@@ -87,7 +87,7 @@ def create_filter_function(lookup_str: str, value: Any) -> Callable[[Any], bool]
         lookup = "exact"
         attr_path = parts
 
-    def filter_func(x):
+    def filter_func(x: object) -> bool:
         for attr in attr_path:
             if hasattr(x, attr):
                 x = getattr(x, attr)

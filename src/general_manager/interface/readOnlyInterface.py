@@ -3,7 +3,7 @@
 from __future__ import annotations
 import json
 
-from typing import Type, Any, Callable, TYPE_CHECKING
+from typing import Type, Any, Callable, TYPE_CHECKING, cast
 from django.db import models, transaction
 from general_manager.interface.databaseBasedInterface import (
     DBBasedInterface,
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     """Interface that reads static JSON data into a managed read-only model."""
+
     _interface_type = "readonly"
     _parent_class: Type[GeneralManager]
 
@@ -79,11 +80,13 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
 
         # Parse JSON into Python structures
         if isinstance(json_data, str):
-            data_list = json.loads(json_data)
+            parsed_data = json.loads(json_data)
         elif isinstance(json_data, list):
-            data_list: list[Any] = json_data
+            parsed_data = json_data
         else:
             raise ValueError("_data must be a JSON string or a list of dictionaries")
+
+        data_list = cast(list[dict[str, Any]], parsed_data)
 
         unique_fields = cls.getUniqueFields(model)
         if not unique_fields:
@@ -91,7 +94,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                 f"For ReadOnlyInterface '{parent_class.__name__}' must have at least one unique field."
             )
 
-        changes = {
+        changes: dict[str, list[models.Model]] = {
             "created": [],
             "updated": [],
             "deactivated": [],
@@ -153,10 +156,10 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         def table_exists(table_name: str) -> bool:
             """
             Determine whether a database table with the specified name exists.
-            
+
             Parameters:
                 table_name (str): Name of the database table to check.
-            
+
             Returns:
                 bool: True if the table exists, False otherwise.
             """
@@ -169,7 +172,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         ) -> tuple[list[str], list[str]]:
             """
             Compares the fields of a Django model to the columns of a specified database table.
-            
+
             Returns:
                 A tuple containing two lists:
                     - The first list contains column names defined in the model but missing from the database table.
@@ -210,7 +213,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     def readOnlyPostCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for post-creation hooks that registers a new manager class as read-only.
-        
+
         After the wrapped post-creation function is executed, the newly created manager class is added to the meta-class's list of read-only classes, marking it as a read-only interface.
         """
 
@@ -218,10 +221,10 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             new_class: Type[GeneralManager],
             interface_cls: Type[ReadOnlyInterface],
             model: Type[GeneralManagerBasisModel],
-        ):
+        ) -> None:
             """
             Registers a newly created manager class as read-only after executing the wrapped post-creation function.
-            
+
             This function appends the new manager class to the list of read-only classes in the meta system, ensuring it is recognized as a read-only interface.
             """
             from general_manager.manager.meta import GeneralManagerMeta
@@ -235,7 +238,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     def readOnlyPreCreate(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for pre-creation hook functions that ensures the base model class is set to `GeneralManagerBasisModel`.
-        
+
         Wraps a pre-creation function, injecting `GeneralManagerBasisModel` as the `base_model_class` argument before the manager class is created.
         """
 
@@ -243,16 +246,18 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             name: generalManagerClassName,
             attrs: attributes,
             interface: interfaceBaseClass,
-            base_model_class=GeneralManagerBasisModel,
-        ):
+            base_model_class: type[GeneralManagerBasisModel] = GeneralManagerBasisModel,
+        ) -> tuple[
+            attributes, interfaceBaseClass, type[GeneralManagerBasisModel] | None
+        ]:
             """
             Wraps a function to ensure the `base_model_class` argument is set to `GeneralManagerBasisModel` before invocation.
-            
+
             Parameters:
                 name: The name of the manager class being created.
                 attrs: Attributes for the manager class.
                 interface: The interface base class to use.
-            
+
             Returns:
                 The result of calling the wrapped function with `base_model_class` set to `GeneralManagerBasisModel`.
             """
@@ -266,11 +271,11 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         Return the pre- and post-creation hook methods for integrating the interface with a manager meta-class system.
-        
+
         The returned tuple includes:
         - A pre-creation method that ensures the base model class is set for read-only operation.
         - A post-creation method that registers the manager class as read-only.
-        
+
         Returns:
             tuple: The pre-creation and post-creation hook methods for manager class lifecycle integration.
         """

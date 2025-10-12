@@ -2,11 +2,17 @@
 
 import inspect
 import json
-from general_manager.utils.jsonEncoder import CustomJSONEncoder
 from hashlib import sha256
+from typing import Callable, Mapping
+
+from general_manager.utils.jsonEncoder import CustomJSONEncoder
 
 
-def make_cache_key(func, args, kwargs):
+def make_cache_key(
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object] | None,
+) -> str:
     """
     Build a deterministic cache key that uniquely identifies a function invocation.
 
@@ -19,7 +25,8 @@ def make_cache_key(func, args, kwargs):
         str: Hexadecimal SHA-256 digest representing the call signature.
     """
     sig = inspect.signature(func)
-    bound = sig.bind_partial(*args, **kwargs)
+    kwargs_dict = dict(kwargs or {})
+    bound = sig.bind_partial(*args, **kwargs_dict)
     bound.apply_defaults()
     payload = {
         "module": func.__module__,

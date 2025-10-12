@@ -1,7 +1,7 @@
 """Utilities for tracing relationships between GeneralManager classes."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 
@@ -19,7 +19,7 @@ class PathMap:
     instance: PathMap
     mapping: dict[tuple[PathStart, PathDestination], PathTracer] = {}
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args: object, **kwargs: object) -> PathMap:
         """
         Create or return the singleton PathMap instance and ensure the path mapping is initialised.
 
@@ -36,7 +36,7 @@ class PathMap:
         return cls.instance
 
     @classmethod
-    def createPathMapping(cls):
+    def createPathMapping(cls) -> None:
         """
         Populate the path mapping with tracers for every distinct pair of managed classes.
 
@@ -53,7 +53,10 @@ class PathMap:
                         (start_class.__name__, destination_class.__name__)
                     ] = PathTracer(start_class, destination_class)
 
-    def __init__(self, path_start: PathStart | GeneralManager | type[GeneralManager]):
+    def __init__(
+        self,
+        path_start: PathStart | GeneralManager | type[GeneralManager],
+    ) -> None:
         """
         Create a new traversal context rooted at the provided manager class or instance.
 
@@ -63,13 +66,16 @@ class PathMap:
         Returns:
             None
         """
+        self.start_instance: GeneralManager | None
+        self.start_class: type[GeneralManager] | None
+        self.start_class_name: str
         if isinstance(path_start, GeneralManager):
             self.start_instance = path_start
             self.start_class = path_start.__class__
             self.start_class_name = path_start.__class__.__name__
         elif isinstance(path_start, type):
             self.start_instance = None
-            self.start_class = path_start
+            self.start_class = cast(type[GeneralManager], path_start)
             self.start_class_name = path_start.__name__
         else:
             self.start_instance = None
@@ -117,7 +123,7 @@ class PathMap:
         tracer = self.mapping.get((self.start_class_name, path_destination), None)
         if not tracer:
             return None
-        if not self.start_instance:
+        if self.start_instance is None:
             raise ValueError("Cannot call goTo on a PathMap without a start instance.")
         return tracer.traversePath(self.start_instance)
 
@@ -143,7 +149,7 @@ class PathTracer:
 
     def __init__(
         self, start_class: type[GeneralManager], destination_class: type[GeneralManager]
-    ):
+    ) -> None:
         """
         Initialise a path tracer between two manager classes.
 
@@ -157,7 +163,7 @@ class PathTracer:
         self.start_class = start_class
         self.destination_class = destination_class
         if self.start_class == self.destination_class:
-            self.path = []
+            self.path: list[str] | None = []
         else:
             self.path = self.createPath(start_class, [])
 
@@ -191,7 +197,7 @@ class PathTracer:
         for attr, attr_type in current_connections.items():
             if attr in path or attr_type == self.start_class:
                 continue
-            if attr_type is None:
+            if attr_type is None or not isinstance(attr_type, type):
                 continue
             if not issubclass(attr_type, GeneralManager):
                 continue
@@ -215,19 +221,20 @@ class PathTracer:
         Returns:
             GeneralManager | Bucket | None: The resolved destination object, a merged bucket, or None when no traversal is required.
         """
-        current_instance = start_instance
+        current_instance: Any = start_instance
         if not self.path:
             return None
         for attr in self.path:
             if not isinstance(current_instance, Bucket):
                 current_instance = getattr(current_instance, attr)
                 continue
-            new_instance = None
+            new_instance: Any = None
             for entry in current_instance:
-                if not new_instance:
-                    new_instance = getattr(entry, attr)
+                attr_value = getattr(entry, attr)
+                if new_instance is None:
+                    new_instance = attr_value
                 else:
-                    new_instance = new_instance | getattr(entry, attr)
+                    new_instance = new_instance | attr_value  # type: ignore[operator]
             current_instance = new_instance
 
-        return current_instance
+        return cast(GeneralManager | Bucket[Any] | None, current_instance)

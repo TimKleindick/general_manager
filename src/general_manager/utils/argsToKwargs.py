@@ -1,9 +1,11 @@
-from typing import Any, Iterable
+from typing import Iterable, Mapping
 
 
 def args_to_kwargs(
-    args: tuple[Any, ...], keys: Iterable[Any], existing_kwargs: dict | None = None
-):
+    args: tuple[object, ...],
+    keys: Iterable[str],
+    existing_kwargs: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """
     Convert positional arguments to keyword arguments and merge them into an existing mapping.
 
@@ -22,7 +24,7 @@ def args_to_kwargs(
     if len(args) > len(keys):
         raise TypeError("More positional arguments than keys provided.")
 
-    kwargs = {key: value for key, value in zip(keys, args)}
+    kwargs: dict[str, object] = {key: value for key, value in zip(keys, args)}
     if existing_kwargs and any(key in kwargs for key in existing_kwargs):
         raise TypeError("Conflicts in existing kwargs.")
     if existing_kwargs:
