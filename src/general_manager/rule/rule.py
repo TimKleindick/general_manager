@@ -61,12 +61,7 @@ class Rule(Generic[GeneralManagerType]):
         self._last_input = None
 
         # 1) Extract source, strip decorators, and dedent
-        src = inspect.getsource(func)
-        lines = src.splitlines()
-        if lines and lines[0].strip().startswith("@"):
-            idx = next(i for i, L in enumerate(lines) if not L.strip().startswith("@"))
-            src = "\n".join(lines[idx:])
-        src = textwrap.dedent(src)
+        src = textwrap.dedent(inspect.getsource(func))
 
         # 2) Parse AST and attach parent references
         self._tree = ast.parse(src)
