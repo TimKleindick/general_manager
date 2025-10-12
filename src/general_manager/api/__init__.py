@@ -1,4 +1,4 @@
-"""Permission helpers for GeneralManager mutations and actions."""
+"""GraphQL helpers for GeneralManager."""
 
 from __future__ import annotations
 
@@ -6,15 +6,19 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
-    "BasePermission",
-    "ManagerBasedPermission",
-    "MutationPermission",
+    "GraphQL",
+    "MeasurementType",
+    "MeasurementScalar",
+    "graphQlProperty",
+    "graphQlMutation",
 ]
 
 _MODULE_MAP = {
-    "BasePermission": ("general_manager.permission.basePermission", "BasePermission"),
-    "ManagerBasedPermission": ("general_manager.permission.managerBasedPermission", "ManagerBasedPermission"),
-    "MutationPermission": ("general_manager.permission.mutationPermission", "MutationPermission"),
+    "GraphQL": ("general_manager.api.graphql", "GraphQL"),
+    "MeasurementType": ("general_manager.api.graphql", "MeasurementType"),
+    "MeasurementScalar": ("general_manager.api.graphql", "MeasurementScalar"),
+    "graphQlProperty": ("general_manager.api.property", "graphQlProperty"),
+    "graphQlMutation": ("general_manager.api.mutation", "graphQlMutation"),
 }
 
 
