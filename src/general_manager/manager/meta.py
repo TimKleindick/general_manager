@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from django.conf import settings
-from typing import Any, Type, TYPE_CHECKING, Generic, TypeVar, Iterable, cast
+from typing import Any, Type, TYPE_CHECKING, ClassVar, TypeVar, Iterable, cast
 from general_manager.interface.baseInterface import InterfaceBase
 
 if TYPE_CHECKING:
-    from general_manager.interface.readOnlyInterface import ReadOnlyInterface
     from general_manager.manager.generalManager import GeneralManager
 
 
@@ -21,10 +20,10 @@ class _nonExistent:
 class GeneralManagerMeta(type):
     """Metaclass responsible for wiring GeneralManager interfaces and registries."""
 
-    all_classes: list[Type[GeneralManager]] = []
-    read_only_classes: list[Type[GeneralManager]] = []
-    pending_graphql_interfaces: list[Type[GeneralManager]] = []
-    pending_attribute_initialization: list[Type[GeneralManager]] = []
+    all_classes: ClassVar[list[Type[GeneralManager]]] = []
+    read_only_classes: ClassVar[list[Type[GeneralManager]]] = []
+    pending_graphql_interfaces: ClassVar[list[Type[GeneralManager]]] = []
+    pending_attribute_initialization: ClassVar[list[Type[GeneralManager]]] = []
     Interface: type[InterfaceBase]
 
     def __new__(
