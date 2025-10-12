@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
+
+from general_manager.utils.public_api import build_module_dir, resolve_export
 
 __all__ = [
     "GraphQL",
@@ -19,28 +20,30 @@ __all__ = [
 ]
 
 _MODULE_MAP = {
-    "GraphQL": ("general_manager.api", "GraphQL"),
-    "graphQlProperty": ("general_manager.api", "graphQlProperty"),
-    "graphQlMutation": ("general_manager.api", "graphQlMutation"),
-    "GeneralManager": ("general_manager.manager", "GeneralManager"),
-    "GeneralManagerMeta": ("general_manager.manager", "GeneralManagerMeta"),
-    "Input": ("general_manager.manager", "Input"),
-    "Bucket": ("general_manager.bucket", "Bucket"),
-    "DatabaseBucket": ("general_manager.bucket", "DatabaseBucket"),
-    "CalculationBucket": ("general_manager.bucket", "CalculationBucket"),
-    "GroupBucket": ("general_manager.bucket", "GroupBucket"),
+    "GraphQL": ("general_manager.api.graphql", "GraphQL"),
+    "graphQlProperty": ("general_manager.api.property", "graphQlProperty"),
+    "graphQlMutation": ("general_manager.api.mutation", "graphQlMutation"),
+    "GeneralManager": ("general_manager.manager.generalManager", "GeneralManager"),
+    "GeneralManagerMeta": ("general_manager.manager.meta", "GeneralManagerMeta"),
+    "Input": ("general_manager.manager.input", "Input"),
+    "Bucket": ("general_manager.bucket.baseBucket", "Bucket"),
+    "DatabaseBucket": ("general_manager.bucket.databaseBucket", "DatabaseBucket"),
+    "CalculationBucket": (
+        "general_manager.bucket.calculationBucket",
+        "CalculationBucket",
+    ),
+    "GroupBucket": ("general_manager.bucket.groupBucket", "GroupBucket"),
 }
 
 
 def __getattr__(name: str) -> Any:
-    if name not in __all__:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_path, attr = _MODULE_MAP[name]
-    module = import_module(module_path)
-    value = getattr(module, attr)
-    globals()[name] = value
-    return value
+    return resolve_export(
+        name,
+        module_all=__all__,
+        module_map=_MODULE_MAP,
+        module_globals=globals(),
+    )
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals().keys()) + __all__)
+    return build_module_dir(module_all=__all__, module_globals=globals())

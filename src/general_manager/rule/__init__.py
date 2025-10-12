@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
+
+from general_manager.utils.public_api import build_module_dir, resolve_export
 
 __all__ = ["Rule", "BaseRuleHandler"]
 
@@ -14,14 +15,13 @@ _MODULE_MAP = {
 
 
 def __getattr__(name: str) -> Any:
-    if name not in __all__:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_path, attr = _MODULE_MAP[name]
-    module = import_module(module_path)
-    value = getattr(module, attr)
-    globals()[name] = value
-    return value
+    return resolve_export(
+        name,
+        module_all=__all__,
+        module_map=_MODULE_MAP,
+        module_globals=globals(),
+    )
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals().keys()) + __all__)
+    return build_module_dir(module_all=__all__, module_globals=globals())
