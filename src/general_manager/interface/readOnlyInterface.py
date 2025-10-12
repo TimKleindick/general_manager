@@ -81,10 +81,12 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         # Parse JSON into Python structures
         if isinstance(json_data, str):
             parsed_data = json.loads(json_data)
+            if not isinstance(parsed_data, list):
+                raise TypeError("_data JSON must decode to a list of dictionaries")
         elif isinstance(json_data, list):
             parsed_data = json_data
         else:
-            raise ValueError("_data must be a JSON string or a list of dictionaries")
+            raise TypeError("_data must be a JSON string or a list of dictionaries")
 
         data_list = cast(list[dict[str, Any]], parsed_data)
 
