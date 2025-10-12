@@ -19,3 +19,4 @@ mkdocs-minify-plugin==0.8.0
 mkdocs-section-index==0.3.10
 mkdocstrings==0.30.1
 mkdocstrings-python==1.18.2
+black==25.9.0
