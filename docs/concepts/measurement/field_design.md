@@ -6,7 +6,7 @@
 
 ```python
 from django.db import models
-from general_manager.measurement import MeasurementField
+from general_manager.measurement import MeasurementField, Measurement
 
 class Product(models.Model):
     weight = MeasurementField(base_unit="kg", null=True, blank=True)

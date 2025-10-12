@@ -1,3 +1,0 @@
-# Permission Examples
-
-TBD

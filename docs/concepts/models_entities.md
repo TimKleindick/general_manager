@@ -10,6 +10,7 @@ Attributes declared as type hints become part of the public interface. They can 
 class Project(GeneralManager):
     name: str
     start_date: date | None
+    end_date: date | None
     derivative_list: Bucket[Derivative]
 
     @graphQlProperty

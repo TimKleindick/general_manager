@@ -73,7 +73,7 @@ nav:
       - index.md
       - quickstart.md
       - installation.md
-      - roadmap.md
+      # - roadmap.md
       - faq.md
   - Concepts:
       - GeneralManager (Core):
@@ -91,7 +91,7 @@ nav:
           - concepts/permission/index.md
           - concepts/permission/manager_based_permission.md
           - concepts/permission/object_level.md
-          - concepts/permission/examples.md
+          # - concepts/permission/examples.md
       - Interfaces:
           - concepts/interfaces/index.md
           - concepts/interfaces/db_based_interface.md
@@ -120,7 +120,7 @@ nav:
   - Examples (Cookbook):
       - examples/index.md
       - examples/project_volume_curve.md
-      - examples/nested_set_bom.md
+      # - examples/nested_set_bom.md
       - examples/derivatives_groups.md
       - examples/graphql_queries.md
       - examples/permission_patterns.md
