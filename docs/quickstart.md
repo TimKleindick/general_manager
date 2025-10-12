@@ -94,4 +94,3 @@ query {
 
 - Study the [architecture overview](concepts/architecture.md) to understand how buckets, managers, and interfaces cooperate.
 - Explore the [tutorials](howto/index.md) to learn how to add permissions, measurements, and computed fields.
-- When you build production workflows, review the [operations guide](ops/index.md) for deployment and monitoring considerations.

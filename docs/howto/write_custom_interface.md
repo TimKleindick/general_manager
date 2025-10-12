@@ -7,6 +7,7 @@ Sometimes your data lives outside of Django or requires a bespoke persistence st
 ```python
 from general_manager.interface.baseInterface import InterfaceBase
 from general_manager.manager import GeneralManager, Input
+from typing import Generator
 
 class ExternalReportInterface(InterfaceBase):
     input_fields = {
@@ -30,7 +31,7 @@ Provide the methods your manager needs. For read-only data, implement `filter`, 
 class ExternalReportInterface(InterfaceBase):
     ...
     @classmethod
-    def all(cls) -> list[dict[str, object]]:
+    def all(cls) -> Generator[dict[str, object], None, None]:
         for payload in external_api.get_reports():
             yield {"id": payload["id"], "year": payload["year"]}
 
