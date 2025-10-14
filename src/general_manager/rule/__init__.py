@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import RULE_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = ["Rule", "BaseRuleHandler"]
+__all__ = list(RULE_EXPORTS)
 
-_MODULE_MAP = {
-    "Rule": ("general_manager.rule.rule", "Rule"),
-    "BaseRuleHandler": ("general_manager.rule.handler", "BaseRuleHandler"),
-}
+_MODULE_MAP = RULE_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.rule import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

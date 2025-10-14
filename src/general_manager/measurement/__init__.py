@@ -2,26 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import MEASUREMENT_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "Measurement",
-    "MeasurementField",
-    "ureg",
-    "currency_units",
-]
+__all__ = list(MEASUREMENT_EXPORTS)
 
-_MODULE_MAP = {
-    "Measurement": ("general_manager.measurement.measurement", "Measurement"),
-    "ureg": ("general_manager.measurement.measurement", "ureg"),
-    "currency_units": ("general_manager.measurement.measurement", "currency_units"),
-    "MeasurementField": (
-        "general_manager.measurement.measurementField",
-        "MeasurementField",
-    ),
-}
+_MODULE_MAP = MEASUREMENT_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.measurement import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import INTERFACE_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "InterfaceBase",
-    "DBBasedInterface",
-    "DatabaseInterface",
-    "ReadOnlyInterface",
-    "CalculationInterface",
-]
+__all__ = list(INTERFACE_EXPORTS)
 
-_MODULE_MAP = {
-    "InterfaceBase": "general_manager.interface.baseInterface",
-    "DBBasedInterface": "general_manager.interface.databaseBasedInterface",
-    "DatabaseInterface": "general_manager.interface.databaseInterface",
-    "ReadOnlyInterface": "general_manager.interface.readOnlyInterface",
-    "CalculationInterface": "general_manager.interface.calculationInterface",
-}
+_MODULE_MAP = INTERFACE_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.interface import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

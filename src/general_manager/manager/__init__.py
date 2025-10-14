@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import MANAGER_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "GeneralManager",
-    "Input",
-    "graphQlProperty",
-    "GeneralManagerMeta",
-    "GroupManager",
-]
+__all__ = list(MANAGER_EXPORTS)
 
-_MODULE_MAP = {
-    "GeneralManager": ("general_manager.manager.generalManager", "GeneralManager"),
-    "GeneralManagerMeta": ("general_manager.manager.meta", "GeneralManagerMeta"),
-    "Input": ("general_manager.manager.input", "Input"),
-    "GroupManager": ("general_manager.manager.groupManager", "GroupManager"),
-    "graphQlProperty": ("general_manager.api.property", "graphQlProperty"),
-}
+_MODULE_MAP = MANAGER_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.manager import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

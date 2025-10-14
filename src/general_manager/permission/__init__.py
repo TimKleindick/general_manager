@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import PERMISSION_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "BasePermission",
-    "ManagerBasedPermission",
-    "MutationPermission",
-]
+__all__ = list(PERMISSION_EXPORTS)
 
-_MODULE_MAP = {
-    "BasePermission": ("general_manager.permission.basePermission", "BasePermission"),
-    "ManagerBasedPermission": ("general_manager.permission.managerBasedPermission", "ManagerBasedPermission"),
-    "MutationPermission": ("general_manager.permission.mutationPermission", "MutationPermission"),
-}
+_MODULE_MAP = PERMISSION_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.permission import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:
