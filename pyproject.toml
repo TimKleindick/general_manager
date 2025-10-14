@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,16 @@ description = "Modular Django-based data management framework with ORM, GraphQL,
 readme = "README.md"
 authors = [{ name = "Tim Kleindick", email = "tkleindick@yahoo.de" }]
 license = { file = "LICENSE" }
+requires-python = ">=3.12"
+keywords = [
+    "django",
+    "orm",
+    "graphql",
+    "permissions",
+    "validation",
+    "caching",
+    "framework",
+]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -18,8 +28,8 @@ classifiers = [
     "Framework :: Django",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
+    "Typing :: Typed",
 ]
-requires-python = ">=3.12"
 dependencies = [
     "asgiref>=3.8.1",
     "Django>=5.2.7",
@@ -40,7 +50,6 @@ dependencies = [
     "platformdirs>=4.3.7",
     "promise>=2.3",
     "python-dateutil>=2.9.0.post0",
-    "setuptools==80.0.0",
     "six>=1.17.0",
     "smmap>=5.0.2",
     "sqlparse>=0.5.3",
@@ -49,8 +58,21 @@ dependencies = [
     "tzdata>=2025.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/TimKleindick/general_manager"
+Documentation = "https://timkleindick.github.io/general_manager/"
+Repository = "https://github.com/TimKleindick/general_manager"
+Issues = "https://github.com/TimKleindick/general_manager/issues"
+Changelog = "https://github.com/TimKleindick/general_manager/releases"
+
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"general_manager" = ["py.typed"]
 
 [tool.semantic_release]
 allow_zero_version = true

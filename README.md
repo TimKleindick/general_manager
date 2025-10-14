@@ -96,7 +96,7 @@ The example above defines a project model, exposes it through the auto-generated
 
 - Python >= 3.12
 - Django >= 5.2
-- Additional dependencies (see `requirements.txt`):
+- Additional dependencies (see `requirements/base.txt`):
   - `graphene`
   - `numpy`
   - `Pint`
