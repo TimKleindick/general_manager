@@ -2,39 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import GENERAL_MANAGER_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "GraphQL",
-    "GeneralManager",
-    "GeneralManagerMeta",
-    "Input",
-    "graphQlProperty",
-    "graphQlMutation",
-    "Bucket",
-    "DatabaseBucket",
-    "CalculationBucket",
-    "GroupBucket",
-]
+__all__ = list(GENERAL_MANAGER_EXPORTS)
 
-_MODULE_MAP = {
-    "GraphQL": ("general_manager.api.graphql", "GraphQL"),
-    "graphQlProperty": ("general_manager.api.property", "graphQlProperty"),
-    "graphQlMutation": ("general_manager.api.mutation", "graphQlMutation"),
-    "GeneralManager": ("general_manager.manager.generalManager", "GeneralManager"),
-    "GeneralManagerMeta": ("general_manager.manager.meta", "GeneralManagerMeta"),
-    "Input": ("general_manager.manager.input", "Input"),
-    "Bucket": ("general_manager.bucket.baseBucket", "Bucket"),
-    "DatabaseBucket": ("general_manager.bucket.databaseBucket", "DatabaseBucket"),
-    "CalculationBucket": (
-        "general_manager.bucket.calculationBucket",
-        "CalculationBucket",
-    ),
-    "GroupBucket": ("general_manager.bucket.groupBucket", "GroupBucket"),
-}
+_MODULE_MAP = GENERAL_MANAGER_EXPORTS
 
+if TYPE_CHECKING:
+    from general_manager._types.general_manager import *  # noqa: F401,F403
 
 def __getattr__(name: str) -> Any:
     return resolve_export(

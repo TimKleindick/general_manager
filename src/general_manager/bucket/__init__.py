@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import BUCKET_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = ["Bucket", "DatabaseBucket", "CalculationBucket", "GroupBucket"]
+__all__ = list(BUCKET_EXPORTS)
 
-_MODULE_MAP = {
-    "Bucket": ("general_manager.bucket.baseBucket", "Bucket"),
-    "DatabaseBucket": ("general_manager.bucket.databaseBucket", "DatabaseBucket"),
-    "CalculationBucket": (
-        "general_manager.bucket.calculationBucket",
-        "CalculationBucket",
-    ),
-    "GroupBucket": ("general_manager.bucket.groupBucket", "GroupBucket"),
-}
+_MODULE_MAP = BUCKET_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.bucket import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

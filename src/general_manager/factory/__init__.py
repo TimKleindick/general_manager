@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import FACTORY_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "AutoFactory",
-    "LazyMeasurement",
-    "LazyDeltaDate",
-    "LazyProjectName",
-]
+__all__ = list(FACTORY_EXPORTS)
 
-_MODULE_MAP = {
-    "AutoFactory": ("general_manager.factory.autoFactory", "AutoFactory"),
-    "LazyMeasurement": ("general_manager.factory.factoryMethods", "LazyMeasurement"),
-    "LazyDeltaDate": ("general_manager.factory.factoryMethods", "LazyDeltaDate"),
-    "LazyProjectName": ("general_manager.factory.factoryMethods", "LazyProjectName"),
-}
+_MODULE_MAP = FACTORY_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.factory import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

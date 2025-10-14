@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import CACHE_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "cached",
-    "CacheBackend",
-    "DependencyTracker",
-    "record_dependencies",
-    "remove_cache_key_from_index",
-    "invalidate_cache_key",
-]
+__all__ = list(CACHE_EXPORTS)
 
-_MODULE_MAP = {
-    "cached": ("general_manager.cache.cacheDecorator", "cached"),
-    "CacheBackend": ("general_manager.cache.cacheDecorator", "CacheBackend"),
-    "DependencyTracker": ("general_manager.cache.cacheTracker", "DependencyTracker"),
-    "record_dependencies": ("general_manager.cache.dependencyIndex", "record_dependencies"),
-    "remove_cache_key_from_index": ("general_manager.cache.dependencyIndex", "remove_cache_key_from_index"),
-    "invalidate_cache_key": ("general_manager.cache.dependencyIndex", "invalidate_cache_key"),
-}
+_MODULE_MAP = CACHE_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.cache import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:

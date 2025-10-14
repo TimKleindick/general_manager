@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from general_manager.public_api_registry import API_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
 
-__all__ = [
-    "GraphQL",
-    "MeasurementType",
-    "MeasurementScalar",
-    "graphQlProperty",
-    "graphQlMutation",
-]
+__all__ = list(API_EXPORTS)
 
-_MODULE_MAP = {
-    "GraphQL": ("general_manager.api.graphql", "GraphQL"),
-    "MeasurementType": ("general_manager.api.graphql", "MeasurementType"),
-    "MeasurementScalar": ("general_manager.api.graphql", "MeasurementScalar"),
-    "graphQlProperty": ("general_manager.api.property", "graphQlProperty"),
-    "graphQlMutation": ("general_manager.api.mutation", "graphQlMutation"),
-}
+_MODULE_MAP = API_EXPORTS
+
+if TYPE_CHECKING:
+    from general_manager._types.api import *  # noqa: F401,F403
 
 
 def __getattr__(name: str) -> Any:
