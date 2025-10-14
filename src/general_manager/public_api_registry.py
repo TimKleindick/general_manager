@@ -17,12 +17,15 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "graphQlProperty": ("general_manager.api.property", "graphQlProperty"),
     "graphQlMutation": ("general_manager.api.mutation", "graphQlMutation"),
     "GeneralManager": ("general_manager.manager.generalManager", "GeneralManager"),
-    "GeneralManagerMeta": ("general_manager.manager.meta", "GeneralManagerMeta"),
     "Input": ("general_manager.manager.input", "Input"),
-    "Bucket": ("general_manager.bucket.baseBucket", "Bucket"),
-    "DatabaseBucket": ("general_manager.bucket.databaseBucket", "DatabaseBucket"),
-    "CalculationBucket": ("general_manager.bucket.calculationBucket", "CalculationBucket"),
-    "GroupBucket": ("general_manager.bucket.groupBucket", "GroupBucket"),
+    "CalculationInterface": ("general_manager.interface.calculationInterface", "CalculationInterface"),
+    "DatabaseInterface": ("general_manager.interface.databaseInterface", "DatabaseInterface"),
+    "ReadOnlyInterface": ("general_manager.interface.readOnlyInterface", "ReadOnlyInterface"),
+    "ManagerBasedPermission": (
+        "general_manager.permission.managerBasedPermission",
+        "ManagerBasedPermission",
+    ),
+    "Rule": ("general_manager.rule.rule", "Rule"),
 }
 
 
@@ -40,6 +43,20 @@ FACTORY_EXPORTS: LazyExportMap = {
     "LazyMeasurement": ("general_manager.factory.factoryMethods", "LazyMeasurement"),
     "LazyDeltaDate": ("general_manager.factory.factoryMethods", "LazyDeltaDate"),
     "LazyProjectName": ("general_manager.factory.factoryMethods", "LazyProjectName"),
+    "LazyDateToday": ("general_manager.factory.factoryMethods", "LazyDateToday"),
+    "LazyDateBetween": ("general_manager.factory.factoryMethods", "LazyDateBetween"),
+    "LazyDateTimeBetween": ("general_manager.factory.factoryMethods", "LazyDateTimeBetween"),
+    "LazyInteger": ("general_manager.factory.factoryMethods", "LazyInteger"),
+    "LazyDecimal": ("general_manager.factory.factoryMethods", "LazyDecimal"),
+    "LazyChoice": ("general_manager.factory.factoryMethods", "LazyChoice"),
+    "LazySequence": ("general_manager.factory.factoryMethods", "LazySequence"),
+    "LazyBoolean": ("general_manager.factory.factoryMethods", "LazyBoolean"),
+    "LazyUUID": ("general_manager.factory.factoryMethods", "LazyUUID"),
+    "LazyFakerName": ("general_manager.factory.factoryMethods", "LazyFakerName"),
+    "LazyFakerEmail": ("general_manager.factory.factoryMethods", "LazyFakerEmail"),
+    "LazyFakerSentence": ("general_manager.factory.factoryMethods", "LazyFakerSentence"),
+    "LazyFakerAddress": ("general_manager.factory.factoryMethods", "LazyFakerAddress"),
+    "LazyFakerUrl": ("general_manager.factory.factoryMethods", "LazyFakerUrl"),
 }
 
 
@@ -61,6 +78,8 @@ UTILS_EXPORTS: LazyExportMap = {
     "snake_to_camel": ("general_manager.utils.formatString", "snake_to_camel"),
     "pascal_to_snake": ("general_manager.utils.formatString", "pascal_to_snake"),
     "camel_to_snake": ("general_manager.utils.formatString", "camel_to_snake"),
+    "CustomJSONEncoder": ("general_manager.utils.jsonEncoder", "CustomJSONEncoder"),
+    "PathMap": ("general_manager.utils.pathMapping", "PathMap"),
 }
 
 

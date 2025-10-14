@@ -7,22 +7,22 @@ __all__ = [
     "graphQlProperty",
     "graphQlMutation",
     "GeneralManager",
-    "GeneralManagerMeta",
     "Input",
-    "Bucket",
-    "DatabaseBucket",
-    "CalculationBucket",
-    "GroupBucket",
+    "CalculationInterface",
+    "DatabaseInterface",
+    "ReadOnlyInterface",
+    "ManagerBasedPermission",
+    "Rule",
 ]
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.property import graphQlProperty
 from general_manager.api.mutation import graphQlMutation
 from general_manager.manager.generalManager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
-from general_manager.bucket.baseBucket import Bucket
-from general_manager.bucket.databaseBucket import DatabaseBucket
-from general_manager.bucket.calculationBucket import CalculationBucket
-from general_manager.bucket.groupBucket import GroupBucket
+from general_manager.interface.calculationInterface import CalculationInterface
+from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.rule.rule import Rule
 
