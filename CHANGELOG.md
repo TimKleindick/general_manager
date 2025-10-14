@@ -2,6 +2,49 @@
 
 <!-- version list -->
 
+## v0.16.0 (2025-10-14)
+
+### Bug Fixes
+
+- Sort __all__ to satisfy Ruff (RUF022).
+  ([`87d4b72`](https://github.com/TimKleindick/general_manager/commit/87d4b7249e3ea957614c17ab7695b253c1ee4091))
+
+### Continuous Integration
+
+- Add ignore rule for type files in code coverage configuration
+  ([`87f68df`](https://github.com/TimKleindick/general_manager/commit/87f68df01234dca67531eee8c955a7dfaed44f69))
+
+### Documentation
+
+- Comment out unused links in documentation and remove roadmap file
+  ([`ea954dc`](https://github.com/TimKleindick/general_manager/commit/ea954dc02d9ecfe100989d244d82bce68c35551c))
+
+- Fix punctuation in documentation section
+  ([`d56d18d`](https://github.com/TimKleindick/general_manager/commit/d56d18da09ad892f041a8d98edfc3a94e2049fe0))
+
+- Update README to enhance overview and key features sections
+  ([`1280238`](https://github.com/TimKleindick/general_manager/commit/1280238c28e370c8dd0f6b5ce795551bda5e8503))
+
+### Features
+
+- Add central registry for lazy public API exports
+  ([`757213a`](https://github.com/TimKleindick/general_manager/commit/757213ab5ec6753f1cc0c3bdc509b25f618fe401))
+
+- Expand public API exports with additional lazy factory methods and utility types
+  ([`6b18a49`](https://github.com/TimKleindick/general_manager/commit/6b18a4927305a6e39809f79458bbe9035fcfea68))
+
+- Implement script to generate type-only helper modules for lazy public APIs
+  ([`7fe14ec`](https://github.com/TimKleindick/general_manager/commit/7fe14eccd8177b127ff59394759df6a4752f2503))
+
+- Refactor public API exports to use centralized registry for improved maintainability
+  ([`999248f`](https://github.com/TimKleindick/general_manager/commit/999248f0ea7f5e4b4fafa536687fe695354f7c2d))
+
+### Testing
+
+- Start public API snapshot generation and testing
+  ([`584cf1c`](https://github.com/TimKleindick/general_manager/commit/584cf1c6c6747efc2cd0c1b607faacbbfdfe7f88))
+
+
 ## v0.15.1 (2025-10-12)
 
 ### Bug Fixes
