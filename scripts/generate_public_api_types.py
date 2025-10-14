@@ -7,6 +7,7 @@ for static type checkers. Re-run the script whenever the registry changes.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -15,6 +16,7 @@ from general_manager.public_api_registry import EXPORT_REGISTRY
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TYPES_PACKAGE = PROJECT_ROOT / "src" / "general_manager" / "_types"
+SNAPSHOT_PATH = PROJECT_ROOT / "tests" / "snapshots" / "public_api_exports.json"
 
 
 def _normalize_target(name: str, target: str | tuple[str, str]) -> tuple[str, str]:
@@ -54,11 +56,15 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    snapshot: dict[str, dict[str, list[str]]] = {}
+
     for module_name, exports in EXPORT_REGISTRY.items():
         ordered_names = list(exports.keys())
         import_lines: list[str] = []
+        snapshot[module_name] = {}
         for public_name in ordered_names:
             module_path, attr_name = _normalize_target(public_name, exports[public_name])
+            snapshot[module_name][public_name] = [module_path, attr_name]
             if attr_name == public_name:
                 import_lines.append(f"from {module_path} import {attr_name}")
             else:
@@ -66,6 +72,12 @@ def main() -> None:
                     f"from {module_path} import {attr_name} as {public_name}"
                 )
         _write_module(module_name, ordered_names, import_lines)
+
+    SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SNAPSHOT_PATH.write_text(
+        json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
