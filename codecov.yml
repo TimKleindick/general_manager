@@ -8,3 +8,6 @@ coverage:
     patch:
       default:
         target: 90%
+
+ignore:
+  - "src/general_manager/_types/**"
