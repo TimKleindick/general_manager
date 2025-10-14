@@ -11,9 +11,6 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from general_manager.public_api_registry import EXPORT_REGISTRY
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TYPES_PACKAGE = PROJECT_ROOT / "src" / "general_manager" / "_types"
 SNAPSHOT_PATH = PROJECT_ROOT / "tests" / "snapshots" / "public_api_exports.json"
@@ -56,10 +53,15 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    # Ensure local package imports work when running the script directly
+    import sys
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
+    from general_manager.public_api_registry import EXPORT_REGISTRY
+
     snapshot: dict[str, dict[str, list[str]]] = {}
 
     for module_name, exports in EXPORT_REGISTRY.items():
-        ordered_names = list(exports.keys())
+        ordered_names = sorted(exports.keys())
         import_lines: list[str] = []
         snapshot[module_name] = {}
         for public_name in ordered_names:
