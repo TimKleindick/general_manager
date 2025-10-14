@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.16.1 (2025-10-14)
+
+### Bug Fixes
+
+- Update setuptools version and enhance project metadata
+  ([`a6ab3e5`](https://github.com/TimKleindick/general_manager/commit/a6ab3e548da04033842215c4709ff29d1b7e8e73))
+
+### Documentation
+
+- Update path to additional dependencies in README
+  ([`4880c8f`](https://github.com/TimKleindick/general_manager/commit/4880c8fcb488af0afecd45dd217cf646965302a1))
+
+
 ## v0.16.0 (2025-10-14)
 
 ### Bug Fixes
