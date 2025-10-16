@@ -45,6 +45,9 @@ class Dummy:
 
 class DataChangeSignalTests(TestCase):
     def setUp(self):
+        # Preserve existing receivers so they can be restored after the test run
+        self._original_pre_receivers = list(pre_data_change.receivers)
+        self._original_post_receivers = list(post_data_change.receivers)
         # Clear any existing receivers before each test
         pre_data_change.receivers.clear()
         post_data_change.receivers.clear()
@@ -53,6 +56,9 @@ class DataChangeSignalTests(TestCase):
         # Clean up receivers after each test
         pre_data_change.receivers.clear()
         post_data_change.receivers.clear()
+        # Restore the original receivers to avoid leaking state into other tests
+        pre_data_change.receivers[:] = self._original_pre_receivers
+        post_data_change.receivers[:] = self._original_post_receivers
 
     def test_create_emits_pre_and_post(self):
         # Capture pre and post signals
