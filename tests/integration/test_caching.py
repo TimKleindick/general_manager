@@ -80,6 +80,29 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return self.project.actual_costs > self.project.budget
 
+            @graphQlProperty
+            def has_duplicate_name(self) -> bool:
+                """
+                Return True when another project shares the same name.
+                
+                Uses a filtered bucket to determine whether multiple projects match the current project's name.
+                """
+                matching_count = TestProjectForCommercials.filter(
+                    name=self.project.name
+                ).count()
+                return matching_count > 1
+
+            @graphQlProperty
+            def other_project_count(self) -> int:
+                """
+                Return the number of projects whose numbers differ from the current project's number.
+                
+                Relies on an ``exclude`` lookup to ensure cache invalidation works for exclusion-based dependencies.
+                """
+                return TestProjectForCommercials.exclude(
+                    number=self.project.number
+                ).count()
+
         cls.TestProject = TestProjectForCommercials
         cls.TestCommercials = TestCommercials
         cls.general_manager_classes = [TestProjectForCommercials, TestCommercials]
@@ -153,3 +176,76 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             self.assertCacheHit()
             self.assertTrue(commercials.budget_left)
             self.assertCacheMiss()
+
+    def test_cache_invalidation_after_related_update(self):
+        """
+        Ensure cached values are invalidated when a dependent project changes while unrelated caches remain intact.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+        commercials2 = self.TestCommercials(project=self.project2)
+
+        self.assertEqual(commercials1.budget_left, Measurement(800, "EUR"))
+        self.assertCacheMiss()
+        self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
+        self.assertCacheMiss()
+
+        self.assertEqual(commercials1.budget_left, Measurement(800, "EUR"))
+        self.assertCacheHit()
+        self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
+        self.assertCacheHit()
+
+        self.project1 = self.project1.update(
+            actual_costs=Measurement(600, "EUR"), ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.budget_left, Measurement(400, "EUR"))
+        self.assertCacheMiss()
+
+        self.assertEqual(refreshed_commercials1.budget_left, Measurement(400, "EUR"))
+        self.assertCacheHit()
+
+        self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
+        self.assertCacheHit()
+
+    def test_filter_dependency_invalidation(self):
+        """
+        Verify that caches depending on ``filter`` lookups are invalidated when matching data changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertFalse(commercials1.has_duplicate_name)
+        self.assertCacheMiss()
+        self.assertFalse(commercials1.has_duplicate_name)
+        self.assertCacheHit()
+
+        self.project2 = self.project2.update(
+            name="Test Project", ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertTrue(refreshed_commercials1.has_duplicate_name)
+        self.assertCacheMiss()
+
+        self.assertTrue(refreshed_commercials1.has_duplicate_name)
+        self.assertCacheHit()
+
+    def test_exclude_dependency_invalidation(self):
+        """
+        Confirm that caches depending on ``exclude`` lookups are invalidated when excluded values change.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.other_project_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.other_project_count, 2)
+        self.assertCacheHit()
+
+        self.project2 = self.project2.update(number=1, ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.other_project_count, 1)
+        self.assertCacheMiss()
+
+        self.assertEqual(refreshed_commercials1.other_project_count, 1)
+        self.assertCacheHit()
