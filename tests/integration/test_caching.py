@@ -1,6 +1,8 @@
+from datetime import date, datetime, timedelta
+from django.utils import timezone
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.manager import GeneralManager, Input
-from django.db.models.fields import CharField, IntegerField
+from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.interface.calculationInterface import CalculationInterface
@@ -28,6 +30,8 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             number: int | None
             budget: Measurement
             actual_costs: Measurement
+            start_date: date
+            completion_at: datetime
 
             class Interface(DatabaseInterface):
                 name = CharField(max_length=100)
@@ -38,6 +42,8 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 actual_costs = MeasurementField(
                     base_unit="EUR",
                 )
+                start_date = DateField()
+                completion_at = DateTimeField()
 
                 class Meta:
                     app_label = "general_manager"
@@ -103,6 +109,90 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     number=self.project.number
                 ).count()
 
+            @graphQlProperty
+            def has_budget_buffer(self) -> bool:
+                """
+                Return True when the project's remaining budget is positive.
+                
+                Relies on ``budget_left`` so the property chain exercises nested cache lookups.
+                """
+                return self.budget_left > Measurement(0, "EUR")
+
+            @graphQlProperty
+            def similar_name_count(self) -> int:
+                """
+                Count projects whose names contain the first word of the current project's name.
+                
+                Exercises ``contains`` lookups to validate cache invalidation on pattern-based filters.
+                """
+                search_term = self.project.name.split()[0]
+                return TestProjectForCommercials.filter(
+                    name__contains=search_term
+                ).count()
+
+            @graphQlProperty
+            def active_project_count(self) -> int:
+                """
+                Count all active projects to ensure deactivation triggers cache invalidation.
+                """
+                return TestProjectForCommercials.filter(is_active=True).count()
+
+            @graphQlProperty
+            def same_name_excluding_self(self) -> int:
+                """
+                Count projects sharing the same name while excluding the current project's number.
+                
+                Exercises combined `filter` and `exclude` lookups to verify dependency tracking.
+                """
+                return (
+                    TestProjectForCommercials.filter(name=self.project.name)
+                    .exclude(number=self.project.number)
+                    .count()
+                )
+
+            @graphQlProperty
+            def project_keyword_number_range_count(self) -> int:
+                """
+                Count projects whose names contain ``\"Project\"`` and whose numbers fall within a selected range.
+                
+                Exercises multiple filter keywords and comparison operators to ensure cache invalidation stays reliable.
+                """
+                return TestProjectForCommercials.filter(
+                    name__contains="Project",
+                    number__gte=1,
+                    number__lte=3,
+                    number__in=[1, 2, 3],
+                ).count()
+
+            @graphQlProperty
+            def recent_project_window_count(self) -> int:
+                """
+                Count projects that started close to the current project's start and complete shortly after it.
+                
+                Validates cache invalidation for combined date and datetime comparisons.
+                """
+                window_start = (self.project.start_date - timedelta(days=7)).isoformat()
+                window_end = (self.project.start_date + timedelta(days=7)).isoformat()
+                completion_threshold = (
+                    self.project.completion_at + timedelta(days=7)
+                ).isoformat()
+                return TestProjectForCommercials.filter(
+                    start_date__gte=window_start,
+                    start_date__lte=window_end,
+                    completion_at__lte=completion_threshold,
+                ).count()
+
+            @graphQlProperty
+            def staged_bucket_count(self) -> int:
+                """
+                Count projects using sequential bucket operations to ensure dependencies are tracked through chained calls.
+                """
+                bucket = TestProjectForCommercials.filter(name__contains="Project")
+                bucket = bucket.filter(number__gte=1)
+                bucket = bucket.exclude(actual_costs__gte=Measurement(1000, "EUR"))
+                bucket = bucket.filter(start_date__lte=self.project.start_date.isoformat())
+                return bucket.count()
+
         cls.TestProject = TestProjectForCommercials
         cls.TestCommercials = TestCommercials
         cls.general_manager_classes = [TestProjectForCommercials, TestCommercials]
@@ -118,18 +208,24 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             number=1,
             budget=Measurement(1000, "EUR"),
             actual_costs=Measurement(200, "EUR"),
+            start_date=date(2024, 1, 1),
+            completion_at=timezone.make_aware(datetime(2024, 1, 10, 12, 0)),
         )
         self.project2 = self.TestProject.create(
             name="Another Project",
             number=2,
             budget=Measurement(2000, "EUR"),
             actual_costs=Measurement(500, "EUR"),
+            start_date=date(2024, 1, 5),
+            completion_at=timezone.make_aware(datetime(2024, 1, 15, 12, 0)),
         )
         self.project3 = self.TestProject.create(
             name="Third Project",
             number=3,
             budget=Measurement(1500, "EUR"),
             actual_costs=Measurement(1800, "EUR"),
+            start_date=date(2023, 12, 1),
+            completion_at=timezone.make_aware(datetime(2024, 1, 20, 12, 0)),
         )
 
     def test_budget_left(self):
@@ -248,4 +344,240 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertCacheMiss()
 
         self.assertEqual(refreshed_commercials1.other_project_count, 1)
+        self.assertCacheHit()
+
+    def test_chained_graphql_properties_invalidation(self):
+        """
+        Ensure properties that depend on other cached properties are invalidated correctly.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertTrue(commercials1.has_budget_buffer)
+        self.assertCacheMiss()
+        self.assertTrue(commercials1.has_budget_buffer)
+        self.assertCacheHit()
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertTrue(refreshed_commercials1.has_budget_buffer)
+        self.assertCacheHit()
+
+        self.project1 = self.project1.update(
+            actual_costs=Measurement(1200, "EUR"), ignore_permission=True
+        )
+
+        self.assertFalse(commercials1.has_budget_buffer)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.budget_left, Measurement(-200, "EUR"))
+        self.assertCacheHit()
+
+    def test_contains_lookup_invalidation(self):
+        """
+        Verify that ``contains`` lookups trigger invalidation when the matching set changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.similar_name_count, 1)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.similar_name_count, 1)
+        self.assertCacheHit()
+
+        self.project2 = self.project2.update(
+            name="Test Another Project", ignore_permission=True
+        )
+
+        self.assertEqual(commercials1.similar_name_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.similar_name_count, 2)
+        self.assertCacheHit()
+
+        self.project3 = self.project3.update(
+            name="Not matching Project", ignore_permission=True
+        )
+        self.assertEqual(commercials1.similar_name_count, 2)
+        self.assertCacheHit()
+
+    def test_deactivation_invalidation(self):
+        """
+        Ensure deactivating a project invalidates caches that depend on active records.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.active_project_count, 3)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.active_project_count, 3)
+        self.assertCacheHit()
+
+        self.project3 = self.project3.deactivate(ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.active_project_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(refreshed_commercials1.active_project_count, 2)
+        self.assertCacheHit()
+
+    def test_combined_filter_and_exclude_invalidation(self):
+        """
+        Ensure caches depending on both filter and exclude lookups refresh on updates and creations.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.same_name_excluding_self, 0)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.same_name_excluding_self, 0)
+        self.assertCacheHit()
+
+        self.project2.update(
+            name="Test Project", ignore_permission=True
+        )
+
+        self.assertEqual(commercials1.same_name_excluding_self, 1)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.same_name_excluding_self, 1)
+        self.assertCacheHit()
+
+        self.project2.update(number=1, ignore_permission=True)
+
+        self.assertEqual(commercials1.same_name_excluding_self, 0)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.same_name_excluding_self, 0)
+        self.assertCacheHit()
+
+        project4 = self.TestProject.create(
+            name="Test Project",
+            number=4,
+            budget=Measurement(500, "EUR"),
+            actual_costs=Measurement(100, "EUR"),
+            start_date=date(2024, 1, 3),
+            completion_at=timezone.make_aware(datetime(2024, 1, 12, 12, 0)),
+        )
+
+        self.assertEqual(commercials1.same_name_excluding_self, 1)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.same_name_excluding_self, 1)
+        self.assertCacheHit()
+
+        # Also ensure newly created project reports expected count
+        commercials4 = self.TestCommercials(project=project4)
+        self.assertEqual(commercials4.same_name_excluding_self, 2)
+        self.assertCacheMiss()
+        self.assertEqual(commercials4.same_name_excluding_self, 2)
+        self.assertCacheHit()
+
+    def test_complex_filter_invalidation(self):
+        """
+        Ensure caches built from multiple filter keywords and comparison operators are invalidated correctly.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.project_keyword_number_range_count, 3)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.project_keyword_number_range_count, 3)
+        self.assertCacheHit()
+
+        self.project2.update(number=4, ignore_permission=True)
+
+        self.assertEqual(commercials1.project_keyword_number_range_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.project_keyword_number_range_count, 2)
+        self.assertCacheHit()
+
+        self.project3 = self.project3.update(
+            name="Third Initiative", ignore_permission=True
+        )
+
+        self.assertEqual(commercials1.project_keyword_number_range_count, 1)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.project_keyword_number_range_count, 1)
+        self.assertCacheHit()
+
+        self.TestProject.create(
+            name="Project Phoenix",
+            number=4,
+            budget=Measurement(1200, "EUR"),
+            actual_costs=Measurement(300, "EUR"),
+            start_date=date(2024, 1, 3),
+            completion_at=timezone.make_aware(datetime(2024, 1, 12, 12, 0)),
+        )
+
+        self.assertEqual(commercials1.project_keyword_number_range_count, 1)
+        self.assertCacheHit()
+
+        self.TestProject.create(
+            name="Project Phoenix",
+            number=3,
+            budget=Measurement(1200, "EUR"),
+            actual_costs=Measurement(300, "EUR"),
+            start_date=date(2024, 1, 3),
+            completion_at=timezone.make_aware(datetime(2024, 1, 12, 12, 0)),
+        )
+
+        self.assertEqual(commercials1.project_keyword_number_range_count, 2)
+        self.assertCacheMiss()
+
+    def test_datetime_range_filter_invalidation(self):
+        """
+        Verify caches using date and datetime comparison operators refresh after relevant updates.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.recent_project_window_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.recent_project_window_count, 2)
+        self.assertCacheHit()
+
+        self.project2 = self.project2.update(
+            start_date=date(2024, 2, 1),
+            completion_at=timezone.make_aware(datetime(2024, 2, 10, 12, 0)),
+            ignore_permission=True,
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        result = refreshed_commercials1.recent_project_window_count
+        self.assertCacheMiss()
+        self.assertEqual(result, 1)
+        self.assertEqual(refreshed_commercials1.recent_project_window_count, 1)
+        self.assertCacheHit()
+
+        self.project3 = self.project3.update(
+            start_date=date(2023, 12, 28),
+            completion_at=timezone.make_aware(datetime(2024, 1, 9, 12, 0)),
+            ignore_permission=True,
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.recent_project_window_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(refreshed_commercials1.recent_project_window_count, 2)
+        self.assertCacheHit()
+
+    def test_staged_bucket_chain_invalidation(self):
+        """
+        Ensure chained bucket filter and exclude operations trigger invalidation when dependent data changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.staged_bucket_count, 1)
+        self.assertCacheMiss()
+        self.assertEqual(commercials1.staged_bucket_count, 1)
+        self.assertCacheHit()
+
+        self.project2 = self.project2.update(
+            start_date=date(2023, 12, 25),
+            actual_costs=Measurement(900, "EUR"),
+            ignore_permission=True,
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.staged_bucket_count, 2)
+        self.assertCacheMiss()
+        self.assertEqual(refreshed_commercials1.staged_bucket_count, 2)
+        self.assertCacheHit()
+
+        self.project2 = self.project2.update(
+            actual_costs=Measurement(1500, "EUR"), ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.staged_bucket_count, 1)
+        self.assertCacheMiss()
+        self.assertEqual(refreshed_commercials1.staged_bucket_count, 1)
         self.assertCacheHit()
