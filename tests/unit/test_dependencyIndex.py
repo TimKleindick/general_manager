@@ -532,6 +532,44 @@ class DateManager:
         self.timestamp = timestamp
 
 
+class ReprObject:
+    def __repr__(self):
+        return "{'key': 'value'}"
+
+    def __eq__(self, other):
+        return isinstance(other, ReprObject)
+
+
+class HashablePayload:
+    def __init__(self, foo: int):
+        if not isinstance(foo, int):
+            raise TypeError("foo must be an int")
+        self.foo = foo
+
+    def __repr__(self):
+        return f"HashablePayload(foo={self.foo})"
+
+    def __eq__(self, other):
+        return isinstance(other, HashablePayload) and self.foo == other.foo
+
+    def __hash__(self):
+        return hash(self.foo)
+
+
+class ReprManager:
+    __name__ = "ReprManager"
+
+    def __init__(self, value):
+        self.value = value
+
+
+class MissingAttrManager:
+    __name__ = "MissingAttrManager"
+
+    def __init__(self, status):
+        self.status = status
+
+
 class GenericCacheInvalidationTests(TestCase):
     @patch("general_manager.cache.dependencyIndex.get_full_index")
     @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
@@ -1235,3 +1273,328 @@ class GenericCacheInvalidationTests(TestCase):
         expected_calls = [call("EXC"), call("EXC")]
         self.assertEqual(mock_invalidate.call_args_list, expected_calls)
         self.assertEqual(mock_remove.call_args_list, expected_calls)
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_eq_repr_fallback_matches(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        val_key = repr(SimpleNamespace(foo=1))
+        mock_get_index.return_value = {
+            "filter": {
+                "ObjectManager": {
+                    "payload": {val_key: {"OBJ"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = ObjectManager(payload=SimpleNamespace(foo=1))
+        old_vals = {"payload": SimpleNamespace(foo=1)}
+
+        generic_cache_invalidation(
+            sender=ObjectManager,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_called_once_with("OBJ")
+        mock_remove.assert_called_once_with("OBJ")
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_eq_with_non_string_key_uses_raw_value(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        payload_key = HashablePayload(1)
+        mock_get_index.return_value = {
+            "filter": {
+                "ObjectManager": {
+                    "payload": {payload_key: {"OBJ"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = ObjectManager(payload=HashablePayload(1))
+        old_vals = {"payload": payload_key}
+
+        generic_cache_invalidation(
+            sender=ObjectManager,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_called_once_with("OBJ")
+        mock_remove.assert_called_once_with("OBJ")
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_in_with_invalid_literal_is_ignored(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {
+                "DummyManager2": {
+                    "status__in": {"[1, 2": {"INKEY"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = DummyManager2(status="active", count=0)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values={},
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_in_with_repr_fallback_matches(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        val_key = '[{"key": "value"}]'
+        mock_get_index.return_value = {
+            "filter": {
+                "ReprManager": {
+                    "value__in": {val_key: {"REP"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = ReprManager(value=ReprObject())
+
+        generic_cache_invalidation(
+            sender=ReprManager,
+            instance=inst,
+            old_relevant_values={},
+        )
+
+        mock_invalidate.assert_called_once_with("REP")
+        mock_remove.assert_called_once_with("REP")
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_datetime_invalid_literal_does_not_invalidate(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {
+                "DateManager": {
+                    "timestamp": {repr("invalid"): {"BAD"}},
+                }
+            },
+            "exclude": {},
+        }
+        aware_dt = datetime(2024, 7, 24, 12, 0, tzinfo=timezone.utc)
+        inst = DateManager(timestamp=aware_dt)
+        old_vals = {"timestamp": aware_dt}
+
+        generic_cache_invalidation(
+            sender=DateManager,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_datetime_naive_value_adjusts_timezone(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        val_key = repr("2024-07-24T12:00:00+00:00")
+        mock_get_index.return_value = {
+            "filter": {
+                "DateManager": {
+                    "timestamp": {val_key: {"NAIVE"}},
+                }
+            },
+            "exclude": {},
+        }
+        naive_dt = datetime(2024, 7, 24, 12, 0)
+        inst = DateManager(timestamp=naive_dt)
+        old_vals = {"timestamp": naive_dt}
+
+        generic_cache_invalidation(
+            sender=DateManager,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_called_once_with("NAIVE")
+        mock_remove.assert_called_once_with("NAIVE")
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_date_invalid_literal_does_not_invalidate(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {
+                "DateOnlyManager": {
+                    "day": {repr("invalid-date"): {"BAD"}},
+                }
+            },
+            "exclude": {},
+        }
+        today = date(2024, 7, 24)
+        inst = DateOnlyManager(day=today)
+        old_vals = {"day": today}
+
+        generic_cache_invalidation(
+            sender=DateOnlyManager,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_date_with_raw_object_matches(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        date_key = date(2024, 7, 24)
+        mock_get_index.return_value = {
+            "filter": {
+                "DateOnlyManager": {
+                    "day": {date_key: {"DAYOBJ"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = DateOnlyManager(day=date(2024, 7, 24))
+        old_vals = {"day": date_key}
+
+        generic_cache_invalidation(
+            sender=DateOnlyManager,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_called_once_with("DAYOBJ")
+        mock_remove.assert_called_once_with("DAYOBJ")
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_range_threshold_with_uncoercible_value(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {
+                "DummyManager2": {
+                    "count__gt": {repr("not-int"): {"RANGE"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = DummyManager2(status="active", count=10)
+        old_vals = {"count": 5}
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_missing_attribute_path_returns_none(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {
+                "MissingAttrManager": {
+                    "missing__field": {repr("value"): {"MISS"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = MissingAttrManager(status="open")
+
+        generic_cache_invalidation(
+            sender=MissingAttrManager,
+            instance=inst,
+            old_relevant_values={},
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependencyIndex.get_full_index")
+    @patch("general_manager.cache.dependencyIndex.invalidate_cache_key")
+    @patch("general_manager.cache.dependencyIndex.remove_cache_key_from_index")
+    def test_composite_dependencies_skip_unrelated_lookup(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        identifier = json.dumps({"count__gte": 5})
+        mock_get_index.return_value = {
+            "filter": {
+                "DummyManager2": {
+                    "__cache_dependencies__": {"CMP": {identifier}},
+                    "status": {"'active'": {"CMP"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = DummyManager2(status="active", count=10)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values={"count": 10},
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
