@@ -8,6 +8,12 @@ When a manager or bucket resolves data, it records the operation in `DependencyT
 
 CRUD methods (`create`, `update`, `deactivate`) emit cache invalidation signals that match these tuples. When a match occurs, in-memory caches and persistent dependency indices can expire stale entries.
 
+### Composite filters and excludes
+
+Multiple lookups that are applied in a single `filter()` or `exclude()` call are treated as a single dependency. The dependency index records the complete filter payload and only invalidates the cache when **all** stored conditions match the before/after state. This prevents unnecessary evictions when one attribute leaves the result set but the remaining filters would still exclude the record.
+
+Successive filter/exclude calls still register individually. If you need to keep them together, group the lookups in one call so the dependency index can evaluate the combination.
+
 ## Caching helper
 
 Use the `@general_manager.cache.cacheDecorator.cached` decorator to memoise expensive functions while automatically tracking dependencies:
