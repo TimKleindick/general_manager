@@ -359,7 +359,7 @@ def generic_cache_invalidation(
         if op == "in":
             try:
                 seq = ast.literal_eval(val_key)
-            except:
+            except (ValueError, SyntaxError):
                 return False
             for item in seq:
                 comparable = _coerce_to_type(value, item)
@@ -389,7 +389,7 @@ def generic_cache_invalidation(
         if op in ("contains", "startswith", "endswith", "regex"):
             try:
                 literal = ast.literal_eval(val_key)
-            except Exception:
+            except (ValueError, SyntaxError):
                 literal = val_key
 
             # ensure we always work with strings to avoid TypeErrors
@@ -403,7 +403,8 @@ def generic_cache_invalidation(
             # regex: treat the stored key as the regex pattern
             if op == "regex":
                 try:
-                    pattern = re.compile(val_key)
+                    pattern_source = literal if isinstance(literal, str) else str(literal)
+                    pattern = re.compile(pattern_source)
                 except re.error:
                     return False
                 return bool(pattern.search(text))
