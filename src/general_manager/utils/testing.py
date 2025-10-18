@@ -119,6 +119,7 @@ class GMTestCaseMeta(type):
             GraphQL.graphql_filter_type_registry = {}
             GraphQL._subscription_payload_registry = {}
             GraphQL.manager_registry = {}
+            GraphQL._schema = None
 
             if fallback_app is not None:
                 setattr(

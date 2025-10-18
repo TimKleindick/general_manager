@@ -2,6 +2,8 @@ SECRET_KEY = "test-secret-key"
 DEBUG = True
 
 INSTALLED_APPS = [
+    "channels",
+    "graphene_django",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -20,6 +22,7 @@ DATABASES = {
 AUTOCREATE_GRAPHQL = True
 SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
 ROOT_URLCONF = "tests.test_urls"
+GRAPHQL_URL = "graphql"
 
 MIDDLEWARE = [
     # ggf. noch andere Middleware …
