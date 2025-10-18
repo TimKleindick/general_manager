@@ -101,6 +101,7 @@ nav:
           - concepts/graphql/index.md
           - concepts/graphql/schema_autogen.md
           - concepts/graphql/filters_pagination.md
+          - concepts/graphql/subscriptions.md
           - concepts/graphql/security.md
       - Factories & Testing:
           - concepts/factories/index.md
