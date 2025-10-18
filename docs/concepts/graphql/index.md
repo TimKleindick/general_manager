@@ -12,3 +12,4 @@ Use the following guides to customise the schema:
 - [Schema auto-generation](schema_autogen.md)
 - [Filtering and pagination](filters_pagination.md)
 - [Security considerations](security.md)
+- [Subscriptions and dependency tracking](subscriptions.md)
