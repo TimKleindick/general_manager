@@ -183,3 +183,116 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             info, _DummyManager
         )
         self.assertEqual(property_names, {"propC"})
+
+    def test_manager_without_interface_returns_empty_set(self) -> None:
+        class NoInterfaceManager:
+            pass
+
+        info = self._build_info(
+            """
+            subscription {
+                onDummyChange(id: "1") {
+                    action
+                }
+            }
+            """
+        )
+        property_names = GraphQL._subscription_property_names(info, NoInterfaceManager)  # type: ignore[arg-type]
+        self.assertEqual(property_names, set())
+
+    def test_manager_without_graphql_properties_returns_empty_set(self) -> None:
+        class EmptyInterface:
+            @classmethod
+            def getGraphQLProperties(cls) -> dict[str, object]:
+                return {}
+
+        class EmptyManager:
+            Interface = EmptyInterface
+
+        info = self._build_info(
+            """
+            subscription {
+                onEmptyChange(id: "1") {
+                    item {
+                        anything
+                    }
+                }
+            }
+            """
+        )
+        property_names = GraphQL._subscription_property_names(info, EmptyManager)  # type: ignore[arg-type]
+        self.assertEqual(property_names, set())
+
+
+class GraphQLPrimeHelpersTests(unittest.TestCase):
+    def setUp(self) -> None:
+        class PrimeInterface:
+            @classmethod
+            def getGraphQLProperties(cls) -> dict[str, object]:
+                return {
+                    "alpha": PrimeTestManager.alpha,
+                    "beta": PrimeTestManager.beta,
+                }
+
+        class PrimeTestManager:
+            access_log: list[str] = []
+
+            class Interface(PrimeInterface):
+                pass
+
+            @property
+            def alpha(self) -> int:
+                type(self).access_log.append("alpha")
+                return 1
+
+            @property
+            def beta(self) -> int:
+                type(self).access_log.append("beta")
+                return 2
+
+        self.manager_cls = PrimeTestManager
+
+    def test_prime_all_properties_when_names_not_specified(self) -> None:
+        instance = self.manager_cls()
+        GraphQL._prime_graphql_properties(instance)
+        self.assertEqual(
+            self.manager_cls.access_log,
+            ["alpha", "beta"],
+        )
+
+    def test_prime_only_requested_properties(self) -> None:
+        self.manager_cls.access_log = []
+        instance = self.manager_cls()
+        GraphQL._prime_graphql_properties(instance, ["beta", "missing"])
+        self.assertEqual(self.manager_cls.access_log, ["beta"])
+
+
+class GraphQLDependencyExtractionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._original_registry = GraphQL.manager_registry.copy()
+
+        class DepManager:
+            class Interface:
+                @classmethod
+                def getGraphQLProperties(cls) -> dict[str, object]:
+                    return {}
+
+        GraphQL.manager_registry = {"DepManager": DepManager}
+        self.dep_manager_cls = DepManager
+
+    def tearDown(self) -> None:
+        GraphQL.manager_registry = self._original_registry
+
+    def test_dependencies_from_tracker_filters_invalid_entries(self) -> None:
+        records = [
+            ("DepManager", "identification", "{'id': 1}"),
+            ("DepManager", "identification", "not a dict"),
+            ("DepManager", "filter", "{'id': 2}"),
+            ("Unknown", "identification", "{'id': 3}"),
+        ]
+
+        extracted = GraphQL._dependencies_from_tracker(records)
+        self.assertEqual(len(extracted), 1)
+        manager_cls, identification = extracted[0]
+        self.assertIs(manager_cls, self.dep_manager_cls)
+        self.assertEqual(identification, {"id": 1})
