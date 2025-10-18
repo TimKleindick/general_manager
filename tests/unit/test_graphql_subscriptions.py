@@ -8,11 +8,28 @@ from types import SimpleNamespace
 import graphene
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
+from graphql import parse
+from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
+import unittest
 
 from general_manager.api.graphql import GraphQL
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+
+class _DummyInterface:
+    @classmethod
+    def getGraphQLProperties(cls) -> dict[str, object]:
+        return {
+            "propA": object(),
+            "propB": object(),
+            "propC": object(),
+        }
+
+
+class _DummyManager:
+    Interface = _DummyInterface
 
 
 class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
@@ -94,3 +111,75 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         update = second_event.data["onEmployeeChange"]
         self.assertEqual(update["action"], "update")
         self.assertEqual(update["item"]["name"], "Bob")
+
+
+class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
+    @staticmethod
+    def _build_info(query: str) -> SimpleNamespace:
+        document = parse(query)
+        field_nodes = []
+        fragments: dict[str, FragmentDefinitionNode] = {}
+        for definition in document.definitions:
+            if isinstance(definition, FragmentDefinitionNode):
+                fragments[definition.name.value] = definition
+            elif isinstance(definition, OperationDefinitionNode):
+                if definition.selection_set is not None:
+                    field_nodes.extend(definition.selection_set.selections)
+        return SimpleNamespace(field_nodes=field_nodes, fragments=fragments)
+
+    def test_direct_property_selection(self) -> None:
+        info = self._build_info(
+            """
+            subscription {
+                onDummyChange(id: "1") {
+                    item {
+                        propA
+                    }
+                }
+            }
+            """
+        )
+        property_names = GraphQL._subscription_property_names(
+            info, _DummyManager
+        )
+        self.assertEqual(property_names, {"propA"})
+
+    def test_property_selection_via_inline_fragment_and_alias(self) -> None:
+        info = self._build_info(
+            """
+            subscription {
+                onDummyChange(id: "1") {
+                    item {
+                        ... on DummyManagerType {
+                            aliasValue: propB
+                        }
+                    }
+                }
+            }
+            """
+        )
+        property_names = GraphQL._subscription_property_names(
+            info, _DummyManager
+        )
+        self.assertEqual(property_names, {"propB"})
+
+    def test_property_selection_via_named_fragment(self) -> None:
+        info = self._build_info(
+            """
+            fragment ExtraFields on DummyManagerType {
+                propC
+                nonProperty
+            }
+            subscription {
+                onDummyChange(id: "1") {
+                    item {
+                        ...ExtraFields
+                    }
+                }
+            }
+            """
+        )
+        property_names = GraphQL._subscription_property_names(
+            info, _DummyManager
+        )
+        self.assertEqual(property_names, {"propC"})
