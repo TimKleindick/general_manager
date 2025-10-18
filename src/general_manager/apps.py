@@ -195,6 +195,7 @@ class GeneralmanagerConfig(AppConfig):
         if GraphQL._subscription_class is not None:
             schema_kwargs["subscription"] = GraphQL._subscription_class
         schema = graphene.Schema(**schema_kwargs)
+        GraphQL._schema = schema
         GeneralmanagerConfig.addGraphqlUrl(schema)
 
     @staticmethod

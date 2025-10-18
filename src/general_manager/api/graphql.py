@@ -135,6 +135,7 @@ class GraphQL:
     graphql_type_registry: dict[str, type] = {}
     graphql_filter_type_registry: dict[str, type] = {}
     manager_registry: dict[str, type[GeneralManager]] = {}
+    _schema: graphene.Schema | None = None
 
     @staticmethod
     def _get_channel_layer(strict: bool = False) -> BaseChannelLayer | None:
@@ -144,6 +145,16 @@ class GraphQL:
                 "No channel layer configured. Configure CHANNEL_LAYERS to enable GraphQL subscriptions."
             )
         return layer
+
+    @classmethod
+    def get_schema(cls) -> graphene.Schema | None:
+        """
+        Return the currently configured Graphene schema, if any.
+
+        Returns:
+            graphene.Schema | None: Active schema instance when GraphQL is initialised, otherwise ``None``.
+        """
+        return cls._schema
 
     @staticmethod
     def _group_name(
