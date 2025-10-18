@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast as py_ast
 import asyncio
 from contextlib import suppress
 import json
@@ -16,6 +17,7 @@ from typing import (
     AsyncIterator,
     Callable,
     Generator,
+    Iterable,
     TYPE_CHECKING,
     Type,
     Union,
@@ -26,9 +28,12 @@ from typing import (
 
 import graphene  # type: ignore[import]
 from graphql.language import ast
+from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode, SelectionSetNode
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer, get_channel_layer
 
+from general_manager.cache.cacheTracker import DependencyTracker
+from general_manager.cache.dependencyIndex import Dependency
 from general_manager.cache.signals import post_data_change
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.interface.baseInterface import InterfaceBase
@@ -873,16 +878,126 @@ class GraphQL:
         cls._query_fields[item_field_name] = item_field
         cls._query_fields[f"resolve_{item_field_name}"] = resolver
 
+    @staticmethod
+    def _prime_graphql_properties(
+        instance: GeneralManager, property_names: Iterable[str] | None = None
+    ) -> None:
+        """
+        Eagerly resolve GraphQLProperty attributes to capture dependency metadata.
+        """
+        interface_cls = getattr(instance.__class__, "Interface", None)
+        if interface_cls is None:
+            return
+        available_properties = interface_cls.getGraphQLProperties()
+        if property_names is None:
+            names = available_properties.keys()
+        else:
+            names = [name for name in property_names if name in available_properties]
+        for prop_name in names:
+            getattr(instance, prop_name)
+
+    @classmethod
+    def _dependencies_from_tracker(
+        cls, dependency_records: Iterable[Dependency]
+    ) -> list[tuple[type[GeneralManager], dict[str, Any]]]:
+        """
+        Convert DependencyTracker records into manager/identification tuples.
+        """
+        resolved: list[tuple[type[GeneralManager], dict[str, Any]]] = []
+        for manager_name, operation, identifier in dependency_records:
+            if operation != "identification":
+                continue
+            manager_class = cls.manager_registry.get(manager_name)
+            if manager_class is None:
+                continue
+            try:
+                parsed = py_ast.literal_eval(identifier)
+            except (ValueError, SyntaxError):
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            resolved.append((manager_class, parsed))
+        return resolved
+
+    @classmethod
+    def _subscription_property_names(
+        cls,
+        info: GraphQLResolveInfo,
+        manager_class: type[GeneralManager],
+    ) -> set[str]:
+        """
+        Return GraphQLProperty names referenced under the subscription payload item.
+        """
+        interface_cls = getattr(manager_class, "Interface", None)
+        if interface_cls is None:
+            return set()
+        available_properties = set(interface_cls.getGraphQLProperties().keys())
+        if not available_properties:
+            return set()
+
+        property_names: set[str] = set()
+
+        def collect_from_selection(selection_set: SelectionSetNode | None) -> None:
+            if selection_set is None:
+                return
+            for selection in selection_set.selections:
+                if isinstance(selection, FieldNode):
+                    name = selection.name.value
+                    if name in available_properties:
+                        property_names.add(name)
+                elif isinstance(selection, FragmentSpreadNode):
+                    fragment = info.fragments.get(selection.name.value)
+                    if fragment is not None:
+                        collect_from_selection(fragment.selection_set)
+                elif isinstance(selection, InlineFragmentNode):
+                    collect_from_selection(selection.selection_set)
+
+        def inspect_selection_set(selection_set: SelectionSetNode | None) -> None:
+            if selection_set is None:
+                return
+            for selection in selection_set.selections:
+                if isinstance(selection, FieldNode):
+                    if selection.name.value == "item":
+                        collect_from_selection(selection.selection_set)
+                    else:
+                        inspect_selection_set(selection.selection_set)
+                elif isinstance(selection, FragmentSpreadNode):
+                    fragment = info.fragments.get(selection.name.value)
+                    if fragment is not None:
+                        inspect_selection_set(fragment.selection_set)
+                elif isinstance(selection, InlineFragmentNode):
+                    inspect_selection_set(selection.selection_set)
+
+        for node in info.field_nodes:
+            inspect_selection_set(node.selection_set)
+        return property_names
+
     @classmethod
     def _resolve_subscription_dependencies(
         cls,
         manager_class: type[GeneralManager],
         instance: GeneralManager,
+        dependency_records: Iterable[Dependency] | None = None,
     ) -> list[tuple[type[GeneralManager], dict[str, Any]]]:
         """
         Derive dependency definitions for calculation subscriptions based on manager inputs.
         """
         dependencies: list[tuple[type[GeneralManager], dict[str, Any]]] = []
+        seen: set[tuple[str, str]] = set()
+        if dependency_records:
+            for dependency_class, dependency_identification in cls._dependencies_from_tracker(
+                dependency_records
+            ):
+                if (
+                    dependency_class is manager_class
+                    and dependency_identification == instance.identification
+                ):
+                    continue
+                key = (dependency_class.__name__, repr(dependency_identification))
+                if key in seen:
+                    continue
+                seen.add(key)
+                dependencies.append((dependency_class, dependency_identification))
         interface_cls = manager_class.Interface
 
         for (
@@ -899,17 +1014,27 @@ class GraphQL:
             values = raw_value if isinstance(raw_value, list) else [raw_value]
             for value in values:
                 if isinstance(value, GeneralManager):
+                    identification = deepcopy(value.identification)
+                    key = (input_field.type.__name__, repr(identification))
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     dependencies.append(
                         (
                             cast(type[GeneralManager], input_field.type),
-                            deepcopy(value.identification),
+                            identification,
                         )
                     )
                 elif isinstance(value, dict):
+                    identification_dict = deepcopy(cast(dict[str, Any], value))
+                    key = (input_field.type.__name__, repr(identification_dict))
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     dependencies.append(
                         (
                             cast(type[GeneralManager], input_field.type),
-                            deepcopy(cast(dict[str, Any], value)),
+                            identification_dict,
                         )
                     )
 
@@ -917,12 +1042,23 @@ class GraphQL:
 
     @staticmethod
     def _instantiate_manager(
-        manager_class: type[GeneralManager], identification: dict[str, Any]
-    ) -> GeneralManager:
+        manager_class: type[GeneralManager],
+        identification: dict[str, Any],
+        *,
+        collect_dependencies: bool = False,
+        property_names: Iterable[str] | None = None,
+    ) -> tuple[GeneralManager, set[Dependency]]:
         """
         Helper used by async subscriptions to create manager instances in a worker thread.
         """
-        return manager_class(**identification)
+        if collect_dependencies:
+            with DependencyTracker() as captured_dependencies:
+                instance = manager_class(**identification)
+                GraphQL._prime_graphql_properties(instance, property_names)
+            return instance, captured_dependencies
+
+        instance = manager_class(**identification)
+        return instance, set()
 
     @classmethod
     def _addSubscriptionField(
@@ -960,11 +1096,16 @@ class GraphQL:
             **identification: Any,
         ) -> AsyncIterator[SubscriptionEvent]:
             identification_copy = deepcopy(identification)
+            property_names = cls._subscription_property_names(
+                info, cast(type[GeneralManager], generalManagerClass)
+            )
             try:
-                instance = await asyncio.to_thread(
+                instance, dependency_records = await asyncio.to_thread(
                     cls._instantiate_manager,
                     cast(type[GeneralManager], generalManagerClass),
                     identification_copy,
+                    collect_dependencies=True,
+                    property_names=property_names,
                 )
             except Exception as exc:  # pragma: no cover - bubbled to GraphQL
                 raise GraphQLError(str(exc)) from exc
@@ -985,7 +1126,9 @@ class GraphQL:
                 )
             }
             dependencies = cls._resolve_subscription_dependencies(
-                cast(type[GeneralManager], generalManagerClass), instance
+                cast(type[GeneralManager], generalManagerClass),
+                instance,
+                dependency_records,
             )
             for dependency_class, dependency_identification in dependencies:
                 group_names.add(
@@ -1005,10 +1148,11 @@ class GraphQL:
                     while True:
                         action = await queue.get()
                         try:
-                            item = await asyncio.to_thread(
+                            item, _ = await asyncio.to_thread(
                                 cls._instantiate_manager,
                                 cast(type[GeneralManager], generalManagerClass),
                                 identification_copy,
+                                property_names=property_names,
                             )
                         except Exception:
                             item = None
