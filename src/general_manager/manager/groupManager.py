@@ -3,7 +3,7 @@
 from __future__ import annotations
 from typing import Any, Generic, Iterator, Type, cast, get_args
 from datetime import datetime, date, time
-from general_manager.api.graphql import GraphQLProperty
+from general_manager.api.property import GraphQLProperty
 from general_manager.measurement import Measurement
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.bucket.baseBucket import (
