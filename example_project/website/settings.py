@@ -31,6 +31,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    "channels",
     "graphene_django",
     "general_manager",
     "django.contrib.admin",
@@ -71,6 +72,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "website.wsgi.application"
+ASGI_APPLICATION = "website.asgi.application"
 
 
 # Database
@@ -139,3 +141,9 @@ CACHES = {
 # GraphQL settings
 AUTOCREATE_GRAPHQL = True
 GRAPHQL_URL = "graphql/"
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
+}

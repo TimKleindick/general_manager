@@ -59,7 +59,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.user = User.objects.create_user(username="tester", password="secret")
         self.client.force_login(self.user)
         self.mutation = """
-        query($employeeId: Int!) {
+        query($employeeId: ID!) {
             taxcalculation(employeeId: $employeeId) {
                 calculatedTax {
                     value
