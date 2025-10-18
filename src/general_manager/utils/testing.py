@@ -111,10 +111,14 @@ class GMTestCaseMeta(type):
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
+            GraphQL._subscription_class = None
             GraphQL._mutations = {}
             GraphQL._query_fields = {}
+            GraphQL._subscription_fields = {}
             GraphQL.graphql_type_registry = {}
             GraphQL.graphql_filter_type_registry = {}
+            GraphQL._subscription_payload_registry = {}
+            GraphQL.manager_registry = {}
 
             if fallback_app is not None:
                 setattr(
@@ -219,7 +223,12 @@ class LoggingCache(LocMemCache):
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
             "LOCATION": "test-cache",
         }
-    }
+    },
+    CHANNEL_LAYERS={
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    },
 )
 class GeneralManagerTransactionTestCase(
     GraphQLTransactionTestCase, metaclass=GMTestCaseMeta

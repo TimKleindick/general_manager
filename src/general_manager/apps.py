@@ -11,7 +11,7 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty
 from general_manager.api.graphql import GraphQL
-from typing import TYPE_CHECKING, Type, cast
+from typing import TYPE_CHECKING, Any, Type, cast
 from django.core.checks import register
 import logging
 from django.core.management.base import BaseCommand
@@ -176,13 +176,25 @@ class GeneralmanagerConfig(AppConfig):
                 },
             )
             GraphQL._mutation_class = mutation_class
-            schema = graphene.Schema(
-                query=GraphQL._query_class,
-                mutation=mutation_class,
-            )
         else:
             GraphQL._mutation_class = None
-            schema = graphene.Schema(query=GraphQL._query_class)
+
+        if GraphQL._subscription_fields:
+            subscription_class = type(
+                "Subscription",
+                (graphene.ObjectType,),
+                GraphQL._subscription_fields,
+            )
+            GraphQL._subscription_class = subscription_class
+        else:
+            GraphQL._subscription_class = None
+
+        schema_kwargs: dict[str, Any] = {"query": GraphQL._query_class}
+        if GraphQL._mutation_class is not None:
+            schema_kwargs["mutation"] = GraphQL._mutation_class
+        if GraphQL._subscription_class is not None:
+            schema_kwargs["subscription"] = GraphQL._subscription_class
+        schema = graphene.Schema(**schema_kwargs)
         GeneralmanagerConfig.addGraphqlUrl(schema)
 
     @staticmethod
