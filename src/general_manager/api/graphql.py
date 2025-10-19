@@ -1276,9 +1276,7 @@ class GraphQL:
                 raise GraphQLError(str(exc)) from exc
 
             try:
-                channel_layer = cls._get_channel_layer(strict=True)
-                if channel_layer is None:
-                    raise RuntimeError("Channel layer is not configured")
+                channel_layer = cast(BaseChannelLayer, cls._get_channel_layer(strict=True))
             except RuntimeError as exc:
                 raise GraphQLError(str(exc)) from exc
             channel_name = cast(str, await channel_layer.new_channel())
