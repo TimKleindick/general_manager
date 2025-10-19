@@ -22,6 +22,24 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        Create and register three in-test GeneralManager models (Employee, TaxRule, TaxCalculation) on the test class for subscription tests.
+        
+        Defines:
+        - Employee: a DatabaseInterface model with `name` and `salary` fields.
+        - TaxRule: a DatabaseInterface model with `name` and `multiplier` fields.
+        - TaxCalculation: a CalculationInterface model referencing an Employee and exposing class-level state:
+          - `default_rule_id` (int | None): optional id used by `configuredTax`.
+          - `access_log` (list[str]): records which GraphQL properties were accessed.
+        
+        TaxCalculation provides three GraphQL properties used by tests:
+        - `calculatedTax`: computes tax as employee salary * 0.2 and appends "calculatedTax" to `access_log`.
+        - `configuredTax`: uses `default_rule_id` to look up a TaxRule and computes salary * rule.multiplier; appends "configuredTax" to `access_log` and raises `ValueError` if no rule is configured.
+        - `unusedTax`: computes salary * 0.5 and appends "unusedTax" to `access_log`.
+        
+        Side effects:
+        - Attaches `TaxRule`, `Employee`, `TaxCalculation`, and `general_manager_classes` to the test class (`cls`) for use by the test methods.
+        """
         class Employee(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=120)
@@ -41,11 +59,28 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
 
             @graphQlProperty()
             def calculatedTax(self) -> Measurement:
+                """
+                Compute the calculated tax for this calculation from the associated employee's salary.
+                
+                This method appends "calculatedTax" to the class-level `access_log` as a record of access.
+                
+                Returns:
+                    Measurement: The tax amount computed as `employee.salary * 0.2`.
+                """
                 self.__class__.access_log.append("calculatedTax")
                 return self.employee.salary * 0.2
 
             @graphQlProperty()
             def configuredTax(self) -> Measurement:
+                """
+                Compute the tax for this calculation using the currently configured TaxRule.
+                
+                Returns:
+                    Measurement: The tax amount computed as employee.salary multiplied by the configured TaxRule.multiplier.
+                
+                Raises:
+                    ValueError: If no tax rule is configured for this TaxCalculation.
+                """
                 self.__class__.access_log.append("configuredTax")
                 rule_id = self.__class__.default_rule_id
                 if rule_id is None:
@@ -55,6 +90,14 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
 
             @graphQlProperty()
             def unusedTax(self) -> Measurement:
+                """
+                Compute an unused tax equal to half of the employee's salary.
+                
+                Also records access by appending "unusedTax" to the class-level `access_log`.
+                
+                Returns:
+                    Measurement: A measurement representing 50% of the employee's salary (same unit as the salary).
+                """
                 self.__class__.access_log.append("unusedTax")
                 return self.employee.salary * 0.5
 
@@ -64,6 +107,16 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [Employee, TaxCalculation, TaxRule]
 
     def setUp(self) -> None:
+        """
+        Prepare test fixtures for each test: create and log in a test user, enable Django async operations for the test, and initialize a default TaxRule and TaxCalculation state.
+        
+        This sets:
+        - self.user: a newly created and authenticated test user.
+        - the environment variable DJANGO_ALLOW_ASYNC_UNSAFE to "true" for the duration of the test.
+        - self.tax_rule: a TaxRule instance used as the default rule.
+        - TestGraphQLCalculationSubscriptions.TaxCalculation.default_rule_id to the created rule's id.
+        - TestGraphQLCalculationSubscriptions.TaxCalculation.access_log to an empty list.
+        """
         super().setUp()
         User = get_user_model()
         self.user = User.objects.create_user(username="bob", password="secret")
@@ -79,6 +132,11 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         self.TaxCalculation.access_log = []
 
     def tearDown(self) -> None:
+        """
+        Restore test-class state and environment variables after each test.
+        
+        Resets TaxCalculation class-level configuration (clears default_rule_id and access_log), restores the DJANGO_ALLOW_ASYNC_UNSAFE environment setting to its original value (removing it if it was not set), and then invokes the superclass teardown.
+        """
         self.TaxCalculation.default_rule_id = None
         self.TaxCalculation.access_log = []
         if self._async_env_original is None:
@@ -88,6 +146,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         super().tearDown()
 
     def _build_schema(self) -> graphene.Schema:
+        """
+        Build a Graphene schema using the test GraphQL query class and any configured mutation or subscription classes.
+        
+        Returns:
+            graphene.Schema: Schema composed of GraphQL._query_class and, when set, GraphQL._mutation_class and GraphQL._subscription_class.
+        """
         schema_kwargs: dict[str, object] = {"query": GraphQL._query_class}
         if GraphQL._mutation_class is not None:
             schema_kwargs["mutation"] = GraphQL._mutation_class
@@ -96,6 +160,11 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         return graphene.Schema(**schema_kwargs)
 
     def test_calculation_subscription_reacts_to_dependency(self) -> None:
+        """
+        Verifies that a calculation GraphQL subscription updates when an underlying dependency changes.
+        
+        Subscribes to onTaxcalculationChange for a created employee, asserts the initial snapshot contains the expected calculated tax, updates the employee's salary to trigger a change, and asserts the subsequent update event reflects the recalculated tax and records access to the `calculatedTax` property.
+        """
         employee = self.Employee.create(
             name="Alice",
             salary=Measurement(3000, "EUR"),
@@ -118,6 +187,15 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
 
         async def run_subscription() -> tuple[object, object]:
+            """
+            Execute the GraphQL subscription, trigger an update on the employee to produce a second event, and return the initial snapshot and the subsequent update event.
+            
+            Raises:
+                AssertionError: If the subscription generator reports errors.
+            
+            Returns:
+                tuple[first_event, second_event]: `first_event` is the initial snapshot event from the subscription; `second_event` is the follow-up update event produced after the employee salary is changed.
+            """
             generator = await schema.subscribe(
                 subscription,
                 variable_values={"employeeId": employee.id},
@@ -155,6 +233,11 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         self.assertIn("calculatedTax", self.TaxCalculation.access_log)
 
     def test_calculation_subscription_reacts_to_graphql_property_dependency_with_fragment(self) -> None:
+        """
+        Verify that a GraphQL subscription using a fragment updates calculated GraphQL properties when their backend dependency changes.
+        
+        Subscribes to onTaxcalculationChange for a created employee with a fragment that selects `configuredTax`, asserts the initial snapshot value and unit (reflecting the initial TaxRule multiplier), updates the TaxRule multiplier, and asserts the subsequent update event reflects the new computed `configuredTax` value and unit. Also verifies that `TaxCalculation.access_log` records access to `configuredTax` and does not contain `unusedTax`.
+        """
         employee = self.Employee.create(
             name="Alice",
             salary=Measurement(3000, "EUR"),
@@ -181,6 +264,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
 
         async def run_subscription() -> tuple[object, object]:
+            """
+            Subscribe to the prepared GraphQL subscription, consume the initial snapshot and the next update produced after mutating the tax rule, and return both events.
+            
+            Returns:
+                tuple[first_event, second_event]: The first subscription event (snapshot) and the subsequent event (update).
+            """
             generator = await schema.subscribe(
                 subscription,
                 variable_values={"employeeId": employee.id},
@@ -219,6 +308,11 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         self.assertNotIn("unusedTax", self.TaxCalculation.access_log)
 
     def test_calculation_subscription_reacts_to_graphql_property_dependency(self) -> None:
+        """
+        Verify that a GraphQL subscription updates when a calculation's GraphQL property depends on another model.
+        
+        Subscribes to onTaxcalculationChange for a created employee and asserts the initial snapshot and subsequent update reflect changes to the TaxRule multiplier used by the `configuredTax` calculation. Confirms the reported `value` and `unit` for `configuredTax` in the snapshot and update events and that `configuredTax` was accessed while `unusedTax` was not recorded in the calculation access log.
+        """
         employee = self.Employee.create(
             name="Alice",
             salary=Measurement(3000, "EUR"),
@@ -241,6 +335,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
 
         async def run_subscription() -> tuple[object, object]:
+            """
+            Subscribe to the prepared GraphQL subscription, consume the initial snapshot and the next update produced after mutating the tax rule, and return both events.
+            
+            Returns:
+                tuple[first_event, second_event]: The first subscription event (snapshot) and the subsequent event (update).
+            """
             generator = await schema.subscribe(
                 subscription,
                 variable_values={"employeeId": employee.id},
@@ -279,6 +379,11 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         self.assertNotIn("unusedTax", self.TaxCalculation.access_log)
 
     def test_calculation_subscription_handles_property_aliases(self) -> None:
+        """
+        Verify GraphQL subscription handles aliases for calculation properties.
+        
+        Subscribes to onTaxcalculationChange requesting `configuredTax` aliased as `primaryTax`, asserts the initial snapshot and subsequent update reflect the TaxRule multiplier change (values 600 → 900 with unit "EUR"), and verifies that `configuredTax` was accessed while `unusedTax` was not.
+        """
         employee = self.Employee.create(
             name="Alice",
             salary=Measurement(3000, "EUR"),
@@ -301,6 +406,17 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
 
         async def run_subscription() -> tuple[object, object]:
+            """
+            Subscribe to the given GraphQL subscription, advance it to capture an initial snapshot and the subsequent update, and return both events.
+            
+            Performs the subscription using the test schema and context for the current employee, awaits the first yielded event, triggers an asynchronous update to the tax rule (multiplier=0.3), awaits the second yielded event, closes the subscription generator, and returns the two received events as a tuple.
+            
+            Returns:
+                tuple[object, object]: The first (snapshot) event and the second (update) event produced by the subscription.
+            
+            Raises:
+                AssertionError: If the subscription generator exposes an `errors` attribute.
+            """
             generator = await schema.subscribe(
                 subscription,
                 variable_values={"employeeId": employee.id},
@@ -339,6 +455,14 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         self.assertNotIn("unusedTax", self.TaxCalculation.access_log)
 
     def test_calculation_subscription_without_item_payload(self) -> None:
+        """
+        Verifies that a subscription requesting only the `action` field emits a snapshot and an update without resolving item payloads.
+        
+        Subscribes to `onTaxcalculationChange` for an employee, receives an initial snapshot event, updates the employee's salary to trigger a change event, and asserts:
+        - the first event's action is "snapshot",
+        - the second event's action is "update",
+        - no calculation GraphQL properties were accessed (TaxCalculation.access_log remains empty).
+        """
         employee = self.Employee.create(
             name="Alice",
             salary=Measurement(3000, "EUR"),
@@ -355,6 +479,17 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
 
         async def run_subscription() -> tuple[object, object]:
+            """
+            Run the GraphQL subscription and collect the initial snapshot event and the next update event.
+            
+            The function subscribes using the prepared schema and context for the current employee, consumes the first emitted event, performs an update to the employee salary, then consumes the second emitted event before closing the subscription generator.
+            
+            Returns:
+                tuple[first_event, second_event]: `first_event` is the initial snapshot event object; `second_event` is the subsequent update event object.
+            
+            Raises:
+                AssertionError: If the subscription generator reports errors on creation.
+            """
             generator = await schema.subscribe(
                 subscription,
                 variable_values={"employeeId": employee.id},
