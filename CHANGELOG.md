@@ -2,6 +2,85 @@
 
 <!-- version list -->
 
+## v0.17.0 (2025-10-19)
+
+### Bug Fixes
+
+- Correct cache invalidation for multiple filter params at once.
+  ([`1233bdf`](https://github.com/TimKleindick/general_manager/commit/1233bdfe635aa52871eeb332fe2a3adc828f4d85))
+
+- Tighten literal eval handling in dependency index
+  ([`d2b82d1`](https://github.com/TimKleindick/general_manager/commit/d2b82d1354f203b43dff5ee4067907540f066b55))
+
+- Update import path for GraphQLProperty in groupManager and test files
+  ([`f97cc4f`](https://github.com/TimKleindick/general_manager/commit/f97cc4f342c3e987e23c131700f63c1e926113e2))
+
+- Update setuptools version and enhance project metadata
+  ([`a6ab3e5`](https://github.com/TimKleindick/general_manager/commit/a6ab3e548da04033842215c4709ff29d1b7e8e73))
+
+### Documentation
+
+- Add explanation for composite filters and excludes in caching
+  ([`0a97a09`](https://github.com/TimKleindick/general_manager/commit/0a97a09fb30045be0da2a13fc216bc0fc2f92684))
+
+- Add subscriptions guide to GraphQL concepts and update navigation
+  ([`6b8fbf7`](https://github.com/TimKleindick/general_manager/commit/6b8fbf7481fdcbcc95959005149a92d07cccc825))
+
+- Update path to additional dependencies in README
+  ([`4880c8f`](https://github.com/TimKleindick/general_manager/commit/4880c8fcb488af0afecd45dd217cf646965302a1))
+
+### Features
+
+- Automatic ASGI websocket routing for GraphQL subscriptions when setting AUTOCREATE_GRAPHQL
+  ([`c973577`](https://github.com/TimKleindick/general_manager/commit/c973577ce25f5756bc2e49ffba93cddb7c4504d3))
+
+- Enhance GraphQL subscription handling with property resolution and dependency tracking
+  ([`bf5eaea`](https://github.com/TimKleindick/general_manager/commit/bf5eaea57d9ccfac638256133095c38aeca717fc))
+
+- Implement GraphQL subscription handling with websocket support and add related tests
+  ([`3e0526c`](https://github.com/TimKleindick/general_manager/commit/3e0526c3514297a90d31a7c301e8a80f1753dd6e))
+
+- Implement GraphQL subscriptions for calculation and database updates
+  ([`5259796`](https://github.com/TimKleindick/general_manager/commit/5259796a2d0c793c68adca373794661b741a83d7))
+
+### Refactoring
+
+- Update identification fields to use graphene.Argument for improved clarity
+  ([`e41d132`](https://github.com/TimKleindick/general_manager/commit/e41d132a9e8e45bff05f1acb17cd6e6dd4110172))
+
+### Testing
+
+- Add caching tests for project name duplicates and exclusion dependencies
+  ([`d55353d`](https://github.com/TimKleindick/general_manager/commit/d55353d7dfb9a78585e5ed01bc8c7243c897d507))
+
+- Add GraphQL subscription property selection tests
+  ([`bcbbc71`](https://github.com/TimKleindick/general_manager/commit/bcbbc71fc82668cb120d437026554e195842b776))
+
+- Add tests for managers without GraphQL properties and interface
+  ([`2a4104b`](https://github.com/TimKleindick/general_manager/commit/2a4104b3ff9d26572c98a168114568a6498907b6))
+
+- Add unit tests for caching edge cases
+  ([`85198b1`](https://github.com/TimKleindick/general_manager/commit/85198b1617460023d6ec5b56b2fe971cbf170618))
+
+- Add unit tests for composite parameter tracking and cache key removal
+  ([`0aeeadf`](https://github.com/TimKleindick/general_manager/commit/0aeeadf7cca92fd73189a108b40ed883305a0798))
+
+- Add unit tests for GraphQL subscription consumer and helper methods
+  ([`96d2b79`](https://github.com/TimKleindick/general_manager/commit/96d2b792aea3e2a8bb3aa70620e97fa63917845d))
+
+- Extend caching test bench with more complex testcases
+  ([`b141dc3`](https://github.com/TimKleindick/general_manager/commit/b141dc34ce55e9095ac36c18e2ef8a184967026a))
+
+- Improve graphql subscription handling tests for better coverage and add edge cases
+  ([`f4ae813`](https://github.com/TimKleindick/general_manager/commit/f4ae81326c83ab20c5dd8f5739df00a20ced8f91))
+
+- Preserve and restore original signal receivers in tests
+  ([`7c4f409`](https://github.com/TimKleindick/general_manager/commit/7c4f409001a9f272d836de45cee198ca7f71683f))
+
+- Reset GraphQL._page_type_registry to prevent cross-test state leakage.
+  ([`bf25488`](https://github.com/TimKleindick/general_manager/commit/bf25488c74f2e6e0fcb0b02e8e613a9e1d7c4c03))
+
+
 ## v0.16.1 (2025-10-14)
 
 ### Bug Fixes
