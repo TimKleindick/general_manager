@@ -28,6 +28,11 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     connection_params: dict[str, Any]
 
     async def connect(self) -> None:
+        """
+        Initialize connection state and accept the WebSocket, preferring the "graphql-transport-ws" subprotocol when offered.
+        
+        Sets up initial flags and containers used for subscription management (connection_acknowledged, connection_params, active_subscriptions) and accepts the WebSocket connection with the selected subprotocol.
+        """
         self.connection_acknowledged = False
         self.connection_params = {}
         self.active_subscriptions: dict[str, asyncio.Task[None]] = {}
@@ -38,6 +43,12 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         await self.accept(subprotocol=selected_subprotocol)
 
     async def disconnect(self, code: int) -> None:
+        """
+        Perform cleanup when the WebSocket disconnects by cancelling and awaiting any active subscription tasks and clearing the subscription registry.
+        
+        Parameters:
+            code (int): The WebSocket close code received from the connection.
+        """
         tasks = list(self.active_subscriptions.values())
         for task in tasks:
             task.cancel()
@@ -47,6 +58,15 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         self.active_subscriptions.clear()
 
     async def receive_json(self, content: dict[str, Any], **_: Any) -> None:
+        """
+        Dispatch incoming graphql-transport-ws protocol messages to the appropriate handler.
+        
+        Parameters:
+            content (dict[str, Any]): The received JSON message; expected to include a "type" key
+                whose value is one of "connection_init", "ping", "subscribe", or "complete".
+                Messages with an unrecognized or missing "type" cause the connection to be closed
+                with code 4400.
+        """
         message_type = content.get("type")
         if message_type == "connection_init":
             await self._handle_connection_init(content)
@@ -60,6 +80,17 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4400)
 
     async def _handle_connection_init(self, content: dict[str, Any]) -> None:
+        """
+        Handle a client's "connection_init" message and send a protocol acknowledgment.
+        
+        If the connection has already been acknowledged, closes the WebSocket with code 4429.
+        If the incoming message contains a "payload" that is a dict, stores it on
+        self.connection_params; otherwise clears connection_params. Marks the connection
+        as acknowledged and sends a "connection_ack" protocol message.
+        
+        Parameters:
+            content (dict[str, Any]): The received WebSocket message for "connection_init".
+        """
         if self.connection_acknowledged:
             await self.close(code=4429)
             return
@@ -72,6 +103,14 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         await self._send_protocol_message({"type": "connection_ack"})
 
     async def _handle_ping(self, content: dict[str, Any]) -> None:
+        """
+        Responds to an incoming ping by sending a pong protocol message.
+        
+        If the incoming `content` contains a `"payload"` key, its value is included in the sent pong message under the same key.
+        
+        Parameters:
+            content (dict[str, Any]): The received message object; may include an optional `"payload"` to echo.
+        """
         payload = content.get("payload")
         response: dict[str, Any] = {"type": "pong"}
         if payload is not None:
@@ -79,6 +118,19 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         await self._send_protocol_message(response)
 
     async def _handle_subscribe(self, content: dict[str, Any]) -> None:
+        """
+        Handle an incoming GraphQL "subscribe" message and start or send the corresponding subscription results.
+        
+        Validates the connection state and the message shape, checks that a subscription-capable schema is available, parses and executes the GraphQL operation, and either streams resulting events to the client or sends a single execution result. On protocol or execution errors the method sends appropriate "error" and "complete" protocol messages. If an active subscription exists for the same operation id it is stopped before the new subscription is started.
+        
+        Parameters:
+            content (dict[str, Any]): The incoming protocol message. Expected keys:
+                - "id" (str): The operation identifier.
+                - "payload" (dict): Operation payload containing:
+                    - "query" (str): GraphQL query string (required).
+                    - "variables" (dict, optional): Operation variables.
+                    - "operationName" (str, optional): Named operation to execute.
+        """
         if not self.connection_acknowledged:
             await self.close(code=4401)
             return
@@ -214,6 +266,14 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def _handle_complete(self, content: dict[str, Any]) -> None:
+        """
+        Handle an incoming "complete" protocol message by stopping the subscription for the specified operation.
+        
+        If the message payload contains an "id" field that is a string, the corresponding active subscription task is cancelled and cleaned up; otherwise the message is ignored.
+        
+        Parameters:
+        	content (dict[str, Any]): The received protocol message payload. Expected to contain an "id" key with the operation identifier.
+        """
         operation_id = content.get("id")
         if isinstance(operation_id, str):
             await self._stop_subscription(operation_id)
@@ -221,6 +281,18 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     async def _stream_subscription(
         self, operation_id: str, async_iterator: Any
     ) -> None:
+        """
+        Stream results from an async iterator to the client for a subscription operation.
+        
+        Iterates the provided async_iterator and sends each yielded execution result to the client for the given operation_id. If an unexpected exception occurs while iterating, sends an error payload for the operation. In all cases, attempts to close the iterator, sends a completion message for the operation_id, and removes the operation from active_subscriptions.
+        
+        Parameters:
+            operation_id (str): The subscription operation identifier to use in protocol messages.
+            async_iterator (Any): An asynchronous iterator that yields execution result objects to be sent to the client.
+        
+        Raises:
+            asyncio.CancelledError: Propagated if the surrounding subscription task is cancelled.
+        """
         try:
             async for result in async_iterator:
                 await self._send_execution_result(operation_id, result)
@@ -242,6 +314,11 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
             self.active_subscriptions.pop(operation_id, None)
 
     async def _stop_subscription(self, operation_id: str) -> None:
+        """
+        Cancel and await the active subscription task for the given operation id, if one exists.
+        
+        If a task is found for operation_id it is cancelled and awaited; CancelledError raised during awaiting is suppressed. If no task exists this is a no-op.
+        """
         task = self.active_subscriptions.pop(operation_id, None)
         if task is None:
             return
@@ -252,6 +329,15 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     async def _send_execution_result(
         self, operation_id: str, result: ExecutionResult
     ) -> None:
+        """
+        Send a GraphQL execution result to the client as a "next" protocol message.
+        
+        The message payload includes a "data" field when result.data is present and an "errors" field when result.errors is non-empty; errors are converted to serializable dictionaries.
+        
+        Parameters:
+            operation_id (str): The operation identifier to include as the message `id`.
+            result (ExecutionResult): The GraphQL execution result to serialize and send.
+        """
         payload: dict[str, Any] = {}
         if result.data is not None:
             payload["data"] = result.data
@@ -262,6 +348,12 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def _send_protocol_message(self, message: dict[str, Any]) -> None:
+        """
+        Send a JSON-serializable GraphQL transport protocol message over the WebSocket.
+        
+        Parameters:
+            message (dict[str, Any]): The protocol message to send. If the connection is already closed, the message is discarded silently.
+        """
         try:
             await self.send_json(message)
         except RuntimeError:
@@ -269,6 +361,16 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
             pass
 
     def _build_context(self) -> Any:
+        """
+        Builds a request context object for GraphQL execution containing the current user, decoded headers, scope, and connection parameters.
+        
+        Returns:
+            context (SimpleNamespace): An object with attributes:
+                - `user`: the value of `scope["user"]` (may be None).
+                - `headers`: a dict mapping header names to decoded string values.
+                - `scope`: the consumer's `scope`.
+                - `connection_params`: the connection parameters provided during `connection_init`.
+        """
         user = self.scope.get("user")
         raw_headers = self.scope.get("headers") or []
         headers = {
@@ -286,16 +388,41 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
 
     @staticmethod
     def _schema_has_no_subscription(schema: GraphQLSchema) -> bool:
+        """
+        Check whether the provided GraphQL schema defines no subscription root type.
+        
+        Parameters:
+            schema (GraphQLSchema): The schema to inspect.
+        
+        Returns:
+            bool: `True` if the schema has no subscription type, `False` otherwise.
+        """
         return schema.subscription_type is None
 
     @staticmethod
     def _format_error(error: Exception) -> dict[str, Any]:
+        """
+        Format an exception into a GraphQL-compatible error dictionary.
+        
+        Parameters:
+            error (Exception): The exception to format; may be a GraphQLError.
+        
+        Returns:
+            dict[str, Any]: If `error` is a `GraphQLError`, returns its `formatted` representation.
+            Otherwise returns a dictionary with a single `"message"` key containing the exception's string.
+        """
         if isinstance(error, GraphQLError):
             return cast(dict[str, Any], error.formatted)
         return {"message": str(error)}
 
     @staticmethod
     async def _close_iterator(async_iterator: Any) -> None:
+        """
+        Close an asynchronous iterator if it exposes an `aclose` coroutine.
+        
+        Parameters:
+            async_iterator (Any): An asynchronous iterator; if it has an `aclose` coroutine method, that coroutine will be awaited to close the iterator.
+        """
         close = getattr(async_iterator, "aclose", None)
         if close is None:
             return
