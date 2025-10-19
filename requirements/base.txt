@@ -1,4 +1,4 @@
-asgiref==3.8.1
+asgiref==3.10.0
 Django==5.2.7
 django-simple-history==3.8.0
 exrex==0.12.0

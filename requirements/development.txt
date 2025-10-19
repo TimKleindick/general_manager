@@ -5,6 +5,7 @@ pytest==8.4.0
 pytest_django==4.11.1
 pytest_cov==4.1.0
 django-types==0.21.0
+pre-commit==4.3.0
 
 # For documentation
 mkdocs==1.6.1

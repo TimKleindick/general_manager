@@ -86,3 +86,76 @@ upload_to_release = true
 
 [tool.semantic_release.remote]
 ignore_token_for_push = true
+
+[tool.ruff]
+
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+extend-exclude = ["example_project"]
+
+[tool.ruff.lint]
+select = [
+    "F",   # Pyflakes
+    "B",   # flake8-bugbear
+    "S",   # flake8-bandit (Security)
+    "BLE", # blind except
+    "T10", # debugger
+    "EXE", # executable
+    "ARG", # unused arguments
+    "TRY", # tryceratops
+    "RUF", # Ruff-own rules
+    "E7",  # pycodestyle: Syntax
+    "E9",  # pycodestyle: Runtime
+]
+
+ignore = ["F401", "I001", "Q000", "UP006", "E501", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["E402"]
+"**/conftest.py" = ["E402"]
+"example_project/manage.py" = ["TRY003"]
+"example_project/**/migrations/*.py" = ["RUF012"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.12"
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = ["src"]
+files = ["src"]
+exclude = ["^build/", "^dist/", "^docs/", "^example_project/", "^site/"]
+
+[[tool.mypy.overrides]]
+module = [
+    "channels",
+    "channels.*",
+    "channels.layers",
+    "channels.auth",
+    "channels.routing",
+    "django",
+    "django.*",
+    "django_simple_history",
+    "simple_history",
+    "simple_history.*",
+    "exrex",
+    "factory",
+    "factory.*",
+    "faker",
+    "faker.*",
+    "graphene",
+    "graphene.*",
+    "graphql",
+    "graphql.*",
+    "numpy",
+    "pint",
+    "pint.*",
+    "promise",
+]
+ignore_missing_imports = true
