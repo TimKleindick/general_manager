@@ -156,7 +156,10 @@ class GeneralmanagerConfig(AppConfig):
         pending_graphql_interfaces: list[Type[GeneralManager]],
     ) -> None:
         """
-        Creates GraphQL interfaces and mutations for the provided general manager classes, builds the GraphQL schema, and registers the GraphQL endpoint in the Django URL configuration.
+        Create GraphQL interfaces and mutations for the given manager classes, build the GraphQL schema, and add the GraphQL endpoint to the URL configuration.
+        
+        Parameters:
+            pending_graphql_interfaces (list[Type[GeneralManager]]): GeneralManager classes that require GraphQL interface and mutation generation.
         """
         logger.debug("Starting to create GraphQL interfaces and mutations...")
         for general_manager_class in pending_graphql_interfaces:

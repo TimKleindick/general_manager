@@ -80,15 +80,18 @@ class GMTestCaseMeta(type):
         attrs: dict[str, object],
     ) -> type:
         """
-        Construct a new test case class that wires GeneralManager-specific initialisation into `setUpClass`.
-
+        Create a new test case class that injects GeneralManager-specific initialization into `setUpClass`.
+        
+        The constructed class replaces or wraps any user-defined `setUpClass` with logic that resets GraphQL and manager registries, configures an optional fallback app lookup, ensures database tables for managed models exist, initializes GeneralManager and GraphQL registrations, and then calls the standard GraphQL test setup.
+        
         Parameters:
-            name (str): Name of the dynamically created test case class.
-            bases (tuple[type, ...]): Base classes that the new test case should inherit.
-            attrs (dict[str, Any]): Namespace containing class attributes, potentially including a custom `setUpClass`.
-
+            mcs (type[GMTestCaseMeta]): Metaclass constructing the new class.
+            name (str): Name of the class to create.
+            bases (tuple[type, ...]): Base classes for the new class.
+            attrs (dict[str, object]): Class namespace; may contain a user-defined `setUpClass` and `fallback_app`.
+        
         Returns:
-            type: Newly constructed class with an augmented `setUpClass` implementation.
+            type: The newly created test case class whose `setUpClass` has been augmented for GeneralManager testing.
         """
         user_setup = attrs.get("setUpClass")
         fallback_app = cast(str | None, attrs.get("fallback_app", "general_manager"))
@@ -99,15 +102,9 @@ class GMTestCaseMeta(type):
             cls: type["GeneralManagerTransactionTestCase"],
         ) -> None:
             """
-            Prepare the test harness with GeneralManager-specific setup prior to executing tests.
-
-            The method resets GraphQL registries, configures optional fallback app lookups, synchronises database tables for managed models, and finally invokes the parent `setUpClass`.
-
-            Parameters:
-                cls (type[GeneralManagerTransactionTestCase]): Test case subclass whose environment is being initialised.
-
-            Returns:
-                None
+            Prepare the test environment for GeneralManager GraphQL tests.
+            
+            Resets GraphQL and manager registries, optionally patches Django's app-config lookup to use a fallback app, ensures database tables exist for models provided by the test's configured manager classes, initializes GeneralManager classes (including read-only interfaces) and GraphQL registrations, and finally invokes the base class setUpClass.
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
