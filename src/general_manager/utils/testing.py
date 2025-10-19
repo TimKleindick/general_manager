@@ -231,6 +231,7 @@ class LoggingCache(LocMemCache):
 class GeneralManagerTransactionTestCase(
     GraphQLTransactionTestCase, metaclass=GMTestCaseMeta
 ):
+    GRAPHQL_URL = "/graphql/"
     general_manager_classes: list[type[GeneralManager]] = []
     read_only_classes: list[type[GeneralManager]] = []
     fallback_app: str | None = "general_manager"
