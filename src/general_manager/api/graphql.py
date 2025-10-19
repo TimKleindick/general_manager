@@ -863,22 +863,22 @@ class GraphQL:
         Returns:
             dict[str, Any]: Mapping from argument name to a Graphene argument/field. Fields for related manager inputs use "<name>_id" as an ID, the "id" input uses an ID, and other inputs are mapped to appropriate Graphene read fields with `required=True`.
         """
-        identification_fields: dict[str, Any] = {}
-        for (
-            input_field_name,
-            input_field,
-        ) in generalManagerClass.Interface.input_fields.items():
+        identification_fields: dict[str, graphene.Argument] = {}
+        for input_field_name, input_field in generalManagerClass.Interface.input_fields.items():
             if issubclass(input_field.type, GeneralManager):
                 key = f"{input_field_name}_id"
-                identification_fields[key] = graphene.ID(required=True)
-            elif input_field_name == "id":
-                identification_fields[input_field_name] = graphene.ID(required=True)
-            else:
-                argument_field = cls._mapFieldToGrapheneRead(
-                    input_field.type, input_field_name
+                identification_fields[key] = graphene.Argument(
+                    graphene.ID, required=True
                 )
-                argument_field.required = True
-                identification_fields[input_field_name] = argument_field
+            elif input_field_name == "id":
+                identification_fields[input_field_name] = graphene.Argument(
+                    graphene.ID, required=True
+                )
+            else:
+                base_type = cls._mapFieldToGrapheneBaseType(input_field.type)
+                identification_fields[input_field_name] = graphene.Argument(
+                    base_type, required=True
+                )
         return identification_fields
 
     @classmethod
