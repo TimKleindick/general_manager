@@ -1,0 +1,45 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9  # <--- version anpassen, wenn du möchtest
+    hooks:
+      - id: ruff
+        name: ruff (lint & fix)
+        args: [--fix, --exit-non-zero-on-fix]
+        additional_dependencies: []  # bleibt leer, Ruff kommt mit
+      - id: ruff-format
+        name: ruff (format)
+        # keine args nötig, nutzt [tool.ruff.format] aus pyproject.toml
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.12.1  # aktuelle stabile MyPy-Version
+    hooks:
+      - id: mypy
+        name: mypy (type checking)
+        # MyPy kann seine Konfiguration direkt aus pyproject.toml lesen
+        args: ["--standard"]
+        files: ^src/
+        additional_dependencies:
+          - channels
+          - django-stubs
+          - djangorestframework-stubs
+          - django-simple-history
+          - exrex
+          - factory-boy
+          - faker
+          - graphene
+          - graphene-stubs
+          - graphene-django
+          - graphql-core
+          - numpy
+          - pint
+          - typing-extensions
