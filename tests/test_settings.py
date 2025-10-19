@@ -22,7 +22,8 @@ DATABASES = {
 AUTOCREATE_GRAPHQL = True
 SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
 ROOT_URLCONF = "tests.test_urls"
-GRAPHQL_URL = "graphql"
+GRAPHQL_URL = "graphql/"
+ASGI_APPLICATION = "tests.testing_asgi.application"
 
 MIDDLEWARE = [
     # ggf. noch andere Middleware …

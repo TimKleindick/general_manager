@@ -7,7 +7,7 @@ from asgiref.testing import ApplicationCommunicator
 from django.db.models import CharField
 from graphql import ExecutionResult
 
-from example_project.website.asgi import application
+from tests.testing_asgi import application
 from general_manager.api.graphql import GraphQL
 from general_manager.interface.databaseInterface import DatabaseInterface
 # NOTE: Circular import is fine in tests.

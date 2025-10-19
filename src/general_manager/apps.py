@@ -3,9 +3,11 @@ from django.apps import AppConfig
 import graphene  # type: ignore[import]
 import os
 from django.conf import settings
-from django.urls import path
+from django.urls import path, re_path
 from graphene_django.views import GraphQLView  # type: ignore[import]
-from importlib import import_module
+from importlib import import_module, util
+import importlib.abc
+import sys
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
@@ -224,6 +226,143 @@ class GeneralmanagerConfig(AppConfig):
                 GraphQLView.as_view(graphiql=True, schema=schema),
             )
         )
+        GeneralmanagerConfig._ensure_asgi_subscription_route(graph_ql_url)
+
+    @staticmethod
+    def _ensure_asgi_subscription_route(graphql_url: str) -> None:
+        asgi_path = getattr(settings, "ASGI_APPLICATION", None)
+        if not asgi_path:
+            logger.debug("ASGI_APPLICATION not configured; skipping websocket setup.")
+            return
+
+        try:
+            module_path, attr_name = asgi_path.rsplit(".", 1)
+        except ValueError:
+            logger.warning(
+                "ASGI_APPLICATION '%s' is not a valid module path; skipping websocket setup.",
+                asgi_path,
+            )
+            return
+
+        try:
+            asgi_module = import_module(module_path)
+        except RuntimeError as exc:
+            if "populate() isn't reentrant" not in str(exc):
+                logger.warning(
+                    "Unable to import ASGI module '%s': %s", module_path, exc, exc_info=True
+                )
+                return
+
+            spec = util.find_spec(module_path)
+            if spec is None or spec.loader is None:
+                logger.warning(
+                    "Could not locate loader for ASGI module '%s'; skipping websocket setup.",
+                    module_path,
+                )
+                return
+
+            def finalize(module: Any) -> None:
+                GeneralmanagerConfig._finalize_asgi_module(module, attr_name, graphql_url)
+
+            class _Loader(importlib.abc.Loader):
+                def __init__(self, original_loader: importlib.abc.Loader) -> None:
+                    self._original_loader = original_loader
+
+                def create_module(self, spec):  # type: ignore[override]
+                    if hasattr(self._original_loader, "create_module"):
+                        return self._original_loader.create_module(spec)  # type: ignore[attr-defined]
+                    return None
+
+                def exec_module(self, module):  # type: ignore[override]
+                    self._original_loader.exec_module(module)
+                    finalize(module)
+
+            wrapped_loader = _Loader(spec.loader)
+
+            class _Finder(importlib.abc.MetaPathFinder):
+                def __init__(self) -> None:
+                    self._processed = False
+
+                def find_spec(self, fullname, path, target=None):  # type: ignore[override]
+                    if fullname != module_path or self._processed:
+                        return None
+                    self._processed = True
+                    new_spec = util.spec_from_loader(fullname, wrapped_loader)
+                    if new_spec is not None:
+                        new_spec.submodule_search_locations = spec.submodule_search_locations
+                    return new_spec
+
+            finder = _Finder()
+            sys.meta_path.insert(0, finder)
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Unable to import ASGI module '%s': %s", module_path, exc, exc_info=True
+            )
+            return
+
+        GeneralmanagerConfig._finalize_asgi_module(asgi_module, attr_name, graphql_url)
+
+    @staticmethod
+    def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) -> None:
+        try:
+            from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
+            from channels.routing import ProtocolTypeRouter, URLRouter  # type: ignore[import-untyped]
+            from general_manager.api.graphql_subscription_consumer import (
+                GraphQLSubscriptionConsumer,
+            )
+        except Exception as exc:  # pragma: no cover - optional dependency
+            logger.debug(
+                "Channels or GraphQL subscription consumer unavailable (%s); skipping websocket setup.",
+                exc,
+            )
+            return
+
+        websocket_patterns = getattr(asgi_module, "websocket_urlpatterns", None)
+        if websocket_patterns is None:
+            websocket_patterns = []
+            setattr(asgi_module, "websocket_urlpatterns", websocket_patterns)
+
+        if not hasattr(websocket_patterns, "append"):
+            logger.warning(
+                "websocket_urlpatterns in '%s' does not support appending; skipping websocket setup.",
+                asgi_module.__name__,
+            )
+            return
+
+        normalized = graphql_url.strip("/")
+        pattern = rf"^{normalized}/?$" if normalized else r"^$"
+
+        route_exists = any(
+            getattr(route, "_general_manager_graphql_ws", False)
+            for route in websocket_patterns
+        )
+        if not route_exists:
+            websocket_route = re_path(pattern, GraphQLSubscriptionConsumer.as_asgi()) # type: ignore[arg-type]
+            setattr(websocket_route, "_general_manager_graphql_ws", True)
+            websocket_patterns.append(websocket_route)
+
+        application = getattr(asgi_module, attr_name, None)
+        if application is None:
+            return
+
+        if (
+            hasattr(application, "application_mapping")
+            and isinstance(application.application_mapping, dict)
+        ):
+            application.application_mapping["websocket"] = AuthMiddlewareStack(
+                URLRouter(list(websocket_patterns))
+            )
+        else:
+            wrapped_application = ProtocolTypeRouter(
+                {
+                    "http": application,
+                    "websocket": AuthMiddlewareStack(
+                        URLRouter(list(websocket_patterns))
+                    ),
+                }
+            )
+            setattr(asgi_module, attr_name, wrapped_application)
 
     @staticmethod
     def checkPermissionClass(general_manager_class: Type[GeneralManager]) -> None:
