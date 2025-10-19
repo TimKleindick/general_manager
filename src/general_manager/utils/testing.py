@@ -115,6 +115,7 @@ class GMTestCaseMeta(type):
             GraphQL.graphql_type_registry = {}
             GraphQL.graphql_filter_type_registry = {}
             GraphQL._subscription_payload_registry = {}
+            GraphQL._page_type_registry = {}
             GraphQL.manager_registry = {}
             GraphQL._schema = None
 
