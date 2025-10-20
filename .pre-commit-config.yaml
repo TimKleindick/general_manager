@@ -20,26 +20,24 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
 
-  # - repo: https://github.com/pre-commit/mirrors-mypy
-  #   rev: v1.12.1  # aktuelle stabile MyPy-Version
-  #   hooks:
-  #     - id: mypy
-  #       name: mypy (type checking)
-  #       # MyPy kann seine Konfiguration direkt aus pyproject.toml lesen
-  #       args: ["--strict"]
-  #       files: ^src/
-  #       additional_dependencies:
-  #         - channels
-  #         - django-stubs
-  #         - djangorestframework-stubs
-  #         - django-simple-history
-  #         - exrex
-  #         - factory-boy
-  #         - faker
-  #         - graphene
-  #         - graphene-stubs
-  #         - graphene-django
-  #         - graphql-core
-  #         - numpy
-  #         - pint
-  #         - typing-extensions
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.12.1  # aktuelle stabile MyPy-Version
+    hooks:
+      - id: mypy
+        name: mypy (type checking)
+        files: ^src/
+        additional_dependencies:
+          - channels
+          - django-stubs
+          - djangorestframework-stubs
+          - django-simple-history
+          - exrex
+          - factory-boy
+          - faker
+          - graphene
+          - graphene-stubs
+          - graphene-django
+          - graphql-core
+          - numpy
+          - pint
+          - typing-extensions

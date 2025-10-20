@@ -83,7 +83,7 @@ class Rule(Generic[GeneralManagerType]):
         self._tree = ast.parse(src)
         for parent in ast.walk(self._tree):
             for child in ast.iter_child_nodes(parent):
-                child.parent = parent
+                child.parent = parent  # type: ignore
 
         # 3) Extract referenced variables
         self._variables = self._extract_variables()

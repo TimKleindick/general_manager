@@ -260,7 +260,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 if hasattr(field, "default"):
                     default = field.default  # type: ignore
                 fields[field_name] = {
-                    "type": related_model,
+                    "type": cast(type, related_model),
                     "is_derived": False,
                     "is_required": not field.null,
                     "is_editable": field.editable,
@@ -291,7 +291,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
             if related_model is not None:
                 fields[f"{field_name}_list"] = {
-                    "type": related_model,
+                    "type": cast(type, related_model),
                     "is_required": False,
                     "is_derived": not bool(field.many_to_many),
                     "is_editable": bool(field.many_to_many and field.editable),
@@ -523,13 +523,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             type(name, (base_model_class,), model_fields),
         )
         if meta_class and rules:
-            model._meta.rules = rules
-            # full_clean Methode hinzufügen
-            model.full_clean = getFullCleanMethode(model)
-        # Interface-Typ bestimmen
+            model._meta.rules = rules  # type: ignore[attr-defined]
+            # add full_clean method
+            model.full_clean = getFullCleanMethode(model)  # type: ignore[assignment]
+        # Determine interface type
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(interface.__name__, (interface,), {})
-        interface_cls._model = model
+        interface_cls._model = model  # type: ignore[attr-defined]
         attrs["Interface"] = interface_cls
 
         # Build the associated factory class
@@ -564,7 +564,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             model (relatedClass): Django model linked to the manager.
         """
         interface_class._parent_class = new_class
-        model._general_manager_class = new_class
+        model._general_manager_class = new_class  # type: ignore
 
     @classmethod
     def handleInterface(

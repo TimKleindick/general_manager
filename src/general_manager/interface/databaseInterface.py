@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 from typing import (
-    Type,
     Any,
+    Type,
+    cast,
 )
 from django.db import models, transaction
 from simple_history.utils import update_change_reason  # type: ignore
@@ -59,9 +60,10 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             ValueError: If unknown fields are supplied.
             ValidationError: Propagated when model validation fails.
         """
-        cls._checkForInvalidKwargs(cls._model, kwargs=kwargs)
-        kwargs, many_to_many_kwargs = cls._sortKwargs(cls._model, kwargs)
-        instance = cls.__setAttrForWrite(cls._model(), kwargs)
+        model_cls = cast(type[GeneralManagerModel], cls._model)
+        cls._checkForInvalidKwargs(model_cls, kwargs=kwargs)
+        kwargs, many_to_many_kwargs = cls._sortKwargs(model_cls, kwargs)
+        instance = cls.__setAttrForWrite(model_cls(), kwargs)
         pk = cls._save_with_history(instance, creator_id, history_comment)
         cls.__setManyToManyAttributes(instance, many_to_many_kwargs)
         return pk
@@ -84,9 +86,10 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             ValueError: If unknown fields are supplied.
             ValidationError: Propagated when model validation fails.
         """
-        self._checkForInvalidKwargs(self._model, kwargs=kwargs)
-        kwargs, many_to_many_kwargs = self._sortKwargs(self._model, kwargs)
-        instance = self.__setAttrForWrite(self._model.objects.get(pk=self.pk), kwargs)
+        model_cls = cast(type[GeneralManagerModel], self._model)
+        self._checkForInvalidKwargs(model_cls, kwargs=kwargs)
+        kwargs, many_to_many_kwargs = self._sortKwargs(model_cls, kwargs)
+        instance = self.__setAttrForWrite(model_cls.objects.get(pk=self.pk), kwargs)
         pk = self._save_with_history(instance, creator_id, history_comment)
         self.__setManyToManyAttributes(instance, many_to_many_kwargs)
         return pk
@@ -104,7 +107,8 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         Returns:
             int: Primary key of the deactivated instance.
         """
-        instance = self._model.objects.get(pk=self.pk)
+        model_cls = cast(type[GeneralManagerModel], self._model)
+        instance = model_cls.objects.get(pk=self.pk)
         instance.is_active = False
         if history_comment:
             history_comment = f"{history_comment} (deactivated)"

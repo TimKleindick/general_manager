@@ -152,7 +152,7 @@ class GroupManager(Generic[GeneralManagerType]):
         for entry in self._data:
             total_data.append(getattr(entry, item))
 
-        new_data = None
+        new_data: Any = None
         if all([i is None for i in total_data]):
             return new_data
         total_data = [i for i in total_data if i is not None]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from general_manager.interface.baseInterface import (
     InterfaceBase,
     classPostCreationMethod,
@@ -22,8 +22,8 @@ from general_manager.bucket.calculationBucket import CalculationBucket
 class CalculationInterface(InterfaceBase):
     """Interface exposing calculation inputs without persisting data."""
 
-    _interface_type = "calculation"
-    input_fields: dict[str, Input]
+    _interface_type: ClassVar[str] = "calculation"
+    input_fields: ClassVar[dict[str, Input]]
 
     def getData(self, search_date: datetime | None = None) -> Any:
         raise NotImplementedError("Calculations do not store data.")

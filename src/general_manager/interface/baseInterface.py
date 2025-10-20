@@ -105,9 +105,9 @@ class InvalidInputValueError(ValueError):
 class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
 
-    _parent_class: Type[GeneralManager]
+    _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
-    input_fields: dict[str, Input]
+    input_fields: ClassVar[dict[str, "Input"]]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """

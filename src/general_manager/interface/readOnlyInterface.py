@@ -3,7 +3,7 @@
 from __future__ import annotations
 import json
 
-from typing import Type, Any, Callable, TYPE_CHECKING, cast
+from typing import Type, Any, Callable, TYPE_CHECKING, cast, ClassVar
 from django.db import models, transaction
 from general_manager.interface.databaseBasedInterface import (
     DBBasedInterface,
@@ -15,7 +15,6 @@ from general_manager.interface.databaseBasedInterface import (
     interfaceBaseClass,
 )
 from django.db import connection
-from typing import ClassVar
 from django.core.checks import Warning
 import logging
 
@@ -61,8 +60,8 @@ class InvalidReadOnlyDataTypeError(TypeError):
 class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     """Interface that reads static JSON data into a managed read-only model."""
 
-    _interface_type = "readonly"
-    _parent_class: Type[GeneralManager]
+    _interface_type: ClassVar[str] = "readonly"
+    _parent_class: ClassVar[Type["GeneralManager"]]
 
     @staticmethod
     def getUniqueFields(model: Type[models.Model]) -> set[str]:

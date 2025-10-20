@@ -572,7 +572,7 @@ class GraphQL:
             return graphene.Field(MeasurementType, target_unit=graphene.String())
         elif issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
-                attributes = {
+                attributes: dict[str, Any] = {
                     "reverse": graphene.Boolean(),
                     "page": graphene.Int(),
                     "page_size": graphene.Int(),
@@ -933,7 +933,7 @@ class GraphQL:
         Returns:
             dict[str, Any]: Mapping from argument name to a Graphene argument/field. Fields for related manager inputs use "<name>_id" as an ID, the "id" input uses an ID, and other inputs are mapped to appropriate Graphene read fields with `required=True`.
         """
-        identification_fields: dict[str, graphene.Argument] = {}
+        identification_fields: dict[str, Any] = {}
         for (
             input_field_name,
             input_field,
@@ -976,7 +976,7 @@ class GraphQL:
 
         # resolver and field for the list query
         list_field_name = f"{generalManagerClass.__name__.lower()}_list"
-        attributes = {
+        attributes: dict[str, Any] = {
             "reverse": graphene.Boolean(),
             "page": graphene.Int(),
             "page_size": graphene.Int(),
@@ -1464,6 +1464,7 @@ class GraphQL:
             req = info["is_required"]
             default = info["default"]
 
+            fld: Any
             if issubclass(typ, GeneralManager):
                 if name.endswith("_list"):
                     fld = graphene.List(
@@ -1484,12 +1485,13 @@ class GraphQL:
                 )
 
             # mark for generate* code to know what is editable
-            fld.editable = info["is_editable"]
+            cast(Any, fld).editable = info["is_editable"]
             fields[name] = fld
 
         # history_comment is always optional without a default value
-        fields["history_comment"] = graphene.String()
-        fields["history_comment"].editable = True
+        history_field = graphene.String()
+        cast(Any, history_field).editable = True
+        fields["history_comment"] = history_field
 
         return fields
 

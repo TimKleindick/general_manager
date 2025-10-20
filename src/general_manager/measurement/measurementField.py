@@ -10,7 +10,7 @@ import pint
 from general_manager.measurement.measurement import Measurement, ureg, currency_units
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models import Lookup, Transform
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 
 class MeasurementFieldNotEditableError(ValidationError):
@@ -23,16 +23,16 @@ class MeasurementFieldNotEditableError(ValidationError):
 class MeasurementField(models.Field):
     description = "Stores a measurement (value + unit) but exposes a single field API"
 
-    empty_values: ClassVar[tuple[object, ...]] = (None, "", [], (), {})
+    empty_values: tuple[object, ...] = (None, "", [], (), {})
 
     def __init__(
         self,
         base_unit: str,
-        *args: object,
+        *args: Any,
         null: bool = False,
         blank: bool = False,
         editable: bool = True,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> None:
         """
         Configure a measurement field backed by separate value and unit columns.
@@ -52,8 +52,8 @@ class MeasurementField(models.Field):
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
 
         self.editable = editable
-        self.value_field: models.DecimalField[Any]
-        self.unit_field: models.CharField[Any]
+        self.value_field: models.Field[Any, Any]
+        self.unit_field: models.Field[Any, Any]
         if null:
             self.value_field = models.DecimalField(
                 max_digits=30,
@@ -85,7 +85,13 @@ class MeasurementField(models.Field):
                 blank=blank,
             )
 
-        super().__init__(*args, null=null, blank=blank, editable=editable, **kwargs)
+        options: dict[str, Any] = {
+            **kwargs,
+            "null": null,
+            "blank": blank,
+            "editable": editable,
+        }
+        super().__init__(*args, **options)
 
     def contribute_to_class(
         self,

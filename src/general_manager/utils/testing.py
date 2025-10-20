@@ -120,8 +120,9 @@ class GMTestCaseMeta(type):
             GraphQL._schema = None
 
             if fallback_app is not None:
-                global_apps.get_containing_app_config = createFallbackGetApp(
-                    fallback_app
+                handler = createFallbackGetApp(fallback_app)
+                global_apps.get_containing_app_config = cast(  # type: ignore[assignment]
+                    Callable[[str], AppConfig | None], handler
                 )
 
             # 1) user-defined setUpClass (if any)
@@ -196,7 +197,7 @@ class LoggingCache(LocMemCache):
         self,
         key: str,
         value: object,
-        timeout: int | None = None,
+        timeout: float | None = None,
         version: int | None = None,
     ) -> None:
         """
@@ -211,7 +212,8 @@ class LoggingCache(LocMemCache):
         Returns:
             None
         """
-        super().set(key, value, timeout)
+        timeout = int(timeout) if timeout is not None else timeout
+        super().set(key, value, timeout=timeout, version=version)
         self.ops.append(("set", key))
 
 
@@ -307,7 +309,9 @@ class GeneralManagerTransactionTestCase(
         ]
 
         # reset fallback app lookup
-        global_apps.get_containing_app_config = _original_get_app
+        global_apps.get_containing_app_config = cast(  # type: ignore[assignment]
+            Callable[[str], AppConfig | None], _original_get_app
+        )
 
         super().tearDownClass()
 

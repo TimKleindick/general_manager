@@ -2,6 +2,7 @@
 
 import inspect
 from typing import (
+    Any,
     Callable,
     Optional,
     TypeVar,
@@ -93,7 +94,7 @@ def graphQlMutation(
         mutation_name = snake_to_camel(fn.__name__)
 
         # Build Arguments inner class dynamically
-        arg_fields = {}
+        arg_fields: dict[str, Any] = {}
         for name, param in sig.parameters.items():
             if name == "info":
                 continue
@@ -105,7 +106,7 @@ def graphQlMutation(
             has_default = default is not inspect._empty
 
             # Prepare kwargs
-            kwargs = {}
+            kwargs: dict[str, Any] = {}
             if required:
                 kwargs["required"] = True
             if has_default:
@@ -120,6 +121,7 @@ def graphQlMutation(
                 kwargs["required"] = False
 
             # Resolve list types to List scalar
+            field: Any
             if get_origin(ann) is list or get_origin(ann) is List:
                 inner = get_args(ann)[0]
                 field = graphene.List(
@@ -137,7 +139,7 @@ def graphQlMutation(
         Arguments = type("Arguments", (), arg_fields)
 
         # Build output fields: success + fn return types
-        outputs = {
+        outputs: dict[str, Any] = {
             "success": graphene.Boolean(required=True),
         }
         return_ann: type | tuple[type] | None = hints.get("return")
@@ -185,7 +187,7 @@ def graphQlMutation(
                 permission.check(kwargs, info.context.user)
             try:
                 result = fn(info, **kwargs)
-                data = {}
+                data: dict[str, Any] = {}
                 if isinstance(result, tuple):
                     # unpack according to outputs ordering after success
                     for (field, _), val in zip(
@@ -207,7 +209,7 @@ def graphQlMutation(
                 return mutation_class(**{"success": False})
 
         # Assemble class dict
-        class_dict = {
+        class_dict: dict[str, Any] = {
             "Arguments": Arguments,
             "__doc__": fn.__doc__,
             "mutate": staticmethod(_mutate),
