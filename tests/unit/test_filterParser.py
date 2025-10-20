@@ -88,7 +88,6 @@ class TestFilterParser(TestCase):
         mock_manager = MagicMock()
         mock_manager.id = 1
         with patch("general_manager.utils.filterParser.issubclass", return_value=True):
-
             filters = parse_filters({"manager__exact": mock_manager}, possible_values)
             self.assertEqual(len(filters), 1)
             self.assertEqual(

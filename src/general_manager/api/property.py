@@ -1,13 +1,23 @@
 """GraphQL-aware property descriptor used by GeneralManager classes."""
 
-from typing import Any, Callable, get_type_hints, overload, TypeVar
 import sys
+from typing import Any, Callable, TypeVar, get_type_hints, overload
 
 T = TypeVar("T", bound=Callable[..., Any])
 
 
+class GraphQLPropertyReturnAnnotationError(TypeError):
+    """Raised when a GraphQLProperty is defined without a return type annotation."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "GraphQLProperty requires a return type hint for the property function."
+        )
+
+
 class GraphQLProperty(property):
     """Descriptor that exposes a property with GraphQL metadata and type hints."""
+
     sortable: bool
     filterable: bool
     query_annotation: Any | None
@@ -46,9 +56,7 @@ class GraphQLProperty(property):
         )  # falls decorator Annotations durchreicht
         ann = getattr(orig, "__annotations__", {}) or {}
         if "return" not in ann:
-            raise TypeError(
-                "GraphQLProperty requires a return type hint for the property function."
-            )
+            raise GraphQLPropertyReturnAnnotationError()
 
     def __set_name__(self, owner: type, name: str) -> None:
         """Store the owning class and attribute name for later introspection."""
@@ -71,7 +79,7 @@ class GraphQLProperty(property):
 
             hints = get_type_hints(self.fget, globalns=globalns, localns=localns)
             self._graphql_type_hint = hints.get("return", None)
-        except Exception:
+        except (AttributeError, KeyError, NameError, TypeError, ValueError):
             self._graphql_type_hint = None
 
     @property

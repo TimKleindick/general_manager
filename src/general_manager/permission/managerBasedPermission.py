@@ -19,6 +19,29 @@ type permission_type = Literal[
 ]
 
 
+class InvalidBasedOnConfigurationError(ValueError):
+    """Raised when the configured `__based_on__` attribute is missing or invalid."""
+
+    def __init__(self, attribute_name: str) -> None:
+        super().__init__(
+            f"Based on configuration '{attribute_name}' is not valid or does not exist."
+        )
+
+
+class InvalidBasedOnTypeError(TypeError):
+    """Raised when the `__based_on__` attribute does not resolve to a GeneralManager."""
+
+    def __init__(self, attribute_name: str) -> None:
+        super().__init__(f"Based on object {attribute_name} is not a GeneralManager.")
+
+
+class UnknownPermissionActionError(ValueError):
+    """Raised when an unsupported permission action is encountered."""
+
+    def __init__(self, action: str) -> None:
+        super().__init__(f"Action {action} not found.")
+
+
 class notExistent:
     pass
 
@@ -83,22 +106,20 @@ class ManagerBasedPermission(BasePermission):
         """
         from general_manager.manager.generalManager import GeneralManager
 
-        __based_on__ = getattr(self, "__based_on__")
+        __based_on__ = self.__based_on__
         if __based_on__ is None:
             return None
 
         basis_object = getattr(self.instance, __based_on__, notExistent)
         if basis_object is notExistent:
-            raise ValueError(
-                f"Based on configuration '{__based_on__}' is not valid or does not exist."
-            )
+            raise InvalidBasedOnConfigurationError(__based_on__)
         if basis_object is None:
             self.__setPermissions(skip_based_on=True)
             return None
         if not isinstance(basis_object, GeneralManager) and not (
             isinstance(basis_object, type) and issubclass(basis_object, GeneralManager)
         ):
-            raise TypeError(f"Based on object {__based_on__} is not a GeneralManager")
+            raise InvalidBasedOnTypeError(__based_on__)
 
         Permission = getattr(basis_object, "Permission", None)
 
@@ -153,7 +174,7 @@ class ManagerBasedPermission(BasePermission):
         elif action == "delete":
             permissions = self.__delete__
         else:
-            raise ValueError(f"Action {action} not found")
+            raise UnknownPermissionActionError(action)
 
         has_attribute_permissions = (
             attriubte in self.__attribute_permissions
@@ -190,7 +211,7 @@ class ManagerBasedPermission(BasePermission):
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         """Return queryset filters inferred from class-level permission configuration."""
-        __based_on__ = getattr(self, "__based_on__")
+        __based_on__ = self.__based_on__
         filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
 
         if self.__based_on_permission is not None:

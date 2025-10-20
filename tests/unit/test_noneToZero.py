@@ -4,7 +4,6 @@ from general_manager.measurement import Measurement
 
 
 class TestNoneToZero(SimpleTestCase):
-
     def test_none_to_zero(self):
         """
         Tests the noneToZero function to ensure it correctly converts None to 0.

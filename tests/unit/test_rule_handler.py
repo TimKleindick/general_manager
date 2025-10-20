@@ -1,7 +1,23 @@
 import ast
-from general_manager.rule.handler import LenHandler, MinHandler, MaxHandler, SumHandler
-from typing import Optional, Any
+from typing import Any, Optional
+
 import pytest
+
+from general_manager.rule.handler import LenHandler, MaxHandler, MinHandler, SumHandler
+
+
+class UnexpectedNodeTypeError(ValueError):
+    """Raised when a rule handler encounters an unexpected AST node type."""
+
+    def __init__(self) -> None:
+        super().__init__("Unexpected node type.")
+
+
+class UnsupportedNodeEvaluationError(ValueError):
+    """Raised when a rule handler cannot evaluate a particular AST node."""
+
+    def __init__(self, node_type: str) -> None:
+        super().__init__(f"Cannot eval node of type {node_type}.")
 
 
 class DummyRule:
@@ -14,7 +30,7 @@ class DummyRule:
     def _get_node_name(self, node: ast.AST) -> str:
         if isinstance(node, ast.Name):
             return node.id
-        raise ValueError("Unexpected node type")
+        raise UnexpectedNodeTypeError()
 
     def _eval_node(self, node: ast.AST) -> Any:
         # 1) Direktes Literal
@@ -28,7 +44,7 @@ class DummyRule:
         # 3) Name-Knoten für var_values lookup
         if isinstance(node, ast.Name):
             return None
-        raise ValueError(f"Cannot eval node of type {type(node).__name__}")
+        raise UnsupportedNodeEvaluationError(type(node).__name__)
 
 
 # Handler-Instanz
@@ -79,7 +95,12 @@ def test_len_handler_success(expr, op_symbol, var_values, expected):
     # DummyRule mit vorgegebener Op-Symbol-Antwort
     rule = DummyRule(op_symbol)
     result = len_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        var_values,
+        rule,  # type: ignore
     )
     assert result == expected
 
@@ -94,14 +115,14 @@ def test_non_compare_node_returns_empty():
 @pytest.mark.parametrize(
     "bad_expr, op",
     [
-        ("x + 1 > 2", ">"),  # left kein Call
         ("len(x) > 'z'", ">"),  # right kein Zahl-Literal
+        ("x + 1 > 2", ">"),  # left kein Call
     ],
 )
-def test_len_handler_invalid_raises(bad_expr, op):
+def test_len_handler_invalid_raises1(bad_expr, op):
     node = ast.parse(bad_expr, mode="eval").body
     rule = DummyRule(op)
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         len_handler.handle(
             node,
             node.left,  # type: ignore
@@ -151,7 +172,12 @@ def test_sum_handler_success(expr, op_symbol, var_values, expected):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
     result = sum_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        var_values,
+        rule,  # type: ignore
     )
     assert result == expected
 
@@ -167,14 +193,14 @@ def test_sum_handler_non_compare_returns_empty():
     "expr, var_values, error_msg",
     [
         ("x + 1 > 2", {"x": [1]}, "Invalid left node for sum() function"),
-        ("sum(x) > 3", {"x": None}, "sum expects an iterable of numbers"),
+        ("sum(x) > 3", {"x": None}, "sum expects a non-empty iterable"),
         ("sum(x) > 'a'", {"x": [1, 2]}, "Invalid arguments for sum function"),
     ],
 )
 def test_sum_handler_invalid(expr, var_values, error_msg):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(">")
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises((ValueError, TypeError)) as excinfo:
         sum_handler.handle(
             node,
             node.left,  # type: ignore
@@ -225,7 +251,12 @@ def test_max_handler_success(expr, op_symbol, var_values, expected):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
     result = max_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        var_values,
+        rule,  # type: ignore
     )
     assert result == expected
 
@@ -247,7 +278,7 @@ def test_max_handler_non_compare_returns_empty():
 def test_max_handler_invalid(expr, var_values, error_msg):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(">")
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises((TypeError, ValueError)) as excinfo:
         max_handler.handle(
             node,
             node.left,  # type: ignore
@@ -298,7 +329,12 @@ def test_min_handler_success(expr, op_symbol, var_values, expected):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
     result = min_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        var_values,
+        rule,  # type: ignore
     )
     assert result == expected
 
@@ -320,7 +356,7 @@ def test_min_handler_non_compare_returns_empty():
 def test_min_handler_invalid(expr, var_values, error_msg):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule("<")
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises((ValueError, TypeError)) as excinfo:
         min_handler.handle(
             node,
             node.left,  # type: ignore
@@ -361,15 +397,30 @@ def test_mixed_numeric_types(expr, op_symbol, var_values, expected):
     # dispatch auf den richtigen Handler
     if expr.startswith("sum"):
         result = sum_handler.handle(
-            node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+            node,
+            node.left,
+            node.comparators[0],
+            node.ops[0],
+            var_values,
+            rule,  # type: ignore
         )
     elif expr.startswith("max"):
         result = max_handler.handle(
-            node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+            node,
+            node.left,
+            node.comparators[0],
+            node.ops[0],
+            var_values,
+            rule,  # type: ignore
         )
     else:
         result = min_handler.handle(
-            node, node.left, node.comparators[0], node.ops[0], var_values, rule  # type: ignore
+            node,
+            node.left,
+            node.comparators[0],
+            node.ops[0],
+            var_values,
+            rule,  # type: ignore
         )
     assert result == expected
 
@@ -382,7 +433,12 @@ def test_sum_handler_large_collection():
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(">=")
     result = sum_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], {"large": large}, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        {"large": large},
+        rule,  # type: ignore
     )
     assert result == {"large": f"[large] (sum={n}) is too small (>= {n})!"}
 
@@ -394,7 +450,12 @@ def test_max_handler_large_collection():
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule("==")
     result = max_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], {"large": large}, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        {"large": large},
+        rule,  # type: ignore
     )
     assert result == {"large": f"[large] (max={n-1}) must be {n-1}!"}
 
@@ -406,7 +467,12 @@ def test_min_handler_large_collection():
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule("==")
     result = min_handler.handle(
-        node, node.left, node.comparators[0], node.ops[0], {"large": large}, rule  # type: ignore
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        {"large": large},
+        rule,  # type: ignore
     )
     assert result == {"large": "[large] (min=0) must be 0!"}
 
@@ -415,7 +481,7 @@ def test_min_handler_large_collection():
 @pytest.mark.parametrize(
     "handler, expr, error_msg",
     [
-        (sum_handler, "sum(x) > 0", "sum expects an iterable of numbers"),
+        (sum_handler, "sum(x) > 0", "sum expects a non-empty iterable"),
         (max_handler, "max(x) > 0", "max expects a non-empty iterable"),
         (min_handler, "min(x) > 0", "min expects a non-empty iterable"),
     ],

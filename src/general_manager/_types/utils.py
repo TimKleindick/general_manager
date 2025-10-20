@@ -27,4 +27,3 @@ from general_manager.utils.filterParser import parse_filters
 from general_manager.utils.formatString import pascal_to_snake
 from general_manager.utils.formatString import snake_to_camel
 from general_manager.utils.formatString import snake_to_pascal
-

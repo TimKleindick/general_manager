@@ -7,6 +7,14 @@ from general_manager.cache.cacheTracker import DependencyTracker
 from general_manager.cache.signals import dataChange
 from general_manager.bucket.baseBucket import Bucket
 
+
+class UnsupportedUnionOperandError(TypeError):
+    """Raised when attempting to union a manager with an incompatible operand."""
+
+    def __init__(self, operand_type: type) -> None:
+        super().__init__(f"Unsupported type for union: {operand_type}.")
+
+
 if TYPE_CHECKING:
     from general_manager.permission.basePermission import BasePermission
     from general_manager.interface.baseInterface import InterfaceBase
@@ -72,7 +80,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         elif isinstance(other, GeneralManager) and other.__class__ == self.__class__:
             return self.filter(id__in=[self.__id, other.__id])
         else:
-            raise TypeError(f"Unsupported type for union: {type(other)}")
+            raise UnsupportedUnionOperandError(type(other))
 
     def __eq__(
         self,

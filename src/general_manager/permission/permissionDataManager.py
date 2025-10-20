@@ -6,6 +6,16 @@ from django.contrib.auth.models import AbstractUser
 
 from general_manager.manager.generalManager import GeneralManager
 
+
+class InvalidPermissionDataError(TypeError):
+    """Raised when the permission data manager receives unsupported input."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "permission_data must be either a dict or an instance of GeneralManager."
+        )
+
+
 GeneralManagerData = TypeVar("GeneralManagerData", bound=GeneralManager)
 
 
@@ -47,9 +57,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
             self.getData = dict_getter
             self._manager = manager
         else:
-            raise TypeError(
-                "permission_data must be either a dict or an instance of GeneralManager"
-            )
+            raise InvalidPermissionDataError()
 
     @classmethod
     def forUpdate(

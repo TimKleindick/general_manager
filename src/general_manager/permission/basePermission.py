@@ -3,18 +3,25 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Literal
-from general_manager.permission.permissionChecks import (
-    permission_functions,
-    permission_filter,
-)
+from general_manager.permission.permissionChecks import permission_functions
 
 from django.contrib.auth.models import AnonymousUser, AbstractUser
 from general_manager.permission.permissionDataManager import PermissionDataManager
-from general_manager.permission.utils import validatePermissionString
+from general_manager.permission.utils import (
+    validatePermissionString,
+    PermissionNotFoundError,
+)
 
 if TYPE_CHECKING:
     from general_manager.manager.generalManager import GeneralManager
     from general_manager.manager.meta import GeneralManagerMeta
+
+
+class PermissionCheckError(PermissionError):
+    """Raised when permission evaluation fails for a user."""
+
+    def __init__(self, user: AbstractUser | AnonymousUser, errors: list[str]) -> None:
+        super().__init__(f"Permission denied for user {user} with errors: {errors}.")
 
 
 class BasePermission(ABC):
@@ -58,9 +65,7 @@ class BasePermission(ABC):
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
                 )
         if errors:
-            raise PermissionError(
-                f"Permission denied for user {request_user} with errors: {errors}"
-            )
+            raise PermissionCheckError(request_user, errors)
 
     @classmethod
     def checkUpdatePermission(
@@ -84,9 +89,7 @@ class BasePermission(ABC):
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
                 )
         if errors:
-            raise PermissionError(
-                f"Permission denied for user {request_user} with errors: {errors}"
-            )
+            raise PermissionCheckError(request_user, errors)
 
     @classmethod
     def checkDeletePermission(
@@ -107,9 +110,7 @@ class BasePermission(ABC):
                     f"Permission denied for {key} with value {getattr(manager_instance, key)} for user {request_user}"
                 )
         if errors:
-            raise PermissionError(
-                f"Permission denied for user {request_user} with errors: {errors}"
-            )
+            raise PermissionCheckError(request_user, errors)
 
     @staticmethod
     def getUserWithId(
@@ -155,7 +156,7 @@ class BasePermission(ABC):
         """Resolve a filter definition for the given permission string."""
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
-            raise ValueError(f"Permission {permission} not found")
+            raise PermissionNotFoundError(permission)
         permission_filter = permission_functions[permission_function][
             "permission_filter"
         ](self.request_user, config)

@@ -41,4 +41,3 @@ from general_manager.factory.factoryMethods import LazyMeasurement
 from general_manager.factory.factoryMethods import LazyProjectName
 from general_manager.factory.factoryMethods import LazySequence
 from general_manager.factory.factoryMethods import LazyUUID
-

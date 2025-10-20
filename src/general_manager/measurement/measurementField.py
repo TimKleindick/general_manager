@@ -13,6 +13,13 @@ from django.db.models import Lookup, Transform
 from typing import Any, ClassVar, cast
 
 
+class MeasurementFieldNotEditableError(ValidationError):
+    """Raised when attempting to modify a non-editable MeasurementField."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(f"{field_name} is not editable.")
+
+
 class MeasurementField(models.Field):
     description = "Stores a measurement (value + unit) but exposes a single field API"
 
@@ -302,7 +309,7 @@ class MeasurementField(models.Field):
             ValidationError: If the field is not editable, the value is invalid, or the units are incompatible.
         """
         if not self.editable:
-            raise ValidationError(f"{self.name} is not editable.")
+            raise MeasurementFieldNotEditableError(self.name)
         if value is None:
             setattr(instance, self.value_attr, None)
             setattr(instance, self.unit_attr, None)

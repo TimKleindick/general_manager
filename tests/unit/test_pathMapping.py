@@ -556,24 +556,31 @@ class PathMappingUnitTests(SimpleTestCase):
         errors = []
 
         def pathmap_worker():
-            try:
-                pm = PathMap(self.StartManager)
-                connected = pm.getAllConnected()
-                tracer = pm.to(self.EndManager)
-                results.append((connected, tracer.path if tracer else None))
-            except Exception as e:
-                errors.append(e)
+            pm = PathMap(self.StartManager)
+            connected = pm.getAllConnected()
+            tracer = pm.to(self.EndManager)
+            results.append((connected, tracer.path if tracer else None))
 
-        # Create multiple threads accessing PathMap concurrently
-        threads = []
-        for _ in range(5):
-            thread = threading.Thread(target=pathmap_worker)
-            threads.append(thread)
-            thread.start()
+        original_excepthook = threading.excepthook
 
-        # Wait for all threads to complete
-        for thread in threads:
-            thread.join()
+        def capture_thread_exception(args: threading.ExceptHookArgs) -> None:
+            errors.append(args.exc_value)
+
+        threading.excepthook = capture_thread_exception
+
+        try:
+            # Create multiple threads accessing PathMap concurrently
+            threads = []
+            for _ in range(5):
+                thread = threading.Thread(target=pathmap_worker)
+                threads.append(thread)
+                thread.start()
+
+            # Wait for all threads to complete
+            for thread in threads:
+                thread.join()
+        finally:
+            threading.excepthook = original_excepthook
 
         # Verify no errors occurred
         self.assertEqual(len(errors), 0, f"Concurrent access caused errors: {errors}")

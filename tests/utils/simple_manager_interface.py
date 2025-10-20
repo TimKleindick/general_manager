@@ -1,5 +1,14 @@
+from typing import ClassVar
+
 from general_manager.interface.baseInterface import InterfaceBase
 from general_manager.bucket.baseBucket import Bucket
+
+
+class SingleItemRequiredError(ValueError):
+    """Raised when a bucket operation expects exactly one item but the bucket contains a different amount."""
+
+    def __init__(self) -> None:
+        super().__init__("get() requires exactly one item.")
 
 
 class SimpleBucket(Bucket):
@@ -24,9 +33,9 @@ class SimpleBucket(Bucket):
             SimpleBucket: A new bucket with the combined contents.
         """
         if isinstance(other, SimpleBucket):
-            return SimpleBucket(self._manager_class, self._data + other._data)
+            return SimpleBucket(self._manager_class, [*self._data, *other._data])
         if isinstance(other, self._manager_class):
-            return SimpleBucket(self._manager_class, self._data + [other])
+            return SimpleBucket(self._manager_class, [*self._data, other])
         return SimpleBucket(self._manager_class, list(self._data))
 
     def __iter__(self):  # type: ignore
@@ -92,7 +101,7 @@ class SimpleBucket(Bucket):
         """
         if len(self._data) == 1:
             return self._data[0]
-        raise ValueError("get() requires exactly one item")
+        raise SingleItemRequiredError()
 
     def __getitem__(self, item):
         """
@@ -133,7 +142,7 @@ class SimpleBucket(Bucket):
 
 
 class BaseTestInterface(InterfaceBase):
-    input_fields: dict = {}
+    input_fields: ClassVar[dict[str, object]] = {}
 
     @classmethod
     def create(cls, *args, **kwargs):

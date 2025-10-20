@@ -13,6 +13,27 @@ if TYPE_CHECKING:
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 
 
+class InvalidInterfaceTypeError(TypeError):
+    """Raised when a GeneralManager is configured with an incompatible Interface class."""
+
+    def __init__(self, interface_name: str) -> None:
+        super().__init__(f"{interface_name} must be a subclass of InterfaceBase.")
+
+
+class MissingAttributeError(AttributeError):
+    """Raised when a dynamically generated descriptor cannot locate the attribute."""
+
+    def __init__(self, attribute_name: str, class_name: str) -> None:
+        super().__init__(f"{attribute_name} not found in {class_name}.")
+
+
+class AttributeEvaluationError(AttributeError):
+    """Raised when evaluating a callable attribute raises an exception."""
+
+    def __init__(self, attribute_name: str, error: Exception) -> None:
+        super().__init__(f"Error calling attribute {attribute_name}: {error}.")
+
+
 class _nonExistent:
     pass
 
@@ -56,9 +77,7 @@ class GeneralManagerMeta(type):
         if "Interface" in attrs:
             interface = attrs.pop("Interface")
             if not issubclass(interface, InterfaceBase):
-                raise TypeError(
-                    f"{interface.__name__} must be a subclass of InterfaceBase"
-                )
+                raise InvalidInterfaceTypeError(interface.__name__)
             preCreation, postCreation = interface.handleInterface()
             attrs, interface_cls, model = preCreation(name, attrs, interface)
             new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
@@ -109,16 +128,14 @@ class GeneralManagerMeta(type):
                         return self._class.Interface.getFieldType(self._attr_name)
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
-                        raise AttributeError(
-                            f"{self._attr_name} not found in {instance.__class__.__name__}"
+                        raise MissingAttributeError(
+                            self._attr_name, instance.__class__.__name__
                         )
                     if callable(attribute):
                         try:
                             attribute = attribute(instance._interface)
                         except Exception as e:
-                            raise AttributeError(
-                                f"Error calling attribute {self._attr_name}: {e}"
-                            ) from e
+                            raise AttributeEvaluationError(self._attr_name, e) from e
                     return attribute
 
             return Descriptor(attr_name, cast(Type[Any], new_class))

@@ -36,6 +36,63 @@ class SortedFilters(TypedDict):
     input_excludes: dict[str, Any]
 
 
+class InvalidCalculationInterfaceError(TypeError):
+    """Raised when a CalculationBucket is initialized with a non-CalculationInterface manager."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "CalculationBucket requires a manager whose interface inherits from CalculationInterface."
+        )
+
+
+class IncompatibleBucketTypeError(TypeError):
+    """Raised when attempting to combine buckets of different types."""
+
+    def __init__(self, bucket_type: type, other_type: type) -> None:
+        super().__init__(
+            f"Cannot combine {bucket_type.__name__} with {other_type.__name__}."
+        )
+
+
+class IncompatibleBucketManagerError(TypeError):
+    """Raised when attempting to combine buckets with different manager classes."""
+
+    def __init__(self, first_manager: type, second_manager: type) -> None:
+        super().__init__(
+            f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
+        )
+
+
+class CyclicDependencyError(ValueError):
+    """Raised when a cyclic dependency is detected in calculation sorting."""
+
+    def __init__(self, node: str) -> None:
+        super().__init__(f"Cyclic dependency detected: {node}.")
+
+
+class InvalidPossibleValuesError(TypeError):
+    """Raised when an input field provides invalid possible value definitions."""
+
+    def __init__(self, key_name: str) -> None:
+        super().__init__(
+            f"Invalid possible_values configuration for input '{key_name}'."
+        )
+
+
+class MissingCalculationMatchError(ValueError):
+    """Raised when no calculation matches the provided filters."""
+
+    def __init__(self) -> None:
+        super().__init__("No matching calculation found.")
+
+
+class MultipleCalculationMatchError(ValueError):
+    """Raised when more than one calculation matches the provided filters."""
+
+    def __init__(self) -> None:
+        super().__init__("Multiple matching calculations found.")
+
+
 class CalculationBucket(Bucket[GeneralManagerType]):
     """Bucket that builds cartesian products of calculation input fields."""
 
@@ -71,9 +128,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         interface_class = manager_class.Interface
         if not issubclass(interface_class, CalculationInterface):
-            raise TypeError(
-                "CalculationBucket can only be used with CalculationInterface subclasses"
-            )
+            raise InvalidCalculationInterfaceError()
         self.input_fields = interface_class.input_fields
         self.filter_definitions = (
             {} if filter_definitions is None else filter_definitions
@@ -164,9 +219,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(self.filter(id__in=[other.identification]))
         if not isinstance(other, self.__class__):
-            raise ValueError("Cannot combine different bucket types")
+            raise IncompatibleBucketTypeError(self.__class__, type(other))
         if self._manager_class != other._manager_class:
-            raise ValueError("Cannot combine different manager classes")
+            raise IncompatibleBucketManagerError(
+                self._manager_class, other._manager_class
+            )
 
         combined_filters = {
             key: value
@@ -431,7 +488,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             if node in visited:
                 return
             if node in temp_mark:
-                raise ValueError(f"Cyclic dependency detected: {node}")
+                raise CyclicDependencyError(node)
             temp_mark.add(node)
             for m in graph.get(node, []):
                 visit(m, temp_mark)
@@ -471,7 +528,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         elif isinstance(input_field.possible_values, (Iterable, Bucket)):
             possible_values = input_field.possible_values
         else:
-            raise TypeError(f"Invalid possible_values for input '{key_name}'")
+            raise InvalidPossibleValuesError(key_name)
         return possible_values
 
     def _generate_input_combinations(
@@ -697,9 +754,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if len(items) == 1:
             return items[0]
         elif len(items) == 0:
-            raise ValueError("No matching calculation found.")
+            raise MissingCalculationMatchError()
         else:
-            raise ValueError("Multiple matching calculations found.")
+            raise MultipleCalculationMatchError()
 
     def sort(
         self, key: str | tuple[str], reverse: bool = False

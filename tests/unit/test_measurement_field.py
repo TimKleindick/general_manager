@@ -14,7 +14,6 @@ from django.db import models
 
 
 class MeasurementFieldTests(TestCase):
-
     @classmethod
     def setUpTestData(cls):
         class TestModel(models.Model):
@@ -43,7 +42,8 @@ class MeasurementFieldTests(TestCase):
         self.instance.length = measurement
         self.instance.full_clean()
         self.assertEqual(
-            self.instance.length_value, Decimal("5")  # type: ignore
+            self.instance.length_value,
+            Decimal("5"),  # type: ignore
         )  # In Basis-Einheit Meter
         self.assertEqual(self.instance.length_unit, "centimeter")  # type: ignore
 

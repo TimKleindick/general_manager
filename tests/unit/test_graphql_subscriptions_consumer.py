@@ -11,7 +11,9 @@ import unittest
 from graphql import GraphQLError, GraphQLSchema, parse
 from graphql.type import GraphQLObjectType, GraphQLField, GraphQLString
 
-from general_manager.api.graphql_subscription_consumer import GraphQLSubscriptionConsumer
+from general_manager.api.graphql_subscription_consumer import (
+    GraphQLSubscriptionConsumer,
+)
 
 
 class GraphQLSubscriptionConsumerConnectTests(unittest.TestCase):
@@ -23,7 +25,9 @@ class GraphQLSubscriptionConsumerConnectTests(unittest.TestCase):
         consumer.scope = {"subprotocols": []}
 
         async def test_connect() -> None:
-            with patch.object(consumer, "accept", new_callable=AsyncMock) as mock_accept:
+            with patch.object(
+                consumer, "accept", new_callable=AsyncMock
+            ) as mock_accept:
                 await consumer.connect()
                 mock_accept.assert_called_once_with(subprotocol=None)
                 self.assertFalse(consumer.connection_acknowledged)
@@ -38,7 +42,9 @@ class GraphQLSubscriptionConsumerConnectTests(unittest.TestCase):
         consumer.scope = {"subprotocols": ["graphql-transport-ws", "other"]}
 
         async def test_connect() -> None:
-            with patch.object(consumer, "accept", new_callable=AsyncMock) as mock_accept:
+            with patch.object(
+                consumer, "accept", new_callable=AsyncMock
+            ) as mock_accept:
                 await consumer.connect()
                 mock_accept.assert_called_once_with(subprotocol="graphql-transport-ws")
 
@@ -76,7 +82,9 @@ class GraphQLSubscriptionConsumerReceiveJsonTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_receive() -> None:
-            with patch.object(consumer, "_handle_connection_init", new_callable=AsyncMock) as mock_handle:
+            with patch.object(
+                consumer, "_handle_connection_init", new_callable=AsyncMock
+            ) as mock_handle:
                 await consumer.receive_json({"type": "connection_init"})
                 mock_handle.assert_called_once_with({"type": "connection_init"})
 
@@ -87,7 +95,9 @@ class GraphQLSubscriptionConsumerReceiveJsonTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_receive() -> None:
-            with patch.object(consumer, "_handle_ping", new_callable=AsyncMock) as mock_handle:
+            with patch.object(
+                consumer, "_handle_ping", new_callable=AsyncMock
+            ) as mock_handle:
                 await consumer.receive_json({"type": "ping"})
                 mock_handle.assert_called_once_with({"type": "ping"})
 
@@ -98,7 +108,9 @@ class GraphQLSubscriptionConsumerReceiveJsonTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_receive() -> None:
-            with patch.object(consumer, "_handle_subscribe", new_callable=AsyncMock) as mock_handle:
+            with patch.object(
+                consumer, "_handle_subscribe", new_callable=AsyncMock
+            ) as mock_handle:
                 await consumer.receive_json({"type": "subscribe"})
                 mock_handle.assert_called_once_with({"type": "subscribe"})
 
@@ -109,7 +121,9 @@ class GraphQLSubscriptionConsumerReceiveJsonTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_receive() -> None:
-            with patch.object(consumer, "_handle_complete", new_callable=AsyncMock) as mock_handle:
+            with patch.object(
+                consumer, "_handle_complete", new_callable=AsyncMock
+            ) as mock_handle:
                 await consumer.receive_json({"type": "complete"})
                 mock_handle.assert_called_once_with({"type": "complete"})
 
@@ -147,7 +161,9 @@ class GraphQLSubscriptionConsumerConnectionInitTests(unittest.TestCase):
         consumer.connection_acknowledged = False
 
         async def test_init() -> None:
-            with patch.object(consumer, "_send_protocol_message", new_callable=AsyncMock) as mock_send:
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ) as mock_send:
                 await consumer._handle_connection_init({})
                 mock_send.assert_called_once_with({"type": "connection_ack"})
                 self.assertTrue(consumer.connection_acknowledged)
@@ -160,7 +176,9 @@ class GraphQLSubscriptionConsumerConnectionInitTests(unittest.TestCase):
         consumer.connection_acknowledged = False
 
         async def test_init() -> None:
-            with patch.object(consumer, "_send_protocol_message", new_callable=AsyncMock):
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ):
                 params = {"auth": "token"}
                 await consumer._handle_connection_init({"payload": params})
                 self.assertEqual(consumer.connection_params, params)
@@ -173,7 +191,9 @@ class GraphQLSubscriptionConsumerConnectionInitTests(unittest.TestCase):
         consumer.connection_acknowledged = False
 
         async def test_init() -> None:
-            with patch.object(consumer, "_send_protocol_message", new_callable=AsyncMock):
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ):
                 await consumer._handle_connection_init({"payload": "not a dict"})
                 self.assertEqual(consumer.connection_params, {})
 
@@ -200,7 +220,9 @@ class GraphQLSubscriptionConsumerPingTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_ping() -> None:
-            with patch.object(consumer, "_send_protocol_message", new_callable=AsyncMock) as mock_send:
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ) as mock_send:
                 await consumer._handle_ping({})
                 mock_send.assert_called_once_with({"type": "pong"})
 
@@ -211,7 +233,9 @@ class GraphQLSubscriptionConsumerPingTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_ping() -> None:
-            with patch.object(consumer, "_send_protocol_message", new_callable=AsyncMock) as mock_send:
+            with patch.object(
+                consumer, "_send_protocol_message", new_callable=AsyncMock
+            ) as mock_send:
                 payload = {"timestamp": 123}
                 await consumer._handle_ping({"payload": payload})
                 mock_send.assert_called_once_with({"type": "pong", "payload": payload})
@@ -376,7 +400,9 @@ class GraphQLSubscriptionConsumerSendProtocolMessageTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_send() -> None:
-            with patch.object(consumer, "send_json", new_callable=AsyncMock) as mock_send:
+            with patch.object(
+                consumer, "send_json", new_callable=AsyncMock
+            ) as mock_send:
                 message = {"type": "test", "data": "value"}
                 await consumer._send_protocol_message(message)
                 mock_send.assert_called_once_with(message)
@@ -388,7 +414,9 @@ class GraphQLSubscriptionConsumerSendProtocolMessageTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_send() -> None:
-            with patch.object(consumer, "send_json", new_callable=AsyncMock) as mock_send:
+            with patch.object(
+                consumer, "send_json", new_callable=AsyncMock
+            ) as mock_send:
                 mock_send.side_effect = RuntimeError("Connection closed")
                 # Should not raise
                 await consumer._send_protocol_message({"type": "test"})

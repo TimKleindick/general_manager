@@ -12,7 +12,7 @@ __all__ = list(PERMISSION_EXPORTS)
 _MODULE_MAP = PERMISSION_EXPORTS
 
 if TYPE_CHECKING:
-    from general_manager._types.permission import *  # noqa: F401,F403
+    from general_manager._types.permission import *  # noqa: F403
 
 
 def __getattr__(name: str) -> Any:

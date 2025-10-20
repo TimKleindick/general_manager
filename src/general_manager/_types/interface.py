@@ -15,4 +15,3 @@ from general_manager.interface.databaseBasedInterface import DBBasedInterface
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.interface.baseInterface import InterfaceBase
 from general_manager.interface.readOnlyInterface import ReadOnlyInterface
-

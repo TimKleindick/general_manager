@@ -1,5 +1,7 @@
 # type: ignore
 
+from typing import ClassVar
+
 from django.test import TransactionTestCase
 from django.db import connection
 from django.contrib.auth.models import User
@@ -36,7 +38,7 @@ class PersonInterface(DBBasedInterface):
     _model = PersonModel
     _parent_class = None
     _interface_type = "test"
-    input_fields = {"id": Input(int)}
+    input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
     @classmethod
     def handleInterface(cls):
@@ -493,7 +495,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that the pre function from handleInterface returns expected values.
         """
-        pre, post = PersonInterface.handleInterface()
+        pre, _post = PersonInterface.handleInterface()
         attrs = {"test": "value"}
         result_attrs, result_cls, result_model = pre(
             "TestClass", attrs, PersonInterface
@@ -507,7 +509,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that the post function from handleInterface correctly links classes.
         """
-        pre, post = PersonInterface.handleInterface()
+        _pre, post = PersonInterface.handleInterface()
 
         # Create a mock new class
         mock_new_cls = MagicMock()

@@ -12,7 +12,7 @@ __all__ = list(RULE_EXPORTS)
 _MODULE_MAP = RULE_EXPORTS
 
 if TYPE_CHECKING:
-    from general_manager._types.rule import *  # noqa: F401,F403
+    from general_manager._types.rule import *  # noqa: F403
 
 
 def __getattr__(name: str) -> Any:

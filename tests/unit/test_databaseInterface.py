@@ -1,5 +1,5 @@
 # type: ignore
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.db import models, connection
@@ -23,7 +23,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         class UserInterface(DatabaseInterface):
             _model = User
             _parent_class = None
-            input_fields = {"id": Input(int)}
+            input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
             @classmethod
             def handleInterface(cls):
@@ -57,7 +57,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         class BookInterface(DatabaseInterface):
             _model = BookModel
             _parent_class = None
-            input_fields = {"id": Input(int)}
+            input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
             @classmethod
             def handleInterface(cls):

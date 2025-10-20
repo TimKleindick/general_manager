@@ -8,6 +8,12 @@ import time
 from contextlib import suppress
 
 
+def _trusted_pickle_loads(data: bytes) -> object:
+    """Deserialize pickle data from the trusted in-memory cache used in tests."""
+
+    return pickle.loads(data)  # noqa: S301 - test cache operates on controlled input
+
+
 class FakeCacheBackend:
     def __init__(self):
         """
@@ -28,7 +34,7 @@ class FakeCacheBackend:
         """
         cached_value = self.store.get(key, default)
         if cached_value is not default:
-            return pickle.loads(cached_value)  # type: ignore
+            return _trusted_pickle_loads(cached_value)  # type: ignore
         return default
 
     def set(self, key, value, timeout=None):
@@ -126,7 +132,6 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             mock.patch.object(cache, "get", wraps=cache.get) as get_spy,
             mock.patch.object(cache, "set", wraps=cache.set) as set_spy,
         ):
-
             sample_function(1, 2)
             self.assertTrue(get_spy.called, "First call: cache.get() should be called")
             self.assertTrue(
@@ -159,7 +164,6 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             mock.patch.object(cache, "get", wraps=cache.get) as get_spy,
             mock.patch.object(cache, "set", wraps=cache.set) as set_spy,
         ):
-
             sample_function(1, 2)
             self.assertTrue(get_spy.called, "First call: cache.get() should be called")
             self.assertTrue(
@@ -220,7 +224,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key, self.fake_cache.store)
-        self.assertEqual(pickle.loads(self.fake_cache.store[key]), 5)
+        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key]), 5)
 
         # record_fn should have been called once
         self.assertEqual(len(self.record_calls), 1)
@@ -256,7 +260,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key, self.fake_cache.store)
-        self.assertEqual(pickle.loads(self.fake_cache.store[key]), 5)
+        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key]), 5)
 
         # no record_fn call because of timeout
         self.assertEqual(len(self.record_calls), 0)
@@ -306,8 +310,8 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         # Result should be in the fake cache
         self.assertIn(key_outer, self.fake_cache.store)
         self.assertIn(key_inner, self.fake_cache.store)
-        self.assertEqual(pickle.loads(self.fake_cache.store[key_outer]), 5)
-        self.assertEqual(pickle.loads(self.fake_cache.store[key_inner]), 5)
+        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_outer]), 5)
+        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_inner]), 5)
 
         # record_fn should have been called twice
         # once for the outer function and once for the inner function
@@ -363,7 +367,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         # now the inner function should be in the cache
         key_inner = make_cache_key(inner_function, (2, 3), {})
         self.assertIn(key_inner, self.fake_cache.store)
-        self.assertEqual(pickle.loads(self.fake_cache.store[key_inner]), 5)
+        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_inner]), 5)
 
         # second call: outer function: Cache miss
         res = outer_function(2, 3)
@@ -372,7 +376,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key_outer, self.fake_cache.store)
-        self.assertEqual(pickle.loads(self.fake_cache.store[key_outer]), 5)
+        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_outer]), 5)
 
         # record_fn should have been called twice
         # once for the outer function and once for the inner function

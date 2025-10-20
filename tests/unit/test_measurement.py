@@ -1,11 +1,18 @@
 from django.test import TestCase
 from general_manager.measurement.measurement import Measurement, ureg
 from decimal import Decimal
-import random
+from random import SystemRandom
+import pickle
+from typing import Any
+
+
+def _trusted_pickle_loads(data: bytes) -> Any:
+    """Deserialize pickle data that was created within this test module."""
+
+    return pickle.loads(data)  # noqa: S301 - data originates from the current test
 
 
 class MeasurementTestCase(TestCase):
-
     def test_initialization_with_physical_units(self):
         m = Measurement(5, "meter")
         self.assertEqual(str(m), "5 meter")
@@ -51,7 +58,7 @@ class MeasurementTestCase(TestCase):
     def test_addition_different_units_same_dimension(self):
         """
         Test addition of `Measurement` instances with different units of the same physical dimension.
-        
+
         Verifies that addition correctly converts units and is commutative. Also checks that adding zero returns the original measurement and that adding a plain number raises a `TypeError`.
         """
         m1 = Measurement(1, "kilometer")  # 1000 meter
@@ -132,16 +139,17 @@ class MeasurementTestCase(TestCase):
     def test_random_measurements(self):
         """
         Performs randomized tests of addition and subtraction between Measurement instances with various physical and currency units.
-        
+
         Randomly generates pairs of Measurement objects using both physical and currency units, verifying that arithmetic operations succeed when units match and raise appropriate exceptions when units are incompatible or when mixing currency and physical units.
         """
         units = ["meter", "second", "kilogram", "liter", "EUR", "USD"]
+        rng = SystemRandom()
         for _ in range(100):
-            random_value_1 = Decimal(random.uniform(1, 1000))
-            random_value_2 = Decimal(random.uniform(1, 1000))
+            random_value_1 = Decimal(rng.uniform(1, 1000))
+            random_value_2 = Decimal(rng.uniform(1, 1000))
 
-            random_unit_1 = random.choice(units)
-            random_unit_2 = random.choice(units)
+            random_unit_1 = rng.choice(units)
+            random_unit_2 = rng.choice(units)
 
             measurement_1 = Measurement(random_value_1, random_unit_1)
             measurement_2 = Measurement(random_value_2, random_unit_2)
@@ -153,11 +161,8 @@ class MeasurementTestCase(TestCase):
                 self.assertEqual(result_sub.quantity.units, ureg(random_unit_1))
             else:
                 if (
-                    measurement_1.is_currency()
-                    and not measurement_2.is_currency()
-                    or not measurement_1.is_currency()
-                    and measurement_2.is_currency()
-                ):
+                    measurement_1.is_currency() and not measurement_2.is_currency()
+                ) or (not measurement_1.is_currency() and measurement_2.is_currency()):
                     with self.assertRaises(TypeError):
                         result_add = measurement_1 + measurement_2
 
@@ -174,11 +179,9 @@ class MeasurementTestCase(TestCase):
         """
         Tests that a Measurement instance can be pickled and unpickled, preserving its value and units.
         """
-        import pickle
-
         m = Measurement(10, "meter")
         m_pickled = pickle.dumps(m)
-        m_unpickled = pickle.loads(m_pickled)
+        m_unpickled = _trusted_pickle_loads(m_pickled)
         self.assertEqual(str(m), str(m_unpickled))
         self.assertEqual(m.quantity.units, m_unpickled.quantity.units)
         self.assertEqual(m.quantity.magnitude, m_unpickled.quantity.magnitude)
@@ -203,7 +206,7 @@ class MeasurementTestCase(TestCase):
     def test_inequality(self):
         """
         Test inequality comparisons between Measurement instances.
-        
+
         Checks that measurements with the same value and unit are considered equal, while those with different values or incompatible units are not. Also verifies that comparing a Measurement to an incompatible type raises the appropriate exception.
         """
         m1 = Measurement(10, "meter")
@@ -222,7 +225,7 @@ class MeasurementTestCase(TestCase):
     def test_comparison(self):
         """
         Test relational comparison operators for Measurement instances.
-        
+
         Verifies correct behavior of equality and ordering comparisons between Measurement objects with identical or differing values and units. Ensures that comparisons with incompatible types or units raise the appropriate exceptions.
         """
         m1 = Measurement(10, "meter")
@@ -263,7 +266,7 @@ class MeasurementTestCase(TestCase):
     def test_percentage_values(self):
         """
         Tests initialization, arithmetic operations, string representation, and unit conversion for `Measurement` instances with percentage units.
-        
+
         Verifies correct handling of both "%" and "percent" units, addition and subtraction of percentage values, conversion between percentage and unitless representations, and conversion from unitless to percentage.
         """
         m1 = Measurement(50, "%")
@@ -287,7 +290,7 @@ class MeasurementTestCase(TestCase):
     def test_dimensionless_values(self):
         """
         Test initialization, arithmetic operations, and comparisons for dimensionless Measurement instances.
-        
+
         Verifies correct behavior for string representation, addition, subtraction, and equality when using dimensionless units or empty unit strings.
         """
         m1 = Measurement(1, "dimensionless")
@@ -311,7 +314,7 @@ class MeasurementTestCase(TestCase):
     def test_calculation_between_currency_and_dimensionless(self):
         """
         Tests arithmetic operations between currency and dimensionless Measurement instances.
-        
+
         Verifies that addition and subtraction raise TypeError, while multiplication and division are allowed and yield correct results with appropriate units.
         """
         m1 = Measurement(100, "EUR")
@@ -333,7 +336,7 @@ class MeasurementTestCase(TestCase):
     def test_calculation_with_other_dimension_and_currency(self):
         """
         Tests arithmetic operations between a currency measurement and a measurement with a different physical dimension.
-        
+
         Verifies that addition and subtraction raise a TypeError, while multiplication and division are permitted and result in combined unit expressions.
         """
         m1 = Measurement(100, "EUR")
@@ -354,7 +357,7 @@ class MeasurementTestCase(TestCase):
     def test_conversion_to_dimensionless(self):
         """
         Tests conversion of a compound-unit Measurement to a dimensionless value and back.
-        
+
         Verifies that multiplying a currency Measurement by a percentage yields a compound unit, and converting this result to the original currency unit produces the correct value.
         """
         m1 = Measurement(100, "EUR")
@@ -367,7 +370,7 @@ class MeasurementTestCase(TestCase):
     def test_conversion_to_complex_units(self):
         """
         Tests conversion of a Measurement with compound units to another compatible complex unit.
-        
+
         Verifies that multiplying two Measurements with different units produces a compound unit, and that converting this result to another compatible complex unit yields the correct value and unit.
         """
         m1 = Measurement(100, "EUR")

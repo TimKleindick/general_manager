@@ -24,4 +24,3 @@ def aggregate_derivatives(project: Project) -> dict[str, Measurement]:
     result["total"] = total_volume.to("MWh")
     return result
 ```
-

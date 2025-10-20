@@ -1,20 +1,49 @@
 """Helpers for generating realistic factory values for Django models."""
 
 from __future__ import annotations
-from typing import Any, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+
 from factory.declarations import LazyFunction
 from factory.faker import Faker
 import exrex  # type: ignore[import-untyped]
-from django.db import models
 from django.core.validators import RegexValidator
-import random
+from django.db import models
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from random import SystemRandom
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
-from datetime import date, datetime, time, timezone
 
 if TYPE_CHECKING:
     from general_manager.factory.autoFactory import AutoFactory
+
+
+_RNG = SystemRandom()
+
+
+class MissingFactoryOrInstancesError(ValueError):
+    """Raised when a related model offers neither a factory nor existing instances."""
+
+    def __init__(self, related_model: type[models.Model]) -> None:
+        super().__init__(
+            f"No factory found for {related_model.__name__} and no instances found."
+        )
+
+
+class MissingRelatedModelError(ValueError):
+    """Raised when a relational field lacks a related model definition."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(f"Field {field_name} does not have a related model defined.")
+
+
+class InvalidRelatedModelTypeError(TypeError):
+    """Raised when a relational field references an incompatible model type."""
+
+    def __init__(self, field_name: str, related: object) -> None:
+        super().__init__(
+            f"Related model for {field_name} must be a Django model class, got {related!r}."
+        )
 
 
 def getFieldValue(
@@ -33,13 +62,13 @@ def getFieldValue(
         ValueError: If a related model lacks both a factory and existing instances.
     """
     if field.null:
-        if random.choice([True] + 9 * [False]):
+        if _RNG.choice([True] + 9 * [False]):
             return None
 
     if isinstance(field, MeasurementField):
 
         def _measurement() -> Measurement:
-            value = Decimal(random.randrange(0, 10_000_000)) / Decimal("100")  # two dp
+            value = Decimal(_RNG.randrange(0, 10_000_000)) / Decimal("100")  # two dp
             return Measurement(value, field.base_unit)
 
         return LazyFunction(_measurement)
@@ -108,21 +137,19 @@ def getFieldValue(
             # If no factory exists, pick a random existing instance
             related_instances = list(related_model.objects.all())
             if related_instances:
-                return LazyFunction(lambda: random.choice(related_instances))
+                return LazyFunction(lambda: _RNG.choice(related_instances))
             else:
-                raise ValueError(
-                    f"No factory found for {related_model.__name__} and no instances found"
-                )
+                raise MissingFactoryOrInstancesError(related_model)
     elif isinstance(field, models.ForeignKey):
         related_model = getRelatedModel(field)
         # Create or get an instance of the related model
         if hasattr(related_model, "_general_manager_class"):
-            create_a_new_instance = random.choice([True, True, False])
+            create_a_new_instance = _RNG.choice([True, True, False])
             if not create_a_new_instance:
                 existing_instances = list(related_model.objects.all())
                 if existing_instances:
                     # Pick a random existing instance
-                    return LazyFunction(lambda: random.choice(existing_instances))
+                    return LazyFunction(lambda: _RNG.choice(existing_instances))
 
             related_factory = related_model._general_manager_class.Factory  # type: ignore
             return related_factory()
@@ -131,11 +158,9 @@ def getFieldValue(
             # If no factory exists, pick a random existing instance
             related_instances = list(related_model.objects.all())
             if related_instances:
-                return LazyFunction(lambda: random.choice(related_instances))
+                return LazyFunction(lambda: _RNG.choice(related_instances))
             else:
-                raise ValueError(
-                    f"No factory found for {related_model.__name__} and no instances found"
-                )
+                raise MissingFactoryOrInstancesError(related_model)
     else:
         return None
 
@@ -157,15 +182,13 @@ def getRelatedModel(
     """
     related_model = field.related_model
     if related_model is None:
-        raise ValueError(f"Field {field.name} does not have a related model defined.")
+        raise MissingRelatedModelError(field.name)
     if related_model == "self":
         related_model = field.model
     if not isinstance(related_model, type) or not issubclass(
         related_model, models.Model
     ):
-        raise TypeError(
-            f"Related model for {field.name} must be a Django model class, got {related_model!r}"
-        )
+        raise InvalidRelatedModelTypeError(field.name, related_model)
     return cast(type[models.Model], related_model)
 
 
@@ -191,13 +214,13 @@ def getManyToManyFieldValue(
         related_factory = related_model._general_manager_class.Factory  # type: ignore
 
     min_required = 0 if field.blank else 1
-    number_of_instances = random.randint(min_required, 10)
+    number_of_instances = _RNG.randint(min_required, 10)
     if related_factory and related_instances:
-        number_to_create = random.randint(min_required, number_of_instances)
+        number_to_create = _RNG.randint(min_required, number_of_instances)
         number_to_pick = number_of_instances - number_to_create
         if number_to_pick > len(related_instances):
             number_to_pick = len(related_instances)
-        existing_instances = random.sample(related_instances, number_to_pick)
+        existing_instances = _RNG.sample(related_instances, number_to_pick)
         new_instances = [related_factory() for _ in range(number_to_create)]
         return existing_instances + new_instances
     elif related_factory:
@@ -209,9 +232,7 @@ def getManyToManyFieldValue(
         number_to_pick = number_of_instances
         if number_to_pick > len(related_instances):
             number_to_pick = len(related_instances)
-        existing_instances = random.sample(related_instances, number_to_pick)
+        existing_instances = _RNG.sample(related_instances, number_to_pick)
         return existing_instances
     else:
-        raise ValueError(
-            f"No factory found for {related_model.__name__} and no instances found"
-        )
+        raise MissingFactoryOrInstancesError(related_model)

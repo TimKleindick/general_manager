@@ -15,6 +15,20 @@ if TYPE_CHECKING:
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 
+class InvalidAutoFactoryModelError(TypeError):
+    """Raised when the factory metadata does not reference a Django model class."""
+
+    def __init__(self) -> None:
+        super().__init__("AutoFactory requires _meta.model to be a Django model class.")
+
+
+class UndefinedAdjustmentMethodError(ValueError):
+    """Raised when an adjustment method is required but not configured."""
+
+    def __init__(self) -> None:
+        super().__init__("generate_func is not defined.")
+
+
 class AutoFactory(DjangoModelFactory[modelsModel]):
     """Factory that auto-populates model fields based on interface metadata."""
 
@@ -39,7 +53,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         model = cls._meta.model
         if not issubclass(model, models.Model):
-            raise ValueError("Model must be a type")
+            raise InvalidAutoFactoryModelError()
         field_name_list, to_ignore_list = cls.interface.handleCustomFields(model)
 
         fields = [
@@ -71,7 +85,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         if isinstance(obj, list):
             for item in obj:
                 if not isinstance(item, models.Model):
-                    raise ValueError("Model must be a type")
+                    raise InvalidAutoFactoryModelError()
                 cls._handleManyToManyFieldsAfterCreation(item, params)
         else:
             cls._handleManyToManyFieldsAfterCreation(obj, params)
@@ -205,7 +219,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         model_cls = cls._meta.model
         if cls._adjustmentMethod is None:
-            raise ValueError("generate_func is not defined")
+            raise UndefinedAdjustmentMethodError()
         records = cls._adjustmentMethod(**params)
         if isinstance(records, dict):
             if use_creation_method:

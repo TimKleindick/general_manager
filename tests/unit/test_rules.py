@@ -15,10 +15,12 @@ class DummyObject:
 
 
 class RuleTests(TestCase):
-
     def test_rule_with_floats(self):
         """Testet die Rule-Klasse mit Gleitkommazahlen."""
-        func = lambda x: x.price < 100.0
+
+        def func(item: DummyObject) -> bool:
+            return item.price < 100.0
+
         x = DummyObject(price=150.75)
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -29,18 +31,24 @@ class RuleTests(TestCase):
 
     def test_rule_with_booleans(self):
         """Testet die Rule-Klasse mit booleschen Werten."""
-        func = lambda x: x.is_active == True
+
+        def func(item: DummyObject) -> bool:
+            return item.is_active is True
+
         x = DummyObject(is_active=False)
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
         error_message = rule.getErrorMessage()
-        expected_error = {"is_active": "[is_active] (False) must be == True!"}
+        expected_error = {"is_active": "[is_active] (False) must be is True!"}
         self.assertEqual(error_message, expected_error)
 
     def test_rule_with_dates(self):
         """Testet die Rule-Klasse mit Datumswerten."""
-        func = lambda x: x.start_date < x.end_date
+
+        def func(item: DummyObject) -> bool:
+            return item.start_date < item.end_date
+
         x = DummyObject(
             start_date=datetime.strptime("2022-01-20", "%Y-%m-%d").date(),
             end_date=datetime.strptime("2022-01-15", "%Y-%m-%d").date(),
@@ -57,7 +65,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_integers(self):
         """Testet die Rule-Klasse mit Ganzzahlen."""
-        func = lambda x: x.age >= 18
+
+        def func(item: DummyObject) -> bool:
+            return item.age >= 18
+
         x = DummyObject(age=16)
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -68,7 +79,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_integers_reverse(self):
         """Testet die Rule-Klasse mit Ganzzahlen."""
-        func = lambda x: 18 <= x.age
+
+        def func(item: DummyObject) -> bool:
+            return 18 <= item.age
+
         x = DummyObject(age=16)
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -79,7 +93,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_strings(self):
         """Testet die Rule-Klasse mit Zeichenketten."""
-        func = lambda x: len(x.username) >= 5
+
+        def func(item: DummyObject) -> bool:
+            return len(item.username) >= 5
+
         x = DummyObject(username="abc")
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -90,7 +107,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_lists(self):
         """Testet die Rule-Klasse mit Listen."""
-        func = lambda x: len(x.items) > 0
+
+        def func(item: DummyObject) -> bool:
+            return len(item.items) > 0
+
         x = DummyObject(items=[])
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -101,7 +121,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_custom_error_message(self):
         """Testet die Rule-Klasse mit benutzerdefinierter Fehlermeldung."""
-        func = lambda x: x.quantity <= x.stock
+
+        def func(item: DummyObject) -> bool:
+            return item.quantity <= item.stock
+
         custom_message = (
             "Ordered quantity ({quantity}) exceeds available stock ({stock})."
         )
@@ -119,7 +142,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_missing_custom_error_variables(self):
         """Testet, ob ein Fehler ausgelöst wird, wenn Variablen in der benutzerdefinierten Fehlermeldung fehlen."""
-        func = lambda x: x.height >= 150
+
+        def func(item: DummyObject) -> bool:
+            return item.height >= 150
+
         custom_message = "Height must be at least 150 cm."
         rule = Rule(func, custom_error_message=custom_message)
         with self.assertRaises(ValueError):
@@ -127,7 +153,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_complex_condition(self):
         """Testet die Rule-Klasse mit einer komplexen Bedingung."""
-        func = lambda x: x.age >= 18 and x.has_permission
+
+        def func(item: DummyObject) -> bool:
+            return item.age >= 18 and item.has_permission
+
         x = DummyObject(age=20, has_permission=False)
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -145,7 +174,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_no_variables(self):
         """Testet die Rule-Klasse mit einer Funktion ohne Variablen."""
-        func = lambda x: True
+
+        def func(_: DummyObject) -> bool:
+            return True
+
         x = DummyObject()
         rule = Rule(func)
         result = rule.evaluate(x)
@@ -166,7 +198,10 @@ class RuleTests(TestCase):
 
     def test_rule_property_access(self):
         """Testet den Zugriff auf die Eigenschaften der Rule-Klasse."""
-        func = lambda x: x.value == 42
+
+        def func(item: DummyObject) -> bool:
+            return item.value == 42
+
         rule = Rule(func)
         self.assertEqual(rule.func, func)
         self.assertIsNone(rule.customErrorMessage)
@@ -180,7 +215,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_type_hint(self):
         """Testet die Rule-Klasse mit Typ-Hinweisen."""
-        func = lambda x: cast(float, x.price) < 100.0
+
+        def func(item: DummyObject) -> bool:
+            return cast(float, item.price) < 100.0
+
         x = DummyObject(price=150.75)
         rule = Rule[DummyObject](func)  # type: ignore
         result = rule.evaluate(x)
@@ -190,7 +228,10 @@ class RuleTests(TestCase):
 
     def test_rule_with_none_value(self):
         """Testet die Rule-Klasse mit None-Werten."""
-        func = lambda x: x.optional_value > 2
+
+        def func(item: DummyObject) -> bool:
+            return item.optional_value > 2
+
         x = DummyObject(optional_value=None)
         rule = Rule(func, ignore_if_none=True)
         result = rule.evaluate(x)

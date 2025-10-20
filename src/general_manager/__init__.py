@@ -12,7 +12,8 @@ __all__ = list(GENERAL_MANAGER_EXPORTS)
 _MODULE_MAP = GENERAL_MANAGER_EXPORTS
 
 if TYPE_CHECKING:
-    from general_manager._types.general_manager import *  # noqa: F401,F403
+    from general_manager._types.general_manager import *  # noqa: F403
+
 
 def __getattr__(name: str) -> Any:
     return resolve_export(

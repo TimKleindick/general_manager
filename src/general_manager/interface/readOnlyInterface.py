@@ -26,6 +26,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class MissingReadOnlyDataError(ValueError):
+    """Raised when a ReadOnlyInterface lacks the required `_data` attribute."""
+
+    def __init__(self, interface_name: str) -> None:
+        super().__init__(
+            f"ReadOnlyInterface '{interface_name}' must define a '_data' attribute."
+        )
+
+
+class MissingUniqueFieldError(ValueError):
+    """Raised when a ReadOnlyInterface has no unique fields defined."""
+
+    def __init__(self, interface_name: str) -> None:
+        super().__init__(
+            f"ReadOnlyInterface '{interface_name}' must declare at least one unique field."
+        )
+
+
+class InvalidReadOnlyDataFormatError(TypeError):
+    """Raised when the `_data` JSON does not decode to a list of dictionaries."""
+
+    def __init__(self) -> None:
+        super().__init__("_data JSON must decode to a list of dictionaries.")
+
+
+class InvalidReadOnlyDataTypeError(TypeError):
+    """Raised when the `_data` attribute is neither JSON string nor list."""
+
+    def __init__(self) -> None:
+        super().__init__("_data must be a JSON string or a list of dictionaries.")
+
+
 class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     """Interface that reads static JSON data into a managed read-only model."""
 
@@ -74,27 +106,23 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         parent_class = cls._parent_class
         json_data = getattr(parent_class, "_data", None)
         if json_data is None:
-            raise ValueError(
-                f"For ReadOnlyInterface '{parent_class.__name__}' must set '_data'"
-            )
+            raise MissingReadOnlyDataError(parent_class.__name__)
 
         # Parse JSON into Python structures
         if isinstance(json_data, str):
             parsed_data = json.loads(json_data)
             if not isinstance(parsed_data, list):
-                raise TypeError("_data JSON must decode to a list of dictionaries")
+                raise InvalidReadOnlyDataFormatError()
         elif isinstance(json_data, list):
             parsed_data = json_data
         else:
-            raise TypeError("_data must be a JSON string or a list of dictionaries")
+            raise InvalidReadOnlyDataTypeError()
 
         data_list = cast(list[dict[str, Any]], parsed_data)
 
         unique_fields = cls.getUniqueFields(model)
         if not unique_fields:
-            raise ValueError(
-                f"For ReadOnlyInterface '{parent_class.__name__}' must have at least one unique field."
-            )
+            raise MissingUniqueFieldError(parent_class.__name__)
 
         changes: dict[str, list[models.Model]] = {
             "created": [],
@@ -192,7 +220,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         if not table_exists(table):
             return [
                 Warning(
-                    f"Database table does not exist!",
+                    "Database table does not exist!",
                     hint=f"ReadOnlyInterface '{new_manager_class.__name__}' (Table '{table}') does not exist in the database.",
                     obj=model,
                 )

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import graphene
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
+from django.utils.crypto import get_random_string
 from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 import unittest
@@ -27,7 +28,7 @@ class _DummyInterface(BaseTestInterface):
     def getGraphQLProperties(cls) -> dict[str, object]:
         """
         Return a mapping of GraphQL property names to placeholder descriptor objects used in tests.
-        
+
         Returns:
             dict[str, object]: Mapping where keys are property names ("propA", "propB", "propC") and values are placeholder descriptor objects.
         """
@@ -52,6 +53,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         Prepare test class-level fixtures: define a temporary Employee GeneralManager subclass with a DatabaseInterface
         that has a CharField `name`, store it as `cls.Employee`, and register it in `cls.general_manager_classes`.
         """
+
         class Employee(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=120)
@@ -62,12 +64,13 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
     def setUp(self) -> None:
         """
         Prepare test environment by creating and logging in a test user and enabling Django async operations.
-        
+
         Creates a user named "alice" and forces the test client to authenticate as that user. Saves the original value of the `DJANGO_ALLOW_ASYNC_UNSAFE` environment variable and sets it to "true" so asynchronous operations are allowed during the test.
         """
         super().setUp()
         User = get_user_model()
-        self.user = User.objects.create_user(username="alice", password="secret")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="alice", password=password)
         self.client.force_login(self.user)
         self._async_env_original = os.environ.get("DJANGO_ALLOW_ASYNC_UNSAFE")
         os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
@@ -75,7 +78,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
     def tearDown(self) -> None:
         """
         Restore the DJANGO_ALLOW_ASYNC_UNSAFE environment variable to its original value and run superclass teardown.
-        
+
         If the original value was not set, the environment variable is removed; otherwise it is reset to the saved value. Then delegates to the superclass's tearDown method.
         """
         if self._async_env_original is None:
@@ -87,7 +90,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
     def _build_schema(self) -> graphene.Schema:
         """
         Builds a graphene.Schema using the module's registered query class and, if present, its mutation and subscription classes.
-        
+
         Returns:
             schema (graphene.Schema): A GraphQL schema constructed with GraphQL._query_class and optionally GraphQL._mutation_class and GraphQL._subscription_class.
         """
@@ -101,7 +104,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
     def test_database_subscription_emits_updates(self) -> None:
         """
         Verifies that a GraphQL subscription for an Employee emits an initial snapshot and then an update when the underlying model changes.
-        
+
         Subscribes to onEmployeeChange for a created Employee, confirms the first event is a snapshot containing the initial name "Alice", performs an update to change the name to "Bob", and confirms the subsequent event is an update containing the new name "Bob".
         """
         employee = self.Employee.create(name="Alice", creator_id=self.user.id)
@@ -122,7 +125,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> tuple[object, object]:
             """
             Run the GraphQL subscription for the test employee and capture the initial snapshot event followed by the update event.
-            
+
             Returns:
                 tuple[first_event, second_event] (tuple[object, object]): The first event emitted for the subscription (initial snapshot) and the second event emitted after the employee record is updated.
             """
@@ -162,10 +165,10 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
     def _build_info(query: str) -> SimpleNamespace:
         """
         Builds a lightweight info object containing top-level field selections and named fragments from a GraphQL query string.
-        
+
         Parameters:
             query (str): GraphQL document (query, mutation, or subscription) to parse.
-        
+
         Returns:
             SimpleNamespace: An object with two attributes:
                 - field_nodes (list): List of top-level selection nodes from the operation definitions.
@@ -185,7 +188,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
     def test_direct_property_selection(self) -> None:
         """
         Verify that _subscription_property_names extracts a directly selected field name from a subscription selection.
-        
+
         Builds GraphQL selection info for a subscription selecting item.propA and asserts the extracted property names equal {"propA"}.
         """
         info = self._build_info(
@@ -199,9 +202,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             }
             """
         )
-        property_names = GraphQL._subscription_property_names(
-            info, _DummyManager
-        )
+        property_names = GraphQL._subscription_property_names(info, _DummyManager)
         self.assertEqual(property_names, {"propA"})
 
     def test_property_selection_via_inline_fragment_and_alias(self) -> None:
@@ -218,9 +219,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             }
             """
         )
-        property_names = GraphQL._subscription_property_names(
-            info, _DummyManager
-        )
+        property_names = GraphQL._subscription_property_names(info, _DummyManager)
         self.assertEqual(property_names, {"propB"})
 
     def test_property_selection_via_named_fragment(self) -> None:
@@ -239,9 +238,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             }
             """
         )
-        property_names = GraphQL._subscription_property_names(
-            info, _DummyManager
-        )
+        property_names = GraphQL._subscription_property_names(info, _DummyManager)
         self.assertEqual(property_names, {"propC"})
 
     def test_manager_without_interface_returns_empty_set(self) -> None:
@@ -263,9 +260,10 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
     def test_manager_without_graphql_properties_returns_empty_set(self) -> None:
         """
         Verifies that _subscription_property_names yields an empty set when a manager's Interface exposes no GraphQL properties.
-        
+
         Constructs a subscription selection that requests a field from the item, provides a manager whose Interface.getGraphQLProperties returns an empty dict, and asserts the extracted property name set is empty.
         """
+
         class EmptyInterface(BaseTestInterface):
             @classmethod
             def getGraphQLProperties(cls) -> dict[str, object]:
@@ -295,14 +293,15 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
     def setUp(self) -> None:
         """
         Prepare test fixtures by creating a PrimeTestManager class with a GraphQL-facing Interface and an access log for property access tracking.
-        
+
         Defines a PrimeInterface whose `getGraphQLProperties` exposes "alpha" and "beta", and a PrimeTestManager that:
         - provides an `Interface` subclassing PrimeInterface,
         - maintains `access_log` (list of property names accessed),
         - exposes `alpha` and `beta` properties that record their access and return 1 and 2 respectively.
-        
+
         Assigns the PrimeTestManager class to `self.manager_cls`.
         """
+
         class PrimeInterface(BaseTestInterface):
             @classmethod
             def getGraphQLProperties(cls) -> dict[str, object]:
@@ -312,7 +311,7 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
                 }
 
         class PrimeTestManager:
-            access_log: list[str] = []
+            access_log: ClassVar[list[str]] = []
 
             class Interface(PrimeInterface):
                 pass
@@ -321,7 +320,7 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
             def alpha(self) -> int:
                 """
                 Record access to the 'alpha' property by appending "alpha" to the class access_log and return its integer value.
-                
+
                 Returns:
                     int: The value 1.
                 """
@@ -332,9 +331,9 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
             def beta(self) -> int:
                 """
                 Provide the integer value for the "beta" property and record its access.
-                
+
                 Appends the string "beta" to type(self).access_log to indicate the property was accessed.
-                
+
                 Returns:
                     int: The integer 2.
                 """
@@ -363,7 +362,7 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
     def setUp(self) -> None:
         """
         Prepare a test-specific GraphQL manager registry and preserve the original for restoration.
-        
+
         Saves a copy of the current GraphQL.manager_registry, replaces it with a registry containing a temporary DepManager whose Interface exposes no GraphQL properties, and stores that DepManager class on the test instance as `dep_manager_cls` for use by tests.
         """
         self._original_registry = GraphQL.manager_registry.copy()
@@ -374,7 +373,7 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
                 def getGraphQLProperties(cls) -> dict[str, object]:
                     """
                     Provide a mapping of GraphQL-exposed property names to their descriptor objects for this interface class.
-                    
+
                     Returns:
                         dict[str, object]: Mapping from property name to property descriptor; may be empty by default and is intended to be overridden by subclasses.
                     """
@@ -387,7 +386,7 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
     def tearDown(self) -> None:
         """
         Restore the GraphQL manager registry to its previously saved state.
-        
+
         Resets GraphQL.manager_registry to the value stored in self._original_registry during test setup.
         """
         GraphQL.manager_registry = self._original_registry
@@ -405,6 +404,7 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
         manager_cls, identification = extracted[0]
         self.assertIs(manager_cls, self.dep_manager_cls)
         self.assertEqual(identification, {"id": 1})
+
 
 class GraphQLChannelLayerTests(unittest.TestCase):
     """Test channel layer helper methods."""
@@ -425,15 +425,19 @@ class GraphQLChannelLayerTests(unittest.TestCase):
     def test_get_channel_layer_returns_layer_when_available(self) -> None:
         """Verify _get_channel_layer returns the configured channel layer."""
         mock_layer = object()
-        with patch("general_manager.api.graphql.get_channel_layer", return_value=mock_layer):
+        with patch(
+            "general_manager.api.graphql.get_channel_layer", return_value=mock_layer
+        ):
             layer = GraphQL._get_channel_layer()
             self.assertIs(layer, mock_layer)
+
 
 class GraphQLGroupNameTests(unittest.TestCase):
     """Test subscription group name generation."""
 
     def test_group_name_is_deterministic(self) -> None:
         """Verify _group_name produces consistent output for identical inputs."""
+
         class TestManager(GeneralManager):
             pass
 
@@ -444,6 +448,7 @@ class GraphQLGroupNameTests(unittest.TestCase):
 
     def test_group_name_differs_for_different_managers(self) -> None:
         """Verify _group_name produces different names for different manager classes."""
+
         class ManagerA(GeneralManager):
             pass
 
@@ -457,6 +462,7 @@ class GraphQLGroupNameTests(unittest.TestCase):
 
     def test_group_name_differs_for_different_identifications(self) -> None:
         """Verify _group_name produces different names for different identifications."""
+
         class TestManager(GeneralManager):
             pass
 
@@ -466,6 +472,7 @@ class GraphQLGroupNameTests(unittest.TestCase):
 
     def test_group_name_handles_complex_identifications(self) -> None:
         """Verify _group_name handles nested and complex identification dictionaries."""
+
         class TestManager(GeneralManager):
             pass
 
@@ -484,6 +491,7 @@ class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
 
     def test_prime_with_no_interface(self) -> None:
         """Verify _prime_graphql_properties handles managers without an Interface gracefully."""
+
         class NoInterfaceManager:
             pass
 
@@ -493,6 +501,7 @@ class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
 
     def test_prime_with_property_raising_exception(self) -> None:
         """Verify _prime_graphql_properties propagates property getter exceptions."""
+
         class ExceptionInterface(BaseTestInterface):
             @classmethod
             def getGraphQLProperties(cls) -> dict[str, object]:
@@ -705,7 +714,8 @@ class GraphQLSubscriptionPropertyNamesEdgeCaseTests(unittest.TestCase):
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)  # type: ignore[arg-type]
         self.assertEqual(property_names, {"propA"})
-    
+
+
 def allow_simple_interface_only(cls):
     def fake_issubclass(a, b):
         if getattr(a, "__name__", None) == "SimpleInterface":
@@ -714,11 +724,13 @@ def allow_simple_interface_only(cls):
 
     return patch("builtins.issubclass", side_effect=fake_issubclass)(cls)
 
+
 class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
     """Test identification argument building for subscriptions."""
 
     def test_simple_id_field(self) -> None:
         """Verify _buildIdentificationArguments creates ID argument for 'id' input field."""
+
         class SimpleInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, object]] = {
                 "id": SimpleNamespace(type=int),
@@ -727,13 +739,13 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
         class SimpleManager(GeneralManager):
             Interface = SimpleInterface
 
-
         args = GraphQL._buildIdentificationArguments(SimpleManager)
         self.assertIn("id", args)
         self.assertIsInstance(args["id"], graphene.Argument)
 
     def test_manager_reference_field(self) -> None:
         """Verify _buildIdentificationArguments creates <name>_id field for manager references."""
+
         class RelatedManager(GeneralManager):
             pass
 
@@ -751,6 +763,7 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
 
     def test_multiple_input_fields(self) -> None:
         """Verify _buildIdentificationArguments handles multiple input fields correctly."""
+
         class RelatedManager(GeneralManager):
             pass
 
@@ -784,14 +797,22 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
 
     def test_handle_data_change_ignores_none_instance(self) -> None:
         """Verify _handle_data_change does nothing when instance is None."""
-        with patch("general_manager.api.graphql.GraphQL._get_channel_layer") as mock_get_layer:
-            GraphQL._handle_data_change(sender=GeneralManager, instance=None, action="test")
+        with patch(
+            "general_manager.api.graphql.GraphQL._get_channel_layer"
+        ) as mock_get_layer:
+            GraphQL._handle_data_change(
+                sender=GeneralManager, instance=None, action="test"
+            )
             mock_get_layer.assert_not_called()
 
     def test_handle_data_change_ignores_non_manager_instance(self) -> None:
         """Verify _handle_data_change does nothing for non-GeneralManager instances."""
-        with patch("general_manager.api.graphql.GraphQL._get_channel_layer") as mock_get_layer:
-            GraphQL._handle_data_change(sender=GeneralManager, instance=object(), action="test")  # type: ignore[arg-type]
+        with patch(
+            "general_manager.api.graphql.GraphQL._get_channel_layer"
+        ) as mock_get_layer:
+            GraphQL._handle_data_change(
+                sender=GeneralManager, instance=object(), action="test"
+            )  # type: ignore[arg-type]
             mock_get_layer.assert_not_called()
 
     def test_handle_data_change_ignores_unregistered_manager(self) -> None:
@@ -801,8 +822,12 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
             identification: ClassVar[dict[str, int]] = {"id": 1}
 
         instance = UnregisteredManager()
-        with patch("general_manager.api.graphql.GraphQL._get_channel_layer") as mock_get_layer:
-            GraphQL._handle_data_change(sender=UnregisteredManager, instance=instance, action="test")
+        with patch(
+            "general_manager.api.graphql.GraphQL._get_channel_layer"
+        ) as mock_get_layer:
+            GraphQL._handle_data_change(
+                sender=UnregisteredManager, instance=instance, action="test"
+            )
             mock_get_layer.assert_not_called()
 
     def test_handle_data_change_ignores_when_no_channel_layer(self) -> None:
@@ -814,9 +839,13 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
         instance = RegisteredManager()
 
-        with patch("general_manager.api.graphql.GraphQL._get_channel_layer", return_value=None):
+        with patch(
+            "general_manager.api.graphql.GraphQL._get_channel_layer", return_value=None
+        ):
             # Should not raise
-            GraphQL._handle_data_change(sender=RegisteredManager, instance=instance, action="test")
+            GraphQL._handle_data_change(
+                sender=RegisteredManager, instance=instance, action="test"
+            )
 
     def test_handle_data_change_sends_to_channel_group(self) -> None:
         """Verify _handle_data_change sends message to correct channel group."""
@@ -828,12 +857,19 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
         instance = RegisteredManager()
 
         mock_layer = MagicMock()
-        with patch("general_manager.api.graphql.GraphQL._get_channel_layer", return_value=mock_layer):
-            with patch("general_manager.api.graphql.async_to_sync") as mock_async_to_sync:
+        with patch(
+            "general_manager.api.graphql.GraphQL._get_channel_layer",
+            return_value=mock_layer,
+        ):
+            with patch(
+                "general_manager.api.graphql.async_to_sync"
+            ) as mock_async_to_sync:
                 mock_send = MagicMock()
                 mock_async_to_sync.return_value = mock_send
 
-                GraphQL._handle_data_change(sender=RegisteredManager, instance=instance, action="update")
+                GraphQL._handle_data_change(
+                    sender=RegisteredManager, instance=instance, action="update"
+                )
 
                 # Verify group_send was wrapped with async_to_sync
                 mock_async_to_sync.assert_called_once_with(mock_layer.group_send)
@@ -868,7 +904,7 @@ class GraphQLInstantiateManagerTests(GeneralManagerTransactionTestCase):
     def test_instantiate_without_dependency_collection(self) -> None:
         """Verify _instantiate_manager creates instance without collecting dependencies."""
         identification = {"id": 1}
-        
+
         with patch.object(self.Product, "__init__", return_value=None) as mock_init:
             _instance, dependencies = GraphQL._instantiate_manager(
                 self.Product,
@@ -940,7 +976,7 @@ class GraphQLResolveSubscriptionDependenciesTests(unittest.TestCase):
 
         class SimpleInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, object]] = {}
-            
+
         class SimpleManager(GeneralManager):
             Interface = SimpleInterface
             identification: ClassVar[dict[str, int]] = {"id": 1}
@@ -1056,7 +1092,7 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
 
             # Allow listener to process messages
             await asyncio.sleep(0.01)
-            
+
             # Cancel the listener
             listener_task.cancel()
             try:

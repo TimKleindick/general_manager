@@ -24,7 +24,7 @@ class TestDependencyTracker(TestCase):
     def test_dependency_tracker_with_exception(self):
         """
         Tests that DependencyTracker clears dependencies after an exception within its context.
-        
+
         Verifies that dependencies added inside the context are not retained after a RuntimeError is raised and the context is exited.
         """
         with self.assertRaises(RuntimeError), DependencyTracker() as dependencies:
@@ -52,7 +52,7 @@ class TestDependencyTracker(TestCase):
     def test_dependency_tracker_with_empty_dependencies(self):
         """
         Tests that DependencyTracker handles empty dependencies correctly.
-        
+
         Enters a DependencyTracker context without adding any dependencies and asserts that the dependency set is empty. Verifies that dependencies are cleared after exiting the context.
         """
         with DependencyTracker() as dependencies:

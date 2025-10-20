@@ -1,15 +1,17 @@
 """Convenience helpers for defining factory_boy lazy attributes."""
 
 from typing import Any, Optional
-from factory.declarations import LazyFunction, LazyAttribute, LazyAttributeSequence
-import random
-from general_manager.measurement.measurement import Measurement
-from datetime import timedelta, date, datetime
-from faker import Faker
-import uuid
+
+from factory.declarations import LazyAttribute, LazyAttributeSequence, LazyFunction
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from faker import Faker
+from general_manager.measurement.measurement import Measurement
+from random import SystemRandom
+import uuid
 
 fake = Faker()
+_RNG = SystemRandom()
 
 
 def LazyMeasurement(
@@ -24,7 +26,7 @@ def LazyMeasurement(
         unit (str): Measurement unit.
     """
     return LazyFunction(
-        lambda: Measurement(f"{random.uniform(min_value, max_value):.6f}", unit)
+        lambda: Measurement(f"{_RNG.uniform(min_value, max_value):.6f}", unit)
     )
 
 
@@ -36,8 +38,8 @@ def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
         base_attribute (str): Name of the attribute providing the base date.
     """
     return LazyAttribute(
-        lambda obj: (getattr(obj, base_attribute) or date.today())
-        + timedelta(days=random.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
+        lambda instance: (getattr(instance, base_attribute) or date.today())
+        + timedelta(days=_RNG.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
     )
 
 
@@ -64,9 +66,7 @@ def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
     if delta < 0:
         start_date, end_date = end_date, start_date
         delta = -delta
-    return LazyAttribute(
-        lambda obj: start_date + timedelta(days=random.randint(0, delta))
-    )
+    return LazyAttribute(lambda _: start_date + timedelta(days=_RNG.randint(0, delta)))
 
 
 def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
@@ -76,36 +76,34 @@ def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
         start, end = end, start
         span = -span
     return LazyAttribute(
-        lambda obj: start + timedelta(seconds=random.randint(0, int(span)))
+        lambda _: start + timedelta(seconds=_RNG.randint(0, int(span)))
     )
 
 
 def LazyInteger(min_value: int, max_value: int) -> LazyFunction:
     """Return a lazy factory yielding random integers within the bounds."""
-    return LazyFunction(lambda: random.randint(min_value, max_value))
+    return LazyFunction(lambda: _RNG.randint(min_value, max_value))
 
 
 def LazyDecimal(min_value: float, max_value: float, precision: int = 2) -> LazyFunction:
     """Return a lazy factory yielding Decimal values within the bounds."""
     fmt = f"{{:.{precision}f}}"
-    return LazyFunction(
-        lambda: Decimal(fmt.format(random.uniform(min_value, max_value)))
-    )
+    return LazyFunction(lambda: Decimal(fmt.format(_RNG.uniform(min_value, max_value))))
 
 
 def LazyChoice(options: list[Any]) -> LazyFunction:
     """Return a lazy factory selecting a random element from the options."""
-    return LazyFunction(lambda: random.choice(options))
+    return LazyFunction(lambda: _RNG.choice(options))
 
 
 def LazySequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
     """Return a lazy attribute sequence starting at ``start`` with ``step`` increments."""
-    return LazyAttributeSequence(lambda obj, n: start + n * step)
+    return LazyAttributeSequence(lambda _instance, index: start + index * step)
 
 
 def LazyBoolean(trues_ratio: float = 0.5) -> LazyFunction:
     """Return a lazy factory yielding booleans with the given true ratio."""
-    return LazyFunction(lambda: random.random() < trues_ratio)
+    return LazyFunction(lambda: _RNG.random() < trues_ratio)
 
 
 def LazyUUID() -> LazyFunction:

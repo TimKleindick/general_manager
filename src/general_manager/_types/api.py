@@ -15,4 +15,3 @@ from general_manager.api.graphql import MeasurementScalar
 from general_manager.api.graphql import MeasurementType
 from general_manager.api.mutation import graphQlMutation
 from general_manager.api.property import graphQlProperty
-

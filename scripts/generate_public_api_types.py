@@ -35,7 +35,7 @@ def _write_module(module_name: str, names: Iterable[str], imports: list[str]) ->
     if names:
         lines.append("__all__ = [")
         for name in names:
-            lines.append(f"    \"{name}\",")
+            lines.append(f'    "{name}",')
         lines.append("]")
     else:
         lines.append("__all__: list[str] = []")
@@ -55,6 +55,7 @@ def main() -> None:
 
     # Ensure local package imports work when running the script directly
     import sys
+
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
     from general_manager.public_api_registry import EXPORT_REGISTRY
 
@@ -65,7 +66,9 @@ def main() -> None:
         import_lines: list[str] = []
         snapshot[module_name] = {}
         for public_name in ordered_names:
-            module_path, attr_name = _normalize_target(public_name, exports[public_name])
+            module_path, attr_name = _normalize_target(
+                public_name, exports[public_name]
+            )
             snapshot[module_name][public_name] = [module_path, attr_name]
             if attr_name == public_name:
                 import_lines.append(f"from {module_path} import {attr_name}")

@@ -13,10 +13,24 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty
 from general_manager.api.graphql import GraphQL
-from typing import TYPE_CHECKING, Any, Type, cast
+from typing import TYPE_CHECKING, Any, Callable, Type, cast
 from django.core.checks import register
 import logging
 from django.core.management.base import BaseCommand
+
+
+class MissingRootUrlconfError(RuntimeError):
+    """Raised when Django settings do not define ROOT_URLCONF."""
+
+    def __init__(self) -> None:
+        super().__init__("ROOT_URLCONF not found in settings.")
+
+
+class InvalidPermissionClassError(TypeError):
+    """Raised when a GeneralManager Permission attribute is not a BasePermission subclass."""
+
+    def __init__(self, permission_name: str) -> None:
+        super().__init__(f"{permission_name} must be a subclass of BasePermission.")
 
 
 if TYPE_CHECKING:
@@ -56,15 +70,22 @@ class GeneralmanagerConfig(AppConfig):
         from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
+
+        def _build_schema_check(
+            manager_cls: Type[GeneralManager], model: Any
+        ) -> Callable[[object], list[Any]]:
+            def schema_check(_: object, **__: Any) -> list[Any]:
+                return ReadOnlyInterface.ensureSchemaIsUpToDate(manager_cls, model)
+
+            return schema_check
+
         for general_manager_class in read_only_classes:
             read_only_interface = cast(
                 Type[ReadOnlyInterface], general_manager_class.Interface
             )
 
             register(
-                lambda app_configs, model=read_only_interface._model, manager_class=general_manager_class, **kwargs: ReadOnlyInterface.ensureSchemaIsUpToDate(
-                    manager_class, model
-                ),
+                _build_schema_check(general_manager_class, read_only_interface._model),
                 "general_manager",
             )
 
@@ -110,7 +131,7 @@ class GeneralmanagerConfig(AppConfig):
             result = original_run_from_argv(self, argv)
             return result
 
-        setattr(BaseCommand, "run_from_argv", run_from_argv_with_sync)
+        BaseCommand.run_from_argv = run_from_argv_with_sync
 
     @staticmethod
     def initializeGeneralManagerClasses(
@@ -124,10 +145,19 @@ class GeneralmanagerConfig(AppConfig):
         """
         logger.debug("Initializing GeneralManager classes...")
 
+        def _build_connection_resolver(
+            attribute_key: str, manager_cls: Type[GeneralManager]
+        ) -> Callable[[object], Any]:
+            def resolver(value: object) -> Any:
+                return manager_cls.filter(**{attribute_key: value})
+
+            resolver.__annotations__ = {"return": manager_cls}
+            return resolver
+
         logger.debug("starting to create attributes for GeneralManager classes...")
         for general_manager_class in pending_attribute_initialization:
             attributes = general_manager_class.Interface.getAttributes()
-            setattr(general_manager_class, "_attributes", attributes)
+            general_manager_class._attributes = attributes
             GeneralManagerMeta.createAtPropertiesForAttributes(
                 attributes.keys(), general_manager_class
             )
@@ -140,15 +170,13 @@ class GeneralmanagerConfig(AppConfig):
                     attribute.type, GeneralManager
                 ):
                     connected_manager = attribute.type
-                    func = lambda x, attribute_name=attribute_name: general_manager_class.filter(
-                        **{attribute_name: x}
+                    resolver = _build_connection_resolver(
+                        attribute_name, general_manager_class
                     )
-
-                    func.__annotations__ = {"return": general_manager_class}
                     setattr(
                         connected_manager,
                         f"{general_manager_class.__name__.lower()}_list",
-                        graphQlProperty(func),
+                        graphQlProperty(resolver),
                     )
         for general_manager_class in all_classes:
             GeneralmanagerConfig.checkPermissionClass(general_manager_class)
@@ -159,7 +187,7 @@ class GeneralmanagerConfig(AppConfig):
     ) -> None:
         """
         Create GraphQL interfaces and mutations for the given manager classes, build the GraphQL schema, and add the GraphQL endpoint to the URL configuration.
-        
+
         Parameters:
             pending_graphql_interfaces (list[Type[GeneralManager]]): GeneralManager classes that require GraphQL interface and mutation generation.
         """
@@ -218,7 +246,7 @@ class GeneralmanagerConfig(AppConfig):
         root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
         graph_ql_url = getattr(settings, "GRAPHQL_URL", "graphql")
         if not root_url_conf_path:
-            raise Exception("ROOT_URLCONF not found in settings")
+            raise MissingRootUrlconfError()
         urlconf = import_module(root_url_conf_path)
         urlconf.urlpatterns.append(
             path(
@@ -249,7 +277,10 @@ class GeneralmanagerConfig(AppConfig):
         except RuntimeError as exc:
             if "populate() isn't reentrant" not in str(exc):
                 logger.warning(
-                    "Unable to import ASGI module '%s': %s", module_path, exc, exc_info=True
+                    "Unable to import ASGI module '%s': %s",
+                    module_path,
+                    exc,
+                    exc_info=True,
                 )
                 return
 
@@ -262,7 +293,9 @@ class GeneralmanagerConfig(AppConfig):
                 return
 
             def finalize(module: Any) -> None:
-                GeneralmanagerConfig._finalize_asgi_module(module, attr_name, graphql_url)
+                GeneralmanagerConfig._finalize_asgi_module(
+                    module, attr_name, graphql_url
+                )
 
             class _Loader(importlib.abc.Loader):
                 def __init__(self, original_loader: importlib.abc.Loader) -> None:
@@ -289,13 +322,15 @@ class GeneralmanagerConfig(AppConfig):
                     self._processed = True
                     new_spec = util.spec_from_loader(fullname, wrapped_loader)
                     if new_spec is not None:
-                        new_spec.submodule_search_locations = spec.submodule_search_locations
+                        new_spec.submodule_search_locations = (
+                            spec.submodule_search_locations
+                        )
                     return new_spec
 
             finder = _Finder()
             sys.meta_path.insert(0, finder)
             return
-        except Exception as exc:  # pragma: no cover - defensive
+        except ImportError as exc:  # pragma: no cover - defensive
             logger.warning(
                 "Unable to import ASGI module '%s': %s", module_path, exc, exc_info=True
             )
@@ -304,14 +339,19 @@ class GeneralmanagerConfig(AppConfig):
         GeneralmanagerConfig._finalize_asgi_module(asgi_module, attr_name, graphql_url)
 
     @staticmethod
-    def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) -> None:
+    def _finalize_asgi_module(
+        asgi_module: Any, attr_name: str, graphql_url: str
+    ) -> None:
         try:
             from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
             from channels.routing import ProtocolTypeRouter, URLRouter  # type: ignore[import-untyped]
             from general_manager.api.graphql_subscription_consumer import (
                 GraphQLSubscriptionConsumer,
             )
-        except Exception as exc:  # pragma: no cover - optional dependency
+        except (
+            ImportError,
+            RuntimeError,
+        ) as exc:  # pragma: no cover - optional dependency
             logger.debug(
                 "Channels or GraphQL subscription consumer unavailable (%s); skipping websocket setup.",
                 exc,
@@ -321,7 +361,7 @@ class GeneralmanagerConfig(AppConfig):
         websocket_patterns = getattr(asgi_module, "websocket_urlpatterns", None)
         if websocket_patterns is None:
             websocket_patterns = []
-            setattr(asgi_module, "websocket_urlpatterns", websocket_patterns)
+            asgi_module.websocket_urlpatterns = websocket_patterns
 
         if not hasattr(websocket_patterns, "append"):
             logger.warning(
@@ -338,17 +378,16 @@ class GeneralmanagerConfig(AppConfig):
             for route in websocket_patterns
         )
         if not route_exists:
-            websocket_route = re_path(pattern, GraphQLSubscriptionConsumer.as_asgi()) # type: ignore[arg-type]
-            setattr(websocket_route, "_general_manager_graphql_ws", True)
+            websocket_route = re_path(pattern, GraphQLSubscriptionConsumer.as_asgi())  # type: ignore[arg-type]
+            websocket_route._general_manager_graphql_ws = True
             websocket_patterns.append(websocket_route)
 
         application = getattr(asgi_module, attr_name, None)
         if application is None:
             return
 
-        if (
-            hasattr(application, "application_mapping")
-            and isinstance(application.application_mapping, dict)
+        if hasattr(application, "application_mapping") and isinstance(
+            application.application_mapping, dict
         ):
             application.application_mapping["websocket"] = AuthMiddlewareStack(
                 URLRouter(list(websocket_patterns))
@@ -378,9 +417,7 @@ class GeneralmanagerConfig(AppConfig):
         if hasattr(general_manager_class, "Permission"):
             permission = general_manager_class.Permission
             if not issubclass(permission, BasePermission):
-                raise TypeError(
-                    f"{permission.__name__} must be a subclass of BasePermission"
-                )
+                raise InvalidPermissionClassError(permission.__name__)
             general_manager_class.Permission = permission
         else:
             general_manager_class.Permission = ManagerBasedPermission

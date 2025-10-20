@@ -35,32 +35,34 @@ class PermissionDict(TypedDict):
 
 permission_functions: dict[str, PermissionDict] = {
     "public": {
-        "permission_method": lambda instance, user, config: True,
-        "permission_filter": lambda user, config: None,
+        "permission_method": lambda _instance, _user, _config: True,
+        "permission_filter": lambda _user, _config: None,
     },
     "matches": {
-        "permission_method": lambda instance, user, config: getattr(instance, config[0])
+        "permission_method": lambda instance, _user, config: getattr(
+            instance, config[0]
+        )
         == config[1],
-        "permission_filter": lambda user, config: {"filter": {config[0]: config[1]}},
+        "permission_filter": lambda _user, config: {"filter": {config[0]: config[1]}},
     },
     "ends_with": {
-        "permission_method": lambda instance, user, config: getattr(
+        "permission_method": lambda instance, _user, config: getattr(
             instance, config[0]
         ).endswith(config[1]),
-        "permission_filter": lambda user, config: {
+        "permission_filter": lambda _user, config: {
             "filter": {f"{config[0]}__endswith": config[1]}
         },
     },
     "isAdmin": {
-        "permission_method": lambda instance, user, config: user.is_staff,
-        "permission_filter": lambda user, config: None,
+        "permission_method": lambda _instance, user, _config: user.is_staff,
+        "permission_filter": lambda _user, _config: None,
     },
     "isSelf": {
-        "permission_method": lambda instance, user, config: instance.creator == user,  # type: ignore
-        "permission_filter": lambda user, config: {"filter": {"creator_id": user.id}},  # type: ignore
+        "permission_method": lambda instance, user, _config: instance.creator == user,  # type: ignore
+        "permission_filter": lambda user, _config: {"filter": {"creator_id": user.id}},  # type: ignore
     },
     "isAuthenticated": {
-        "permission_method": lambda instance, user, config: user.is_authenticated,
-        "permission_filter": lambda user, config: None,
+        "permission_method": lambda _instance, user, _config: user.is_authenticated,
+        "permission_filter": lambda _user, _config: None,
     },
 }

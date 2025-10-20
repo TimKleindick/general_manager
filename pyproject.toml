@@ -109,7 +109,17 @@ select = [
     "E9",  # pycodestyle: Runtime
 ]
 
-ignore = ["F401", "I001", "Q000", "UP006", "E501", "S101"]
+ignore = [
+    "F401",
+    "I001",
+    "Q000",
+    "UP006",
+    "E501",
+    "S101",
+    "ARG001",
+    "ARG002",
+    "ARG003",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["E402"]

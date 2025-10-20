@@ -5,6 +5,14 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any, Iterable, Mapping, MutableMapping, overload
 
+
+class MissingExportError(AttributeError):
+    """Raised when a requested export is not defined in the public API."""
+
+    def __init__(self, module_name: str, attribute: str) -> None:
+        super().__init__(f"module {module_name!r} has no attribute {attribute!r}")
+
+
 ModuleTarget = tuple[str, str]
 ModuleMap = Mapping[str, str | ModuleTarget]
 
@@ -32,7 +40,7 @@ def resolve_export(
 ) -> Any:
     """Resolve a lazily-loaded export for a package __init__ module."""
     if name not in module_all:
-        raise AttributeError(f"module {module_globals['__name__']!r} has no attribute {name!r}")
+        raise MissingExportError(module_globals["__name__"], name)
     module_path, attr_name = _normalize_target(name, module_map[name])
     module = import_module(module_path)
     value = getattr(module, attr_name)

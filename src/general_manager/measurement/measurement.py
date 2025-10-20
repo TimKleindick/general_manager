@@ -21,6 +21,94 @@ for currency in currency_units:
     ureg.define(f"{currency} = [{currency}]")
 
 
+class InvalidMeasurementValueError(ValueError):
+    """Raised when a measurement cannot be constructed from the provided value."""
+
+    def __init__(self) -> None:
+        super().__init__("Value must be a Decimal, float, int or compatible.")
+
+
+class InvalidDimensionlessValueError(ValueError):
+    """Raised when parsing a dimensionless measurement with an invalid value."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid value for dimensionless measurement.")
+
+
+class InvalidMeasurementStringError(ValueError):
+    """Raised when a measurement string is not in the expected format."""
+
+    def __init__(self) -> None:
+        super().__init__("String must be in the format 'value unit'.")
+
+
+class MissingExchangeRateError(ValueError):
+    """Raised when a currency conversion lacks a required exchange rate."""
+
+    def __init__(self) -> None:
+        super().__init__("Conversion between currencies requires an exchange rate.")
+
+
+class MeasurementOperandTypeError(TypeError):
+    """Raised when arithmetic operations receive non-measurement operands."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(f"{operation} is only allowed between Measurement instances.")
+
+
+class CurrencyMismatchError(ValueError):
+    """Raised when performing arithmetic between mismatched currencies."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(f"{operation} between different currencies is not allowed.")
+
+
+class IncompatibleUnitsError(ValueError):
+    """Raised when operations involve incompatible physical units."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(f"Units are not compatible for {operation}.")
+
+
+class MixedUnitOperationError(TypeError):
+    """Raised when mixing currency and physical units in arithmetic."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(
+            f"{operation} between currency and physical unit is not allowed."
+        )
+
+
+class CurrencyScalarOperationError(TypeError):
+    """Raised when multiplication/division uses unsupported currency operands."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(f"{operation} between two currency amounts is not allowed.")
+
+
+class MeasurementScalarTypeError(TypeError):
+    """Raised when operations expect a measurement or numeric operand."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(
+            f"{operation} is only allowed with Measurement or numeric values."
+        )
+
+
+class UnsupportedComparisonError(TypeError):
+    """Raised when comparing measurements with non-measurement types."""
+
+    def __init__(self) -> None:
+        super().__init__("Comparison is only allowed between Measurement instances.")
+
+
+class IncomparableMeasurementError(ValueError):
+    """Raised when measurements of different dimensions are compared."""
+
+    def __init__(self) -> None:
+        super().__init__("Cannot compare measurements with different dimensions.")
+
+
 class Measurement:
     def __init__(self, value: Decimal | float | int | str, unit: str) -> None:
         """
@@ -39,8 +127,8 @@ class Measurement:
         if not isinstance(value, (Decimal, float, int)):
             try:
                 value = Decimal(str(value))
-            except Exception:
-                raise ValueError("Value must be a Decimal, float, int or compatible.")
+            except (InvalidOperation, TypeError, ValueError) as error:
+                raise InvalidMeasurementValueError() from error
         if not isinstance(value, Decimal):
             value = Decimal(str(value))
         self.__quantity = ureg.Quantity(self.formatDecimal(value), unit)
@@ -121,10 +209,10 @@ class Measurement:
             # If only one part, assume it's a dimensionless value
             try:
                 return cls(Decimal(splitted[0]), "dimensionless")
-            except InvalidOperation:
-                raise ValueError("Invalid value for dimensionless measurement.")
+            except InvalidOperation as error:
+                raise InvalidDimensionlessValueError() from error
         if len(splitted) != 2:
-            raise ValueError("String must be in the format 'value unit'.")
+            raise InvalidMeasurementStringError()
         value, unit = splitted
         return cls(value, unit)
 
@@ -176,9 +264,7 @@ class Measurement:
                 value = self.magnitude * Decimal(str(exchange_rate))
                 return Measurement(value, target_unit)
             else:
-                raise ValueError(
-                    "Conversion between currencies requires an exchange rate."
-                )
+                raise MissingExchangeRateError()
         else:
             # Standard conversion for physical units
             converted_quantity: pint.Quantity = self.quantity.to(target_unit)  # type: ignore
@@ -210,33 +296,29 @@ class Measurement:
             ValueError: If the operands use incompatible currency codes or physical dimensions.
         """
         if not isinstance(other, Measurement):
-            raise TypeError("Addition is only allowed between Measurement instances.")
+            raise MeasurementOperandTypeError("Addition")
         if self.is_currency() and other.is_currency():
             # Both are currencies
             if self.unit != other.unit:
-                raise ValueError(
-                    "Addition between different currencies is not allowed."
-                )
+                raise CurrencyMismatchError("Addition")
             result_quantity = self.quantity + other.quantity
             if not isinstance(result_quantity, pint.Quantity):
-                raise ValueError("Units are not compatible for addition.")
+                raise IncompatibleUnitsError("addition")
             return Measurement(
                 Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
             )
         elif not self.is_currency() and not other.is_currency():
             # Both are physical units
             if self.quantity.dimensionality != other.quantity.dimensionality:
-                raise ValueError("Units are not compatible for addition.")
+                raise IncompatibleUnitsError("addition")
             result_quantity = self.quantity + other.quantity
             if not isinstance(result_quantity, pint.Quantity):
-                raise ValueError("Units are not compatible for addition.")
+                raise IncompatibleUnitsError("addition")
             return Measurement(
                 Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
             )
         else:
-            raise TypeError(
-                "Addition between currency and physical unit is not allowed."
-            )
+            raise MixedUnitOperationError("Addition")
 
     def __sub__(self, other: Any) -> Measurement:
         """
@@ -253,27 +335,21 @@ class Measurement:
             ValueError: If the operands use incompatible currency codes or physical dimensions.
         """
         if not isinstance(other, Measurement):
-            raise TypeError(
-                "Subtraction is only allowed between Measurement instances."
-            )
+            raise MeasurementOperandTypeError("Subtraction")
         if self.is_currency() and other.is_currency():
             # Both are currencies
             if self.unit != other.unit:
-                raise ValueError(
-                    "Subtraction between different currencies is not allowed."
-                )
+                raise CurrencyMismatchError("Subtraction")
             result_quantity = self.quantity - other.quantity
             return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
         elif not self.is_currency() and not other.is_currency():
             # Both are physical units
             if self.quantity.dimensionality != other.quantity.dimensionality:
-                raise ValueError("Units are not compatible for subtraction.")
+                raise IncompatibleUnitsError("subtraction")
             result_quantity = self.quantity - other.quantity
             return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
         else:
-            raise TypeError(
-                "Subtraction between currency and physical unit is not allowed."
-            )
+            raise MixedUnitOperationError("Subtraction")
 
     def __mul__(self, other: Any) -> Measurement:
         """
@@ -290,9 +366,7 @@ class Measurement:
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():
-                raise TypeError(
-                    "Multiplication between two currency amounts is not allowed."
-                )
+                raise CurrencyScalarOperationError("Multiplication")
             result_quantity = self.quantity * other.quantity
             return Measurement(
                 Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
@@ -303,9 +377,7 @@ class Measurement:
             result_quantity = self.quantity * other
             return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
         else:
-            raise TypeError(
-                "Multiplication is only allowed with Measurement or numeric values."
-            )
+            raise MeasurementScalarTypeError("Multiplication")
 
     def __truediv__(self, other: Any) -> Measurement:
         """
@@ -322,9 +394,7 @@ class Measurement:
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency() and self.unit != other.unit:
-                raise TypeError(
-                    "Division between two different currency amounts is not allowed."
-                )
+                raise CurrencyMismatchError("Division")
             result_quantity = self.quantity / other.quantity
             return Measurement(
                 Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
@@ -335,9 +405,7 @@ class Measurement:
             result_quantity = self.quantity / other
             return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
         else:
-            raise TypeError(
-                "Division is only allowed with Measurement or numeric values."
-            )
+            raise MeasurementScalarTypeError("Division")
 
     def __str__(self) -> str:
         """
@@ -379,16 +447,13 @@ class Measurement:
         if isinstance(other, str):
             other = Measurement.from_string(other)
 
-        # Überprüfen, ob `other` ein Measurement-Objekt ist
         if not isinstance(other, Measurement):
-            raise TypeError("Comparison is only allowed between Measurement instances.")
+            raise UnsupportedComparisonError()
         try:
-            # Convert `other` to the same units as `self`
             other_converted: pint.Quantity = other.quantity.to(self.unit)  # type: ignore
-            # Apply the comparison operation
             return operation(self.magnitude, other_converted.magnitude)
-        except pint.DimensionalityError:
-            raise ValueError("Cannot compare measurements with different dimensions.")
+        except pint.DimensionalityError as error:
+            raise IncomparableMeasurementError() from error
 
     def __radd__(self, other: Any) -> Measurement:
         """

@@ -25,4 +25,3 @@ from general_manager.interface.readOnlyInterface import ReadOnlyInterface
 from general_manager.rule.rule import Rule
 from general_manager.api.mutation import graphQlMutation
 from general_manager.api.property import graphQlProperty
-

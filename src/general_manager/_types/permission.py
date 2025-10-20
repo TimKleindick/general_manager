@@ -11,4 +11,3 @@ __all__ = [
 from general_manager.permission.basePermission import BasePermission
 from general_manager.permission.managerBasedPermission import ManagerBasedPermission
 from general_manager.permission.mutationPermission import MutationPermission
-

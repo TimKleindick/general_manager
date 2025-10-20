@@ -21,6 +21,7 @@ from general_manager.bucket.calculationBucket import CalculationBucket
 
 class CalculationInterface(InterfaceBase):
     """Interface exposing calculation inputs without persisting data."""
+
     _interface_type = "calculation"
     input_fields: dict[str, Input]
 
@@ -72,7 +73,7 @@ class CalculationInterface(InterfaceBase):
 
     @staticmethod
     def _preCreate(
-        name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
+        _name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
         Prepare interface attributes prior to GeneralManager class creation.
@@ -104,7 +105,7 @@ class CalculationInterface(InterfaceBase):
     def _postCreate(
         new_class: newlyCreatedGeneralManagerClass,
         interface_class: newlyCreatedInterfaceClass,
-        model: relatedClass,
+        _model: relatedClass,
     ) -> None:
         """Link the generated interface to the manager class after creation."""
         interface_class._parent_class = new_class
@@ -135,5 +136,5 @@ class CalculationInterface(InterfaceBase):
         """
         field = cls.input_fields.get(field_name)
         if field is None:
-            raise KeyError(f"Field '{field_name}' not found in input fields.")
+            raise KeyError(field_name)
         return field.type

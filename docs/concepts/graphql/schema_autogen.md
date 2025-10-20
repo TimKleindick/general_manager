@@ -1,6 +1,6 @@
 # Schema Auto-Generation
 
-`general_manager.api.graphql.GraphQL` inspects manager interfaces and creates matching Graphene types and mutations. 
+`general_manager.api.graphql.GraphQL` inspects manager interfaces and creates matching Graphene types and mutations.
 
 ## Type mapping
 
