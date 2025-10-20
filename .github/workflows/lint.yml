@@ -36,10 +36,10 @@ jobs:
           pip install pre-commit ruff
 
       - name: Ruff lint
-        run: ruff check src tests
+        run: ruff check --config pyproject.toml src tests
 
       - name: Ruff format check
-        run: ruff format --check .
+        run: ruff format --config pyproject.toml --check .
 
       - name: Run pre-commit (without Ruff)
         env:
