@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9  # <--- version anpassen, wenn du möchtest
+    rev: v0.14.1  # <--- version anpassen, wenn du möchtest
     hooks:
       - id: ruff
         name: ruff (lint & fix)
