@@ -79,7 +79,7 @@ class CalculationInterface(InterfaceBase):
         Prepare interface attributes prior to GeneralManager class creation.
 
         Parameters:
-            name (generalManagerClassName): Name of the new manager class.
+            _name (generalManagerClassName): Name of the new manager class.
             attrs (attributes): Attribute dictionary for the manager being created.
             interface (interfaceBaseClass): Base interface definition.
 
