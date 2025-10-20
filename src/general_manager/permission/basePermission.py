@@ -21,7 +21,11 @@ class PermissionCheckError(PermissionError):
     """Raised when permission evaluation fails for a user."""
 
     def __init__(self, user: AbstractUser | AnonymousUser, errors: list[str]) -> None:
-        super().__init__(f"Permission denied for user {user} with errors: {errors}.")
+        user_id = getattr(user, "id", None)
+        user_label = "anonymous" if user_id is None else f"id={user_id}"
+        super().__init__(
+            f"Permission denied for user {user_label} with errors: {errors}."
+        )
 
 
 class BasePermission(ABC):
