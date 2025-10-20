@@ -324,7 +324,9 @@ class BasePermissionTests(TestCase):
     def test_get_user_with_id_authenticated(self):
         """Test getUserWithId with authenticated user."""
         User = get_user_model()
-        user = User.objects.create_user(username="test_user", password="secret123")  # noqa: S106
+        user = User.objects.create_user(
+            username="test_user", password="secret123"
+        )  # noqa: S106
 
         result = BasePermission.getUserWithId(user)
         self.assertEqual(result, user)
