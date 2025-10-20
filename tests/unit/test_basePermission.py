@@ -144,3 +144,145 @@ class BasePermissionTests(TestCase):
         result = self.permission_obj.getPermissionFilter()
         expected = [{"filter": {"test": "value"}, "exclude": {}}]
         self.assertEqual(result, expected)
+
+    def test_permission_check_error_with_errors(self):
+        """Test that PermissionCheckError is raised with proper error details."""
+        from general_manager.permission.basePermission import PermissionCheckError
+        from django.contrib.auth.models import AnonymousUser
+
+        user = AnonymousUser()
+        errors = ["Error 1", "Error 2"]
+
+        with self.assertRaises(PermissionCheckError) as ctx:
+            raise PermissionCheckError(user, errors)
+
+        self.assertIn("Permission denied", str(ctx.exception))
+        self.assertIn("anonymous", str(ctx.exception))
+        self.assertIn("Error 1", str(ctx.exception))
+        self.assertIn("Error 2", str(ctx.exception))
+
+    def test_permission_check_error_with_authenticated_user(self):
+        """Test PermissionCheckError message with authenticated user."""
+        from general_manager.permission.basePermission import PermissionCheckError
+
+        # Create a mock user with id
+        user = Mock()
+        user.id = 42
+        errors = ["Test error"]
+
+        with self.assertRaises(PermissionCheckError) as ctx:
+            raise PermissionCheckError(user, errors)
+
+        self.assertIn("id=42", str(ctx.exception))
+        self.assertIn("Test error", str(ctx.exception))
+
+    def test_check_create_permission_raises_permission_check_error(self):
+        """Test that checkCreatePermission raises PermissionCheckError on failure."""
+        from general_manager.permission.basePermission import PermissionCheckError
+
+        # Set up permission to fail
+        self.permission_obj.create_permissions = {"attribute": "dummy:deny"}
+
+        with self.assertRaises(PermissionCheckError) as ctx:
+            self.permission_obj.checkCreatePermission(
+                {"attribute": "test_value"}, self.user
+            )
+
+        self.assertIn("Permission denied", str(ctx.exception))
+
+    def test_check_update_permission_raises_permission_check_error(self):
+        """Test that checkUpdatePermission raises PermissionCheckError on failure."""
+        from general_manager.permission.basePermission import PermissionCheckError
+
+        # Set up permission to fail
+        self.permission_obj.update_permissions = {"attribute": "dummy:deny"}
+
+        with self.assertRaises(PermissionCheckError) as ctx:
+            self.permission_obj.checkUpdatePermission(
+                {"attribute": "new_value"}, self.user
+            )
+
+        self.assertIn("Permission denied", str(ctx.exception))
+
+    def test_check_delete_permission_raises_permission_check_error(self):
+        """Test that checkDeletePermission raises PermissionCheckError on failure."""
+        from general_manager.permission.basePermission import PermissionCheckError
+
+        # Create a mock manager instance
+        manager_instance = Mock()
+        manager_instance.attribute = "test_value"
+
+        # Set up permission to fail
+        self.permission_obj.delete_permissions = {"attribute": "dummy:deny"}
+
+        with self.assertRaises(PermissionCheckError) as ctx:
+            self.permission_obj.checkDeletePermission(manager_instance, self.user)
+
+        self.assertIn("Permission denied", str(ctx.exception))
+
+    def test_permission_not_found_error(self):
+        """Test that PermissionNotFoundError is raised for unknown permissions."""
+        from general_manager.permission.utils import PermissionNotFoundError
+
+        with self.assertRaises(PermissionNotFoundError) as ctx:
+            self.permission_obj.validatePermissionString("nonexistent:config")
+
+        self.assertIn("Permission", str(ctx.exception))
+        self.assertIn("not found", str(ctx.exception))
+
+    def test_get_permission_filter_with_invalid_permission_string(self):
+        """Test getPermissionFilter with invalid permission string."""
+        from general_manager.permission.utils import PermissionNotFoundError
+
+        self.permission_obj.read_permissions = {"field": "invalid:permission"}
+
+        with self.assertRaises(PermissionNotFoundError):
+            self.permission_obj.getPermissionFilter()
+
+    def test_permission_multiple_errors_aggregation(self):
+        """Test that multiple permission errors are aggregated properly."""
+        from general_manager.permission.basePermission import PermissionCheckError
+
+        # Set up multiple failing permissions
+        self.permission_obj.create_permissions = {
+            "field1": "dummy:deny",
+            "field2": "dummy:deny",
+            "field3": "dummy:deny",
+        }
+
+        with self.assertRaises(PermissionCheckError) as ctx:
+            self.permission_obj.checkCreatePermission(
+                {"field1": "val1", "field2": "val2", "field3": "val3"},
+                self.user,
+            )
+
+        # Should contain all three errors
+        error_str = str(ctx.exception)
+        self.assertIn("field1", error_str)
+        self.assertIn("field2", error_str)
+        self.assertIn("field3", error_str)
+
+    def test_permission_with_empty_data(self):
+        """Test permission checks with empty data dictionaries."""
+        # Should not raise any errors
+        self.permission_obj.checkCreatePermission({}, self.user)
+        self.permission_obj.checkUpdatePermission({}, self.user)
+
+    def test_get_user_with_id_authenticated(self):
+        """Test getUserWithId with authenticated user."""
+        user = Mock()
+        user.id = 123
+        user.is_authenticated = True
+
+        result = BasePermission.getUserWithId(user, "test_action")
+        self.assertEqual(result, user)
+
+    def test_get_user_with_id_anonymous(self):
+        """Test getUserWithId with anonymous user."""
+        user = AnonymousUser()
+
+        with self.assertRaises(PermissionError) as ctx:
+            BasePermission.getUserWithId(user, "test_action")
+
+        self.assertIn("test_action", str(ctx.exception))
+        self.assertIn("requires authentication", str(ctx.exception))

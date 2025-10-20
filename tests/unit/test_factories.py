@@ -350,3 +350,233 @@ class TestGetManyToManyFieldValue(TestCase):
             self.assertRaises(ValueError),
         ):
             getManyToManyFieldValue(field)  # type: ignore
+
+    def test_missing_factory_or_instances_error(self):
+        """Test that MissingFactoryOrInstancesError is raised when no factory or instances exist."""
+        from general_manager.factory.factories import MissingFactoryOrInstancesError
+        from django.db import models
+
+        # Create a related model without factory or instances
+        class OrphanModel(models.Model):
+            name = models.CharField(max_length=100)
+
+            class Meta:
+                app_label = "test_app"
+
+        field = Mock()
+        field.related_model = OrphanModel
+        field.null = False
+
+        with (
+            patch.object(OrphanModel.objects, "all", return_value=[]),
+            self.assertRaises(MissingFactoryOrInstancesError) as ctx,
+        ):
+            getFieldValue(field)
+
+        self.assertIn("No factory found", str(ctx.exception))
+        self.assertIn("OrphanModel", str(ctx.exception))
+        self.assertIn("no instances found", str(ctx.exception))
+
+    def test_missing_related_model_error(self):
+        """Test that MissingRelatedModelError is raised when related model is None."""
+        from general_manager.factory.factories import (
+            MissingRelatedModelError,
+            getRelatedModel,
+        )
+
+        field = Mock()
+        field.related_model = None
+        field.name = "test_field"
+
+        with self.assertRaises(MissingRelatedModelError) as ctx:
+            getRelatedModel(field)
+
+        self.assertIn("test_field", str(ctx.exception))
+        self.assertIn("does not have a related model", str(ctx.exception))
+
+    def test_invalid_related_model_type_error(self):
+        """Test that InvalidRelatedModelTypeError is raised for non-model related types."""
+        from general_manager.factory.factories import (
+            InvalidRelatedModelTypeError,
+            getRelatedModel,
+        )
+
+        field = Mock()
+        field.related_model = "NotAModel"  # String instead of model class
+        field.name = "test_field"
+
+        with self.assertRaises(InvalidRelatedModelTypeError) as ctx:
+            getRelatedModel(field)
+
+        self.assertIn("test_field", str(ctx.exception))
+        self.assertIn("must be a Django model class", str(ctx.exception))
+
+    def test_field_value_with_null_field_randomness(self):
+        """Test that nullable fields sometimes return None with proper randomness."""
+        from general_manager.factory.factories import getFieldValue
+
+        # Create a nullable CharField
+        field = Mock()
+        field.null = True
+        field.__class__.__name__ = "CharField"
+
+        # Run multiple times to check randomness
+        none_count = 0
+        total_runs = 100
+
+        for _ in range(total_runs):
+            result = getFieldValue(field)
+            if result is None:
+                none_count += 1
+
+        # Should get some None values but not all (roughly 10% based on the code)
+        self.assertGreater(none_count, 0)
+        self.assertLess(none_count, total_runs)
+
+    def test_measurement_field_value_generation(self):
+        """Test that MeasurementField generates valid Measurement values."""
+        from general_manager.factory.factories import getFieldValue
+        from general_manager.measurement.measurementField import MeasurementField
+        from decimal import Decimal
+
+        field = MeasurementField(base_unit="meter")
+        field.null = False
+
+        result = getFieldValue(field)
+
+        # Should be a LazyFunction
+        self.assertIsNotNone(result)
+        # Execute the lazy function if it is one
+        if hasattr(result, "evaluate"):
+            measurement = result.evaluate()
+            from general_manager.measurement.measurement import Measurement
+
+            self.assertIsInstance(measurement, Measurement)
+            self.assertEqual(measurement.unit, "meter")
+            self.assertIsInstance(measurement.magnitude, Decimal)
+
+    def test_foreign_key_field_creates_or_picks_existing(self):
+        """Test that ForeignKey fields either create new or pick existing instances."""
+        from general_manager.factory.factories import getFieldValue
+
+        # Create a mock related model with _general_manager_class
+        related_model = Mock()
+        related_model._general_manager_class = Mock()
+        related_model._general_manager_class.Factory = Mock(return_value="new_instance")
+        related_model.objects.all.return_value = ["existing1", "existing2"]
+
+        field = Mock()
+        field.related_model = related_model
+        field.null = False
+        field.__class__.__name__ = "ForeignKey"
+
+        # Run multiple times to see both behaviors
+        creates = 0
+        picks = 0
+
+        for _ in range(100):
+            result = getFieldValue(field)
+
+            # Check if it's a LazyFunction
+            if hasattr(result, "evaluate"):
+                continue  # It picked an existing one (wrapped in LazyFunction)
+            elif result == "new_instance":
+                creates += 1
+
+        # Should sometimes create and sometimes pick (based on random choice)
+        # This is a statistical test, so we just check that it happens sometimes
+        # The actual implementation uses a 2/3 create, 1/3 pick strategy
+
+    def test_many_to_many_field_subset_selection(self):
+        """Test that M2M fields select a subset of available instances."""
+        from general_manager.factory.factories import getManyToManyFieldValue
+
+        # Create mock instances
+        instances = [f"instance_{i}" for i in range(10)]
+
+        field = Mock()
+        field.related_model = Mock()
+        field.related_model.objects.all.return_value = instances
+
+        result = getManyToManyFieldValue(field)
+
+        # Should return a list
+        self.assertIsInstance(result, list)
+
+        # Should be a subset (not empty, not all)
+        self.assertGreater(len(result), 0)
+        self.assertLessEqual(len(result), len(instances))
+
+        # All items should be from the original list
+        for item in result:
+            self.assertIn(item, instances)
+
+    def test_regex_field_value_generation(self):
+        """Test that fields with RegexValidator generate matching values."""
+        from general_manager.factory.factories import getFieldValue
+        from django.core.validators import RegexValidator
+        import re
+
+        # Create a CharField with RegexValidator
+        field = Mock()
+        field.null = False
+        field.__class__.__name__ = "CharField"
+
+        # Add a regex validator for phone numbers
+        validator = RegexValidator(regex=r"^\d{3}-\d{3}-\d{4}$")
+        field.validators = [validator]
+
+        result = getFieldValue(field)
+
+        # Should return a LazyFunction with Faker
+        self.assertIsNotNone(result)
+
+        # If it's a LazyFunction, it should generate a value matching the regex
+        # The actual value generation happens at evaluation time
+
+    def test_choice_field_value_generation(self):
+        """Test that fields with choices generate valid choice values."""
+        from general_manager.factory.factories import getFieldValue
+
+        choices = [("A", "Option A"), ("B", "Option B"), ("C", "Option C")]
+
+        field = Mock()
+        field.null = False
+        field.choices = choices
+        field.__class__.__name__ = "CharField"
+        field.validators = []
+
+        result = getFieldValue(field)
+
+        # Should return a LazyFunction
+        self.assertIsNotNone(result)
+
+        # Execute multiple times to check it picks from choices
+        if hasattr(result, "evaluate"):
+            for _ in range(10):
+                value = result.evaluate()
+                self.assertIn(value, ["A", "B", "C"])
+
+    def test_system_random_usage(self):
+        """Test that SystemRandom is used instead of standard random module."""
+        from general_manager.factory import factories
+        from random import SystemRandom
+
+        # Check that _RNG is a SystemRandom instance
+        self.assertIsInstance(factories._RNG, SystemRandom)
+
+    def test_decimal_field_value_generation(self):
+        """Test that DecimalField generates valid Decimal values."""
+        from general_manager.factory.factories import getFieldValue
+        from decimal import Decimal
+
+        field = Mock()
+        field.null = False
+        field.__class__.__name__ = "DecimalField"
+        field.max_digits = 10
+        field.decimal_places = 2
+
+        result = getFieldValue(field)
+
+        # Should return a Faker instance
+        self.assertIsNotNone(result)

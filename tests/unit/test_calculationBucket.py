@@ -635,3 +635,209 @@ class TestCalculationBucketAdditional(TestCase):
         combined = b1 | b2
         self.assertEqual(combined.filter_definitions, f1)  # identical preserved
         self.assertEqual(combined.exclude_definitions, {})  # non-identical removed
+
+
+class TestCalculationBucketExceptions(TestCase):
+    """Test new custom exception classes in CalculationBucket."""
+
+    def test_invalid_calculation_interface_error(self):
+        """Test that InvalidCalculationInterfaceError is raised for non-CalculationInterface managers."""
+        from general_manager.bucket.calculationBucket import (
+            InvalidCalculationInterfaceError,
+        )
+        from general_manager.interface.baseInterface import BaseInterface
+
+        # Create a manager with non-CalculationInterface
+        class NonCalcInterface(BaseInterface):
+            pass
+
+        class NonCalcManager:
+            Interface = NonCalcInterface
+
+        with self.assertRaises(InvalidCalculationInterfaceError) as ctx:
+            CalculationBucket(NonCalcManager)
+        self.assertIn("CalculationInterface", str(ctx.exception))
+
+    def test_incompatible_bucket_type_error(self):
+        """Test that IncompatibleBucketTypeError is raised when combining different bucket types."""
+        from general_manager.bucket.calculationBucket import (
+            IncompatibleBucketTypeError,
+        )
+        from general_manager.bucket.baseBucket import Bucket
+
+        bucket1 = CalculationBucket(DummyGeneralManager)
+
+        # Create a different bucket type
+        class OtherBucket(Bucket):
+            pass
+
+        other_bucket = OtherBucket(DummyGeneralManager)
+
+        with self.assertRaises(IncompatibleBucketTypeError) as ctx:
+            bucket1 | other_bucket
+        self.assertIn("Cannot combine", str(ctx.exception))
+
+    def test_incompatible_bucket_manager_error(self):
+        """Test that IncompatibleBucketManagerError is raised when combining buckets with different managers."""
+        from general_manager.bucket.calculationBucket import (
+            IncompatibleBucketManagerError,
+        )
+
+        # Create another dummy manager
+        class AnotherDummyInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {}
+
+        class AnotherDummyManager:
+            Interface = AnotherDummyInterface
+
+        AnotherDummyInterface._parent_class = AnotherDummyManager
+
+        bucket1 = CalculationBucket(DummyGeneralManager)
+        bucket2 = CalculationBucket(AnotherDummyManager)
+
+        with self.assertRaises(IncompatibleBucketManagerError) as ctx:
+            bucket1 | bucket2
+        self.assertIn("Cannot combine buckets for", str(ctx.exception))
+
+    def test_cyclic_dependency_error(self):
+        """Test that CyclicDependencyError is raised when cyclic dependencies detected."""
+        from general_manager.bucket.calculationBucket import CyclicDependencyError
+
+        # Create input fields with circular dependencies
+        class CircularInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "field_a": Input(str, dependencies=["field_b"]),
+                "field_b": Input(str, dependencies=["field_a"]),
+            }
+
+        class CircularManager:
+            Interface = CircularInterface
+
+        CircularInterface._parent_class = CircularManager
+
+        bucket = CalculationBucket(CircularManager)
+
+        # Try to sort with circular dependencies
+        with self.assertRaises(CyclicDependencyError) as ctx:
+            bucket._sortCalculations(
+                [
+                    {"field_a": "value1", "field_b": "value2"},
+                ]
+            )
+        self.assertIn("Cyclic dependency detected", str(ctx.exception))
+
+    def test_invalid_possible_values_error(self):
+        """Test that InvalidPossibleValuesError is raised for invalid possible_values configuration."""
+        from general_manager.bucket.calculationBucket import (
+            InvalidPossibleValuesError,
+        )
+
+        # Create interface with invalid possible_values
+        class InvalidPossibleValuesInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "test_field": Input(
+                    str, possible_values="not_a_list_or_callable"  # Invalid type
+                ),
+            }
+
+        class InvalidPossibleValuesManager:
+            Interface = InvalidPossibleValuesInterface
+
+        InvalidPossibleValuesInterface._parent_class = InvalidPossibleValuesManager
+
+        bucket = CalculationBucket(InvalidPossibleValuesManager)
+
+        with self.assertRaises(InvalidPossibleValuesError) as ctx:
+            bucket._getPossibleValues("test_field")
+        self.assertIn("Invalid possible_values configuration", str(ctx.exception))
+
+    def test_missing_calculation_match_error(self):
+        """Test that MissingCalculationMatchError is raised when no calculation matches."""
+        from general_manager.bucket.calculationBucket import (
+            MissingCalculationMatchError,
+        )
+
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        # Try to get a calculation that doesn't exist
+        with self.assertRaises(MissingCalculationMatchError) as ctx:
+            bucket.get(nonexistent_field="value")
+        self.assertIn("No matching calculation found", str(ctx.exception))
+
+    def test_multiple_calculation_match_error(self):
+        """Test that MultipleCalculationMatchError is raised when multiple calculations match."""
+        from general_manager.bucket.calculationBucket import (
+            MultipleCalculationMatchError,
+        )
+
+        # Create interface with overlapping calculations
+        class OverlapInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "field": Input(str, possible_values=["a", "b"]),
+            }
+
+        class OverlapManager:
+            Interface = OverlapInterface
+            identification = {"field": str}
+
+        OverlapInterface._parent_class = OverlapManager
+
+        bucket = CalculationBucket(OverlapManager)
+
+        # Manually add overlapping calculations to trigger the error
+        # This would normally be prevented by proper configuration
+        # but we're testing the error handling
+        with patch.object(bucket, "_calculations", [
+            OverlapManager(field="a"),
+            OverlapManager(field="a"),
+        ]):
+            with self.assertRaises(MultipleCalculationMatchError) as ctx:
+                bucket.get(field="a")
+            self.assertIn("Multiple matching calculations found", str(ctx.exception))
+
+    def test_calculation_bucket_edge_cases(self):
+        """Test edge cases in CalculationBucket functionality."""
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        # Test empty bucket operations
+        empty_result = list(bucket)
+        self.assertEqual(empty_result, [])
+
+        # Test filter with empty definitions
+        filtered = bucket.filter()
+        self.assertIsInstance(filtered, CalculationBucket)
+
+        # Test exclude with empty definitions
+        excluded = bucket.exclude()
+        self.assertIsInstance(excluded, CalculationBucket)
+
+    def test_calculation_bucket_filter_combinations(self):
+        """Test various filter and exclude combinations."""
+        bucket = CalculationBucket(
+            DummyGeneralManager,
+            filter_definitions={"field1": "value1"},
+            exclude_definitions={"field2": "value2"},
+        )
+
+        # Add more filters
+        filtered = bucket.filter(field3="value3")
+        self.assertIn("field1", filtered.filter_definitions)
+        self.assertIn("field3", filtered.filter_definitions)
+
+        # Add more exclusions
+        excluded = bucket.exclude(field4="value4")
+        self.assertIn("field2", excluded.exclude_definitions)
+        self.assertIn("field4", excluded.exclude_definitions)
+
+    def test_calculation_bucket_or_with_manager_instance(self):
+        """Test OR operation with a GeneralManager instance."""
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        # Create a dummy manager instance
+        manager_instance = DummyGeneralManager(id=123)
+        manager_instance.__class__ = DummyGeneralManager
+        manager_instance.identification = {"id": 123}
+
+        # Should combine bucket with manager instance
+        combined = bucket | manager_instance
+        self.assertIsInstance(combined, CalculationBucket)

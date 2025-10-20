@@ -747,3 +747,128 @@ class PathMappingUnitTests(SimpleTestCase):
         if tracer.path:
             self.assertEqual(len(tracer.path), 3)
             self.assertEqual(tracer.path, ["chain_b", "chain_c", "final_end"])
+
+    def test_missing_start_instance_error(self):
+        """Test that MissingStartInstanceError is raised when calling goTo without start instance."""
+        from general_manager.utils.pathMapping import MissingStartInstanceError
+
+        path_map = PathMap(self.StartManager)
+        # Don't set start_instance
+
+        with self.assertRaises(MissingStartInstanceError) as ctx:
+            path_map.goTo(self.EndManager)
+
+        self.assertIn("Cannot call goTo on a PathMap without a start instance", str(ctx.exception))
+
+    def test_path_map_go_to_with_none_start_instance(self):
+        """Test goTo when start_instance is explicitly set to None."""
+        from general_manager.utils.pathMapping import MissingStartInstanceError
+
+        path_map = PathMap(self.StartManager)
+        path_map.start_instance = None
+
+        with self.assertRaises(MissingStartInstanceError):
+            path_map.goTo(self.EndManager)
+
+    def test_path_map_singleton_behavior(self):
+        """Test that PathMap implements singleton pattern correctly."""
+        path_map1 = PathMap(self.StartManager)
+        path_map2 = PathMap(self.EndManager)
+
+        # Both should be the same instance
+        self.assertIs(path_map1, path_map2)
+
+    def test_path_map_caching_mechanism(self):
+        """Test that path mappings are cached correctly."""
+        path_map = PathMap(self.StartManager)
+
+        # First call should compute and cache the path
+        tracer1 = path_map.getPathTo(self.EndManager)
+
+        # Second call should use cached path
+        tracer2 = path_map.getPathTo(self.EndManager)
+
+        # Should be the same tracer instance (cached)
+        self.assertIs(tracer1, tracer2)
+
+    def test_path_map_get_all_connected_empty(self):
+        """Test getAllConnected when no connections exist."""
+
+        class IsolatedInterface(BaseTestInterface):
+            pass
+
+        class IsolatedManager(GeneralManager):
+            Interface = IsolatedInterface
+
+        path_map = PathMap(IsolatedManager)
+        connected = path_map.getAllConnected()
+
+        # Should only include itself
+        self.assertIn(IsolatedManager.__name__, connected)
+
+    def test_path_map_get_all_connected_multiple_levels(self):
+        """Test getAllConnected with multi-level connections."""
+
+        class Level1Interface(BaseTestInterface):
+            pass
+
+        class Level2Interface(BaseTestInterface):
+            pass
+
+        class Level3Interface(BaseTestInterface):
+            pass
+
+        class Level3Manager(GeneralManager):
+            Interface = Level3Interface
+
+        class Level2Manager(GeneralManager):
+            Interface = Level2Interface
+
+            @GraphQLProperty
+            def level3(self) -> Level3Manager:  # type: ignore
+                return Level3Manager()
+
+        class Level1Manager(GeneralManager):
+            Interface = Level1Interface
+
+            @GraphQLProperty
+            def level2(self) -> Level2Manager:  # type: ignore
+                return Level2Manager()
+
+        path_map = PathMap(Level1Manager)
+        connected = path_map.getAllConnected()
+
+        # Should include all levels
+        self.assertIn(Level1Manager.__name__, connected)
+        self.assertIn(Level2Manager.__name__, connected)
+        self.assertIn(Level3Manager.__name__, connected)
+
+    def test_path_tracer_with_no_path_available(self):
+        """Test PathTracer when no path exists between managers."""
+
+        class UnconnectedInterface(BaseTestInterface):
+            pass
+
+        class UnconnectedManager(GeneralManager):
+            Interface = UnconnectedInterface
+
+        tracer = PathTracer(self.StartManager, UnconnectedManager)
+
+        # Should have no path
+        self.assertIsNone(tracer.path)
+
+    def test_path_tracer_traverse_path_no_path(self):
+        """Test traversePath when no path exists."""
+
+        class UnconnectedInterface(BaseTestInterface):
+            pass
+
+        class UnconnectedManager(GeneralManager):
+            Interface = UnconnectedInterface
+
+        tracer = PathTracer(self.StartManager, UnconnectedManager)
+
+        start_instance = self.StartManager()
+
+        result = tracer.traversePath(start_instance)
+        self.assertIsNone(result)

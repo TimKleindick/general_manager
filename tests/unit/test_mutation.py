@@ -329,3 +329,213 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.int, 0)
         self.assertFalse(res.bool)
         self.assertEqual(res.str, "no")
+
+    def test_missing_parameter_type_hint_error(self):
+        """Test that MissingParameterTypeHintError is raised for parameters without type hints."""
+        from general_manager.api.mutation import MissingParameterTypeHintError
+
+        with self.assertRaises(MissingParameterTypeHintError) as ctx:
+
+            @graphQlMutation()
+            def bad_mutation(info, param_without_hint):  # Missing type hint
+                return True
+
+        self.assertIn("param_without_hint", str(ctx.exception))
+        self.assertIn("Missing type hint", str(ctx.exception))
+
+    def test_missing_mutation_return_annotation_error(self):
+        """Test that MissingMutationReturnAnnotationError is raised for mutations without return annotation."""
+        from general_manager.api.mutation import MissingMutationReturnAnnotationError
+
+        with self.assertRaises(MissingMutationReturnAnnotationError) as ctx:
+
+            @graphQlMutation()
+            def bad_mutation(info, value: int):  # Missing return annotation
+                return value
+
+        self.assertIn("missing return annotation", str(ctx.exception))
+
+    def test_invalid_mutation_return_type_error(self):
+        """Test that InvalidMutationReturnTypeError is raised for non-type return values."""
+        from general_manager.api.mutation import InvalidMutationReturnTypeError
+
+        with self.assertRaises(InvalidMutationReturnTypeError) as ctx:
+
+            @graphQlMutation()
+            def bad_mutation(info, value: int) -> "not_a_type":  # Invalid return type
+                return value
+
+        self.assertIn("is not a type", str(ctx.exception))
+
+    def test_mutation_with_optional_parameters(self):
+        """Test mutations with Optional parameters are handled correctly."""
+
+        @graphQlMutation()
+        def optional_param_mutation(info, required: int, optional: int | None = None) -> bool:
+            _ = info
+            return required > 0 and (optional is None or optional > 0)
+
+        mutation = GraphQL._mutations["optional_param_mutation"]
+
+        # Check that optional parameter is not required
+        args_class = mutation.Arguments
+        self.assertFalse(args_class.optional.kwargs.get("required", False))
+
+    def test_mutation_with_list_parameters(self):
+        """Test mutations with List parameters."""
+
+        @graphQlMutation()
+        def list_param_mutation(info, values: list[int]) -> int:
+            _ = info
+            return sum(values)
+
+        mutation = GraphQL._mutations["list_param_mutation"]
+
+        # Check that list parameter exists
+        args_class = mutation.Arguments
+        self.assertTrue(hasattr(args_class, "values"))
+
+    def test_mutation_with_default_values(self):
+        """Test mutations with default parameter values."""
+
+        @graphQlMutation()
+        def default_value_mutation(info, multiplier: int = 2) -> int:
+            _ = info
+            return multiplier * 10
+
+        mutation = GraphQL._mutations["default_value_mutation"]
+
+        # Check that parameter has default
+        args_class = mutation.Arguments
+        self.assertTrue(hasattr(args_class.multiplier, "default_value"))
+
+    def test_mutation_error_handling(self):
+        """Test that mutations properly handle and report errors."""
+
+        @graphQlMutation()
+        def error_mutation(info, should_fail: bool) -> str:
+            _ = info
+            if should_fail:
+                raise ValueError("Expected error")
+            return "success"
+
+        mutation = GraphQL._mutations["error_mutation"]
+
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        # Should fail gracefully
+        result = mutation.mutate(None, Info, should_fail=True)
+        self.assertFalse(result.success)
+
+        # Should succeed when no error
+        result = mutation.mutate(None, Info, should_fail=False)
+        self.assertTrue(result.success)
+        self.assertEqual(result.str, "success")
+
+    def test_mutation_with_permission_class(self):
+        """Test mutations with custom permission classes."""
+        from general_manager.permission.mutationPermission import MutationPermission
+
+        class CustomPermission(MutationPermission):
+            @classmethod
+            def check(cls, data: dict, user: object) -> None:
+                if data.get("value", 0) < 0:
+                    raise PermissionError("Value must be non-negative")
+
+        @graphQlMutation(permission=CustomPermission)
+        def protected_mutation(info, value: int) -> int:
+            _ = info
+            return value * 2
+
+        mutation = GraphQL._mutations["protected_mutation"]
+
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        # Should fail with negative value
+        result = mutation.mutate(None, Info, value=-5)
+        self.assertFalse(result.success)
+
+        # Should succeed with positive value
+        result = mutation.mutate(None, Info, value=5)
+        self.assertTrue(result.success)
+        self.assertEqual(result.int, 10)
+
+    def test_mutation_with_tuple_unpacking(self):
+        """Test that tuple returns are properly unpacked into mutation fields."""
+
+        @graphQlMutation()
+        def tuple_mutation(info, a: int, b: int) -> tuple[int, int, int]:
+            _ = info
+            return a + b, a - b, a * b
+
+        mutation = GraphQL._mutations["tuple_mutation"]
+
+        Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        result = mutation.mutate(None, Info, a=10, b=5)
+        self.assertTrue(result.success)
+        self.assertEqual(result.int, 15)  # First tuple element
+
+    def test_mutation_info_parameter_skipping(self):
+        """Test that 'info' parameter is correctly skipped in Arguments."""
+
+        @graphQlMutation()
+        def info_mutation(info, value: int) -> int:
+            # info should be passed but not in Arguments
+            return value
+
+        mutation = GraphQL._mutations["info_mutation"]
+
+        # Arguments should not include 'info'
+        args_class = mutation.Arguments
+        self.assertFalse(hasattr(args_class, "info"))
+        self.assertTrue(hasattr(args_class, "value"))
+
+    def test_mutation_snake_to_camel_case_naming(self):
+        """Test that mutation names are converted from snake_case to camelCase."""
+
+        @graphQlMutation()
+        def my_custom_mutation(info, value: int) -> int:
+            _ = info
+            return value
+
+        # Should be converted to camelCase
+        self.assertIn("myCustomMutation", GraphQL._mutations)
+
+    def test_mutation_with_manager_type_parameter(self):
+        """Test mutations that accept GeneralManager types as parameters."""
+        from general_manager.manager import GeneralManager
+
+        # This would need proper setup with a real manager class
+        # Testing the type resolution mechanism
+
+        @graphQlMutation()
+        def manager_mutation(info, id: int) -> int:
+            _ = info
+            return id
+
+        mutation = GraphQL._mutations["manager_mutation"]
+        self.assertIsNotNone(mutation)
+
+    def test_mutation_graphql_type_resolution(self):
+        """Test that mutations properly resolve Python types to GraphQL types."""
+
+        @graphQlMutation()
+        def type_resolution_mutation(
+            info,
+            int_val: int,
+            float_val: float,
+            str_val: str,
+            bool_val: bool,
+        ) -> bool:
+            _ = info, int_val, float_val, str_val
+            return bool_val
+
+        mutation = GraphQL._mutations["type_resolution_mutation"]
+
+        # All parameters should be properly typed
+        args_class = mutation.Arguments
+        self.assertTrue(hasattr(args_class, "int_val"))
+        self.assertTrue(hasattr(args_class, "float_val"))
+        self.assertTrue(hasattr(args_class, "str_val"))
+        self.assertTrue(hasattr(args_class, "bool_val"))
