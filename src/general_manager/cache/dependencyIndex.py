@@ -349,6 +349,19 @@ def generic_cache_invalidation(
                     return None
             return None
 
+        # Booleans: avoid bool("False") == True
+        if isinstance(sample, bool):
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, (int,)):
+                return bool(raw)
+            if isinstance(raw, str):
+                s = raw.strip().lower()
+                if s in {"true", "1", "yes", "y", "t"}:
+                    return True
+                if s in {"false", "0", "no", "n", "f"}:
+                    return False
+            return None
         try:
             return type(sample)(raw)  # type: ignore
         except (TypeError, ValueError):
