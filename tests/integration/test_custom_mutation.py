@@ -1,11 +1,13 @@
 from django.contrib.auth import get_user_model
 from django.db.models import CharField, BooleanField
+from django.utils.crypto import get_random_string
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.api.mutation import graphQlMutation
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.permission.mutationPermission import MutationPermission
 from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from typing import ClassVar
 
 
 class CustomMutationTest(GeneralManagerTransactionTestCase):
@@ -22,7 +24,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [TestMaterial]
 
         class IsAuthenticated(MutationPermission):
-            __mutate__ = ["isAuthenticated"]
+            __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
 
         @graphQlMutation(IsAuthenticated)
         def create_material(info, name: str) -> TestMaterial:
@@ -35,7 +37,8 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         Creates and logs in a test user, then defines the GraphQL mutation string for creating a material.
         """
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="secret")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
         self.mutation = """
         mutation($name: String!) {
@@ -72,7 +75,7 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [TestProject]
 
         class IsAuthenticated(MutationPermission):
-            __mutate__ = ["isAuthenticated"]
+            __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
 
         @graphQlMutation(IsAuthenticated)
         def create_project(info, title: str) -> TestProject:
@@ -85,7 +88,8 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         Creates and logs in a test user, then defines a GraphQL mutation string for creating a project.
         """
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="secret")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
         self.mutation = """
         mutation($title: String!) {
@@ -109,7 +113,6 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
 
 
 class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         class ToDo(GeneralManager):
@@ -118,16 +121,16 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
                 finished = BooleanField(default=False)
 
             class Permission(ManagerBasedPermission):
-                __read__ = ["public"]
-                __create__ = ["public"]
-                __update__ = ["public"]
-                __delete__ = ["public"]
+                __read__: ClassVar[list[str]] = ["public"]
+                __create__: ClassVar[list[str]] = ["public"]
+                __update__: ClassVar[list[str]] = ["public"]
+                __delete__: ClassVar[list[str]] = ["public"]
 
         cls.ToDo = ToDo
         cls.general_manager_classes = [ToDo]
 
         class ResetToDoPermission(MutationPermission):
-            __mutate__ = ["isAuthenticated"]
+            __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
 
         @graphQlMutation
         def mark_todo_as_finished(info, id: int) -> ToDo:

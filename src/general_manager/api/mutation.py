@@ -17,7 +17,7 @@ from typing import (
 import graphene  # type: ignore[import]
 from graphql import GraphQLResolveInfo
 
-from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql import GraphQL, HANDLED_MANAGER_ERRORS
 from general_manager.manager.generalManager import GeneralManager
 
 from general_manager.utils.formatString import snake_to_camel
@@ -26,6 +26,31 @@ from general_manager.permission.mutationPermission import MutationPermission
 
 
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
+
+
+class MissingParameterTypeHintError(TypeError):
+    """Raised when a mutation resolver parameter lacks a type hint."""
+
+    def __init__(self, parameter_name: str, function_name: str) -> None:
+        super().__init__(
+            f"Missing type hint for parameter {parameter_name} in {function_name}."
+        )
+
+
+class MissingMutationReturnAnnotationError(TypeError):
+    """Raised when a mutation resolver does not specify a return annotation."""
+
+    def __init__(self, function_name: str) -> None:
+        super().__init__(f"Mutation {function_name} missing return annotation.")
+
+
+class InvalidMutationReturnTypeError(TypeError):
+    """Raised when a mutation resolver declares a non-type return value."""
+
+    def __init__(self, function_name: str, return_type: object) -> None:
+        super().__init__(
+            f"Mutation {function_name} return type {return_type} is not a type."
+        )
 
 
 def graphQlMutation(
@@ -74,9 +99,7 @@ def graphQlMutation(
                 continue
             ann = hints.get(name)
             if ann is None:
-                raise TypeError(
-                    f"Missing type hint for parameter {name} in {fn.__name__}"
-                )
+                raise MissingParameterTypeHintError(name, fn.__name__)
             required = True
             default = param.default
             has_default = default is not inspect._empty
@@ -93,7 +116,7 @@ def graphQlMutation(
             if origin is Union and type(None) in get_args(ann):
                 required = False
                 # extract inner type
-                ann = [a for a in get_args(ann) if a is not type(None)][0]
+                ann = next(a for a in get_args(ann) if a is not type(None))
                 kwargs["required"] = False
 
             # Resolve list types to List scalar
@@ -119,7 +142,7 @@ def graphQlMutation(
         }
         return_ann: type | tuple[type] | None = hints.get("return")
         if return_ann is None:
-            raise TypeError(f"Mutation {fn.__name__} missing return annotation")
+            raise MissingMutationReturnAnnotationError(fn.__name__)
 
         # Unpack tuple return or single
         out_types = (
@@ -131,9 +154,7 @@ def graphQlMutation(
             is_named_type = isinstance(out, TypeAliasType)
             is_type = isinstance(out, type)
             if not is_type and not is_named_type:
-                raise TypeError(
-                    f"Mutation {fn.__name__} return type {out} is not a type"
-                )
+                raise InvalidMutationReturnTypeError(fn.__name__, out)
             name = out.__name__
             field_name = name[0].lower() + name[1:]
 
@@ -169,7 +190,8 @@ def graphQlMutation(
                     # unpack according to outputs ordering after success
                     for (field, _), val in zip(
                         outputs.items(),
-                        [None, *list(result)],  # None for success field to be set later
+                        [None, *list(result)],
+                        strict=False,  # None for success field to be set later
                     ):
                         # skip success
                         if field == "success":
@@ -180,8 +202,8 @@ def graphQlMutation(
                     data[only] = result
                 data["success"] = True
                 return mutation_class(**data)
-            except Exception as e:
-                GraphQL._handleGraphQLError(e)
+            except HANDLED_MANAGER_ERRORS as error:
+                GraphQL._handleGraphQLError(error)
                 return mutation_class(**{"success": False})
 
         # Assemble class dict

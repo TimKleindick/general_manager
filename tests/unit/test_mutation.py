@@ -261,7 +261,6 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.int, 3)
 
     def test_missing_required_argument_raises(self):
-
         @graphQlMutation()
         def required(info, value: int) -> int:
             _ = info

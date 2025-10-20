@@ -5,6 +5,13 @@ from typing import Any, Callable
 from general_manager.manager.input import Input
 
 
+class UnknownInputFieldError(ValueError):
+    """Raised when a filter references an unknown input field."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(f"Unknown input field '{field_name}' in filter.")
+
+
 def parse_filters(
     filter_kwargs: dict[str, Any], possible_values: dict[str, Input]
 ) -> dict[str, dict]:
@@ -28,7 +35,7 @@ def parse_filters(
         parts = kwarg.split("__")
         field_name = parts[0]
         if field_name not in possible_values:
-            raise ValueError(f"Unknown input field '{field_name}' in filter")
+            raise UnknownInputFieldError(field_name)
         input_field = possible_values[field_name]
 
         lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
@@ -131,5 +138,5 @@ def apply_lookup(value_to_check: Any, lookup: str, filter_value: Any) -> bool:
             return value_to_check in filter_value
         else:
             return False
-    except TypeError as e:
+    except TypeError:
         return False

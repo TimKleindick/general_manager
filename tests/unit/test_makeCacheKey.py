@@ -3,7 +3,6 @@ from general_manager.utils.makeCacheKey import make_cache_key
 
 
 class TestMakeCacheKey(SimpleTestCase):
-
     def test_make_cache_key(self):
         def sample_function(x, y):
             """

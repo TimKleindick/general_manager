@@ -5,16 +5,8 @@ import ast
 import inspect
 import re
 import textwrap
-from typing import (
-    Callable,
-    ClassVar,
-    Dict,
-    Generic,
-    List,
-    Optional,
-    TypeVar,
-    cast,
-)
+from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar
+from decimal import Decimal
 
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -31,6 +23,22 @@ from general_manager.manager.generalManager import GeneralManager
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
 
+class MissingErrorTemplateVariableError(ValueError):
+    """Raised when a custom error template omits required variables."""
+
+    def __init__(self, missing: List[str]) -> None:
+        super().__init__(
+            f"The custom error message does not contain all used variables: {missing}."
+        )
+
+
+class ErrorMessageGenerationError(ValueError):
+    """Raised when generating an error message before evaluating any input."""
+
+    def __init__(self) -> None:
+        super().__init__("No input provided for error message generation.")
+
+
 class Rule(Generic[GeneralManagerType]):
     """
     Encapsulate a boolean predicate and derive contextual error messages from its AST.
@@ -44,6 +52,9 @@ class Rule(Generic[GeneralManagerType]):
     _ignore_if_none: bool
     _last_result: Optional[bool]
     _last_input: Optional[GeneralManagerType]
+    _last_args: Dict[str, object]
+    _param_names: Tuple[str, ...]
+    _primary_param: Optional[str]
     _tree: ast.AST
     _variables: List[str]
     _handlers: Dict[str, BaseRuleHandler]
@@ -59,6 +70,11 @@ class Rule(Generic[GeneralManagerType]):
         self._ignore_if_none = ignore_if_none
         self._last_result = None
         self._last_input = None
+        self._last_args = {}
+
+        parameters = inspect.signature(func).parameters
+        self._param_names = tuple(parameters.keys())
+        self._primary_param = self._param_names[0] if self._param_names else None
 
         # 1) Extract source, strip decorators, and dedent
         src = textwrap.dedent(inspect.getsource(func))
@@ -67,7 +83,7 @@ class Rule(Generic[GeneralManagerType]):
         self._tree = ast.parse(src)
         for parent in ast.walk(self._tree):
             for child in ast.iter_child_nodes(parent):
-                setattr(child, "parent", parent)
+                child.parent = parent
 
         # 3) Extract referenced variables
         self._variables = self._extract_variables()
@@ -117,6 +133,10 @@ class Rule(Generic[GeneralManagerType]):
             bool | None: True or False when the predicate executes; None when `ignore_if_none` is set and any referenced value is None.
         """
         self._last_input = x
+        self._last_args = {}
+        if self._primary_param is not None:
+            self._last_args[self._primary_param] = x
+
         vals = self._extract_variable_values(x)
         if self._ignore_if_none and any(v is None for v in vals.values()):
             self._last_result = None
@@ -141,9 +161,7 @@ class Rule(Generic[GeneralManagerType]):
         vars_in_msg = set(re.findall(r"{([^}]+)}", self._custom_error_message))
         missing = [v for v in self._variables if v not in vars_in_msg]
         if missing:
-            raise ValueError(
-                f"The custom error message does not contain all used variables: {missing}"
-            )
+            raise MissingErrorTemplateVariableError(missing)
 
     def getErrorMessage(self) -> Optional[Dict[str, str]]:
         """
@@ -158,7 +176,7 @@ class Rule(Generic[GeneralManagerType]):
         if self._last_result or self._last_result is None:
             return None
         if self._last_input is None:
-            raise ValueError("No input provided for error message generation")
+            raise ErrorMessageGenerationError()
 
         # Validate and substitute template placeholders
         self.validateCustomErrorMessage()
@@ -176,8 +194,14 @@ class Rule(Generic[GeneralManagerType]):
         return errors or None
 
     def _extract_variables(self) -> List[str]:
+        param_names = set(self._param_names)
+        if not param_names:
+            return []
+
         class VarVisitor(ast.NodeVisitor):
-            vars: set[str] = set()
+            def __init__(self, params: set[str]) -> None:
+                self.vars: set[str] = set()
+                self.params = params
 
             def visit_Attribute(self, node: ast.Attribute) -> None:
                 parts: list[str] = []
@@ -185,11 +209,11 @@ class Rule(Generic[GeneralManagerType]):
                 while isinstance(curr, ast.Attribute):
                     parts.append(curr.attr)
                     curr = curr.value
-                if isinstance(curr, ast.Name) and curr.id == "x":
+                if isinstance(curr, ast.Name) and curr.id in self.params:
                     self.vars.add(".".join(reversed(parts)))
                 self.generic_visit(node)
 
-        visitor = VarVisitor()
+        visitor = VarVisitor(param_names)
         visitor.visit(self._tree)
         return sorted(visitor.vars)
 
@@ -208,7 +232,8 @@ class Rule(Generic[GeneralManagerType]):
 
     def _extract_comparisons(self) -> list[ast.Compare]:
         class CompVisitor(ast.NodeVisitor):
-            comps: list[ast.Compare] = []
+            def __init__(self) -> None:
+                self.comps: list[ast.Compare] = []
 
             def visit_Compare(self, node: ast.Compare) -> None:
                 self.comps.append(node)
@@ -241,7 +266,7 @@ class Rule(Generic[GeneralManagerType]):
         if comparisons:
             for cmp in comparisons:
                 left, rights, ops = cmp.left, cmp.comparators, cmp.ops
-                for right, op in zip(rights, ops):
+                for right, op in zip(rights, ops, strict=False):
                     # Special handler?
                     if isinstance(left, ast.Call):
                         fn = self._get_node_name(left.func)
@@ -313,7 +338,7 @@ class Rule(Generic[GeneralManagerType]):
         try:
             # ast.unparse returns a string representation
             return ast.unparse(node)
-        except Exception:
+        except (AttributeError, ValueError, TypeError):
             return ""
 
     def _eval_node(self, node: ast.expr) -> Optional[object]:
@@ -321,8 +346,19 @@ class Rule(Generic[GeneralManagerType]):
         if not isinstance(node, ast.expr):
             return None
         try:
-            expr = ast.Expression(body=node)
-            code = compile(expr, "<ast>", "eval")
-            return eval(code, {"x": self._last_input}, {})
-        except Exception:
-            return None
+            return ast.literal_eval(node)
+        except (ValueError, TypeError):
+            if isinstance(node, ast.Attribute):
+                base = self._eval_node(node.value)
+                if base is None:
+                    return None
+                return getattr(base, node.attr, None)
+            if isinstance(node, ast.Name):
+                if node.id in self._last_args:
+                    return self._last_args[node.id]
+                return self._func.__globals__.get(node.id)
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+                operand = self._eval_node(node.operand)
+                if isinstance(operand, (int, float, Decimal)):
+                    return -operand
+        return None

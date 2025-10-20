@@ -3,7 +3,10 @@
 from __future__ import annotations
 from django.contrib.auth.models import AbstractUser, AnonymousUser
 from typing import Any
-from general_manager.permission.basePermission import BasePermission
+from general_manager.permission.basePermission import (
+    BasePermission,
+    PermissionCheckError,
+)
 
 from general_manager.permission.permissionDataManager import PermissionDataManager
 from general_manager.permission.utils import validatePermissionString
@@ -76,7 +79,7 @@ class MutationPermission:
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
                 )
         if errors:
-            raise PermissionError(f"Permission denied with errors: {errors}")
+            raise PermissionCheckError(request_user, errors)
 
     def checkPermission(
         self,

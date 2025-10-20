@@ -1,7 +1,7 @@
 """Database-backed interface implementation for GeneralManager classes."""
 
 from __future__ import annotations
-from typing import Type, Any, Callable, TYPE_CHECKING, TypeVar, Generic, cast
+from typing import Any, Callable, ClassVar, Generic, TYPE_CHECKING, TypeVar, Type, cast
 from django.db import models
 
 from datetime import datetime, date, time, timedelta
@@ -39,11 +39,18 @@ modelsModel = TypeVar("modelsModel", bound=models.Model)
 MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
 
 
+class DuplicateFieldNameError(ValueError):
+    """Raised when a dynamically generated field name conflicts with an existing one."""
+
+    def __init__(self) -> None:
+        super().__init__("Field name already exists.")
+
+
 class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     """Interface implementation that persists data using Django ORM models."""
 
     _model: Type[MODEL_TYPE]
-    input_fields: dict[str, Input] = {"id": Input(int)}
+    input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
     def __init__(
         self,
@@ -268,7 +275,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 if field_call not in fields:
                     field_name = field_call
                 else:
-                    raise ValueError("Field name already exists.")
+                    raise DuplicateFieldNameError()
             field = cls._model._meta.get_field(field_name)
             related_model = cls._model._meta.get_field(field_name).related_model
             if related_model == "self":
@@ -332,7 +339,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                     Type[GeneralManager], related_model._general_manager_class
                 )
                 field_values[f"{field_name}"] = (
-                    lambda self, field_name=field_name, manager_class=generalManagerClass: (
+                    lambda self,
+                    field_name=field_name,
+                    manager_class=generalManagerClass: (
                         manager_class(getattr(self._instance, field_name).pk)
                         if getattr(self._instance, field_name)
                         else None
@@ -353,7 +362,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 if field_call not in field_values:
                     field_name = field_call
                 else:
-                    raise ValueError("Field name already exists.")
+                    raise DuplicateFieldNameError()
             if hasattr(
                 cls._model._meta.get_field(field_name).related_model,
                 "_general_manager_class",
@@ -368,12 +377,17 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                     if f.related_model == cls._model
                 ]
 
-                field_values[
-                    f"{field_name}_list"
-                ] = lambda self, field_name=field_name, related_fields=related_fields: self._instance._meta.get_field(
-                    field_name
-                ).related_model._general_manager_class.filter(
-                    **{related_field.name: self.pk for related_field in related_fields}
+                field_values[f"{field_name}_list"] = (
+                    lambda self,
+                    field_name=field_name,
+                    related_fields=related_fields: self._instance._meta.get_field(
+                        field_name
+                    ).related_model._general_manager_class.filter(
+                        **{
+                            related_field.name: self.pk
+                            for related_field in related_fields
+                        }
+                    )
                 )
             else:
                 field_values[f"{field_name}_list"] = (
@@ -500,7 +514,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             model_fields["Meta"] = meta_class
 
             if hasattr(meta_class, "rules"):
-                rules = getattr(meta_class, "rules")
+                rules = meta_class.rules
                 delattr(meta_class, "rules")
 
         # Create the concrete Django model dynamically
@@ -509,13 +523,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             type(name, (base_model_class,), model_fields),
         )
         if meta_class and rules:
-            setattr(model._meta, "rules", rules)
+            model._meta.rules = rules
             # full_clean Methode hinzufügen
-            setattr(model, "full_clean", getFullCleanMethode(model))
+            model.full_clean = getFullCleanMethode(model)
         # Interface-Typ bestimmen
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(interface.__name__, (interface,), {})
-        setattr(interface_cls, "_model", model)
+        interface_cls._model = model
         attrs["Interface"] = interface_cls
 
         # Build the associated factory class
@@ -550,7 +564,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             model (relatedClass): Django model linked to the manager.
         """
         interface_class._parent_class = new_class
-        setattr(model, "_general_manager_class", new_class)
+        model._general_manager_class = new_class
 
     @classmethod
     def handleInterface(

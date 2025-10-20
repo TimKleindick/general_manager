@@ -9,4 +9,3 @@ __all__ = [
 
 from general_manager.rule.handler import BaseRuleHandler
 from general_manager.rule.rule import Rule
-

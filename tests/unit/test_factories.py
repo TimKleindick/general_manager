@@ -51,10 +51,10 @@ class DummyManyToMany(models.Model):
 
 
 class DummyModel(models.Model):
-    # String without Regex‐Validator
+    # String without Regex-Validator
     char_field = models.CharField(max_length=10, null=False)
     text_field = models.TextField(null=False)
-    # String with Regex‐Validator
+    # String with Regex-Validator
     regex_field = models.CharField(
         max_length=10, null=False, validators=[RegexValidator(r"[A-Z]{3}\d{2}")]
     )
@@ -155,7 +155,7 @@ class TestGetFieldValue(TestCase):
 
     def test_nullable_field(self):
         with patch(
-            "general_manager.factory.factories.random.choice",
+            "general_manager.factory.factories._RNG.choice",
             return_value=True,
         ):
             field = DummyModel._meta.get_field("test_none")
@@ -187,12 +187,9 @@ class TestRelationFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy  # type: ignore
+        GMC.Factory = lambda **_kwargs: dummy  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
-        with patch(
-            "general_manager.factory.factoryMethods.random.choice", return_value=True
-        ):
-
+        with patch("general_manager.factory.factories._RNG.choice", return_value=True):
             field = DummyModel._meta.get_field("dummy_fk")
             result = getFieldValue(field)
             # Hier kommt kein LazyFunction, sondern direkt das factory-Ergebnis
@@ -206,12 +203,12 @@ class TestRelationFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy1  # type: ignore
+        GMC.Factory = lambda **_kwargs: dummy1  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
 
         with (
             patch(
-                "general_manager.factory.factories.random.choice",
+                "general_manager.factory.factories._RNG.choice",
                 return_value=False,
             ),
             patch.object(DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]),
@@ -227,7 +224,7 @@ class TestRelationFieldValue(TestCase):
         class GMC2:
             pass
 
-        GMC2.Factory = lambda **kwargs: dummy  # type: ignore
+        GMC2.Factory = lambda **_kwargs: dummy  # type: ignore
         DummyForeignKey2._general_manager_class = GMC2  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_one_to_one")
@@ -297,12 +294,14 @@ class TestGetManyToManyFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy1  # type: ignore
+        GMC.Factory = lambda **_kwargs: dummy1  # type: ignore
         DummyManyToMany._general_manager_class = GMC  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_m2m")
         with patch.object(
-            field.related_model.objects, "all", return_value=[dummy1, dummy2]  # type: ignore
+            field.related_model.objects,
+            "all",
+            return_value=[dummy1, dummy2],  # type: ignore
         ):
             result = getManyToManyFieldValue(field)  # type: ignore
         self.assertIsInstance(result, list)
@@ -317,7 +316,7 @@ class TestGetManyToManyFieldValue(TestCase):
         class GMC:
             pass
 
-        GMC.Factory = lambda **kwargs: dummy1  # type: ignore
+        GMC.Factory = lambda **_kwargs: dummy1  # type: ignore
         DummyManyToMany._general_manager_class = GMC  # type: ignore
 
         field = DummyModel._meta.get_field("dummy_m2m")
@@ -333,7 +332,9 @@ class TestGetManyToManyFieldValue(TestCase):
 
         field = DummyModel._meta.get_field("dummy_m2m")
         with patch.object(
-            field.related_model.objects, "all", return_value=[dummy1, dummy2]  # type: ignore
+            field.related_model.objects,
+            "all",
+            return_value=[dummy1, dummy2],  # type: ignore
         ):
             result = getManyToManyFieldValue(field)  # type: ignore
         self.assertIsInstance(result, list)

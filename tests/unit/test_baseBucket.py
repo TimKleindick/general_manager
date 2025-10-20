@@ -12,18 +12,32 @@ class DummyManager:
         def getAttributes():
             """
             Returns a dictionary with attribute names as keys and None as values.
-            
+
             Provides a fixed set of attribute keys for use in testing or as an interface example.
             """
             return {"a": None, "b": None, "c": None}
 
 
 # DummyBucket concrete implementation for testing
+class MultipleMatchesError(ValueError):
+    """Raised when DummyBucket.get encounters more than one matching item."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"get() returned {count} matches.")
+
+
+class SingleMatchRequiredError(ValueError):
+    """Raised when DummyBucket.get requires exactly one value but none are available."""
+
+    def __init__(self) -> None:
+        super().__init__("get() requires exactly one match.")
+
+
 class DummyBucket(Bucket[int]):
     def __init__(self, manager_class, data=None):
         """
         Initializes a DummyBucket with a manager class and optional data.
-        
+
         If data is provided, the bucket is populated with its items; otherwise, it is initialized empty.
         """
         super().__init__(manager_class)
@@ -32,13 +46,13 @@ class DummyBucket(Bucket[int]):
     def __or__(self, other):
         """
         Returns a new DummyBucket with data combined from this bucket and another bucket or integer.
-        
+
         If `other` is a DummyBucket, the result contains elements from both buckets. If `other` is an integer, it is appended to this bucket's data. Returns NotImplemented for unsupported types.
         """
         if isinstance(other, DummyBucket):
-            return DummyBucket(self._manager_class, self._data + other._data)
+            return DummyBucket(self._manager_class, [*self._data, *other._data])
         if isinstance(other, int):
-            return DummyBucket(self._manager_class, self._data + [other])
+            return DummyBucket(self._manager_class, [*self._data, other])
         return NotImplemented
 
     def __iter__(self):
@@ -50,7 +64,7 @@ class DummyBucket(Bucket[int]):
     def filter(self, **kwargs):
         """
         Returns a new DummyBucket with the same data and updated filters.
-        
+
         The returned bucket's filters dictionary is merged with the provided keyword arguments.
         """
         new = DummyBucket(self._manager_class, self._data)
@@ -60,7 +74,7 @@ class DummyBucket(Bucket[int]):
     def exclude(self, **kwargs):
         """
         Returns a new DummyBucket with exclusion filters updated by the provided criteria.
-        
+
         The returned bucket contains the same data but with its exclusion filters merged with the given keyword arguments.
         """
         new = DummyBucket(self._manager_class, self._data)
@@ -95,23 +109,23 @@ class DummyBucket(Bucket[int]):
         # support lookup by 'value'
         """
         Returns the unique item from the bucket matching the specified criteria.
-        
+
         If called with a 'value' keyword argument, returns the single item equal to that value. If called with no arguments, returns the item if the bucket contains exactly one element. Raises ValueError if zero or multiple matches are found.
         """
         if "value" in kwargs:
             matches = [item for item in self._data if item == kwargs["value"]]
             if len(matches) == 1:
                 return matches[0]
-            raise ValueError(f"get() returned {len(matches)} matches")
+            raise MultipleMatchesError(len(matches))
         # no kwargs
         if len(self._data) == 1:
             return self._data[0]
-        raise ValueError("get() requires exactly one match")
+        raise SingleMatchRequiredError()
 
     def __getitem__(self, item):
         """
         Retrieves an element by index or returns a new DummyBucket for a slice.
-        
+
         If a slice is provided, returns a new DummyBucket containing the sliced elements.
         """
         if isinstance(item, slice):
@@ -133,10 +147,10 @@ class DummyBucket(Bucket[int]):
     def sort(self, key, reverse=False):
         """
         Returns a new DummyBucket with elements sorted in ascending or descending order.
-        
+
         Args:
             reverse: If True, sorts elements in descending order.
-        
+
         Returns:
             A new DummyBucket containing the sorted elements.
         """
@@ -148,7 +162,7 @@ class BucketTests(SimpleTestCase):
     def setUp(self):
         """
         Initializes test fixtures for DummyBucket tests.
-        
+
         Creates an empty DummyBucket and another DummyBucket containing the integers 3, 1, and 2, both using DummyManager as the manager class.
         """
         self.manager_class = DummyManager
@@ -158,7 +172,7 @@ class BucketTests(SimpleTestCase):
     def test_eq_and_neq(self):
         """
         Tests equality and inequality of DummyBucket instances.
-        
+
         Asserts that buckets with the same data are equal, while those with different data or types are not considered equal.
         """
         b1 = DummyBucket(self.manager_class, [1, 2])
@@ -171,7 +185,7 @@ class BucketTests(SimpleTestCase):
     def test_or_bucket_and_item(self):
         """
         Tests the union operation for DummyBucket instances and integers.
-        
+
         Asserts that the '|' operator combines the data of two DummyBucket instances or appends an integer to the bucket's data, producing a new DummyBucket with the expected contents.
         """
         b1 = DummyBucket(self.manager_class, [1])
@@ -222,7 +236,7 @@ class BucketTests(SimpleTestCase):
     def test_get_no_kwargs(self):
         """
         Tests the get() method without arguments.
-        
+
         Ensures get() returns the single element if the bucket contains exactly one item, and raises ValueError if the bucket is empty or contains multiple elements.
         """
         single = DummyBucket(self.manager_class, [42])
@@ -233,7 +247,7 @@ class BucketTests(SimpleTestCase):
     def test_get_by_value(self):
         """
         Tests that get(value=...) retrieves the unique matching item or raises ValueError.
-        
+
         Ensures get(value=...) returns the correct item when exactly one match exists, raises ValueError if no match is found, and raises ValueError if multiple matches are present.
         """
         b = DummyBucket(self.manager_class, [1, 2, 3])
@@ -254,7 +268,7 @@ class BucketTests(SimpleTestCase):
     def test_getitem_index_and_slice(self):
         """
         Tests indexing and slicing behavior of DummyBucket.
-        
+
         Asserts that indexing returns the correct element and slicing returns a new DummyBucket containing the expected subset of data.
         """
         self.assertEqual(self.bucket[1], 1)
@@ -294,7 +308,7 @@ class BucketTests(SimpleTestCase):
         # Create DummyManager instances with attributes
         """
         Tests grouping a DummyBucket by valid attribute keys.
-        
+
         Asserts that grouping by valid keys returns a GroupBucket with the correct manager class and grouping keys.
         """
         m1 = DummyManager()

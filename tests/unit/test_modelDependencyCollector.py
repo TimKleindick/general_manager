@@ -8,7 +8,7 @@ class FakeGM:
     def __init__(self, identification):
         """
         Initializes a FakeGM instance with the given identification.
-        
+
         Args:
             identification: A value representing the identification of this FakeGM instance.
         """
@@ -20,7 +20,7 @@ class FakeBucket:
     def __init__(self, manager_class, filters, excludes):
         """
         Initializes a FakeBucket instance with a manager class, filters, and excludes.
-        
+
         Args:
             manager_class: The class representing the manager associated with this bucket.
             filters: A dictionary of filter criteria.
@@ -37,7 +37,7 @@ class TestModelDependencyCollector(SimpleTestCase):
     def test_collect_general_manager(self):
         """
         Tests that ModelDependencyCollector.collect extracts the identification from a FakeGM instance.
-        
+
         Asserts that the collected dependencies include a tuple with the class name, the string "identification", and the identification value.
         """
         gm = FakeGM("id123")
@@ -49,6 +49,7 @@ class TestModelDependencyCollector(SimpleTestCase):
         Tests that ModelDependencyCollector.collect correctly extracts filter and exclude
         dependencies from a FakeBucket instance using the manager class name.
         """
+
         class Mgr:
             pass
 
@@ -64,7 +65,7 @@ class TestModelDependencyCollector(SimpleTestCase):
         """
         Tests that ModelDependencyCollector.collect can extract dependencies from nested
         data structures containing FakeGM and FakeBucket instances.
-        
+
         Verifies that dependencies are correctly identified within dictionaries, lists,
         and tuples, and that the expected dependency tuples are collected.
         """
@@ -88,7 +89,7 @@ class TestModelDependencyCollector(SimpleTestCase):
         # GM with nested attribute child (another GM)
         """
         Tests that addArgs collects dependencies from positional arguments and their nested attributes.
-        
+
         Verifies that when a FakeGM instance with a nested child FakeGM is passed as an argument, addArgs recursively collects identification dependencies from both the root and child instances.
         """
         gm = FakeGM("root")
@@ -107,7 +108,7 @@ class TestModelDependencyCollector(SimpleTestCase):
     def test_addArgs_includes_kwargs(self):
         """
         Tests that addArgs collects dependencies from keyword arguments containing dependency objects.
-        
+
         Verifies that when a dependency object is passed in kwargs, its identifying information is added to the dependencies set.
         """
         gm = FakeGM("root")

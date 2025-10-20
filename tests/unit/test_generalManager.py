@@ -4,6 +4,7 @@ from general_manager.permission.managerBasedPermission import ManagerBasedPermis
 from unittest.mock import patch
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
+from django.utils.crypto import get_random_string
 
 
 class DummyInterface:
@@ -82,7 +83,8 @@ class GeneralManagerTestCase(TestCase):
 
         self.post_list = []
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="geheim")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
 
         def temp_post_receiver(sender, **kwargs):
             """
@@ -164,7 +166,8 @@ class GeneralManagerTestCase(TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].identification, {"id": "dummy_id"})  # type: ignore
         self.assertEqual(
-            result[1].identification, {"id": "dummy_id"}  # type: ignore
+            result[1].identification,
+            {"id": "dummy_id"},  # type: ignore
         )  # Assuming both managers have the same id
 
     def test_identification_property(self):

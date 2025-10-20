@@ -18,8 +18,7 @@ def _load_snapshot() -> dict[str, dict[str, tuple[str, str]]]:
     snapshot_raw = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     return {
         module_path: {
-            export_name: tuple(target)
-            for export_name, target in module_exports.items()
+            export_name: tuple(target) for export_name, target in module_exports.items()
         }
         for module_path, module_exports in snapshot_raw.items()
     }
@@ -87,5 +86,4 @@ def test_public_api_dir_includes_exports(module_path: str) -> None:
 @pytest.mark.parametrize("module_path", MODULE_EXPORTS.keys())
 def test_public_api_invalid_attribute_raises(module_path: str) -> None:
     module = import_module(module_path)
-    with pytest.raises(AttributeError):
-        getattr(module, "does_not_exist")
+    assert not hasattr(module, "does_not_exist")

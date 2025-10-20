@@ -10,6 +10,13 @@ from general_manager.manager.generalManager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 
 
+class PermissionNotFoundError(ValueError):
+    """Raised when a referenced permission function is not registered."""
+
+    def __init__(self, permission: str) -> None:
+        super().__init__(f"Permission {permission} not found.")
+
+
 def validatePermissionString(
     permission: str,
     data: PermissionDataManager | GeneralManager | GeneralManagerMeta,
@@ -32,7 +39,7 @@ def validatePermissionString(
     ) -> bool:
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
-            raise ValueError(f"Permission {permission} not found")
+            raise PermissionNotFoundError(permission)
 
         return permission_functions[permission_function]["permission_method"](
             data, request_user, config

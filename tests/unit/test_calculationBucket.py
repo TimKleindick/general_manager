@@ -135,11 +135,11 @@ class TestCalculationBucket(TestCase):
 
     def test_or_with_invalid(self, _mock_parse):
         """
-        Tests that combining a CalculationBucket with an incompatible type or a bucket of a different manager class raises a ValueError.
+        Tests that combining a CalculationBucket with an incompatible type or a bucket of a different manager class raises a TypeError.
         """
         b1 = CalculationBucket(DummyGeneralManager)
         # Combining with different type should raise
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             _ = b1 | 123
 
         # Combining with bucket of different manager class should raise
@@ -147,7 +147,7 @@ class TestCalculationBucket(TestCase):
             Interface = DummyCalculationInterface
 
         b2 = CalculationBucket(OtherManager)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             _ = b1 | b2
 
     def test_str_and_repr_formatting(self, _mock_parse):
@@ -243,7 +243,6 @@ class TestCalculationBucket(TestCase):
 
 @patch("general_manager.bucket.calculationBucket.parse_filters", return_value={})
 class TestGenerateCombinations(TestCase):
-
     def _make_bucket_with_fields(self, fields):
         # Dynamically create an interface and manager class with given input_fields
 
@@ -254,7 +253,7 @@ class TestGenerateCombinations(TestCase):
             fields: A list of input field definitions to assign to the generated interface.
 
         Returns:
-        	CalculationBucket: An instance configured with a manager and interface using the specified input fields.
+                CalculationBucket: An instance configured with a manager and interface using the specified input fields.
         """
 
         class DynInterface(CalculationInterface):
@@ -321,12 +320,12 @@ class TestGenerateCombinations(TestCase):
         def pv_func(a):
             """
             Return a list containing the input value multiplied by 10.
-            
+
             Parameters:
-            	a (int or float): The value to be multiplied.
-            
+                a (int or float): The value to be multiplied.
+
             Returns:
-            	list: A single-element list with the result of a * 10.
+                list: A single-element list with the result of a * 10.
             """
             return [a * 10]
 

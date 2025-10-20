@@ -12,7 +12,7 @@ __all__ = list(FACTORY_EXPORTS)
 _MODULE_MAP = FACTORY_EXPORTS
 
 if TYPE_CHECKING:
-    from general_manager._types.factory import *  # noqa: F401,F403
+    from general_manager._types.factory import *  # noqa: F403
 
 
 def __getattr__(name: str) -> Any:

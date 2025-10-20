@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from django.test import SimpleTestCase, override_settings
 
 from general_manager.manager.meta import GeneralManagerMeta
@@ -59,7 +61,8 @@ class TestPropertyInitialization(SimpleTestCase):
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["test_field"], DummyManager1  # type: ignore
+            ["test_field"],
+            DummyManager1,  # type: ignore
         )
 
         self.assertTrue(hasattr(DummyManager1, "test_field"))  # type: ignore
@@ -75,7 +78,8 @@ class TestPropertyInitialization(SimpleTestCase):
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["dummy_manager2"], DummyManager1  # type: ignore
+            ["dummy_manager2"],
+            DummyManager1,  # type: ignore
         )
 
         self.assertTrue(hasattr(DummyManager1, "dummy_manager2"))  # type: ignore
@@ -94,11 +98,13 @@ class TestPropertyInitialization(SimpleTestCase):
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["dummy_manager2"], DummyManager1  # type: ignore
+            ["dummy_manager2"],
+            DummyManager1,  # type: ignore
         )
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["dummy_manager1"], DummyManager2  # type: ignore
+            ["dummy_manager1"],
+            DummyManager2,  # type: ignore
         )
 
         self.assertTrue(hasattr(DummyManager1, "dummy_manager2"))
@@ -111,8 +117,12 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertEqual(self.dummy_manager1.dummy_manager2, self.dummy_manager2)  # type: ignore
 
         self.assertTrue(hasattr(self.dummy_manager1.dummy_manager2, "dummy_manager1"))  # type: ignore
-        self.assertIsInstance(self.dummy_manager1.dummy_manager2.dummy_manager1, DummyManager1)  # type: ignore
-        self.assertEqual(self.dummy_manager1.dummy_manager2.dummy_manager1, self.dummy_manager1)  # type: ignore
+        self.assertIsInstance(
+            self.dummy_manager1.dummy_manager2.dummy_manager1, DummyManager1
+        )  # type: ignore
+        self.assertEqual(
+            self.dummy_manager1.dummy_manager2.dummy_manager1, self.dummy_manager1
+        )  # type: ignore
 
     def test_multiple_properties_initialization(self):
         self.dummy_manager1._attributes = {
@@ -121,7 +131,8 @@ class TestPropertyInitialization(SimpleTestCase):
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["test_int", "test_field"], DummyManager1  # type: ignore
+            ["test_int", "test_field"],
+            DummyManager1,  # type: ignore
         )
 
         self.assertTrue(hasattr(DummyManager1, "test_int"))
@@ -145,7 +156,8 @@ class TestPropertyInitialization(SimpleTestCase):
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["test_field"], DummyManager1  # type: ignore
+            ["test_field"],
+            DummyManager1,  # type: ignore
         )
 
         self.assertTrue(hasattr(DummyManager1, "test_field"))
@@ -167,7 +179,8 @@ class TestPropertyInitialization(SimpleTestCase):
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["test_field", "test_int"], DummyManager1  # type: ignore
+            ["test_field", "test_int"],
+            DummyManager1,  # type: ignore
         )
 
         self.assertTrue(hasattr(DummyManager1, "test_field"))
@@ -186,27 +199,33 @@ class TestPropertyInitialization(SimpleTestCase):
         self.dummy_manager1._attributes = {}
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["non_existent_field"], DummyManager1  # type: ignore
+            ["non_existent_field"],
+            DummyManager1,  # type: ignore
         )
 
+        missing_attr = "non_existent_field"
         with self.assertRaises(AttributeError):
-            getattr(self.dummy_manager1, "non_existent_field")
+            getattr(self.dummy_manager1, missing_attr)
 
     def test_property_with_callable_error(self):
+        class PropertyExecutionError(ValueError):
+            """Raised to simulate an exception inside a property callable."""
 
         def test_callable_error(interface):
-            raise ValueError("This is a test error")
+            raise PropertyExecutionError()
 
         self.dummy_manager1._attributes = {
             "test_field": test_callable_error,
         }
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
-            ["test_field"], DummyManager1  # type: ignore
+            ["test_field"],
+            DummyManager1,  # type: ignore
         )
 
+        target_attr = "test_field"
         with self.assertRaises(AttributeError) as context:
-            getattr(self.dummy_manager1, "test_field")
+            getattr(self.dummy_manager1, target_attr)
         self.assertIn("Error calling attribute test_field", str(context.exception))
 
 
@@ -234,12 +253,12 @@ class Bucket(list):
 class DummyInterface(InterfaceBase):
     """
     Minimal subclass of InterfaceBase that:
-    - Defines input_fields as an empty dict so parseInputFieldsToIdentification won’t fail.
+    - Defines input_fields as an empty dict so parseInputFieldsToIdentification won't fail.
     - Stubs all abstract methods.
     - Implements handleInterface() to return custom pre/post creation hooks.
     """
 
-    input_fields: dict[str, Input] = {}  # no required fields # type: ignore
+    input_fields: ClassVar[dict[str, Input]] = {}  # no required fields # type: ignore
 
     @classmethod
     def create(cls, *args, **kwargs):
@@ -297,7 +316,7 @@ class DummyInterface(InterfaceBase):
 # -----------------------------------------------------------------------------
 class GeneralManagerMetaTests(SimpleTestCase):
     def setUp(self):
-        # Reset the metaclass’s global lists before each test
+        # Reset the metaclass's global lists before each test
         GeneralManagerMeta.all_classes.clear()
         GeneralManagerMeta.pending_graphql_interfaces.clear()
         GeneralManagerMeta.pending_attribute_initialization.clear()
@@ -341,7 +360,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
     def test_invalid_interface_raises_type_error(self):
         """
         Test that defining a class with an Interface not subclassing InterfaceBase raises a TypeError.
-        
+
         Asserts that the exception message specifies the InterfaceBase requirement and that no classes are registered after the failed definition.
         """
         with self.assertRaises(TypeError) as cm:
@@ -373,12 +392,11 @@ class GeneralManagerMetaTests(SimpleTestCase):
     def test_plain_manager_without_interface_does_nothing(self):
         """
         Verifies that defining a class without an Interface attribute does not alter GeneralManagerMeta registration lists.
-        
+
         Ensures that such a class is not added to `all_classes` or `pending_attribute_initialization`.
         """
         before_all = list(GeneralManagerMeta.all_classes)
         before_pending_init = list(GeneralManagerMeta.pending_attribute_initialization)
-        before_pending_graphql = list(GeneralManagerMeta.pending_graphql_interfaces)
 
         class PlainManager(metaclass=GeneralManagerMeta):
             pass
@@ -437,7 +455,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
         # DummyInterfaceA: adds 'fromA' and 'a_post'
         class DummyInterfaceA(InterfaceBase):
-            input_fields: dict[str, Input] = {}  # type: ignore
+            input_fields: ClassVar[dict[str, Input]] = {}  # type: ignore
 
             @classmethod
             def create(cls, *args, **kwargs):
@@ -485,7 +503,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
         # DummyInterfaceB: adds 'fromB' and 'b_post'
         class DummyInterfaceB(InterfaceBase):
-            input_fields: dict[str, Input] = {}  # type: ignore
+            input_fields: ClassVar[dict[str, Input]] = {}  # type: ignore
 
             @classmethod
             def create(cls, *args, **kwargs):

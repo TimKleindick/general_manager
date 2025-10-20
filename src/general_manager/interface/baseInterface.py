@@ -55,6 +55,53 @@ class AttributeTypedDict(TypedDict):
     is_derived: bool
 
 
+class UnexpectedInputArgumentsError(TypeError):
+    """Raised when parseInputFields receives keyword arguments not defined by the interface."""
+
+    def __init__(self, extra_args: Iterable[str]) -> None:
+        extras = ", ".join(extra_args)
+        super().__init__(f"Unexpected arguments: {extras}.")
+
+
+class MissingInputArgumentsError(TypeError):
+    """Raised when required interface inputs are not supplied."""
+
+    def __init__(self, missing_args: Iterable[str]) -> None:
+        missing = ", ".join(missing_args)
+        super().__init__(f"Missing required arguments: {missing}.")
+
+
+class CircularInputDependencyError(ValueError):
+    """Raised when input fields declare circular dependencies."""
+
+    def __init__(self, unresolved: Iterable[str]) -> None:
+        names = ", ".join(unresolved)
+        super().__init__(f"Circular dependency detected among inputs: {names}.")
+
+
+class InvalidInputTypeError(TypeError):
+    """Raised when an input value does not match its declared type."""
+
+    def __init__(self, name: str, provided: type, expected: type) -> None:
+        super().__init__(f"Invalid type for {name}: {provided}, expected: {expected}.")
+
+
+class InvalidPossibleValuesTypeError(TypeError):
+    """Raised when an input's possible_values configuration is not callable or iterable."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Invalid type for possible_values of input {name}.")
+
+
+class InvalidInputValueError(ValueError):
+    """Raised when a provided input value is not within the allowed set."""
+
+    def __init__(self, name: str, value: object, allowed: Iterable[object]) -> None:
+        super().__init__(
+            f"Invalid value for {name}: {value}, allowed: {list(allowed)}."
+        )
+
+
 class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
 
@@ -106,11 +153,11 @@ class InterfaceBase(ABC):
                 if extra_arg.replace("_id", "") in self.input_fields.keys():
                     kwargs[extra_arg.replace("_id", "")] = kwargs.pop(extra_arg)
                 else:
-                    raise TypeError(f"Unexpected arguments: {', '.join(extra_args)}")
+                    raise UnexpectedInputArgumentsError(extra_args)
 
         missing_args = set(self.input_fields.keys()) - set(kwargs.keys())
         if missing_args:
-            raise TypeError(f"Missing required arguments: {', '.join(missing_args)}")
+            raise MissingInputArgumentsError(missing_args)
 
         # process input fields with dependencies
         processed: set[str] = set()
@@ -129,9 +176,7 @@ class InterfaceBase(ABC):
             if not progress_made:
                 # detect circular dependencies
                 unresolved = set(self.input_fields.keys()) - processed
-                raise ValueError(
-                    f"Circular dependency detected among inputs: {', '.join(unresolved)}"
-                )
+                raise CircularInputDependencyError(unresolved)
         return identification
 
     @staticmethod
@@ -185,9 +230,7 @@ class InterfaceBase(ABC):
         """
         input_field = self.input_fields[name]
         if not isinstance(value, input_field.type):
-            raise TypeError(
-                f"Invalid type for {name}: {type(value)}, expected: {input_field.type}"
-            )
+            raise InvalidInputTypeError(name, type(value), input_field.type)
         if settings.DEBUG:
             # `possible_values` can be a callable or an iterable
             possible_values = input_field.possible_values
@@ -202,12 +245,10 @@ class InterfaceBase(ABC):
                 elif isinstance(possible_values, Iterable):
                     allowed_values = possible_values
                 else:
-                    raise TypeError(f"Invalid type for possible_values of input {name}")
+                    raise InvalidPossibleValuesTypeError(name)
 
                 if value not in allowed_values:
-                    raise ValueError(
-                        f"Invalid value for {name}: {value}, allowed: {allowed_values}"
-                    )
+                    raise InvalidInputValueError(name, value, allowed_values)
 
     @classmethod
     def create(cls, *args: Any, **kwargs: Any) -> Any:

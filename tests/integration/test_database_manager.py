@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 from django.db import models
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
+from django.utils.crypto import get_random_string
+from typing import ClassVar
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.interface.readOnlyInterface import ReadOnlyInterface
@@ -22,7 +24,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
 
         class TestCountry(GeneralManager):
-            _data = [
+            _data: ClassVar[list[dict[str, str]]] = [
                 {"code": "US", "name": "United States"},
                 {"code": "DE", "name": "Germany"},
             ]
@@ -370,7 +372,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Test many-to-many relationships between humans and families.
         """
         # Create additional family for testing
-        second_family = self.TestFamily.create(
+        self.TestFamily.create(
             creator_id=None,
             name="Johnson Family",
             humans=[self.test_human2],
@@ -396,13 +398,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Test edge cases and error handling scenarios.
         """
         # Test filtering with invalid field
-        try:
-            invalid_filter = self.TestHuman.filter(nonexistent_field="value")
-            # If no exception is raised, ensure it returns empty result
-            self.assertEqual(len(invalid_filter), 0)
-        except Exception:
-            # Exception is acceptable for invalid field access
-            pass
+        with self.assertRaises(FieldError):
+            self.TestHuman.filter(nonexistent_field="value")
 
         # Test empty string names
         self.assertRaises(
@@ -427,9 +424,10 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         Test permission system and creator tracking functionality.
         """
+        password = get_random_string(12)
         User.objects.create_user(
             username="testuser",
-            password="testpassword",
+            password=password,
             id=1,
         )
         # Test creation with creator_id

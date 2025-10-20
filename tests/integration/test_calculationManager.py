@@ -2,6 +2,7 @@
 
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
+from django.utils.crypto import get_random_string
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.interface.calculationInterface import CalculationInterface
@@ -12,7 +13,6 @@ from general_manager.api.property import graphQlProperty
 
 
 class CustomMutationTest(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         """
@@ -56,7 +56,8 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         Prepares the test environment by creating and logging in a test user, and defines the GraphQL query for tax calculation.
         """
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="secret")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
         self.mutation = """
         query($employeeId: ID!) {
@@ -89,13 +90,13 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         """
         Tests that the tax calculation can be sorted by the employee's name.
         """
-        employee1 = self.Employee.create(
+        self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
-        employee2 = self.Employee.create(
+        self.Employee.create(
             name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
         )
-        employee3 = self.Employee.create(
+        self.Employee.create(
             name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
         )
 
@@ -121,16 +122,16 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         """
         Tests that the tax calculation can be sorted by the employee's name.
         """
-        employee1 = self.Employee.create(
+        self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
-        employee2 = self.Employee.create(
+        self.Employee.create(
             name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
         )
-        employee3 = self.Employee.create(
+        self.Employee.create(
             name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
         )
-        employee4 = self.Employee.create(
+        self.Employee.create(
             name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
 
@@ -146,16 +147,16 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         """
         Tests that the tax calculation can be filtered by the employee's name.
         """
-        employee1 = self.Employee.create(
+        self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
-        employee2 = self.Employee.create(
+        self.Employee.create(
             name="Bob", salary=Measurement(4000, "EUR"), creator_id=self.user.id
         )
-        employee3 = self.Employee.create(
+        self.Employee.create(
             name="Tim", salary=Measurement(2000, "EUR"), creator_id=self.user.id
         )
-        employee4 = self.Employee.create(
+        self.Employee.create(
             name="Tina", salary=Measurement(3000, "EUR"), creator_id=self.user.id
         )
 

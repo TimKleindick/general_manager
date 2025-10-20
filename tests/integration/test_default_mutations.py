@@ -1,6 +1,7 @@
 # type: ignore
 from django.contrib.auth import get_user_model
 from django.db.models import CharField, IntegerField
+from django.utils.crypto import get_random_string
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.measurement.measurementField import MeasurementField
@@ -8,10 +9,10 @@ from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
 )
 from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from typing import ClassVar
 
 
 class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         """
@@ -39,7 +40,8 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         Prepares the test environment by creating and logging in a test user and setting the GraphQL mutation string for creating a TestProject instance.
         """
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="geheim")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
         self.create_mutation = """
         mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
@@ -156,7 +158,6 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
 
 class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         """
@@ -188,7 +189,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
                     app_label = "general_manager"
 
             class Permission(ManagerBasedPermission):
-                __create__ = ["public"]
+                __create__: ClassVar[list[str]] = ["public"]
 
         cls.TestProject = TestProject
         cls.TestProject2 = TestProject2
@@ -281,7 +282,6 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
 
 
 class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         """
@@ -309,7 +309,8 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         Prepares the test environment by creating a test user, logging them in, creating an initial TestProject instance, and defining GraphQL mutation strings for updating a TestProject with and without the budget field.
         """
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="geheim")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
 
         self.project = self.TestProject.create(
@@ -410,7 +411,6 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
 
 class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         """
@@ -438,7 +438,8 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
         Prepares the test case by creating and logging in a user, initializing a TestProject instance, and defining the GraphQL mutation for deactivating a project.
         """
         User = get_user_model()
-        self.user = User.objects.create_user(username="tester", password="geheim")
+        password = get_random_string(12)
+        self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
 
         self.project = self.TestProject.create(

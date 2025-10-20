@@ -1,20 +1,77 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
-from typing import Type, Any, Generator, TypeVar, TYPE_CHECKING
-from django.db import models
-from general_manager.interface.baseInterface import (
-    GeneralManagerType,
-)
-from general_manager.utils.filterParser import create_filter_function
-from general_manager.bucket.baseBucket import Bucket
+from typing import TYPE_CHECKING, Any, Generator, Type, TypeVar
 
+from django.core.exceptions import FieldError
+from django.db import models
+
+from general_manager.bucket.baseBucket import Bucket
+from general_manager.interface.baseInterface import GeneralManagerType
 from general_manager.manager.generalManager import GeneralManager
+from general_manager.utils.filterParser import create_filter_function
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 if TYPE_CHECKING:
     from general_manager.interface.databaseInterface import DatabaseInterface
+
+
+class DatabaseBucketTypeMismatchError(TypeError):
+    """Raised when attempting to combine buckets of different types."""
+
+    def __init__(self, bucket_type: type, other_type: type) -> None:
+        super().__init__(
+            f"Cannot combine {bucket_type.__name__} with {other_type.__name__}."
+        )
+
+
+class DatabaseBucketManagerMismatchError(TypeError):
+    """Raised when combining buckets backed by different manager classes."""
+
+    def __init__(self, first_manager: type, second_manager: type) -> None:
+        super().__init__(
+            f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
+        )
+
+
+class NonFilterablePropertyError(ValueError):
+    """Raised when attempting to filter on a property without filter support."""
+
+    def __init__(self, property_name: str, manager_name: str) -> None:
+        super().__init__(
+            f"Property '{property_name}' is not filterable in {manager_name}."
+        )
+
+
+class InvalidQueryAnnotationTypeError(TypeError):
+    """Raised when a query annotation callback returns a non-queryset value."""
+
+    def __init__(self) -> None:
+        super().__init__("Query annotation must return a Django QuerySet.")
+
+
+class QuerysetFilteringError(ValueError):
+    """Raised when applying ORM filters fails."""
+
+    def __init__(self, original: Exception) -> None:
+        super().__init__(f"Error filtering queryset: {original}")
+
+
+class QuerysetOrderingError(ValueError):
+    """Raised when applying ORM ordering fails."""
+
+    def __init__(self, original: Exception) -> None:
+        super().__init__(f"Error ordering queryset: {original}")
+
+
+class NonSortablePropertyError(ValueError):
+    """Raised when attempting to sort on a property lacking sort support."""
+
+    def __init__(self, property_name: str, manager_name: str) -> None:
+        super().__init__(
+            f"Property '{property_name}' is not sortable in {manager_name}."
+        )
 
 
 class DatabaseBucket(Bucket[GeneralManagerType]):
@@ -75,9 +132,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 self._manager_class.filter(id__in=[other.identification["id"]])
             )
         if not isinstance(other, self.__class__):
-            raise ValueError("Cannot combine different bucket types")
+            raise DatabaseBucketTypeMismatchError(self.__class__, type(other))
         if self._manager_class != other._manager_class:
-            raise ValueError("Cannot combine different bucket managers")
+            raise DatabaseBucketManagerMismatchError(
+                self._manager_class, other._manager_class
+            )
         return self.__class__(
             self._data | other._data,
             self._manager_class,
@@ -129,9 +188,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             root = k.split("__")[0]
             if root in properties:
                 if not properties[root].filterable:
-                    raise ValueError(
-                        f"Property '{root}' is not filterable in {self._manager_class.__name__}"
-                    )
+                    raise NonFilterablePropertyError(root, self._manager_class.__name__)
                 prop = properties[root]
                 if prop.query_annotation is not None:
                     annotations[root] = prop.query_annotation
@@ -196,12 +253,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     continue
                 qs = value(qs)
             if not isinstance(qs, models.QuerySet):
-                raise TypeError("Query annotation must return a Django QuerySet")
+                raise InvalidQueryAnnotationTypeError()
             qs = qs.annotate(**other_annotations)
         try:
             qs = qs.filter(**orm_kwargs)
-        except Exception as e:
-            raise ValueError(f"Error filtering queryset: {e}")
+        except (FieldError, TypeError, ValueError) as error:
+            raise QuerysetFilteringError(error) from error
 
         if python_filters:
             ids = self.__parsePythonFilters(qs, python_filters)
@@ -235,7 +292,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     continue
                 qs = value(qs)
             if not isinstance(qs, models.QuerySet):
-                raise TypeError("Query annotation must return a Django QuerySet")
+                raise InvalidQueryAnnotationTypeError()
             qs = qs.annotate(**other_annotations)
         qs = qs.exclude(**orm_kwargs)
 
@@ -393,9 +450,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             if k in properties:
                 prop = properties[k]
                 if not prop.sortable:
-                    raise ValueError(
-                        f"Property '{k}' is not sortable in {self._manager_class.__name__}"
-                    )
+                    raise NonSortablePropertyError(k, self._manager_class.__name__)
                 if prop.query_annotation is not None:
                     if callable(prop.query_annotation):
                         qs = prop.query_annotation(qs)
@@ -404,7 +459,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 else:
                     python_keys.append(k)
         if not isinstance(qs, models.QuerySet):
-            raise TypeError("Query annotation must return a Django QuerySet")
+            raise InvalidQueryAnnotationTypeError()
         if annotations:
             qs = qs.annotate(**annotations)
 
@@ -435,8 +490,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             order_fields = [f"-{k}" if reverse else k for k in key]
             try:
                 qs = qs.order_by(*order_fields)
-            except Exception as e:
-                raise ValueError(f"Error ordering queryset: {e}")
+            except (FieldError, TypeError, ValueError) as error:
+                raise QuerysetOrderingError(error) from error
 
         return self.__class__(qs, self._manager_class)
 

@@ -1,7 +1,7 @@
 """Utilities for tracing relationships between GeneralManager classes."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 
@@ -13,11 +13,18 @@ type PathStart = str
 type PathDestination = str
 
 
+class MissingStartInstanceError(ValueError):
+    """Raised when attempting to traverse a path without a starting instance."""
+
+    def __init__(self) -> None:
+        super().__init__("Cannot call goTo on a PathMap without a start instance.")
+
+
 class PathMap:
     """Maintain cached traversal paths between GeneralManager classes."""
 
     instance: PathMap
-    mapping: dict[tuple[PathStart, PathDestination], PathTracer] = {}
+    mapping: ClassVar[dict[tuple[PathStart, PathDestination], PathTracer]] = {}
 
     def __new__(cls, *args: object, **kwargs: object) -> PathMap:
         """
@@ -124,7 +131,7 @@ class PathMap:
         if not tracer:
             return None
         if self.start_instance is None:
-            raise ValueError("Cannot call goTo on a PathMap without a start instance.")
+            raise MissingStartInstanceError()
         return tracer.traversePath(self.start_instance)
 
     def getAllConnected(self) -> set[str]:

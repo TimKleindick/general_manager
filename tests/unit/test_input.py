@@ -6,7 +6,6 @@ from datetime import date, datetime
 
 
 class TestInput(TestCase):
-
     def test_simple_input_initialization(self):
         """
         Test that initializing an Input with a type sets the type attribute, leaves possible_values as None, and depends_on as an empty list.

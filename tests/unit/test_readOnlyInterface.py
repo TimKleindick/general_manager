@@ -1,5 +1,6 @@
 # type: ignore
 from types import SimpleNamespace
+from typing import ClassVar
 from django.test import SimpleTestCase, TestCase
 from django.core.checks import Warning
 from django.db import connection
@@ -102,6 +103,10 @@ class GetUniqueFieldsTests(SimpleTestCase):
         Tests that getUniqueFields correctly identifies unique fields from unique attributes, unique_together, and UniqueConstraint in a model's _meta.
         """
         Field = SimpleNamespace  # mit .name, .unique, .column
+
+        def always_false_instancecheck(_: type, __: object) -> bool:
+            return False
+
         fake_meta = SimpleNamespace(
             local_fields=[
                 Field(name="id", unique=True, column="id"),
@@ -111,7 +116,9 @@ class GetUniqueFieldsTests(SimpleTestCase):
             unique_together=[("username", "other")],
             constraints=[
                 mock.Mock(
-                    __class__=type("C", (), {"__instancecheck__": lambda s, x: False}),
+                    __class__=type(
+                        "C", (), {"__instancecheck__": always_false_instancecheck}
+                    ),
                     fields=["other_field"],
                 ),
                 # echtes UniqueConstraint
@@ -156,7 +163,11 @@ class EnsureSchemaTests(TestCase):
         """
         Tests that a warning is returned when the model's database table does not exist.
         """
-        connection.introspection.table_names = lambda cursor: []
+
+        def table_names(_: object) -> list[str]:
+            return []
+
+        connection.introspection.table_names = table_names  # type: ignore[assignment]
         warnings = ReadOnlyInterface.ensureSchemaIsUpToDate(DummyManager, DummyModel)
         self.assertEqual(len(warnings), 1)
         self.assertIsInstance(warnings[0], Warning)
@@ -167,18 +178,26 @@ class EnsureSchemaTests(TestCase):
         """
         Tests that ensureSchemaIsUpToDate returns no warnings when the database schema matches the model's fields.
         """
-        connection.introspection.table_names = lambda cursor: [
-            DummyModel._meta.db_table
-        ]
+
+        def table_names(_: object) -> list[str]:
+            return [DummyModel._meta.db_table]
+
+        connection.introspection.table_names = table_names  # type: ignore[assignment]
         # description liefert genau die Spalten, die model._meta.local_fields vorgibt
         fake_desc = [SimpleNamespace(name="col1"), SimpleNamespace(name="col2")]
-        connection.introspection.get_table_description = lambda cursor, table: fake_desc
+
+        def get_table_description(_: object, __: object) -> list[SimpleNamespace]:
+            return fake_desc
+
+        connection.introspection.get_table_description = (  # type: ignore[assignment]
+            get_table_description
+        )
 
         # FakeModel mit passenden local_fields
         class M:
             class _meta:
                 db_table = DummyModel._meta.db_table
-                local_fields = [
+                local_fields: ClassVar[list[SimpleNamespace]] = [
                     SimpleNamespace(column="col1"),
                     SimpleNamespace(column="col2"),
                 ]
@@ -200,11 +219,16 @@ class SyncDataTests(SimpleTestCase):
         DummyManager._data = None
         # stub transaction.atomic
         self.atomic_cm = mock.MagicMock()
+
+        def _atomic_enter(_: object) -> None:
+            return None
+
+        def _atomic_exit(*_: object) -> None:
+            return None
+
         self.atomic_patch = mock.patch(
             "general_manager.interface.readOnlyInterface.transaction.atomic",
-            return_value=mock.MagicMock(
-                __enter__=lambda s: None, __exit__=lambda *a: None
-            ),
+            return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
         # stub getUniqueFields auf {'name'}
@@ -239,7 +263,7 @@ class SyncDataTests(SimpleTestCase):
         DummyManager._data = None
         with self.assertRaises(ValueError) as cm:
             DummyInterface.syncData()
-        self.assertIn("must set '_data'", str(cm.exception))
+        self.assertIn("must define a '_data'", str(cm.exception))
 
     def test_invalid_data_type_raises(self):
         """
@@ -262,7 +286,7 @@ class SyncDataTests(SimpleTestCase):
             DummyManager._data = []
             with self.assertRaises(ValueError) as cm:
                 DummyInterface.syncData()
-            self.assertIn("must have at least one unique field", str(cm.exception))
+            self.assertIn("must declare at least one unique field", str(cm.exception))
 
     def test_ensure_schema_not_up_to_date_logs_and_exits(self):
         # ersetze ensureSchemaIsUpToDate durch Warnung

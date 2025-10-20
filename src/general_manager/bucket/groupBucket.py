@@ -1,16 +1,64 @@
 """Grouping bucket implementation for aggregating GeneralManager instances."""
 
 from __future__ import annotations
-from typing import (
-    Type,
-    Generator,
-    Any,
-)
+from typing import Any, Generator, Type
 from general_manager.manager.groupManager import GroupManager
-from general_manager.bucket.baseBucket import (
-    Bucket,
-    GeneralManagerType,
-)
+from general_manager.bucket.baseBucket import Bucket, GeneralManagerType
+
+
+class InvalidGroupByKeyTypeError(TypeError):
+    """Raised when a non-string value is provided as a group-by key."""
+
+    def __init__(self) -> None:
+        super().__init__("groupBy() arguments must be strings.")
+
+
+class UnknownGroupByKeyError(ValueError):
+    """Raised when a group-by key does not exist on the manager interface."""
+
+    def __init__(self, manager_name: str) -> None:
+        super().__init__(f"groupBy() arguments must be attributes of {manager_name}.")
+
+
+class GroupBucketTypeMismatchError(TypeError):
+    """Raised when attempting to merge grouping buckets of different types."""
+
+    def __init__(self, first_type: type, second_type: type) -> None:
+        super().__init__(
+            f"Cannot combine {first_type.__name__} with {second_type.__name__}."
+        )
+
+
+class GroupBucketManagerMismatchError(ValueError):
+    """Raised when grouping buckets track different manager classes."""
+
+    def __init__(self, first_manager: type, second_manager: type) -> None:
+        super().__init__(
+            f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
+        )
+
+
+class GroupItemNotFoundError(ValueError):
+    """Raised when a grouped manager matching the provided criteria cannot be found."""
+
+    def __init__(self, manager_name: str, criteria: dict[str, Any]) -> None:
+        super().__init__(f"Cannot find {manager_name} with {criteria}.")
+
+
+class EmptyGroupBucketSliceError(ValueError):
+    """Raised when slicing a group bucket yields no results."""
+
+    def __init__(self) -> None:
+        super().__init__("Cannot slice an empty GroupBucket.")
+
+
+class InvalidGroupBucketIndexError(TypeError):
+    """Raised when a group bucket is indexed with an unsupported type."""
+
+    def __init__(self, received_type: type) -> None:
+        super().__init__(
+            f"Invalid argument type: {received_type}. Expected int or slice."
+        )
 
 
 class GroupBucket(Bucket[GeneralManagerType]):
@@ -78,14 +126,12 @@ class GroupBucket(Bucket[GeneralManagerType]):
             ValueError: If a key is not an attribute exposed by the manager interface.
         """
         if not all(isinstance(arg, str) for arg in group_by_keys):
-            raise TypeError("groupBy() arguments must be a strings")
+            raise InvalidGroupByKeyTypeError()
         if not all(
             arg in self._manager_class.Interface.getAttributes()
             for arg in group_by_keys
         ):
-            raise ValueError(
-                f"groupBy() argument must be a valid attribute of {self._manager_class.__name__}"
-            )
+            raise UnknownGroupByKeyError(self._manager_class.__name__)
 
     def __buildGroupedManager(
         self,
@@ -130,9 +176,11 @@ class GroupBucket(Bucket[GeneralManagerType]):
             ValueError: If `other` is not a compatible GroupBucket instance.
         """
         if not isinstance(other, self.__class__):
-            raise ValueError("Cannot combine different bucket types")
+            raise GroupBucketTypeMismatchError(self.__class__, type(other))
         if self._manager_class != other._manager_class:
-            raise ValueError("Cannot combine different manager classes")
+            raise GroupBucketManagerMismatchError(
+                self._manager_class, other._manager_class
+            )
         return GroupBucket(
             self._manager_class,
             self._group_by_keys,
@@ -239,9 +287,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
         """
         first_value = self.filter(**kwargs).first()
         if first_value is None:
-            raise ValueError(
-                f"Cannot find {self._manager_class.__name__} with {kwargs}"
-            )
+            raise GroupItemNotFoundError(self._manager_class.__name__, kwargs)
         return first_value
 
     def __getitem__(
@@ -272,9 +318,9 @@ class GroupBucket(Bucket[GeneralManagerType]):
                 else:
                     new_base_data = new_base_data | manager._data
             if new_base_data is None:
-                raise ValueError("Cannot slice an empty GroupBucket")
+                raise EmptyGroupBucketSliceError()
             return GroupBucket(self._manager_class, self._group_by_keys, new_base_data)
-        raise TypeError(f"Invalid argument type: {type(item)}. Expected int or slice.")
+        raise InvalidGroupBucketIndexError(type(item))
 
     def __len__(self) -> int:
         """

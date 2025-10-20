@@ -3,6 +3,7 @@ from django.utils import timezone
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.manager import GeneralManager, Input
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
+from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.interface.calculationInterface import CalculationInterface
@@ -11,16 +12,15 @@ from general_manager.permission.managerBasedPermission import ManagerBasedPermis
 
 
 class CachingTestCase(GeneralManagerTransactionTestCase):
-
     @classmethod
     def setUpClass(cls):
         """
         Set up test manager classes for project and commercials with computed budget properties.
-        
+
         Defines and assigns two `GeneralManager` subclasses for use in caching tests:
         - `TestProjectForCommercials`: Represents a project with name, number, budget, and actual costs.
         - `TestCommercials`: References a project and exposes computed properties for budget left, budget used (as percent), and over-budget status.
-        
+
         Stores references to these classes as class attributes for use in test methods.
         """
         super().setUpClass()
@@ -49,7 +49,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     app_label = "general_manager"
 
             class Permission(ManagerBasedPermission):
-                __create__ = ["public"]
+                __create__: ClassVar[list[str]] = ["public"]
 
         class TestCommercials(GeneralManager):
             project: TestProjectForCommercials
@@ -64,7 +64,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def budget_left(self) -> Measurement:
                 """
                 Returns the remaining budget for the project as a Measurement.
-                
+
                 Calculates the difference between the project's budget and its actual costs.
                 """
                 return self.project.budget - self.project.actual_costs
@@ -73,7 +73,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def budget_used(self) -> Measurement:
                 """
                 Return the percentage of the project's budget that has been used.
-                
+
                 Returns:
                     Measurement: The ratio of actual costs to budget, expressed as a percentage.
                 """
@@ -90,7 +90,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def has_duplicate_name(self) -> bool:
                 """
                 Return True when another project shares the same name.
-                
+
                 Uses a filtered bucket to determine whether multiple projects match the current project's name.
                 """
                 matching_count = TestProjectForCommercials.filter(
@@ -102,7 +102,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def other_project_count(self) -> int:
                 """
                 Return the number of projects whose numbers differ from the current project's number.
-                
+
                 Relies on an ``exclude`` lookup to ensure cache invalidation works for exclusion-based dependencies.
                 """
                 return TestProjectForCommercials.exclude(
@@ -113,7 +113,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def has_budget_buffer(self) -> bool:
                 """
                 Return True when the project's remaining budget is positive.
-                
+
                 Relies on ``budget_left`` so the property chain exercises nested cache lookups.
                 """
                 return self.budget_left > Measurement(0, "EUR")
@@ -122,7 +122,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def similar_name_count(self) -> int:
                 """
                 Count projects whose names contain the first word of the current project's name.
-                
+
                 Exercises ``contains`` lookups to validate cache invalidation on pattern-based filters.
                 """
                 search_term = self.project.name.split()[0]
@@ -141,7 +141,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def same_name_excluding_self(self) -> int:
                 """
                 Count projects sharing the same name while excluding the current project's number.
-                
+
                 Exercises combined `filter` and `exclude` lookups to verify dependency tracking.
                 """
                 return (
@@ -154,7 +154,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def project_keyword_number_range_count(self) -> int:
                 """
                 Count projects whose names contain ``\"Project\"`` and whose numbers fall within a selected range.
-                
+
                 Exercises multiple filter keywords and comparison operators to ensure cache invalidation stays reliable.
                 """
                 return TestProjectForCommercials.filter(
@@ -168,7 +168,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def recent_project_window_count(self) -> int:
                 """
                 Count projects that started close to the current project's start and complete shortly after it.
-                
+
                 Validates cache invalidation for combined date and datetime comparisons.
                 """
                 window_start = (self.project.start_date - timedelta(days=7)).isoformat()
@@ -190,7 +190,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 bucket = TestProjectForCommercials.filter(name__contains="Project")
                 bucket = bucket.filter(number__gte=1)
                 bucket = bucket.exclude(actual_costs__gte=Measurement(1000, "EUR"))
-                bucket = bucket.filter(start_date__lte=self.project.start_date.isoformat())
+                bucket = bucket.filter(
+                    start_date__lte=self.project.start_date.isoformat()
+                )
                 return bucket.count()
 
         cls.TestProject = TestProjectForCommercials
@@ -250,7 +252,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
     def test_caching_each_attribute_individually(self):
         """
         Test that each computed property on TestCommercials is cached independently.
-        
+
         Verifies that accessing the `budget_used` property on different TestCommercials instances results in cache misses on first access and cache hits on subsequent accesses. Also checks that accessing `budget_left` after `budget_used` results in a cache miss, confirming that caching is per attribute.
         """
         commercials1 = self.TestCommercials(project=self.project1)
@@ -425,9 +427,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertEqual(commercials1.same_name_excluding_self, 0)
         self.assertCacheHit()
 
-        self.project2.update(
-            name="Test Project", ignore_permission=True
-        )
+        self.project2.update(name="Test Project", ignore_permission=True)
 
         self.assertEqual(commercials1.same_name_excluding_self, 1)
         self.assertCacheMiss()

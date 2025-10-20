@@ -2,10 +2,12 @@ from __future__ import annotations
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.contrib.auth.models import User
+from django.utils.crypto import get_random_string
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.interface.databaseInterface import DatabaseInterface
 from general_manager.bucket.baseBucket import Bucket
 from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from typing import ClassVar
 
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -29,10 +31,10 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 name = models.CharField(max_length=50)
 
             class Permission(ManagerBasedPermission):
-                __read__ = ["public"]
-                __create__ = ["public"]
-                __update__ = ["public"]
-                __delete__ = ["public"]
+                __read__: ClassVar[list[str]] = ["public"]
+                __create__: ClassVar[list[str]] = ["public"]
+                __update__: ClassVar[list[str]] = ["public"]
+                __delete__: ClassVar[list[str]] = ["public"]
 
         class TestHuman1(GeneralManager):
             name: str
@@ -50,7 +52,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 )
 
             class Permission(ManagerBasedPermission):
-                __based_on__ = "country"
+                __based_on__: ClassVar[str] = "country"
 
         class TestFamily1(GeneralManager):
             name: str
@@ -64,10 +66,10 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 )
 
             class Permission(ManagerBasedPermission):
-                __read__ = ["public"]
-                __create__ = ["public"]
-                __update__ = ["public"]
-                __delete__ = ["public"]
+                __read__: ClassVar[list[str]] = ["public"]
+                __create__: ClassVar[list[str]] = ["public"]
+                __update__: ClassVar[list[str]] = ["public"]
+                __delete__: ClassVar[list[str]] = ["public"]
 
         cls.TestCountry = TestCountry1
         cls.TestHuman = TestHuman1
@@ -81,8 +83,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Creates a test user, two country instances, three human instances (one linked to a country), and a family associating two humans. All objects are created with permissions bypassed to ensure consistent test setup.
         """
         super().setUp()
+        password = get_random_string(12)
         self.user: User = User.objects.create_user(
-            username="testuser", password="testpassword", email="testuser@example.com"
+            username="testuser", password=password, email="testuser@example.com"
         )
         self.us = self.TestCountry.create(
             creator_id=None,
@@ -182,7 +185,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 name="Eve",
             )
         human_without_country = self.TestHuman.create(
-            creator_id=self.user.id, name="Eva"  # type: ignore
+            creator_id=self.user.id,
+            name="Eva",  # type: ignore
         )
         self.assertEqual(human_without_country.name, "Eva")
         self.assertIsNone(human_without_country.country)

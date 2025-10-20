@@ -13,4 +13,3 @@ from general_manager.bucket.baseBucket import Bucket
 from general_manager.bucket.calculationBucket import CalculationBucket
 from general_manager.bucket.databaseBucket import DatabaseBucket
 from general_manager.bucket.groupBucket import GroupBucket
-

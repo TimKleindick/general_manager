@@ -1,5 +1,6 @@
 # type: ignore
 from datetime import date
+from typing import ClassVar
 from django.test import TestCase
 from general_manager.api.property import GraphQLProperty
 from general_manager.manager.groupManager import (
@@ -11,7 +12,7 @@ from general_manager.measurement import Measurement
 
 # Stub Interface to simulate attribute definitions
 class DummyInterface:
-    attr_types = {
+    attr_types: ClassVar[dict[str, dict[str, object]]] = {
         "a": {"type": int},
         "b": {"type": str},
         "c": {"type": list},
@@ -298,7 +299,6 @@ class GroupManagerCombineValueTests(TestCase):
         self.assertEqual(gm.combineValue("field"), date(2021, 1, 1))
 
     def test_combine_measurement_sum(self):
-
         gm = self.helper_make_group_manager(
             [Measurement(1, "m"), Measurement(2, "m")], Measurement
         )

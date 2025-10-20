@@ -14,6 +14,27 @@ from general_manager.interface.databaseBasedInterface import (
 from django.db.models import NOT_PROVIDED
 
 
+class InvalidFieldValueError(ValueError):
+    """Raised when assigning a value incompatible with the model field."""
+
+    def __init__(self, field_name: str, value: object) -> None:
+        super().__init__(f"Invalid value for {field_name}: {value}.")
+
+
+class InvalidFieldTypeError(TypeError):
+    """Raised when assigning a value with an unexpected type."""
+
+    def __init__(self, field_name: str, error: Exception) -> None:
+        super().__init__(f"Type error for {field_name}: {error}.")
+
+
+class UnknownFieldError(ValueError):
+    """Raised when keyword arguments reference fields not present on the model."""
+
+    def __init__(self, field_name: str, model_name: str) -> None:
+        super().__init__(f"{field_name} does not exist in {model_name}.")
+
+
 class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     """CRUD-capable interface backed by a concrete Django model."""
 
@@ -147,10 +168,10 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
                 continue
             try:
                 setattr(instance, key, value)
-            except ValueError as e:
-                raise ValueError(f"Invalid value for {key}: {value}") from e
-            except TypeError as e:
-                raise TypeError(f"Type error for {key}: {e}") from e
+            except ValueError as error:
+                raise InvalidFieldValueError(key, value) from error
+            except TypeError as error:
+                raise InvalidFieldTypeError(key, error) from error
         return instance
 
     @staticmethod
@@ -172,7 +193,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         for key in kwargs:
             temp_key = key.split("_id_list")[0]  # Remove '_id_list' suffix
             if temp_key not in attributes and temp_key not in field_names:
-                raise ValueError(f"{key} does not exist in {model.__name__}")
+                raise UnknownFieldError(key, model.__name__)
 
     @staticmethod
     def _sortKwargs(
@@ -190,7 +211,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         """
         many_to_many_fields = [field.name for field in model._meta.many_to_many]
         many_to_many_kwargs: dict[Any, Any] = {}
-        for key, value in list(kwargs.items()):
+        for key, _value in list(kwargs.items()):
             many_to_many_key = key.split("_id_list")[0]
             if many_to_many_key in many_to_many_fields:
                 many_to_many_kwargs[key] = kwargs.pop(key)

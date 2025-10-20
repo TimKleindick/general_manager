@@ -9,6 +9,41 @@ if TYPE_CHECKING:
     from general_manager.rule.rule import Rule
 
 
+class InvalidFunctionNodeError(ValueError):
+    """Raised when a rule handler receives an invalid AST node for its function."""
+
+    def __init__(self, function_name: str) -> None:
+        super().__init__(f"Invalid left node for {function_name}() function.")
+
+
+class InvalidLenThresholdError(TypeError):
+    """Raised when len() comparisons use a non-numeric threshold."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid arguments for len function.")
+
+
+class InvalidNumericThresholdError(TypeError):
+    """Raised when aggregate handlers use a non-numeric threshold."""
+
+    def __init__(self, function_name: str) -> None:
+        super().__init__(f"Invalid arguments for {function_name} function.")
+
+
+class NonEmptyIterableError(ValueError):
+    """Raised when an aggregate function expects a non-empty iterable."""
+
+    def __init__(self, function_name: str) -> None:
+        super().__init__(f"{function_name} expects a non-empty iterable.")
+
+
+class NumericIterableError(TypeError):
+    """Raised when an aggregate function expects numeric elements."""
+
+    def __init__(self, function_name: str) -> None:
+        super().__init__(f"{function_name} expects an iterable of numbers.")
+
+
 class BaseRuleHandler(ABC):
     """Define the protocol for generating rule-specific error messages."""
 
@@ -64,7 +99,7 @@ class FunctionHandler(BaseRuleHandler, ABC):
         op_symbol = rule._get_op_symbol(op)
 
         if not (isinstance(left_node, ast.Call) and left_node.args):
-            raise ValueError(f"Invalid left node for {self.function_name}() function")
+            raise InvalidFunctionNodeError(self.function_name)
         arg_node = left_node.args[0]
 
         return self.aggregate(
@@ -134,7 +169,7 @@ class LenHandler(FunctionHandler):
         # --- Hier der Typ-Guard für right_value ---
         raw = rule._eval_node(right_node)
         if not isinstance(raw, (int, float)):
-            raise ValueError("Invalid arguments for len function")
+            raise InvalidLenThresholdError()
         right_value: int | float = raw
 
         if op_symbol == ">":
@@ -190,16 +225,16 @@ class SumHandler(FunctionHandler):
         # Name und Wert holen
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)
-        if not isinstance(raw_iter, (list, tuple)):
-            raise ValueError("sum expects an iterable of numbers")
+        if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
+            raise NonEmptyIterableError("sum")
         if not all(isinstance(x, (int, float)) for x in raw_iter):
-            raise ValueError("sum expects an iterable of numbers")
+            raise NumericIterableError("sum")
         total = sum(raw_iter)
 
         # Schwellenwert aus dem rechten Knoten
         raw = rule._eval_node(right_node)
         if not isinstance(raw, (int, float)):
-            raise ValueError("Invalid arguments for sum function")
+            raise InvalidNumericThresholdError("sum")
         right_value = raw
 
         # Message formulieren
@@ -248,14 +283,14 @@ class MaxHandler(FunctionHandler):
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)
         if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
-            raise ValueError("max expects a non-empty iterable")
+            raise NonEmptyIterableError("max")
         if not all(isinstance(x, (int, float)) for x in raw_iter):
-            raise ValueError("max expects an iterable of numbers")
+            raise NumericIterableError("max")
         current = max(raw_iter)
 
         raw = rule._eval_node(right_node)
         if not isinstance(raw, (int, float)):
-            raise ValueError("Invalid arguments for max function")
+            raise InvalidNumericThresholdError("max")
         right_value = raw
 
         if op_symbol in (">", ">="):
@@ -299,14 +334,14 @@ class MinHandler(FunctionHandler):
         var_name = rule._get_node_name(arg_node)
         raw_iter = var_values.get(var_name)
         if not isinstance(raw_iter, (list, tuple)) or len(raw_iter) == 0:
-            raise ValueError("min expects a non-empty iterable")
+            raise NonEmptyIterableError("min")
         if not all(isinstance(x, (int, float)) for x in raw_iter):
-            raise ValueError("min expects an iterable of numbers")
+            raise NumericIterableError("min")
         current = min(raw_iter)
 
         raw = rule._eval_node(right_node)
         if not isinstance(raw, (int, float)):
-            raise ValueError("Invalid arguments for min function")
+            raise InvalidNumericThresholdError("min")
         right_value = raw
 
         if op_symbol in (">", ">="):

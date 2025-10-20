@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Literal, Dict, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Dict, Literal, Optional, cast
 from django.test import TestCase
 from django.contrib.auth.models import User, AnonymousUser
+from django.utils.crypto import get_random_string
 from unittest.mock import Mock, patch, PropertyMock, MagicMock
 
 from general_manager.permission.basePermission import BasePermission
@@ -39,14 +40,14 @@ class CustomManagerBasedPermission(ManagerBasedPermission):
     """Custom ManagerBasedPermission for testing."""
 
     __based_on__: Optional[str] = "manager"
-    __read__: list[str] = ["public"]
-    __create__: list[str] = ["isAuthenticated"]
-    __update__: list[str] = ["isAdmin"]
-    __delete__: list[str] = ["isAuthenticated&isAdmin"]
+    __read__: ClassVar[list[str]] = ["public"]
+    __create__: ClassVar[list[str]] = ["isAuthenticated"]
+    __update__: ClassVar[list[str]] = ["isAdmin"]
+    __delete__: ClassVar[list[str]] = ["isAuthenticated&isAdmin"]
 
     # Test attribute-specific permissions
-    specific_attribute: Dict[
-        Literal["create", "read", "update", "delete"], list[str]
+    specific_attribute: ClassVar[
+        Dict[Literal["create", "read", "update", "delete"], list[str]]
     ] = {
         "create": ["isAdmin"],
         "read": ["public"],
@@ -59,22 +60,24 @@ class CustomManagerBasedPermissionNoBasis(ManagerBasedPermission):
     """Custom ManagerBasedPermission without a basis for testing."""
 
     __based_on__: Optional[str] = None
-    __read__: list[str] = ["public"]
-    __create__: list[str] = ["isAuthenticated"]
-    __update__: list[str] = ["isAdmin"]
-    __delete__: list[str] = ["isAuthenticated&isAdmin"]
+    __read__: ClassVar[list[str]] = ["public"]
+    __create__: ClassVar[list[str]] = ["isAuthenticated"]
+    __update__: ClassVar[list[str]] = ["isAdmin"]
+    __delete__: ClassVar[list[str]] = ["isAuthenticated&isAdmin"]
 
 
 class ManagerBasedPermissionTests(TestCase):
     def setUp(self):
         # Create a test user
+        user_password = get_random_string(12)
         self.user = User.objects.create_user(
-            username="testuser", email="test@example.com", password="testpassword"
+            username="testuser", email="test@example.com", password=user_password
         )
 
         # Create an admin user
+        admin_password = get_random_string(12)
         self.admin_user = User.objects.create_user(
-            username="adminuser", email="admin@example.com", password="adminpassword"
+            username="adminuser", email="admin@example.com", password=admin_password
         )
         self.admin_user.is_staff = True
         self.admin_user.save()
@@ -119,7 +122,7 @@ class ManagerBasedPermissionTests(TestCase):
     def test_get_attribute_permissions(self):
         """Test getting attribute permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        method = getattr(permission, "_ManagerBasedPermission__getAttributePermissions")
+        method = permission._ManagerBasedPermission__getAttributePermissions
         attribute_permissions = method()
 
         self.assertIn("specific_attribute", attribute_permissions)
@@ -223,7 +226,7 @@ class ManagerBasedPermissionTests(TestCase):
     def test_check_specific_permission(self):
         """Test checking specific permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        method = getattr(permission, "_ManagerBasedPermission__checkSpecificPermission")
+        method = permission._ManagerBasedPermission__checkSpecificPermission
 
         # Test with a valid permission that returns True
         with patch.object(
@@ -280,7 +283,6 @@ class ManagerBasedPermissionTests(TestCase):
             "validatePermissionString",
             side_effect=lambda x: x == "isAdmin",
         ) as mock_validate:
-
             # First call should call validatePermissionString
             result1 = permission.checkPermission("update", "any_attribute")
             self.assertTrue(result1)

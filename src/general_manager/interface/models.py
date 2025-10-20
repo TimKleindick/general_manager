@@ -88,7 +88,7 @@ class GeneralManagerModel(GeneralManagerBasisModel):
         Parameters:
             value (AbstractUser): The user to associate with the latest modification.
         """
-        setattr(self, "changed_by", value)
+        self.changed_by = value
 
     class Meta:  # type: ignore
         abstract = True

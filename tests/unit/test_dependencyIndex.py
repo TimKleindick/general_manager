@@ -221,7 +221,6 @@ class TestRecordDependencies(TestCase):
 
     @patch("general_manager.cache.dependencyIndex.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):
-
         mock_acquire.side_effect = [False, False, True]
         record_dependencies(
             "abc123",
@@ -454,7 +453,6 @@ class DummyManager:
 
 
 class CaptureOldValuesTests(TestCase):
-
     @patch("general_manager.cache.dependencyIndex.get_full_index")
     def test_capture_old_values_sets_old_values_correctly(self, mock_get_full_index):
         mock_get_full_index.return_value = {
@@ -541,9 +539,15 @@ class ReprObject:
 
 
 class HashablePayload:
+    class InvalidFooTypeError(TypeError):
+        """Raised when HashablePayload receives a non-integer foo value."""
+
+        def __init__(self) -> None:
+            super().__init__("foo must be an int.")
+
     def __init__(self, foo: int):
         if not isinstance(foo, int):
-            raise TypeError("foo must be an int")
+            raise HashablePayload.InvalidFooTypeError()
         self.foo = foo
 
     def __repr__(self):
@@ -580,7 +584,6 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate,
         mock_get_index,
     ):
-
         mock_get_index.return_value = {
             "filter": {"DummyManager2": {"status": {"'active'": ["A", "B"]}}},
             "exclude": {},
@@ -609,7 +612,6 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate,
         mock_get_index,
     ):
-
         mock_get_index.return_value = {
             "filter": {},
             "exclude": {"DummyManager2": {"count__gt": {"5": ["X"]}}},
@@ -635,7 +637,6 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate,
         mock_get_index,
     ):
-
         mock_get_index.return_value = {"filter": {}, "exclude": {}}
         old_vals = {}
         inst = DummyManager2(status=None, count=None)

@@ -13,4 +13,3 @@ from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurementField import MeasurementField
 from general_manager.measurement.measurement import currency_units
 from general_manager.measurement.measurement import ureg
-

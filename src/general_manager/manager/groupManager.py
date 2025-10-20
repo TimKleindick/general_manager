@@ -12,6 +12,13 @@ from general_manager.bucket.baseBucket import (
 )
 
 
+class MissingGroupAttributeError(AttributeError):
+    """Raised when a GroupManager access attempts to use an undefined attribute."""
+
+    def __init__(self, manager_name: str, attribute: str) -> None:
+        super().__init__(f"{manager_name} has no attribute {attribute}.")
+
+
 class GroupManager(Generic[GeneralManagerType]):
     """Represent aggregated results for grouped GeneralManager records."""
 
@@ -139,7 +146,7 @@ class GroupManager(Generic[GeneralManagerType]):
                     else cast(type, attr_value.graphql_type_hint)
                 )
         if data_type is None or not isinstance(data_type, type):
-            raise AttributeError(f"{self.__class__.__name__} has no attribute {item}")
+            raise MissingGroupAttributeError(self.__class__.__name__, item)
 
         total_data = []
         for entry in self._data:

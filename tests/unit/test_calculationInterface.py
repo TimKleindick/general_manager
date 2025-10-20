@@ -1,11 +1,13 @@
+from typing import ClassVar
+
 from django.test import TestCase
-from general_manager.interface.calculationInterface import CalculationInterface
 from general_manager.bucket.calculationBucket import CalculationBucket
+from general_manager.interface.calculationInterface import CalculationInterface
 from general_manager.manager.input import Input
 
 
 class DummyCalculationInterface(CalculationInterface):
-    input_fields = {
+    input_fields: ClassVar[dict[str, Input]] = {
         "field1": Input(type=str),
         "field2": Input(type=int),
     }
@@ -81,7 +83,7 @@ class TestCalculationInterface(TestCase):
     def test_preCreate(self):
         """
         Tests that the _preCreate class method initializes attributes and interface metadata correctly.
-        
+
         Verifies that the returned attributes dictionary contains the provided field values, the correct interface type, and a reference to the interface class. Also checks that the initialized interface is a subclass of DummyCalculationInterface.
         """
         attr, initialized_interface, _ = DummyCalculationInterface._preCreate(

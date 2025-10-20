@@ -2,7 +2,7 @@
 
 from contextlib import suppress
 from importlib import import_module
-from typing import Any, Callable, cast
+from typing import Any, Callable, ClassVar, cast
 
 from django.apps import AppConfig, apps as global_apps
 from django.conf import settings
@@ -81,15 +81,15 @@ class GMTestCaseMeta(type):
     ) -> type:
         """
         Create a new test case class that injects GeneralManager-specific initialization into `setUpClass`.
-        
+
         The constructed class replaces or wraps any user-defined `setUpClass` with logic that resets GraphQL and manager registries, configures an optional fallback app lookup, ensures database tables for managed models exist, initializes GeneralManager and GraphQL registrations, and then calls the standard GraphQL test setup.
-        
+
         Parameters:
             mcs (type[GMTestCaseMeta]): Metaclass constructing the new class.
             name (str): Name of the class to create.
             bases (tuple[type, ...]): Base classes for the new class.
             attrs (dict[str, object]): Class namespace; may contain a user-defined `setUpClass` and `fallback_app`.
-        
+
         Returns:
             type: The newly created test case class whose `setUpClass` has been augmented for GeneralManager testing.
         """
@@ -103,7 +103,7 @@ class GMTestCaseMeta(type):
         ) -> None:
             """
             Prepare the test environment for GeneralManager GraphQL tests.
-            
+
             Resets GraphQL and manager registries, optionally patches Django's app-config lookup to use a fallback app, ensures database tables exist for models provided by the test's configured manager classes, initializes GeneralManager classes (including read-only interfaces) and GraphQL registrations, and finally invokes the base class setUpClass.
             """
             GraphQL._query_class = None
@@ -120,10 +120,8 @@ class GMTestCaseMeta(type):
             GraphQL._schema = None
 
             if fallback_app is not None:
-                setattr(
-                    global_apps,
-                    "get_containing_app_config",
-                    createFallbackGetApp(fallback_app),
+                global_apps.get_containing_app_config = createFallbackGetApp(
+                    fallback_app
                 )
 
             # 1) user-defined setUpClass (if any)
@@ -146,7 +144,8 @@ class GMTestCaseMeta(type):
                     ):
                         continue
                     model_class = cast(
-                        type[models.Model], manager_class.Interface._model  # type: ignore
+                        type[models.Model],
+                        manager_class.Interface._model,  # type: ignore
                     )
                     if model_class._meta.db_table not in existing:
                         editor.create_model(model_class)
@@ -233,8 +232,8 @@ class GeneralManagerTransactionTestCase(
     GraphQLTransactionTestCase, metaclass=GMTestCaseMeta
 ):
     GRAPHQL_URL = "/graphql/"
-    general_manager_classes: list[type[GeneralManager]] = []
-    read_only_classes: list[type[GeneralManager]] = []
+    general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
+    read_only_classes: ClassVar[list[type[GeneralManager]]] = []
     fallback_app: str | None = "general_manager"
 
     def setUp(self) -> None:
@@ -247,7 +246,7 @@ class GeneralManagerTransactionTestCase(
             None
         """
         super().setUp()
-        setattr(caches._connections, "default", LoggingCache("test-cache", {}))  # type: ignore[attr-defined]
+        caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
         self.__resetCacheCounter()
 
     @classmethod
@@ -308,7 +307,7 @@ class GeneralManagerTransactionTestCase(
         ]
 
         # reset fallback app lookup
-        setattr(global_apps, "get_containing_app_config", _original_get_app)
+        global_apps.get_containing_app_config = _original_get_app
 
         super().tearDownClass()
 

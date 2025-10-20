@@ -1,6 +1,20 @@
 from typing import Iterable, Mapping
 
 
+class TooManyArgumentsError(TypeError):
+    """Raised when more positional arguments are supplied than available keys."""
+
+    def __init__(self) -> None:
+        super().__init__("More positional arguments than keys provided.")
+
+
+class ConflictingKeywordError(TypeError):
+    """Raised when generated keyword arguments conflict with existing kwargs."""
+
+    def __init__(self) -> None:
+        super().__init__("Conflicts in existing kwargs.")
+
+
 def args_to_kwargs(
     args: tuple[object, ...],
     keys: Iterable[str],
@@ -22,11 +36,13 @@ def args_to_kwargs(
     """
     keys = list(keys)
     if len(args) > len(keys):
-        raise TypeError("More positional arguments than keys provided.")
+        raise TooManyArgumentsError()
 
-    kwargs: dict[str, object] = {key: value for key, value in zip(keys, args)}
+    kwargs: dict[str, object] = {
+        key: value for key, value in zip(keys, args, strict=False)
+    }
     if existing_kwargs and any(key in kwargs for key in existing_kwargs):
-        raise TypeError("Conflicts in existing kwargs.")
+        raise ConflictingKeywordError()
     if existing_kwargs:
         kwargs.update(existing_kwargs)
 

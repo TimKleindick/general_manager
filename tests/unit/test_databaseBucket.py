@@ -300,13 +300,13 @@ class DatabaseBucketTestCase(TestCase):
     def test_or_errors(self):
         # incompatible type
         """
-        Tests that union operations with incompatible types or different manager classes raise ValueError.
+        Tests that union operations with incompatible types or different manager classes raise TypeError.
         """
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             _ = self.bucket | 123
         # different manager class
         b_other = DatabaseBucket(User.objects.all(), AnotherManager)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             _ = self.bucket | b_other
 
     def test_contains(self):

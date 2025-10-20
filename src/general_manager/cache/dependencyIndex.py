@@ -33,6 +33,16 @@ type Dependency = Tuple[general_manager_name, filter_type, str]
 
 logger = logging.getLogger(__name__)
 
+
+class DependencyLockTimeoutError(TimeoutError):
+    """Raised when the dependency index lock cannot be acquired within the timeout."""
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(
+            f"Timed out acquiring dependency index lock during {operation}."
+        )
+
+
 # -----------------------------------------------------------------------------
 # CONFIG
 # -----------------------------------------------------------------------------
@@ -129,7 +139,7 @@ def record_dependencies(
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
-            raise TimeoutError("Could not aquire lock for record_dependencies")
+            raise DependencyLockTimeoutError("record_dependencies")
         time.sleep(0.05)
 
     try:
@@ -140,7 +150,9 @@ def record_dependencies(
                 params = ast.literal_eval(identifier)
                 section = idx[action_key].setdefault(model_name, {})
                 if len(params) > 1:
-                    cache_dependencies = section.setdefault("__cache_dependencies__", {})
+                    cache_dependencies = section.setdefault(
+                        "__cache_dependencies__", {}
+                    )
                     cache_dependencies.setdefault(cache_key, set()).add(identifier)
                 for lookup, val in params.items():
                     lookup_map = section.setdefault(lookup, {})
@@ -179,7 +191,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     start = time.time()
     while not acquire_lock():
         if time.time() - start > LOCK_TIMEOUT:
-            raise TimeoutError("Could not aquire lock for remove_cache_key_from_index")
+            raise DependencyLockTimeoutError("remove_cache_key_from_index")
         time.sleep(0.05)
 
     try:
@@ -270,7 +282,7 @@ def capture_old_values(
                     break
                 current = getattr(current, attr, None)
             vals[lookup] = current
-        setattr(instance, "_old_values", vals)
+        instance._old_values = vals
 
 
 @receiver(post_data_change)
@@ -337,8 +349,8 @@ def generic_cache_invalidation(
             return None
 
         try:
-            return type(sample)(raw) # type: ignore
-        except Exception:
+            return type(sample)(raw)  # type: ignore
+        except (TypeError, ValueError):
             if isinstance(raw, type(sample)):
                 return raw
             return None
@@ -403,7 +415,9 @@ def generic_cache_invalidation(
             # regex: treat the stored key as the regex pattern
             if op == "regex":
                 try:
-                    pattern_source = literal if isinstance(literal, str) else str(literal)
+                    pattern_source = (
+                        literal if isinstance(literal, str) else str(literal)
+                    )
                     pattern = re.compile(pattern_source)
                 except re.error:
                     return False
@@ -419,9 +433,7 @@ def generic_cache_invalidation(
                 return None
         return current
 
-    def evaluate_composite(
-        cache_key: str, lookup_key: str, action: str
-    ) -> bool | None:
+    def evaluate_composite(cache_key: str, lookup_key: str, action: str) -> bool | None:
         cache_dependencies = model_section.get("__cache_dependencies__", {})
         identifiers = cache_dependencies.get(cache_key) if cache_dependencies else None
         if not identifiers:
