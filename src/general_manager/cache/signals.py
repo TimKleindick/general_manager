@@ -66,6 +66,11 @@ def dataChange(func: Callable[P, R]) -> Callable[P, R]:
             old_relevant_values=old_relevant_values,
             **kwargs,
         )
+        if instance_before is not None:
+            try:
+                delattr(instance_before, "_old_values")
+            except AttributeError:
+                pass
         return result
 
     return wrapper
