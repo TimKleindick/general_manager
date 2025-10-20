@@ -15,6 +15,13 @@ if TYPE_CHECKING:
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 
+class InvalidGeneratedObjectError(TypeError):
+    """Raised when factory generation produces non-model instances."""
+
+    def __init__(self) -> None:
+        super().__init__("Generated object is not a Django model instance.")
+
+
 class InvalidAutoFactoryModelError(TypeError):
     """Raised when the factory metadata does not reference a Django model class."""
 
@@ -85,7 +92,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         if isinstance(obj, list):
             for item in obj:
                 if not isinstance(item, models.Model):
-                    raise InvalidAutoFactoryModelError()
+                    raise InvalidGeneratedObjectError()
                 cls._handleManyToManyFieldsAfterCreation(item, params)
         else:
             cls._handleManyToManyFieldsAfterCreation(obj, params)
