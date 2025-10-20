@@ -446,7 +446,7 @@ def test_sum_handler_large_collection():
 def test_max_handler_large_collection():
     n = 100_000
     large = list(range(n))
-    expr = f"max(large) == {n-1}"
+    expr = f"max(large) == {n - 1}"
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule("==")
     result = max_handler.handle(
@@ -457,7 +457,7 @@ def test_max_handler_large_collection():
         {"large": large},
         rule,  # type: ignore
     )
-    assert result == {"large": f"[large] (max={n-1}) must be {n-1}!"}
+    assert result == {"large": f"[large] (max={n - 1}) must be {n - 1}!"}
 
 
 def test_min_handler_large_collection():
