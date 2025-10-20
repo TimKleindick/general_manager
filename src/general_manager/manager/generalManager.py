@@ -24,6 +24,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     Permission: Type[BasePermission]
     _attributes: dict[str, Any]
     Interface: Type["InterfaceBase"]
+    _old_values: dict[str, Any]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """

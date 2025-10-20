@@ -58,7 +58,7 @@ class GeneralManagerBasisModel(models.Model):
     """Abstract base model providing shared fields for GeneralManager storage."""
 
     _general_manager_class: ClassVar[Type[GeneralManager]]
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
     history = HistoricalRecords(inherit=True)
 
     class Meta:
@@ -70,7 +70,7 @@ class GeneralManagerModel(GeneralManagerBasisModel):
 
     changed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
-    )
+    )  # type: ignore[var-annotated]
     changed_by_id: int | None
 
     @property

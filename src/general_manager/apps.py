@@ -73,8 +73,8 @@ class GeneralmanagerConfig(AppConfig):
 
         def _build_schema_check(
             manager_cls: Type[GeneralManager], model: Any
-        ) -> Callable[[object], list[Any]]:
-            def schema_check(_: object, **__: Any) -> list[Any]:
+        ) -> Callable[..., list[Any]]:
+            def schema_check(*_: Any, **__: Any) -> list[Any]:
                 return ReadOnlyInterface.ensureSchemaIsUpToDate(manager_cls, model)
 
             return schema_check
@@ -84,9 +84,11 @@ class GeneralmanagerConfig(AppConfig):
                 Type[ReadOnlyInterface], general_manager_class.Interface
             )
 
-            register(
-                _build_schema_check(general_manager_class, read_only_interface._model),
-                "general_manager",
+            register("general_manager")(
+                _build_schema_check(
+                    general_manager_class,
+                    read_only_interface._model,
+                )
             )
 
     @staticmethod
@@ -131,7 +133,7 @@ class GeneralmanagerConfig(AppConfig):
             result = original_run_from_argv(self, argv)
             return result
 
-        BaseCommand.run_from_argv = run_from_argv_with_sync
+        BaseCommand.run_from_argv = run_from_argv_with_sync  # type: ignore[assignment]
 
     @staticmethod
     def initializeGeneralManagerClasses(

@@ -50,6 +50,7 @@ INDEX_KEY = "dependency_index"  # Cache key storing the complete dependency inde
 LOCK_KEY = "dependency_index_lock"  # Cache key used for the dependency lock
 LOCK_TIMEOUT = 5  # Lock TTL in seconds
 UNDEFINED = object()  # Sentinel for undefined values
+ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
 
 
 # -----------------------------------------------------------------------------
@@ -196,8 +197,8 @@ def remove_cache_key_from_index(cache_key: str) -> None:
 
     try:
         idx = get_full_index()
-        for action in ("filter", "exclude"):
-            action_section = idx.get(action, {})
+        for action in ACTIONS:
+            action_section = idx[action]
             for mname, model_section in list(action_section.items()):
                 cache_dependencies = model_section.get("__cache_dependencies__", {})
                 for lookup, lookup_map in list(model_section.items()):
@@ -260,8 +261,8 @@ def capture_old_values(
     idx = get_full_index()
     # get all lookups for this model
     lookups = set()
-    for action in ("filter", "exclude"):
-        model_section = idx.get(action, {}).get(manager_name, {})
+    for action in ACTIONS:
+        model_section = idx[action].get(manager_name)
         if isinstance(model_section, dict):
             lookups |= {
                 lookup
@@ -433,7 +434,12 @@ def generic_cache_invalidation(
                 return None
         return current
 
-    def evaluate_composite(cache_key: str, lookup_key: str, action: str) -> bool | None:
+    def evaluate_composite(
+        cache_key: str,
+        lookup_key: str,
+        action: Literal["filter", "exclude"],
+        model_section: dict[str, dict[str, set[str]]],
+    ) -> bool | None:
         cache_dependencies = model_section.get("__cache_dependencies__", {})
         identifiers = cache_dependencies.get(cache_key) if cache_dependencies else None
         if not identifiers:
@@ -480,9 +486,9 @@ def generic_cache_invalidation(
                     return True
         return False
 
-    for action in ("filter", "exclude"):
-        model_section = idx.get(action, {}).get(manager_name, {})
-        if not model_section:
+    for action in ACTIONS:
+        model_section = idx[action].get(manager_name)
+        if not isinstance(model_section, dict):
             continue
         for lookup, lookup_map in model_section.items():
             if lookup.startswith("__"):
@@ -524,7 +530,9 @@ def generic_cache_invalidation(
                 if action == "filter":
                     # Filter: invalidate if new match or old match
                     for ck in list(cache_keys):
-                        composite_decision = evaluate_composite(ck, lookup, action)
+                        composite_decision = evaluate_composite(
+                            ck, lookup, action, model_section
+                        )
                         should_invalidate = (
                             composite_decision
                             if composite_decision is not None
@@ -540,7 +548,9 @@ def generic_cache_invalidation(
                 else:  # action == 'exclude'
                     # Excludes: invalidate only if matches changed
                     for ck in list(cache_keys):
-                        composite_decision = evaluate_composite(ck, lookup, action)
+                        composite_decision = evaluate_composite(
+                            ck, lookup, action, model_section
+                        )
                         should_invalidate = (
                             composite_decision
                             if composite_decision is not None
