@@ -12,7 +12,7 @@ from pint.facets.plain import PlainQuantity
 getcontext().prec = 28
 
 # Create a new UnitRegistry
-ureg = pint.UnitRegistry(auto_reduce_dimensions=True)
+ureg = pint.UnitRegistry(auto_reduce_dimensions=True)  # type: ignore
 
 # Define currency units
 currency_units = ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD"]
@@ -21,7 +21,7 @@ for currency in currency_units:
     ureg.define(f"{currency} = [{currency}]")
 
 
-class InvalidMeasurementValueError(ValueError):
+class InvalidMeasurementInitializationError(ValueError):
     """Raised when a measurement cannot be constructed from the provided value."""
 
     def __init__(self) -> None:
@@ -128,7 +128,7 @@ class Measurement:
             try:
                 value = Decimal(str(value))
             except (InvalidOperation, TypeError, ValueError) as error:
-                raise InvalidMeasurementValueError() from error
+                raise InvalidMeasurementInitializationError() from error
         if not isinstance(value, Decimal):
             value = Decimal(str(value))
         self.__quantity = ureg.Quantity(self.formatDecimal(value), unit)
