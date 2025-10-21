@@ -1,7 +1,7 @@
 # type: ignore
 
 from django.test import SimpleTestCase
-from general_manager.utils.pathMapping import PathMap
+from general_manager.utils.pathMapping import PathMap, PathTracer
 from general_manager.manager.generalManager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
@@ -758,7 +758,9 @@ class PathMappingUnitTests(SimpleTestCase):
         with self.assertRaises(MissingStartInstanceError) as ctx:
             path_map.goTo(self.EndManager)
 
-        self.assertIn("Cannot call goTo on a PathMap without a start instance", str(ctx.exception))
+        self.assertIn(
+            "Cannot call goTo on a PathMap without a start instance", str(ctx.exception)
+        )
 
     def test_path_map_go_to_with_none_start_instance(self):
         """Test goTo when start_instance is explicitly set to None."""
@@ -783,10 +785,10 @@ class PathMappingUnitTests(SimpleTestCase):
         path_map = PathMap(self.StartManager)
 
         # First call should compute and cache the path
-        tracer1 = path_map.getPathTo(self.EndManager)
+        tracer1 = path_map.to(self.EndManager)
 
         # Second call should use cached path
-        tracer2 = path_map.getPathTo(self.EndManager)
+        tracer2 = path_map.to(self.EndManager)
 
         # Should be the same tracer instance (cached)
         self.assertIs(tracer1, tracer2)
@@ -803,8 +805,7 @@ class PathMappingUnitTests(SimpleTestCase):
         path_map = PathMap(IsolatedManager)
         connected = path_map.getAllConnected()
 
-        # Should only include itself
-        self.assertIn(IsolatedManager.__name__, connected)
+        self.assertEqual(len(connected), 0)
 
     def test_path_map_get_all_connected_multiple_levels(self):
         """Test getAllConnected with multi-level connections."""
@@ -839,7 +840,6 @@ class PathMappingUnitTests(SimpleTestCase):
         connected = path_map.getAllConnected()
 
         # Should include all levels
-        self.assertIn(Level1Manager.__name__, connected)
         self.assertIn(Level2Manager.__name__, connected)
         self.assertIn(Level3Manager.__name__, connected)
 

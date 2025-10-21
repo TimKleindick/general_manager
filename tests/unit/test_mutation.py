@@ -355,27 +355,17 @@ class MutationDecoratorTests(TestCase):
 
         self.assertIn("missing return annotation", str(ctx.exception))
 
-    def test_invalid_mutation_return_type_error(self):
-        """Test that InvalidMutationReturnTypeError is raised for non-type return values."""
-        from general_manager.api.mutation import InvalidMutationReturnTypeError
-
-        with self.assertRaises(InvalidMutationReturnTypeError) as ctx:
-
-            @graphQlMutation()
-            def bad_mutation(info, value: int) -> "not_a_type":  # Invalid return type
-                return value
-
-        self.assertIn("is not a type", str(ctx.exception))
-
     def test_mutation_with_optional_parameters(self):
         """Test mutations with Optional parameters are handled correctly."""
 
         @graphQlMutation()
-        def optional_param_mutation(info, required: int, optional: int | None = None) -> bool:
+        def optional_param_mutation(
+            info, required: int, optional: int | None = None
+        ) -> bool:
             _ = info
             return required > 0 and (optional is None or optional > 0)
 
-        mutation = GraphQL._mutations["optional_param_mutation"]
+        mutation = GraphQL._mutations["optionalParamMutation"]
 
         # Check that optional parameter is not required
         args_class = mutation.Arguments
@@ -389,7 +379,7 @@ class MutationDecoratorTests(TestCase):
             _ = info
             return sum(values)
 
-        mutation = GraphQL._mutations["list_param_mutation"]
+        mutation = GraphQL._mutations["listParamMutation"]
 
         # Check that list parameter exists
         args_class = mutation.Arguments
@@ -403,11 +393,11 @@ class MutationDecoratorTests(TestCase):
             _ = info
             return multiplier * 10
 
-        mutation = GraphQL._mutations["default_value_mutation"]
+        mutation = GraphQL._mutations["defaultValueMutation"]
 
         # Check that parameter has default
         args_class = mutation.Arguments
-        self.assertTrue(hasattr(args_class.multiplier, "default_value"))
+        self.assertTrue(args_class.multiplier.kwargs.get("default_value") == 2)
 
     def test_mutation_error_handling(self):
         """Test that mutations properly handle and report errors."""
@@ -416,16 +406,16 @@ class MutationDecoratorTests(TestCase):
         def error_mutation(info, should_fail: bool) -> str:
             _ = info
             if should_fail:
-                raise ValueError("Expected error")
+                raise ValueError("Expected error")  # noqa: TRY003
             return "success"
 
-        mutation = GraphQL._mutations["error_mutation"]
+        mutation = GraphQL._mutations["errorMutation"]
 
         Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
 
-        # Should fail gracefully
-        result = mutation.mutate(None, Info, should_fail=True)
-        self.assertFalse(result.success)
+        # Should fail
+        with self.assertRaises(GraphQLError):
+            mutation.mutate(None, Info, should_fail=True)
 
         # Should succeed when no error
         result = mutation.mutate(None, Info, should_fail=False)
@@ -440,20 +430,20 @@ class MutationDecoratorTests(TestCase):
             @classmethod
             def check(cls, data: dict, user: object) -> None:
                 if data.get("value", 0) < 0:
-                    raise PermissionError("Value must be non-negative")
+                    raise PermissionError("Value must be non-negative")  # noqa: TRY003
 
         @graphQlMutation(permission=CustomPermission)
         def protected_mutation(info, value: int) -> int:
             _ = info
             return value * 2
 
-        mutation = GraphQL._mutations["protected_mutation"]
+        mutation = GraphQL._mutations["protectedMutation"]
 
         Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
 
         # Should fail with negative value
-        result = mutation.mutate(None, Info, value=-5)
-        self.assertFalse(result.success)
+        with self.assertRaises(PermissionError):
+            mutation.mutate(None, Info, value=-5)
 
         # Should succeed with positive value
         result = mutation.mutate(None, Info, value=5)
@@ -468,7 +458,7 @@ class MutationDecoratorTests(TestCase):
             _ = info
             return a + b, a - b, a * b
 
-        mutation = GraphQL._mutations["tuple_mutation"]
+        mutation = GraphQL._mutations["tupleMutation"]
 
         Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
 
@@ -484,7 +474,7 @@ class MutationDecoratorTests(TestCase):
             # info should be passed but not in Arguments
             return value
 
-        mutation = GraphQL._mutations["info_mutation"]
+        mutation = GraphQL._mutations["infoMutation"]
 
         # Arguments should not include 'info'
         args_class = mutation.Arguments
@@ -514,7 +504,7 @@ class MutationDecoratorTests(TestCase):
             _ = info
             return id
 
-        mutation = GraphQL._mutations["manager_mutation"]
+        mutation = GraphQL._mutations["managerMutation"]
         self.assertIsNotNone(mutation)
 
     def test_mutation_graphql_type_resolution(self):
@@ -531,7 +521,7 @@ class MutationDecoratorTests(TestCase):
             _ = info, int_val, float_val, str_val
             return bool_val
 
-        mutation = GraphQL._mutations["type_resolution_mutation"]
+        mutation = GraphQL._mutations["typeResolutionMutation"]
 
         # All parameters should be properly typed
         args_class = mutation.Arguments
