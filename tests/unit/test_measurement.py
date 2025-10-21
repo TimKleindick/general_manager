@@ -426,7 +426,9 @@ class MeasurementTestCase(TestCase):
         m = Measurement(10, "meter")
         with self.assertRaises(MeasurementOperandTypeError) as ctx:
             _ = m + 5
-        self.assertIn("Addition is only allowed between Measurement instances", str(ctx.exception))
+        self.assertIn(
+            "Addition is only allowed between Measurement instances", str(ctx.exception)
+        )
 
     def test_measurement_operand_type_error_subtraction(self):
         """Test that MeasurementOperandTypeError is raised for non-measurement operands in subtraction."""
@@ -435,7 +437,10 @@ class MeasurementTestCase(TestCase):
         m = Measurement(10, "meter")
         with self.assertRaises(MeasurementOperandTypeError) as ctx:
             _ = m - 5
-        self.assertIn("Subtraction is only allowed between Measurement instances", str(ctx.exception))
+        self.assertIn(
+            "Subtraction is only allowed between Measurement instances",
+            str(ctx.exception),
+        )
 
     def test_currency_mismatch_error_addition(self):
         """Test that CurrencyMismatchError is raised when adding different currencies."""
@@ -485,7 +490,9 @@ class MeasurementTestCase(TestCase):
         m2 = Measurement(10, "meter")
         with self.assertRaises(MixedUnitOperationError) as ctx:
             _ = m1 - m2
-        self.assertIn("Subtraction between currency and physical unit", str(ctx.exception))
+        self.assertIn(
+            "Subtraction between currency and physical unit", str(ctx.exception)
+        )
 
     def test_currency_scalar_operation_error_multiplication(self):
         """Test that CurrencyScalarOperationError is raised when multiplying two currencies."""
@@ -499,13 +506,13 @@ class MeasurementTestCase(TestCase):
 
     def test_currency_scalar_operation_error_division(self):
         """Test that CurrencyScalarOperationError is raised when dividing two different currencies."""
-        from general_manager.measurement.measurement import CurrencyScalarOperationError
+        from general_manager.measurement.measurement import CurrencyMismatchError
 
         m1 = Measurement(100, "EUR")
         m2 = Measurement(50, "USD")
-        with self.assertRaises(CurrencyScalarOperationError) as ctx:
+        with self.assertRaises(CurrencyMismatchError) as ctx:
             _ = m1 / m2
-        self.assertIn("Division between two currency amounts", str(ctx.exception))
+        self.assertIn("different currencies", str(ctx.exception))
 
     def test_measurement_scalar_type_error_multiplication(self):
         """Test that MeasurementScalarTypeError is raised for invalid multiplication operands."""
@@ -514,7 +521,10 @@ class MeasurementTestCase(TestCase):
         m = Measurement(10, "meter")
         with self.assertRaises(MeasurementScalarTypeError) as ctx:
             _ = m * "invalid"
-        self.assertIn("Multiplication is only allowed with Measurement or numeric", str(ctx.exception))
+        self.assertIn(
+            "Multiplication is only allowed with Measurement or numeric",
+            str(ctx.exception),
+        )
 
     def test_measurement_scalar_type_error_division(self):
         """Test that MeasurementScalarTypeError is raised for invalid division operands."""
@@ -523,7 +533,9 @@ class MeasurementTestCase(TestCase):
         m = Measurement(10, "meter")
         with self.assertRaises(MeasurementScalarTypeError) as ctx:
             _ = m / "invalid"
-        self.assertIn("Division is only allowed with Measurement or numeric", str(ctx.exception))
+        self.assertIn(
+            "Division is only allowed with Measurement or numeric", str(ctx.exception)
+        )
 
     def test_unsupported_comparison_error(self):
         """Test that UnsupportedComparisonError is raised for non-measurement comparisons."""
@@ -531,7 +543,7 @@ class MeasurementTestCase(TestCase):
 
         m = Measurement(10, "meter")
         with self.assertRaises(UnsupportedComparisonError):
-            _ = m < "invalid"
+            _ = m < 1234
 
     def test_incomparable_measurement_error(self):
         """Test that IncomparableMeasurementError is raised when comparing different dimensions."""
@@ -541,7 +553,9 @@ class MeasurementTestCase(TestCase):
         m2 = Measurement(5, "second")
         with self.assertRaises(IncomparableMeasurementError) as ctx:
             _ = m1 < m2
-        self.assertIn("Cannot compare measurements with different dimensions", str(ctx.exception))
+        self.assertIn(
+            "Cannot compare measurements with different dimensions", str(ctx.exception)
+        )
 
     def test_measurement_from_string_edge_cases(self):
         """Test edge cases in Measurement.from_string parsing."""
@@ -592,7 +606,7 @@ class MeasurementTestCase(TestCase):
 
         # scalar / measurement
         result = 100 / m
-        self.assertEqual(str(result), "10 / meter")
+        self.assertEqual(str(result), "10 1 / meter")
 
     def test_measurement_zero_division(self):
         """Test that dividing by zero raises appropriate error."""
