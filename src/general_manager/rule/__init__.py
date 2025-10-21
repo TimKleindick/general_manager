@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    """
+    Dynamically resolve a missing module attribute using the module's export registry.
+    
+    Parameters:
+        name (str): The attribute name being accessed on the module.
+    
+    Returns:
+        The attribute value associated with `name` from the module's export registry, or a fallback value if the name cannot be resolved.
+    """
     return resolve_export(
         name,
         module_all=__all__,

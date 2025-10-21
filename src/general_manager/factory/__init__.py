@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    """
+    Dynamically resolve and return a named export from this module.
+    
+    Parameters:
+        name (str): The attribute name to resolve.
+    
+    Returns:
+        Any: The resolved attribute object corresponding to `name`.
+    """
     return resolve_export(
         name,
         module_all=__all__,

@@ -16,9 +16,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines and assigns test model classes with interfaces and permissions for integration tests.
-
-        This class method creates three nested GeneralManager-based models—TestCountry1, TestHuman1, and TestFamily1—each with Django ORM fields and manager-based permissions. The models are assigned to class variables for use in test cases, and a list of all manager classes is initialized.
+        Configure and attach three nested GeneralManager-based test models to the test class.
+        
+        Creates TestCountry, TestHuman, and TestFamily models with their database interfaces, relations, and ManagerBasedPermission settings, then assigns them to cls.TestCountry, cls.TestHuman, cls.TestFamily, and cls.general_manager_classes for use in integration tests.
         """
 
         class TestCountry1(GeneralManager):

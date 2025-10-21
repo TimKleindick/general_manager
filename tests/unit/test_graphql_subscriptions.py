@@ -27,10 +27,10 @@ class _DummyInterface(BaseTestInterface):
     @classmethod
     def getGraphQLProperties(cls) -> dict[str, object]:
         """
-        Return a mapping of GraphQL property names to placeholder descriptor objects used in tests.
-
+        Provide a mapping of GraphQL property names to placeholder descriptor objects used in tests.
+        
         Returns:
-            dict[str, object]: Mapping where keys are property names ("propA", "propB", "propC") and values are placeholder descriptor objects.
+            dict[str, object]: Mapping with keys "propA", "propB", and "propC" whose values are placeholder descriptor objects.
         """
         return {
             "propA": object(),
@@ -63,9 +63,9 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
 
     def setUp(self) -> None:
         """
-        Prepare test environment by creating and logging in a test user and enabling Django async operations.
-
-        Creates a user named "alice" and forces the test client to authenticate as that user. Saves the original value of the `DJANGO_ALLOW_ASYNC_UNSAFE` environment variable and sets it to "true" so asynchronous operations are allowed during the test.
+        Create a test user, authenticate the test client as that user, and enable Django async operations.
+        
+        Creates a user named "alice" with a random password, forces the test client to log in as that user, stores the original value of the DJANGO_ALLOW_ASYNC_UNSAFE environment variable on self._async_env_original, and sets that environment variable to "true".
         """
         super().setUp()
         User = get_user_model()
@@ -124,10 +124,10 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
 
         async def run_subscription() -> tuple[object, object]:
             """
-            Run the GraphQL subscription for the test employee and capture the initial snapshot event followed by the update event.
-
+            Subscribe to the schema for the test employee and capture the initial snapshot event followed by the update event.
+            
             Returns:
-                tuple[first_event, second_event] (tuple[object, object]): The first event emitted for the subscription (initial snapshot) and the second event emitted after the employee record is updated.
+                tuple[first_event, second_event] (tuple[object, object]): `first_event` is the initial snapshot emitted by the subscription; `second_event` is the event emitted after the employee record is updated.
             """
             generator = await schema.subscribe(
                 subscription,
@@ -267,6 +267,12 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
         class EmptyInterface(BaseTestInterface):
             @classmethod
             def getGraphQLProperties(cls) -> dict[str, object]:
+                """
+                Provide GraphQL-exposed property descriptors for this Interface.
+                
+                Returns:
+                    dict[str, object]: Mapping from property name to its property descriptor object. An empty dict indicates no GraphQL properties are exposed.
+                """
                 return {}
 
         class EmptyManager:
@@ -305,6 +311,15 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
         class PrimeInterface(BaseTestInterface):
             @classmethod
             def getGraphQLProperties(cls) -> dict[str, object]:
+                """
+                Return the mapping of GraphQL-exposed property names to their corresponding manager property descriptors.
+                
+                Parameters:
+                    cls: The interface class requesting its GraphQL properties.
+                
+                Returns:
+                    dict[str, object]: A dictionary mapping property names (e.g., "alpha", "beta") to the property descriptors used by the manager.
+                """
                 return {
                     "alpha": PrimeTestManager.alpha,
                     "beta": PrimeTestManager.beta,
@@ -319,8 +334,8 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
             @property
             def alpha(self) -> int:
                 """
-                Record access to the 'alpha' property by appending "alpha" to the class access_log and return its integer value.
-
+                Record access to the "alpha" property by appending "alpha" to the class access_log.
+                
                 Returns:
                     int: The value 1.
                 """
@@ -330,10 +345,10 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
             @property
             def beta(self) -> int:
                 """
-                Provide the integer value for the "beta" property and record its access.
-
-                Appends the string "beta" to type(self).access_log to indicate the property was accessed.
-
+                Record access to the "beta" property and return its integer value.
+                
+                Appends "beta" to type(self).access_log to indicate the property was accessed.
+                
                 Returns:
                     int: The integer 2.
                 """
@@ -372,10 +387,10 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
                 @classmethod
                 def getGraphQLProperties(cls) -> dict[str, object]:
                     """
-                    Provide a mapping of GraphQL-exposed property names to their descriptor objects for this interface class.
-
+                    Return a mapping of GraphQL-exposed property names to their descriptor objects for this interface class.
+                    
                     Returns:
-                        dict[str, object]: Mapping from property name to property descriptor; may be empty by default and is intended to be overridden by subclasses.
+                        dict[str, object]: Mapping from property name to property descriptor; empty by default and intended to be overridden by subclasses.
                     """
                     return {}
 
@@ -385,9 +400,7 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         """
-        Restore the GraphQL manager registry to its previously saved state.
-
-        Resets GraphQL.manager_registry to the value stored in self._original_registry during test setup.
+        Restore the GraphQL manager registry to the saved registry captured during test setup.
         """
         GraphQL.manager_registry = self._original_registry
 
@@ -505,6 +518,12 @@ class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
         class ExceptionInterface(BaseTestInterface):
             @classmethod
             def getGraphQLProperties(cls) -> dict[str, object]:
+                """
+                Return a mapping of GraphQL-exposed property names to their property descriptors for the interface class.
+                
+                Returns:
+                    dict[str, object]: Mapping where keys are GraphQL property names and values are the corresponding descriptor objects (e.g., manager property descriptors).
+                """
                 return {"bad_prop": ExceptionManager.bad_prop}
 
         class ExceptionManager:
@@ -717,6 +736,15 @@ class GraphQLSubscriptionPropertyNamesEdgeCaseTests(unittest.TestCase):
 
 
 def allow_simple_interface_only(cls):
+    """
+    Temporarily patch `builtins.issubclass` so any type named `SimpleInterface` is treated as a subclass, and apply that patch as a decorator to `cls`.
+    
+    Parameters:
+        cls: The class to be decorated with the patch.
+    
+    Returns:
+        The class decorated with a patch that makes `issubclass(X, Y)` return `True` when `X.__name__ == "SimpleInterface"`, otherwise delegating to the original `issubclass`.
+    """
     def fake_issubclass(a, b):
         if getattr(a, "__name__", None) == "SimpleInterface":
             return True
@@ -1064,6 +1092,14 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
         """Verify _channel_listener enqueues action strings from subscription events."""
 
         async def test_listener() -> list[str]:
+            """
+            Runs the GraphQL channel listener against a mock channel layer, cancels it, and returns the actions it enqueued.
+            
+            The mock layer yields a sequence of messages including some non-subscription messages and one message without an `action`; the listener should enqueue only the `action` values from messages with `type` equal to "gm.subscription.event" that include an `action` field. The listener is cancelled after processing the supplied messages.
+            
+            Returns:
+                list[str]: The ordered list of enqueued action strings collected from the listener.
+            """
             mock_layer = MagicMock()
             # Simulate receiving messages
             messages = [

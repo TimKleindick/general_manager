@@ -60,14 +60,14 @@ class MutationPermission:
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
         """
-        Validate that ``request_user`` may execute the mutation for the provided data.
-
+        Validate that the given user is authorized to perform the mutation described by `data`.
+        
         Parameters:
-            data (dict[str, Any]): Mutation payload.
-            request_user (AbstractUser | AnonymousUser | Any): User or user ID.
-
+            data (dict[str, Any]): Mutation payload mapping field names to values.
+            request_user (AbstractUser | AnonymousUser | Any): A user object or a user identifier; if an identifier is provided it will be resolved to a user.
+        
         Raises:
-            PermissionError: If any field-level permission check fails.
+            PermissionCheckError: Raised with the `request_user` and a list of field-level error messages when one or more fields fail their permission checks.
         """
         errors = []
         if not isinstance(request_user, (AbstractUser, AnonymousUser)):
@@ -86,13 +86,15 @@ class MutationPermission:
         attribute: str,
     ) -> bool:
         """
-        Evaluate permissions for a specific attribute within the mutation payload.
-
+        Determine whether the request user is allowed to modify a specific attribute in the mutation payload.
+        
+        Updates the instance's cached overall permission result based on the class-level mutate permissions.
+        
         Parameters:
-            attribute (str): Attribute name being validated.
-
+            attribute (str): Name of the attribute to validate.
+        
         Returns:
-            bool: True when permitted, False otherwise.
+            True if modification of the attribute is allowed, False otherwise.
         """
 
         has_attribute_permissions = attribute in self.__attribute_permissions

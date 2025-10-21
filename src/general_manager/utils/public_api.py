@@ -10,6 +10,15 @@ class MissingExportError(AttributeError):
     """Raised when a requested export is not defined in the public API."""
 
     def __init__(self, module_name: str, attribute: str) -> None:
+        """
+        Initialize the MissingExportError with the originating module name and the missing attribute.
+        
+        Constructs the exception message "module 'module_name' has no attribute 'attribute'".
+        
+        Parameters:
+            module_name (str): Name of the module where the attribute was expected.
+            attribute (str): Name of the missing attribute.
+        """
         super().__init__(f"module {module_name!r} has no attribute {attribute!r}")
 
 
@@ -38,7 +47,21 @@ def resolve_export(
     module_map: ModuleMap,
     module_globals: MutableMapping[str, Any],
 ) -> Any:
-    """Resolve a lazily-loaded export for a package __init__ module."""
+    """
+    Resolve and cache a lazily-loaded export for a package __init__ module.
+    
+    Parameters:
+    	name (str): The public export name to resolve.
+    	module_all (Iterable[str]): Iterable of names declared in the module's __all__; used to validate that `name` is an allowed export.
+    	module_map (ModuleMap): Mapping from public export names to target module paths or (module path, attribute) pairs used to locate the actual object.
+    	module_globals (MutableMapping[str, Any]): The module's globals dict; the resolved value will be stored here under `name`.
+    
+    Returns:
+    	Any: The resolved attribute value for `name`.
+    
+    Raises:
+    	MissingExportError: If `name` is not present in `module_all`.
+    """
     if name not in module_all:
         raise MissingExportError(module_globals["__name__"], name)
     module_path, attr_name = _normalize_target(name, module_map[name])

@@ -40,6 +40,11 @@ class InvalidCalculationInterfaceError(TypeError):
     """Raised when a CalculationBucket is initialized with a non-CalculationInterface manager."""
 
     def __init__(self) -> None:
+        """
+        Indicates a manager's interface does not inherit from CalculationInterface.
+        
+        Initializes the exception with the message "CalculationBucket requires a manager whose interface inherits from CalculationInterface."
+        """
         super().__init__(
             "CalculationBucket requires a manager whose interface inherits from CalculationInterface."
         )
@@ -49,6 +54,16 @@ class IncompatibleBucketTypeError(TypeError):
     """Raised when attempting to combine buckets of different types."""
 
     def __init__(self, bucket_type: type, other_type: type) -> None:
+        """
+        Initialize the error indicating two bucket types cannot be combined.
+        
+        Parameters:
+            bucket_type (type): The first bucket class involved in the attempted combination.
+            other_type (type): The second bucket class involved in the attempted combination.
+        
+        Notes:
+            The exception message is formatted as "Cannot combine {bucket_type.__name__} with {other_type.__name__}."
+        """
         super().__init__(
             f"Cannot combine {bucket_type.__name__} with {other_type.__name__}."
         )
@@ -58,6 +73,16 @@ class IncompatibleBucketManagerError(TypeError):
     """Raised when attempting to combine buckets with different manager classes."""
 
     def __init__(self, first_manager: type, second_manager: type) -> None:
+        """
+        Indicate that two buckets for different manager classes cannot be combined.
+        
+        Parameters:
+            first_manager (type): The first manager class involved in the attempted combination.
+            second_manager (type): The second manager class involved in the attempted combination.
+        
+        Description:
+            The exception message will include the class names of both managers.
+        """
         super().__init__(
             f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
         )
@@ -67,6 +92,12 @@ class CyclicDependencyError(ValueError):
     """Raised when a cyclic dependency is detected in calculation sorting."""
 
     def __init__(self, node: str) -> None:
+        """
+        Initialize the CyclicDependencyError for a specific node involved in a dependency cycle.
+        
+        Parameters:
+            node (str): The identifier of the node where a cycle was detected. The exception message will include this node, e.g. "Cyclic dependency detected: {node}."
+        """
         super().__init__(f"Cyclic dependency detected: {node}.")
 
 
@@ -74,6 +105,12 @@ class InvalidPossibleValuesError(TypeError):
     """Raised when an input field provides invalid possible value definitions."""
 
     def __init__(self, key_name: str) -> None:
+        """
+        Indicate that an input field defines an invalid `possible_values` configuration.
+        
+        Parameters:
+            key_name (str): Name of the input field whose `possible_values` configuration is invalid.
+        """
         super().__init__(
             f"Invalid possible_values configuration for input '{key_name}'."
         )
@@ -83,6 +120,11 @@ class MissingCalculationMatchError(ValueError):
     """Raised when no calculation matches the provided filters."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when no calculation matches the provided filters.
+        
+        Initializes the exception with the message "No matching calculation found."
+        """
         super().__init__("No matching calculation found.")
 
 
@@ -90,6 +132,11 @@ class MultipleCalculationMatchError(ValueError):
     """Raised when more than one calculation matches the provided filters."""
 
     def __init__(self) -> None:
+        """
+        Error raised when more than one calculation matches the provided filters.
+        
+        Initializes the exception with the message "Multiple matching calculations found."
+        """
         super().__init__("Multiple matching calculations found.")
 
 
@@ -105,20 +152,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ) -> None:
         """
-        Prepare a calculation bucket that enumerates all input combinations.
-
+        Initialize a CalculationBucket configured to enumerate all valid input combinations for a manager.
+        
         Parameters:
-            manager_class (type[GeneralManagerType]): Manager subclass whose interface derives from `CalculationInterface`.
-            filter_definitions (dict[str, dict] | None): Optional filter constraints applied to generated combinations.
-            exclude_definitions (dict[str, dict] | None): Optional exclude constraints removing combinations.
-            sort_key (str | tuple[str, ...] | None): Key(s) used to order generated combinations.
-            reverse (bool): When True, reverse the ordering defined by `sort_key`.
-
-        Returns:
-            None
-
+            manager_class (type[GeneralManagerType]): Manager subclass whose Interface must inherit from CalculationInterface.
+            filter_definitions (dict[str, dict] | None): Mapping of input/property filter constraints to apply to generated combinations.
+            exclude_definitions (dict[str, dict] | None): Mapping of input/property exclude constraints to remove generated combinations.
+            sort_key (str | tuple[str] | None): Key name or tuple of key names used to order generated manager combinations.
+            reverse (bool): If True, reverse the ordering defined by `sort_key`.
+        
         Raises:
-            TypeError: If the interface does not inherit from `CalculationInterface`.
+            InvalidCalculationInterfaceError: If the manager_class.Interface does not inherit from CalculationInterface.
         """
         from general_manager.interface.calculationInterface import (
             CalculationInterface,
@@ -203,16 +247,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Merge two calculation buckets or intersect with a single manager instance.
-
+        Combine this bucket with another bucket or intersect it with a single manager instance.
+        
         Parameters:
-            other (Bucket[GeneralManagerType] | GeneralManagerType): Calculation bucket or manager instance to merge.
-
+            other: A CalculationBucket or a GeneralManager instance to merge. If a manager instance of the same manager class is given, it is treated as a filter on that manager's identification.
+        
         Returns:
-            CalculationBucket[GeneralManagerType]: Bucket reflecting the combined constraints.
-
+            A new CalculationBucket representing the constraints common to both operands.
+        
         Raises:
-            ValueError: If `other` is incompatible or uses a different manager class.
+            IncompatibleBucketTypeError: If `other` is neither a CalculationBucket nor a compatible manager instance.
+            IncompatibleBucketManagerError: If `other` is a CalculationBucket for a different manager class.
         """
         from general_manager.manager.generalManager import GeneralManager
 
@@ -451,12 +496,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     def topological_sort_inputs(self) -> List[str]:
         """
         Produce a dependency-respecting order of input fields.
-
+        
         Returns:
-            list[str]: Input names ordered so each dependency appears before dependants.
-
+            list[str]: Input names ordered so each dependency appears before its dependents.
+        
         Raises:
-            ValueError: If the dependency graph contains a cycle.
+            CyclicDependencyError: If the dependency graph contains a cycle; the exception's `node` identifies a node involved in the cycle.
         """
         from collections import defaultdict
 
@@ -473,17 +518,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         def visit(node: str, temp_mark: set[str]) -> None:
             """
-            Perform DFS while detecting cycles in the dependency graph.
-
+            Depth-first search helper that orders dependency nodes and detects cycles.
+            
             Parameters:
-                node (str): Input field currently being processed.
-                temp_mark (set[str]): Nodes visited along the current path.
-
-            Returns:
-                None
-
+                node (str): The input field being visited.
+                temp_mark (set[str]): Nodes on the current DFS path used to detect cycles.
+            
             Raises:
-                ValueError: If a cyclic dependency involves `node`.
+                CyclicDependencyError: If a cyclic dependency is detected involving `node`.
             """
             if node in visited:
                 return
@@ -508,18 +550,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
     ) -> Union[Iterable[Any], Bucket[Any]]:
         # Retrieve possible values
         """
-        Resolve the potential values for an input field given the current combination.
-
+        Resolve potential values for an input field based on the current partial input combination.
+        
         Parameters:
-            key_name (str): Name of the input field.
-            input_field (Input): Input definition describing type and dependencies.
-            current_combo (dict): Current partial assignment of input values.
-
+            key_name (str): Name of the input field used for error context.
+            input_field (Input): Input definition that may include `possible_values` and `depends_on`.
+            current_combo (dict): Partial mapping of already-selected input values required to evaluate dependencies.
+        
         Returns:
-            Iterable[Any] | Bucket[Any]: Collection of permissible values.
-
+            Iterable[Any] | Bucket[Any]: An iterable of allowed values for the input or a Bucket supplying candidate values.
+        
         Raises:
-            TypeError: If the configured `possible_values` cannot be evaluated.
+            InvalidPossibleValuesError: If the input field's `possible_values` is neither callable nor an iterable/Bucket.
         """
         if callable(input_field.possible_values):
             depends_on = input_field.depends_on
@@ -538,15 +580,15 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         excludes: dict[str, dict],
     ) -> List[dict[str, Any]]:
         """
-        Generate all valid input combinations while honouring filters and excludes.
-
+        Generate all valid assignments of input fields that satisfy the provided per-field filters and exclusions.
+        
         Parameters:
-            sorted_inputs (list[str]): Input names ordered by dependency.
-            filters (dict[str, dict]): Filter definitions keyed by input name.
-            excludes (dict[str, dict]): Exclusion definitions keyed by input name.
-
+            sorted_inputs (list[str]): Input names in dependency-respecting order.
+            filters (dict[str, dict]): Per-input filter definitions (may include `filter_funcs` or `filter_kwargs`).
+            excludes (dict[str, dict]): Per-input exclusion definitions (may include `filter_funcs` or `filter_kwargs`).
+        
         Returns:
-            list[dict[str, Any]]: Valid input combinations.
+            list[dict[str, Any]]: Completed input-to-value mappings that meet the filters and excludes.
         """
 
         def helper(
@@ -738,16 +780,17 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
         """
-        Retrieve a single manager instance that satisfies the given filters.
-
+        Return the single manager instance that matches the provided field filters.
+        
         Parameters:
-            **kwargs (Any): Filter expressions narrowing the calculation results.
-
+            **kwargs (Any): Field filters to apply when selecting a calculation (e.g., property or input names mapped to expected values).
+        
         Returns:
-            GeneralManagerType: Matching manager instance.
-
+            The single manager instance that satisfies the provided filters.
+        
         Raises:
-            ValueError: If zero or multiple calculations match the filters.
+            MissingCalculationMatchError: If no matching manager exists.
+            MultipleCalculationMatchError: If more than one matching manager exists.
         """
         filtered_bucket = self.filter(**kwargs)
         items = list(filtered_bucket)
@@ -762,14 +805,14 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self, key: str | tuple[str], reverse: bool = False
     ) -> CalculationBucket[GeneralManagerType]:
         """
-        Return a new bucket with updated sorting preferences.
-
+        Create a new CalculationBucket configured to order generated combinations by the given attribute key.
+        
         Parameters:
-            key (str | tuple[str, ...]): Attribute name(s) used for ordering combinations.
-            reverse (bool): Whether to apply descending order.
-
+            key: Attribute name or tuple of attribute names to use for ordering generated manager combinations.
+            reverse: If True, sort in descending order.
+        
         Returns:
-            CalculationBucket[GeneralManagerType]: Bucket configured with the provided sorting options.
+            A new CalculationBucket configured to sort combinations by the provided key and direction.
         """
         return CalculationBucket(
             self._manager_class,

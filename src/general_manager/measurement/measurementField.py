@@ -17,6 +17,12 @@ class MeasurementFieldNotEditableError(ValidationError):
     """Raised when attempting to modify a non-editable MeasurementField."""
 
     def __init__(self, field_name: str) -> None:
+        """
+        Initialize the exception indicating an attempt to assign to a non-editable measurement field.
+        
+        Parameters:
+            field_name (str): Name of the field that was attempted to be modified; used to compose the error message.
+        """
         super().__init__(f"{field_name} is not editable.")
 
 
@@ -36,17 +42,14 @@ class MeasurementField(models.Field):
     ) -> None:
         """
         Configure a measurement field backed by separate value and unit columns.
-
+        
         Parameters:
-            base_unit (str): Canonical unit used when normalising stored measurements.
-            args (tuple): Positional arguments forwarded to the base `Field` implementation.
-            null (bool): If True, the measurement may be stored as NULL.
-            blank (bool): If True, forms may submit an empty value.
-            editable (bool): If False, assignments through the API raise a validation error.
-            kwargs (dict): Additional keyword arguments forwarded to the base `Field`.
-
-        Returns:
-            None
+            base_unit (str): Canonical unit used to normalise stored measurements.
+            *args: Positional arguments forwarded to the base Field implementation.
+            null (bool): If True, the measurement may be stored as NULL in the database.
+            blank (bool): If True, forms may accept an empty value for this field.
+            editable (bool): If False, assignments through the model API are rejected.
+            **kwargs: Additional keyword arguments forwarded to the base Field implementation.
         """
         self.base_unit = base_unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
@@ -101,16 +104,13 @@ class MeasurementField(models.Field):
         **kwargs: object,
     ) -> None:
         """
-        Attach the measurement field and its backing columns to a Django model.
-
+        Attach the measurement field and its backing value and unit fields to the model and install the descriptor.
+        
         Parameters:
-            cls (type[models.Model]): Model class receiving the field.
-            name (str): Attribute name of the field on the model.
-            private_only (bool): Whether the field should be treated as private.
-            kwargs (dict): Additional options forwarded to the base implementation.
-
-        Returns:
-            None
+            cls: Model class receiving the field.
+            name: Attribute name to use on the model for this field.
+            private_only: Whether the field should be treated as private.
+            kwargs: Additional options forwarded to the base implementation.
         """
         super().contribute_to_class(cls, name, private_only=private_only, **kwargs)
         self.concrete = False
@@ -302,17 +302,15 @@ class MeasurementField(models.Field):
         value: Measurement | str | None,
     ) -> None:
         """
-        Assign a measurement to the model instance after validating compatibility.
-
+        Set a measurement on a model instance after validating editability, type, and unit compatibility.
+        
         Parameters:
             instance (models.Model): Model instance receiving the value.
-            value (Measurement | str | None): Measurement value supplied by the caller.
-
-        Returns:
-            None
-
+            value (Measurement | str | None): A Measurement, a string parseable to a Measurement, or None to clear the field.
+        
         Raises:
-            ValidationError: If the field is not editable, the value is invalid, or the units are incompatible.
+            MeasurementFieldNotEditableError: If the field is not editable.
+            ValidationError: If the value is not a Measurement (or valid parseable string), if currency unit rules are violated, or if the unit is incompatible with the field's base unit.
         """
         if not self.editable:
             raise MeasurementFieldNotEditableError(self.name)

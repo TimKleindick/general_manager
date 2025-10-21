@@ -25,6 +25,12 @@ class MissingFactoryOrInstancesError(ValueError):
     """Raised when a related model offers neither a factory nor existing instances."""
 
     def __init__(self, related_model: type[models.Model]) -> None:
+        """
+        Exception raised when a related model has neither a registered factory nor any existing instances.
+        
+        Parameters:
+            related_model (type[models.Model]): The Django model class that lacks both a factory and existing instances.
+        """
         super().__init__(
             f"No factory found for {related_model.__name__} and no instances found."
         )
@@ -34,6 +40,12 @@ class MissingRelatedModelError(ValueError):
     """Raised when a relational field lacks a related model definition."""
 
     def __init__(self, field_name: str) -> None:
+        """
+        Initialize the exception for a field that does not declare a related model.
+        
+        Parameters:
+            field_name (str): The name of the field missing a related model; included in the exception message.
+        """
         super().__init__(f"Field {field_name} does not have a related model defined.")
 
 
@@ -41,6 +53,13 @@ class InvalidRelatedModelTypeError(TypeError):
     """Raised when a relational field references an incompatible model type."""
 
     def __init__(self, field_name: str, related: object) -> None:
+        """
+        Initialize the exception indicating a relational field references a non-model type.
+        
+        Parameters:
+            field_name (str): Name of the relational field that declared an invalid related model.
+            related (object): The value provided as the related model; its repr is included in the exception message.
+        """
         super().__init__(
             f"Related model for {field_name} must be a Django model class, got {related!r}."
         )
@@ -50,16 +69,22 @@ def getFieldValue(
     field: models.Field[Any, Any] | models.ForeignObjectRel,
 ) -> object:
     """
-    Generate a realistic value for a Django model field.
-
+    Generate a realistic sample value for a Django model field or relation.
+    
+    This returns a value appropriate for the field's type (e.g., text for TextField, Decimal for DecimalField,
+    datetime for DateTimeField, a LazyFunction that creates or selects a related instance for relational fields).
+    If the field is nullable there is a 10% chance this will return `None`.
+    
     Parameters:
-        field (models.Field | models.ForeignObjectRel): Field definition to generate a value for.
-
+        field (models.Field | models.ForeignObjectRel): The Django field or relation to generate a value for.
+    
     Returns:
-        object: Value appropriate for the field type.
-
+        object: A value suitable for assignment to the given field (or `None`).
+    
     Raises:
-        ValueError: If a related model lacks both a factory and existing instances.
+        MissingFactoryOrInstancesError: When a related field's model has neither a factory nor any existing instances.
+        MissingRelatedModelError: When a relational field does not declare a related model.
+        InvalidRelatedModelTypeError: When a relational field's related value is not a Django model class.
     """
     if field.null:
         if _RNG.choice([True] + 9 * [False]):
@@ -68,6 +93,12 @@ def getFieldValue(
     if isinstance(field, MeasurementField):
 
         def _measurement() -> Measurement:
+            """
+            Create a Measurement using the field's base unit and a randomly chosen value.
+            
+            Returns:
+                measurement (Measurement): A Measurement whose value is a Decimal with two decimal places between 0.00 and 100000.00 and whose unit is the enclosing field's `base_unit`.
+            """
             value = Decimal(_RNG.randrange(0, 10_000_000)) / Decimal("100")  # two dp
             return Measurement(value, field.base_unit)
 
@@ -169,16 +200,19 @@ def getRelatedModel(
     field: models.ForeignObjectRel | models.Field[Any, Any],
 ) -> type[models.Model]:
     """
-    Return the related model class for the given relational field.
-
+    Resolve and return the Django model class referenced by a relational field.
+    
+    If the field's declared related model is the string "self", this resolves it to the field's model before validation.
+    
     Parameters:
-        field (models.Field | models.ForeignObjectRel): Relational field to inspect.
-
+        field (models.ForeignObjectRel | models.Field): Relational field or relation descriptor to inspect.
+    
     Returns:
-        type[models.Model]: Related model class.
-
+        type[models.Model]: The related Django model class.
+    
     Raises:
-        ValueError: If the field does not declare a related model.
+        MissingRelatedModelError: If the field does not declare a related model.
+        InvalidRelatedModelTypeError: If the resolved related model is not a Django model class.
     """
     related_model = field.related_model
     if related_model is None:
@@ -196,16 +230,18 @@ def getManyToManyFieldValue(
     field: models.ManyToManyField,
 ) -> list[models.Model]:
     """
-    Produce sample related instances for a ManyToMany field.
-
+    Generate a list of related model instances suitable for assigning to a ManyToManyField.
+    
+    The function selects a random number of related objects (at least one when the field is not blank, up to 10). It will use the related model's factory to create new instances when available, prefer a mix of created and existing instances if both are present, or return existing instances when no factory is available.
+    
     Parameters:
-        field (models.ManyToManyField): Field definition whose values should be generated.
-
+        field (models.ManyToManyField): The ManyToMany field to generate values for.
+    
     Returns:
-        list[models.Model]: List of related instances to assign to the field.
-
+        list[models.Model]: A list of related model instances to assign to the field.
+    
     Raises:
-        ValueError: If neither factories nor existing instances are available.
+        MissingFactoryOrInstancesError: If the related model provides neither a factory nor any existing instances.
     """
     related_factory = None
     related_model = getRelatedModel(field)

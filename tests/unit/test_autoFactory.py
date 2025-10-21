@@ -13,12 +13,15 @@ class DummyInterface:
     @classmethod
     def handleCustomFields(cls, model):
         """
-        Placeholder method for handling custom fields in a model.
-
-        Intended to be overridden in subclasses to provide custom field processing logic.
-
+        Placeholder hook for processing a model's custom fields.
+        
+        Intended to be overridden by subclasses to extract or transform custom field definitions for the given model. When overridden, it should return a tuple of two lists: (custom_field_definitions, deferred_relation_descriptors).
+        
+        Parameters:
+            model: The model class or instance to inspect for custom fields.
+        
         Returns:
-            tuple: Two empty lists representing placeholder values for custom field handling.
+            tuple: A pair of lists (custom_field_definitions, deferred_relation_descriptors). Defaults to two empty lists.
         """
         return [], []
 
@@ -186,10 +189,10 @@ class AutoFactoryTestCase(TransactionTestCase):
 
         def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
             """
-            Generate a list of 101 dictionaries with 'name' set to "Generated Name" and 'value' set to the square of each index from 0 to 100.
-
+            Generate 101 dictionaries with 'name' set to "Generated Name" and 'value' equal to the square of its index (0–100).
+            
             Returns:
-                list[dict[str, Any]]: A list of dictionaries, each containing 'name' and 'value' keys.
+                list[dict[str, Any]]: A list of 101 dictionaries where each dictionary has keys 'name' (str) and 'value' (int) with 'value' equal to i*i for i in 0..100.
             """
             return [
                 {
@@ -223,11 +226,11 @@ class AutoFactoryTestCase(TransactionTestCase):
 
         def custom_generate_function(**kwargs: Any) -> dict[str, Any]:
             """
-            Generate a dictionary of model field values with the "name" field set to "Generated Name".
-
-            Merges any provided keyword arguments with a fixed "name" value.
+            Return a mapping of model field values with the 'name' field set to "Generated Name".
+            
+            Merges any provided keyword arguments into the result; if `name` is present in kwargs it is replaced.
             Returns:
-                dict[str, Any]: Dictionary containing the merged field values.
+                dict[str, Any]: Mapping of field names to values with `name` equal to "Generated Name".
             """
             return {
                 **kwargs,

@@ -21,6 +21,13 @@ class DatabaseBucketTypeMismatchError(TypeError):
     """Raised when attempting to combine buckets of different types."""
 
     def __init__(self, bucket_type: type, other_type: type) -> None:
+        """
+        Initialize the error for attempting to combine two incompatible bucket types.
+        
+        Parameters:
+            bucket_type (type): The bucket type used in the operation.
+            other_type (type): The other bucket type that is incompatible with `bucket_type`.
+        """
         super().__init__(
             f"Cannot combine {bucket_type.__name__} with {other_type.__name__}."
         )
@@ -30,6 +37,13 @@ class DatabaseBucketManagerMismatchError(TypeError):
     """Raised when combining buckets backed by different manager classes."""
 
     def __init__(self, first_manager: type, second_manager: type) -> None:
+        """
+        Raised when attempting to combine buckets that are backed by different manager classes.
+        
+        Parameters:
+            first_manager (type): The first manager class involved in the attempted combination.
+            second_manager (type): The second manager class involved in the attempted combination.
+        """
         super().__init__(
             f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
         )
@@ -39,6 +53,13 @@ class NonFilterablePropertyError(ValueError):
     """Raised when attempting to filter on a property without filter support."""
 
     def __init__(self, property_name: str, manager_name: str) -> None:
+        """
+        Raised when a filter is requested for a GraphQL property that is not marked as filterable on the given manager.
+        
+        Parameters:
+            property_name (str): The GraphQL property name that was used for filtering.
+            manager_name (str): The name of the manager (or manager class) where the property is not filterable.
+        """
         super().__init__(
             f"Property '{property_name}' is not filterable in {manager_name}."
         )
@@ -48,6 +69,11 @@ class InvalidQueryAnnotationTypeError(TypeError):
     """Raised when a query annotation callback returns a non-queryset value."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when a query annotation callback returns a non-QuerySet.
+        
+        The exception carries a standardized message: "Query annotation must return a Django QuerySet."
+        """
         super().__init__("Query annotation must return a Django QuerySet.")
 
 
@@ -55,6 +81,12 @@ class QuerysetFilteringError(ValueError):
     """Raised when applying ORM filters fails."""
 
     def __init__(self, original: Exception) -> None:
+        """
+        Initialize a QuerysetFilteringError that wraps an original exception raised during ORM filtering.
+        
+        Parameters:
+            original (Exception): The original exception encountered while filtering the queryset; its message is included in this error's message.
+        """
         super().__init__(f"Error filtering queryset: {original}")
 
 
@@ -62,6 +94,12 @@ class QuerysetOrderingError(ValueError):
     """Raised when applying ORM ordering fails."""
 
     def __init__(self, original: Exception) -> None:
+        """
+        Initialize the QuerysetOrderingError by wrapping the originating exception.
+        
+        Parameters:
+            original (Exception): The original exception raised while ordering the queryset; retained as the wrapped cause.
+        """
         super().__init__(f"Error ordering queryset: {original}")
 
 
@@ -69,6 +107,13 @@ class NonSortablePropertyError(ValueError):
     """Raised when attempting to sort on a property lacking sort support."""
 
     def __init__(self, property_name: str, manager_name: str) -> None:
+        """
+        Initialize an error indicating a property cannot be used for sorting on a manager.
+        
+        Parameters:
+            property_name (str): The name of the property that was requested for sorting.
+            manager_name (str): The name of the manager (or manager class) where the property was queried.
+        """
         super().__init__(
             f"Property '{property_name}' is not sortable in {manager_name}."
         )
@@ -116,16 +161,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> DatabaseBucket[GeneralManagerType]:
         """
-        Merge two database buckets (or bucket and instance) into a single result.
-
+        Produce a new DatabaseBucket representing the union of this bucket with another DatabaseBucket or a GeneralManager instance of the same manager class.
+        
         Parameters:
-            other (Bucket[GeneralManagerType] | GeneralManagerType): Bucket or manager instance to merge.
-
+            other (Bucket[GeneralManagerType] | GeneralManagerType): The bucket or manager instance to merge with this bucket.
+        
         Returns:
-            DatabaseBucket[GeneralManagerType]: New bucket containing the combined queryset.
-
+            DatabaseBucket[GeneralManagerType]: A new bucket containing the combined items from both operands.
+        
         Raises:
-            ValueError: If the operand is incompatible or uses a different manager class.
+            DatabaseBucketTypeMismatchError: If `other` is not a DatabaseBucket of the same class and not a compatible GeneralManager.
+            DatabaseBucketManagerMismatchError: If `other` is a DatabaseBucket but uses a different manager class.
         """
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(
@@ -170,14 +216,19 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         **kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, list[Any]], list[tuple[str, Any, str]]]:
         """
-        Separate ORM-compatible filters from Python-side property filters.
-
+        Split provided filter kwargs into three parts: query annotations required by properties, ORM-compatible lookup mappings, and Python-evaluated filter specifications.
+        
         Parameters:
             **kwargs: Filter lookups supplied to `filter` or `exclude`.
-
+        
         Returns:
-            tuple[dict[str, Any], dict[str, Any], list[tuple[str, Any, str]]]:
-                Query annotations, ORM-compatible lookups, and Python-evaluated filter specifications.
+            tuple:
+                - annotations (dict[str, Any]): Mapping from property name to its `query_annotation` (callable or annotation object) for properties that require ORM annotations.
+                - orm_kwargs (dict[str, list[Any]]): Mapping of ORM lookup strings (e.g., "field__lookup") to their values to be passed to the queryset.
+                - python_filters (list[tuple[str, Any, str]]): List of tuples (lookup, value, root_property_name) for properties that must be evaluated in Python.
+        
+        Raises:
+            NonFilterablePropertyError: If a lookup targets a property that is not allowed to be filtered.
         """
         annotations: dict[str, Any] = {}
         orm_kwargs: dict[str, list[Any]] = {}
@@ -229,17 +280,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Produce a bucket filtered by the supplied lookups in addition to existing state.
-
+        Return a new DatabaseBucket refined by the given Django-style lookup expressions.
+        
         Parameters:
-            **kwargs (Any): Django-style lookup expressions applied to the underlying queryset.
-
+            **kwargs (Any): Django-style lookup expressions to apply to the underlying queryset.
+        
         Returns:
-            DatabaseBucket[GeneralManagerType]: New bucket representing the refined queryset.
-
+            DatabaseBucket[GeneralManagerType]: New bucket containing items matching the existing state combined with the provided lookups.
+        
         Raises:
-            ValueError: If the ORM rejects the filter arguments.
-            TypeError: If a query annotation callback does not return a queryset.
+            NonFilterablePropertyError: If a provided property is not filterable for this manager.
+            InvalidQueryAnnotationTypeError: If a query-annotation callback returns a non-QuerySet.
+            QuerysetFilteringError: If the ORM rejects the filter arguments or filtering fails.
         """
         annotations, orm_kwargs, python_filters = self.__parseFilterDeifintions(
             **kwargs
@@ -269,16 +321,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
-        Produce a bucket that excludes rows matching the supplied lookups.
-
+        Produce a bucket that excludes rows matching the provided Django-style lookup expressions.
+        
+        Accepts ORM lookups, query annotation entries, and Python-only filters; annotation callables will be applied to the underlying queryset as needed.
+        
         Parameters:
-            **kwargs (Any): Django-style lookup expressions identifying records to omit.
-
+            **kwargs (Any): Django-style lookup expressions, annotation entries, or property-based filters used to identify records to exclude.
+        
         Returns:
-            DatabaseBucket[GeneralManagerType]: New bucket representing the filtered queryset.
-
+            DatabaseBucket[GeneralManagerType]: A new bucket whose queryset omits rows matching the provided lookups.
+        
         Raises:
-            TypeError: If a query annotation callback does not return a queryset.
+            InvalidQueryAnnotationTypeError: If an annotation callable is applied and does not return a Django QuerySet.
         """
         annotations, orm_kwargs, python_filters = self.__parseFilterDeifintions(
             **kwargs
@@ -427,18 +481,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         reverse: bool = False,
     ) -> DatabaseBucket:
         """
-        Return a new bucket ordered by the specified fields.
-
+        Return a new DatabaseBucket ordered by the given property name(s).
+        
+        Accepts a single property name or a tuple of property names. Properties with ORM annotations are applied at the database level; properties without ORM annotations are evaluated in Python and the resulting records are re-ordered while preserving a queryset result. Stable ordering and preservation of manager wrapping are maintained.
+        
         Parameters:
-            key (str | tuple[str, ...]): Field name(s) used for ordering.
-            reverse (bool): Whether to sort in descending order.
-
+            key (str | tuple[str, ...]): Property name or sequence of property names to sort by, applied in order of appearance.
+            reverse (bool): If True, sort each specified key in descending order.
+        
         Returns:
-            DatabaseBucket: Bucket whose queryset is ordered accordingly.
-
+            DatabaseBucket: A new bucket whose underlying queryset is ordered according to the requested keys.
+        
         Raises:
-            ValueError: If sorting by a non-sortable property or when the ORM rejects the ordering.
-            TypeError: If a property annotation callback does not return a queryset.
+            NonSortablePropertyError: If any requested property is not marked as sortable on the manager's GraphQL properties.
+            InvalidQueryAnnotationTypeError: If a property query annotation callable returns a non-QuerySet value.
+            QuerysetOrderingError: If the ORM rejects the constructed ordering (e.g., invalid field or incompatible ordering expression).
         """
         if isinstance(key, str):
             key = (key,)

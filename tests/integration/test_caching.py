@@ -63,19 +63,20 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def budget_left(self) -> Measurement:
                 """
-                Returns the remaining budget for the project as a Measurement.
-
-                Calculates the difference between the project's budget and its actual costs.
+                Compute the project's remaining budget.
+                
+                Returns:
+                    Measurement: The project's budget minus its actual costs.
                 """
                 return self.project.budget - self.project.actual_costs
 
             @graphQlProperty
             def budget_used(self) -> Measurement:
                 """
-                Return the percentage of the project's budget that has been used.
-
+                Compute the project's used budget as a percentage.
+                
                 Returns:
-                    Measurement: The ratio of actual costs to budget, expressed as a percentage.
+                    Measurement: Fraction of the project's budget that has been consumed, expressed as a percentage.
                 """
                 return (self.project.actual_costs / self.project.budget).to("percent")
 
@@ -89,9 +90,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def has_duplicate_name(self) -> bool:
                 """
-                Return True when another project shares the same name.
-
-                Uses a filtered bucket to determine whether multiple projects match the current project's name.
+                Determine whether another project has the same name as this instance.
+                
+                Returns:
+                    True if more than one project exists with the same name, False otherwise.
                 """
                 matching_count = TestProjectForCommercials.filter(
                     name=self.project.name
@@ -101,9 +103,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def other_project_count(self) -> int:
                 """
-                Return the number of projects whose numbers differ from the current project's number.
-
-                Relies on an ``exclude`` lookup to ensure cache invalidation works for exclusion-based dependencies.
+                Return the count of projects whose `number` differs from this instance's project's `number`.
+                
+                Returns:
+                    int: Number of projects with a different `number` than this instance's project.
                 """
                 return TestProjectForCommercials.exclude(
                     number=self.project.number
@@ -112,18 +115,20 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def has_budget_buffer(self) -> bool:
                 """
-                Return True when the project's remaining budget is positive.
-
-                Relies on ``budget_left`` so the property chain exercises nested cache lookups.
+                Indicates whether the project has a positive remaining budget.
+                
+                Returns:
+                    `true` if the project's remaining budget is greater than zero EUR, `false` otherwise.
                 """
                 return self.budget_left > Measurement(0, "EUR")
 
             @graphQlProperty
             def similar_name_count(self) -> int:
                 """
-                Count projects whose names contain the first word of the current project's name.
-
-                Exercises ``contains`` lookups to validate cache invalidation on pattern-based filters.
+                Count projects whose names contain the first word of this instance's associated project's name.
+                
+                Returns:
+                    int: Number of projects whose `name` contains that first word.
                 """
                 search_term = self.project.name.split()[0]
                 return TestProjectForCommercials.filter(
@@ -140,9 +145,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def same_name_excluding_self(self) -> int:
                 """
-                Count projects sharing the same name while excluding the current project's number.
-
-                Exercises combined `filter` and `exclude` lookups to verify dependency tracking.
+                Count projects that have the same name as the current project's name, excluding the current project by its number.
+                
+                Returns:
+                    int: Number of matching projects excluding the current project.
                 """
                 return (
                     TestProjectForCommercials.filter(name=self.project.name)
@@ -153,9 +159,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def project_keyword_number_range_count(self) -> int:
                 """
-                Count projects whose names contain ``\"Project\"`` and whose numbers fall within a selected range.
-
-                Exercises multiple filter keywords and comparison operators to ensure cache invalidation stays reliable.
+                Count projects whose name contains "Project" and whose number is between 1 and 3 inclusive.
+                
+                Returns:
+                    count (int): Number of projects matching the filters.
                 """
                 return TestProjectForCommercials.filter(
                     name__contains="Project",
@@ -167,9 +174,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def recent_project_window_count(self) -> int:
                 """
-                Count projects that started close to the current project's start and complete shortly after it.
-
-                Validates cache invalidation for combined date and datetime comparisons.
+                Count projects whose start_date falls within seven days before or after this instance's project.start_date and whose completion_at is no later than seven days after this instance's project.completion_at.
+                
+                Returns:
+                	int: Number of projects matching the date window and completion threshold.
                 """
                 window_start = (self.project.start_date - timedelta(days=7)).isoformat()
                 window_end = (self.project.start_date + timedelta(days=7)).isoformat()
@@ -185,7 +193,12 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             @graphQlProperty
             def staged_bucket_count(self) -> int:
                 """
-                Count projects using sequential bucket operations to ensure dependencies are tracked through chained calls.
+                Count TestProjectForCommercials that match a specific sequence of chained filters relative to this instance's project.
+                
+                Applies a contains filter on the name, a minimum-number filter, an exclusion by actual_costs, and a start_date upper bound based on this instance's project start_date.
+                
+                Returns:
+                    count (int): Number of projects matching the chained filter and exclude criteria.
                 """
                 bucket = TestProjectForCommercials.filter(name__contains="Project")
                 bucket = bucket.filter(number__gte=1)

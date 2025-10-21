@@ -26,6 +26,15 @@ class CalculationInterface(InterfaceBase):
     input_fields: ClassVar[dict[str, Input]]
 
     def getData(self, search_date: datetime | None = None) -> Any:
+        """
+        Indicates that calculation interfaces do not provide stored data.
+        
+        Parameters:
+            search_date (datetime | None): Date for which data would be requested.
+        
+        Raises:
+            NotImplementedError: Always raised with the message "Calculations do not store data."
+        """
         raise NotImplementedError("Calculations do not store data.")
 
     @classmethod
@@ -76,15 +85,15 @@ class CalculationInterface(InterfaceBase):
         _name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
-        Prepare interface attributes prior to GeneralManager class creation.
-
+        Prepare and attach a generated Interface subclass into the attributes for a GeneralManager class before its creation.
+        
         Parameters:
-            _name (generalManagerClassName): Name of the new manager class.
-            attrs (attributes): Attribute dictionary for the manager being created.
-            interface (interfaceBaseClass): Base interface definition.
-
+            _name (generalManagerClassName): Name of the manager class being created.
+            attrs (attributes): Mutable attribute dictionary for the manager class under construction; will be modified to include the generated Interface and interface type.
+            interface (interfaceBaseClass): Base interface class from which the generated Interface subclass is derived.
+        
         Returns:
-            tuple[attributes, interfaceBaseClass, None]: Updated attributes, interface class, and related model (None).
+            tuple[attributes, interfaceBaseClass, None]: The updated attributes dict, the newly created Interface subclass, and None for the related model.
         """
         input_fields: dict[str, Input[Any]] = {}
         for key, value in vars(interface).items():
@@ -107,7 +116,17 @@ class CalculationInterface(InterfaceBase):
         interface_class: newlyCreatedInterfaceClass,
         _model: relatedClass,
     ) -> None:
-        """Link the generated interface to the manager class after creation."""
+        """
+        Link the generated interface class to its manager class after creation.
+        
+        Parameters:
+            new_class: The newly created GeneralManager class to attach.
+            interface_class: The generated interface class that will reference the manager.
+            _model: Unused placeholder for the related model class; ignored.
+        
+        Description:
+            Sets `interface_class._parent_class` to `new_class` so the interface knows its owning manager.
+        """
         interface_class._parent_class = new_class
 
     @classmethod
@@ -123,16 +142,13 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def getFieldType(cls, field_name: str) -> type:
         """
-        Return the Python type of the specified input field.
-
-        Parameters:
-            field_name (str): The name of the input field.
-
+        Get the Python type for an input field.
+        
         Returns:
-            type: The Python type associated with the input field.
-
+            The Python type associated with the specified input field.
+        
         Raises:
-            KeyError: If the specified field name does not exist in input_fields.
+            KeyError: If `field_name` is not present in `cls.input_fields`.
         """
         field = cls.input_fields.get(field_name)
         if field is None:
