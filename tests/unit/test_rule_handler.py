@@ -12,7 +12,6 @@ class UnexpectedNodeTypeError(ValueError):
     def __init__(self) -> None:
         """
         Initialize the exception indicating an unexpected AST node type was encountered.
-        
         The exception is constructed with the message "Unexpected node type."
         """
         super().__init__("Unexpected node type.")
@@ -24,7 +23,6 @@ class UnsupportedNodeEvaluationError(ValueError):
     def __init__(self, node_type: str) -> None:
         """
         Initialize the exception indicating a rule handler cannot evaluate an AST node of the given type.
-        
         Parameters:
             node_type (str): The name of the AST node type that cannot be evaluated; this value is included in the exception message.
         """
@@ -35,7 +33,6 @@ class DummyRule:
     def __init__(self, op_symbol: str):
         """
         Initialize the DummyRule with a fixed operator symbol.
-        
         Parameters:
             op_symbol (str): Operator symbol to store and return for this rule instance.
         """
@@ -47,13 +44,13 @@ class DummyRule:
     def _get_node_name(self, node: ast.AST) -> str:
         """
         Get the identifier of an AST Name node.
-        
+
         Parameters:
             node (ast.AST): The AST node expected to be an `ast.Name`.
-        
+
         Returns:
             str: The `id` (identifier) of the `ast.Name` node.
-        
+
         Raises:
             UnexpectedNodeTypeError: If `node` is not an `ast.Name`.
         """
@@ -65,14 +62,14 @@ class DummyRule:
         # 1) Direktes Literal
         """
         Evaluate a simple AST node and return its corresponding Python value.
-        
+
         Supports literal constants, negative numeric unary operations, and name nodes.
         Parameters:
             node (ast.AST): The AST node to evaluate.
-        
+
         Returns:
             The evaluated value: the literal for `ast.Constant`, the negated number for a numeric `ast.UnaryOp` with `ast.USub`, or `None` for `ast.Name`.
-        
+
         Raises:
             UnsupportedNodeEvaluationError: If the node type is not supported.
         """
@@ -541,3 +538,258 @@ def test_handler_none_value_raises(handler, expr, error_msg):
             rule,
         )
     assert error_msg in str(excinfo.value)
+
+
+# --- Tests for new custom exception classes ---
+def test_invalid_function_node_error():
+    """Test that InvalidFunctionNodeError is raised for invalid AST nodes."""
+    from general_manager.rule.handler import InvalidFunctionNodeError, LenHandler
+
+    handler = LenHandler()
+    rule = DummyRule(">")
+
+    # Create a node that is not a Call with args
+    node = ast.parse("x > 5", mode="eval").body
+    invalid_node = ast.parse("5", mode="eval").body  # Not a Call node
+
+    with pytest.raises(InvalidFunctionNodeError) as excinfo:
+        handler.handle(
+            node,
+            invalid_node,
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {},
+            rule,
+        )
+    assert "Invalid left node for len() function" in str(excinfo.value)
+
+
+def test_invalid_len_threshold_error():
+    """Test that InvalidLenThresholdError is raised for non-numeric thresholds."""
+    from general_manager.rule.handler import InvalidLenThresholdError
+
+    handler = LenHandler()
+    rule = DummyRule(">")
+
+    # Create a comparison where right side is not numeric
+    node = ast.parse("len(x) > 'invalid'", mode="eval").body
+
+    with pytest.raises(InvalidLenThresholdError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [1, 2, 3]},
+            rule,
+        )
+    assert "Invalid arguments for len function" in str(excinfo.value)
+
+
+def test_invalid_numeric_threshold_error_sum():
+    """Test that InvalidNumericThresholdError is raised for sum with non-numeric threshold."""
+    from general_manager.rule.handler import InvalidNumericThresholdError
+
+    handler = SumHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("sum(x) > 'invalid'", mode="eval").body
+
+    with pytest.raises(InvalidNumericThresholdError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [1, 2, 3]},
+            rule,
+        )
+    assert "Invalid arguments for sum function" in str(excinfo.value)
+
+
+def test_invalid_numeric_threshold_error_max():
+    """Test that InvalidNumericThresholdError is raised for max with non-numeric threshold."""
+    from general_manager.rule.handler import InvalidNumericThresholdError
+
+    handler = MaxHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("max(x) > 'invalid'", mode="eval").body
+
+    with pytest.raises(InvalidNumericThresholdError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [1, 2, 3]},
+            rule,
+        )
+    assert "Invalid arguments for max function" in str(excinfo.value)
+
+
+def test_invalid_numeric_threshold_error_min():
+    """Test that InvalidNumericThresholdError is raised for min with non-numeric threshold."""
+    from general_manager.rule.handler import InvalidNumericThresholdError
+
+    handler = MinHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("min(x) > 'invalid'", mode="eval").body
+
+    with pytest.raises(InvalidNumericThresholdError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [1, 2, 3]},
+            rule,
+        )
+    assert "Invalid arguments for min function" in str(excinfo.value)
+
+
+def test_non_empty_iterable_error_sum_empty_list():
+    """Test that NonEmptyIterableError is raised when sum receives empty list."""
+    from general_manager.rule.handler import NonEmptyIterableError
+
+    handler = SumHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("sum(x) > 0", mode="eval").body
+
+    with pytest.raises(NonEmptyIterableError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": []},
+            rule,
+        )
+    assert "sum expects a non-empty iterable" in str(excinfo.value)
+
+
+def test_non_empty_iterable_error_max_empty_list():
+    """Test that NonEmptyIterableError is raised when max receives empty list."""
+    from general_manager.rule.handler import NonEmptyIterableError
+
+    handler = MaxHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("max(x) > 0", mode="eval").body
+
+    with pytest.raises(NonEmptyIterableError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": []},
+            rule,
+        )
+    assert "max expects a non-empty iterable" in str(excinfo.value)
+
+
+def test_non_empty_iterable_error_min_empty_list():
+    """Test that NonEmptyIterableError is raised when min receives empty list."""
+    from general_manager.rule.handler import NonEmptyIterableError
+
+    handler = MinHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("min(x) > 0", mode="eval").body
+
+    with pytest.raises(NonEmptyIterableError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": []},
+            rule,
+        )
+    assert "min expects a non-empty iterable" in str(excinfo.value)
+
+
+def test_numeric_iterable_error_sum_non_numeric():
+    """Test that NumericIterableError is raised when sum receives non-numeric values."""
+    from general_manager.rule.handler import NumericIterableError
+
+    handler = SumHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("sum(x) > 0", mode="eval").body
+
+    with pytest.raises(NumericIterableError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": ["a", "b", "c"]},
+            rule,
+        )
+    assert "sum expects an iterable of numbers" in str(excinfo.value)
+
+
+def test_numeric_iterable_error_max_non_numeric():
+    """Test that NumericIterableError is raised when max receives non-numeric values."""
+    from general_manager.rule.handler import NumericIterableError
+
+    handler = MaxHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("max(x) > 0", mode="eval").body
+
+    with pytest.raises(NumericIterableError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": ["a", "b", "c"]},
+            rule,
+        )
+    assert "max expects an iterable of numbers" in str(excinfo.value)
+
+
+def test_numeric_iterable_error_min_non_numeric():
+    """Test that NumericIterableError is raised when min receives non-numeric values."""
+    from general_manager.rule.handler import NumericIterableError
+
+    handler = MinHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("min(x) > 0", mode="eval").body
+
+    with pytest.raises(NumericIterableError) as excinfo:
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": ["a", "b", "c"]},
+            rule,
+        )
+    assert "min expects an iterable of numbers" in str(excinfo.value)
+
+
+def test_sum_handler_with_mixed_types():
+    """Test sum handler rejects mixed numeric and non-numeric types."""
+    from general_manager.rule.handler import NumericIterableError
+
+    handler = SumHandler()
+    rule = DummyRule(">")
+
+    node = ast.parse("sum(x) > 10", mode="eval").body
+
+    with pytest.raises(NumericIterableError):
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [1, 2, "three", 4]},
+            rule,
+        )

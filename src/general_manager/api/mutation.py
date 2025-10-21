@@ -14,6 +14,7 @@ from typing import (
     Type,
     get_type_hints,
     cast,
+    TypeAliasType,
 )
 import graphene  # type: ignore[import]
 from graphql import GraphQLResolveInfo
@@ -22,8 +23,8 @@ from general_manager.api.graphql import GraphQL, HANDLED_MANAGER_ERRORS
 from general_manager.manager.generalManager import GeneralManager
 
 from general_manager.utils.formatString import snake_to_camel
-from typing import TypeAliasType
 from general_manager.permission.mutationPermission import MutationPermission
+from types import UnionType
 
 
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
@@ -134,7 +135,7 @@ def graphQlMutation(
 
             # Handle Optional[...] → not required
             origin = get_origin(ann)
-            if origin is Union and type(None) in get_args(ann):
+            if (origin is Union or origin is UnionType) and type(None) in get_args(ann):
                 required = False
                 # extract inner type
                 ann = next(a for a in get_args(ann) if a is not type(None))
