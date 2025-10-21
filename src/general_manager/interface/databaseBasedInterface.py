@@ -43,6 +43,11 @@ class DuplicateFieldNameError(ValueError):
     """Raised when a dynamically generated field name conflicts with an existing one."""
 
     def __init__(self) -> None:
+        """
+        Initialize the DuplicateFieldNameError with a default descriptive message.
+        
+        This exception indicates a conflict where a dynamically generated field name duplicates an existing name; the default message is "Field name already exists."
+        """
         super().__init__("Field name already exists.")
 
 
@@ -59,15 +64,15 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         **kwargs: Any,
     ) -> None:
         """
-        Build the interface and hydrate the underlying model instance.
-
+        Initialize the interface and load its underlying model instance.
+        
+        Positional and keyword arguments are forwarded to the parent interface to establish identification. 
+        search_date, when provided, causes the instance to be resolved from historical records at or before that timestamp; if omitted, the current database record is loaded.
+        
         Parameters:
-            *args (list[Any]): Positional identification arguments forwarded to the parent interface.
-            search_date (datetime | None): When provided, load historical data for the given timestamp.
-            **kwargs (Any): Keyword identification arguments forwarded to the parent interface.
-
-        Returns:
-            None
+            *args: Positional identification arguments forwarded to the parent interface.
+            search_date (datetime | None): Timestamp to select a historical record; `None` to use the current record.
+            **kwargs: Keyword identification arguments forwarded to the parent interface.
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
@@ -193,12 +198,20 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
         """
-        Return a dictionary mapping each model attribute name to its type information and metadata.
-
-        Includes standard fields, custom fields, foreign keys, many-to-many, and reverse relation fields, excluding GenericForeignKey fields. For each attribute, provides its Python type (translated from Django field types when possible), required and editable status, whether it is derived, and its default value. For related models with a general manager class, the type is set to that class.
-
+        Builds a mapping of model attribute names to their type metadata for the interface.
+        
+        Produces entries for model fields, custom measurement-like fields, foreign-key relations, many-to-many relations, and reverse one-to-many relations. For related models that expose a general manager class, the attribute type is that manager class; many-to-many and reverse relation attributes are exposed with a "_list" suffix. GenericForeignKey fields are omitted.
+        
         Returns:
-            dict[str, AttributeTypedDict]: Mapping of attribute names to their type information and metadata.
+            dict[str, AttributeTypedDict]: Mapping from attribute name to metadata with keys:
+                - `type`: the attribute's Python type or general-manager class for related models (common Django field classes are translated to built-in Python types),
+                - `is_derived`: `True` for attributes computed from relations, `False` for direct model fields,
+                - `is_required`: `True` if the attribute must be present (e.g., field null is False and no default),
+                - `is_editable`: `True` if the field is editable on the model,
+                - `default`: the field's default value or `None` when not applicable.
+        
+        Raises:
+            DuplicateFieldNameError: if a generated attribute name collides with an existing attribute name.
         """
         TRANSLATION: dict[Type[models.Field[Any, Any]], type] = {
             models.fields.BigAutoField: int,
@@ -306,12 +319,15 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     @classmethod
     def getAttributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
-        Return a mapping of attribute names to callables that extract values from a DBBasedInterface instance.
-
-        The returned dictionary includes accessors for custom fields, standard model fields, foreign keys, many-to-many relations, and reverse relations. For related models with a general manager class, the accessor returns an instance or queryset of that class; otherwise, it returns the related object or queryset directly. Raises a ValueError if a field name conflict is detected.
-
+        Builds a mapping of attribute names to accessor callables for a DBBasedInterface instance.
+        
+        Includes accessors for custom fields, standard model fields, foreign-key relations, many-to-many relations, and reverse relations. For relations whose related model exposes a _general_manager_class, the accessor yields the corresponding GeneralManager instance (for single relations) or a filtered manager/queryset (for multi-relations); otherwise the accessor yields the related model instance or a queryset directly.
+        
         Returns:
-            dict[str, Callable[[DBBasedInterface], Any]]: Mapping of attribute names to callables for retrieving values from a DBBasedInterface instance.
+            dict[str, Callable[[DBBasedInterface], Any]]: Mapping from attribute name to a callable that accepts a DBBasedInterface and returns that attribute's value.
+        
+        Raises:
+            DuplicateFieldNameError: If a generated attribute name conflicts with an existing attribute name.
         """
         from general_manager.manager.generalManager import GeneralManager
 
@@ -482,18 +498,16 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Collect fields defined directly on the interface class
         """
-        Dynamically generates a Django model class, its associated interface class, and a factory class from an interface definition.
-
-        This method collects fields and metadata from the provided interface class, creates a new Django model inheriting from the specified base model class, attaches custom validation rules if present, and constructs corresponding interface and factory classes. The updated attributes dictionary, the new interface class, and the newly created model class are returned for integration into the general manager framework.
-
+        Create a Django model class, a corresponding interface subclass, and a Factory class from an interface definition.
+        
         Parameters:
-            name (generalManagerClassName): Name for the dynamically created model class.
-            attrs (attributes): Attribute dictionary updated with interface and factory definitions.
-            interface (interfaceBaseClass): Interface definition used to derive the model.
-            base_model_class (type[GeneralManagerBasisModel]): Base Django model class (defaults to GeneralManagerModel).
-
+            name (generalManagerClassName): Name to assign to the generated Django model class.
+            attrs (attributes): Attribute dictionary to be updated with the generated Interface and Factory entries.
+            interface (interfaceBaseClass): Interface definition used to derive the model and interface subclass.
+            base_model_class (type[GeneralManagerBasisModel]): Base class for the generated Django model (defaults to GeneralManagerModel).
+        
         Returns:
-            tuple[attributes, interfaceBaseClass, relatedClass]: Updated attributes, interface class, and the generated model.
+            tuple[attributes, interfaceBaseClass, relatedClass]: A tuple containing the updated attributes dictionary, the newly created interface subclass, and the generated Django model class.
         """
         model_fields: dict[str, Any] = {}
         meta_class = None
@@ -571,12 +585,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         cls,
     ) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
-        Returns the pre- and post-creation hooks for initializing the interface.
-
-        The pre-creation method is called before the GeneralManager class is created to allow customization, while the post-creation method is called after creation to finalize setup.
-
+        Provide hooks invoked before and after dynamic interface class creation.
+        
         Returns:
-            tuple[classPreCreationMethod, classPostCreationMethod]: Hooks used during manager class creation.
+            tuple[classPreCreationMethod, classPostCreationMethod]: A pair (pre_create, post_create) where `pre_create` is invoked before the manager class is created to allow customization, and `post_create` is invoked after creation to finalize setup.
         """
         return cls._preCreate, cls._postCreate
 

@@ -59,6 +59,12 @@ class UnexpectedInputArgumentsError(TypeError):
     """Raised when parseInputFields receives keyword arguments not defined by the interface."""
 
     def __init__(self, extra_args: Iterable[str]) -> None:
+        """
+        Initialize the exception with a message listing unexpected input argument names.
+        
+        Parameters:
+            extra_args (Iterable[str]): Names of the unexpected keyword arguments to include in the error message.
+        """
         extras = ", ".join(extra_args)
         super().__init__(f"Unexpected arguments: {extras}.")
 
@@ -67,6 +73,12 @@ class MissingInputArgumentsError(TypeError):
     """Raised when required interface inputs are not supplied."""
 
     def __init__(self, missing_args: Iterable[str]) -> None:
+        """
+        Initialize the exception for missing required input arguments.
+        
+        Parameters:
+            missing_args (Iterable[str]): Names of required input arguments that were not provided; these will be joined into the exception message.
+        """
         missing = ", ".join(missing_args)
         super().__init__(f"Missing required arguments: {missing}.")
 
@@ -75,6 +87,12 @@ class CircularInputDependencyError(ValueError):
     """Raised when input fields declare circular dependencies."""
 
     def __init__(self, unresolved: Iterable[str]) -> None:
+        """
+        Initialize the CircularInputDependencyError with the names of inputs involved in the cycle.
+        
+        Parameters:
+            unresolved (Iterable[str]): Iterable of input names that form the detected circular dependency.
+        """
         names = ", ".join(unresolved)
         super().__init__(f"Circular dependency detected among inputs: {names}.")
 
@@ -83,6 +101,14 @@ class InvalidInputTypeError(TypeError):
     """Raised when an input value does not match its declared type."""
 
     def __init__(self, name: str, provided: type, expected: type) -> None:
+        """
+        Initialize the InvalidInputTypeError with a message describing a type mismatch for a named input.
+        
+        Parameters:
+            name (str): The name of the input field with the invalid type.
+            provided (type): The actual type that was provided.
+            expected (type): The type that was expected.
+        """
         super().__init__(f"Invalid type for {name}: {provided}, expected: {expected}.")
 
 
@@ -90,6 +116,12 @@ class InvalidPossibleValuesTypeError(TypeError):
     """Raised when an input's possible_values configuration is not callable or iterable."""
 
     def __init__(self, name: str) -> None:
+        """
+        Exception raised when an input's `possible_values` configuration is neither callable nor iterable.
+        
+        Parameters:
+            name (str): The input field name whose `possible_values` is invalid; included in the exception message.
+        """
         super().__init__(f"Invalid type for possible_values of input {name}.")
 
 
@@ -97,6 +129,14 @@ class InvalidInputValueError(ValueError):
     """Raised when a provided input value is not within the allowed set."""
 
     def __init__(self, name: str, value: object, allowed: Iterable[object]) -> None:
+        """
+        Initialize the exception with a message describing an invalid input value for a specific field.
+        
+        Parameters:
+            name (str): The name of the input field that received the invalid value.
+            value (object): The value that was provided and deemed invalid.
+            allowed (Iterable[object]): An iterable of permitted values for the field; used to include allowed options in the exception message.
+        """
         super().__init__(
             f"Invalid value for {name}: {value}, allowed: {list(allowed)}."
         )
@@ -111,14 +151,13 @@ class InterfaceBase(ABC):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
-        Construct the interface using the supplied identification arguments.
-
+        Initialize the interface using the provided identification inputs.
+        
+        Positional arguments are mapped to the interface's declared input fields by position; keyword arguments are matched by name. Inputs are validated and normalized according to the interface's input field definitions and the resulting normalized identification is stored on the instance as `self.identification`.
+        
         Parameters:
-            *args: Positional arguments passed to the interface constructor.
-            **kwargs: Keyword arguments passed to the interface constructor.
-
-        Returns:
-            None
+            *args: Positional identification values corresponding to the interface's input field order.
+            **kwargs: Named identification values matching the interface's input field names.
         """
         identification = self.parseInputFieldsToIdentification(*args, **kwargs)
         self.identification = self.formatIdentification(identification)
@@ -129,18 +168,22 @@ class InterfaceBase(ABC):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
-        Parse raw arguments into a validated identification mapping.
-
+        Convert positional and keyword inputs into a validated identification mapping for the interface's input fields.
+        
         Parameters:
-            *args (Any): Positional arguments matched to the interface's input field order.
-            **kwargs (dict[str, Any]): Keyword arguments supplied by the caller.
-
+            *args: Positional arguments matched, in order, to the interface's defined input fields.
+            **kwargs: Keyword arguments supplying input values by name.
+        
         Returns:
-            dict[str, Any]: Mapping of input field names to validated values.
-
+            dict[str, Any]: Mapping of input field names to their validated values.
+        
         Raises:
-            TypeError: If required inputs are missing, unexpected inputs are provided, or a value fails type checking.
-            ValueError: If circular dependencies prevent resolution of the inputs.
+            UnexpectedInputArgumentsError: If extra keyword arguments are provided that do not match any input field (after allowing keys suffixed with "_id").
+            MissingInputArgumentsError: If one or more required input fields are not provided.
+            CircularInputDependencyError: If input fields declare dependencies that form a cycle and cannot be resolved.
+            InvalidInputTypeError: If a provided value does not match the declared type for an input.
+            InvalidPossibleValuesTypeError: If an input's `possible_values` configuration is neither callable nor iterable.
+            InvalidInputValueError: If a provided value is not in the allowed set defined by an input's `possible_values`.
         """
         identification: dict[str, Any] = {}
         kwargs = cast(
@@ -214,19 +257,19 @@ class InterfaceBase(ABC):
         self, name: str, value: Any, identification: dict[str, Any]
     ) -> None:
         """
-        Validate a single input value against its definition.
-
+        Validate a single input value against its declared Input definition.
+        
+        Checks that the provided value matches the declared Python type and, when DEBUG is enabled, verifies the value is allowed by the input's `possible_values` (which may be an iterable or a callable that receives dependent input values).
+        
         Parameters:
-            name (str): Input field name being processed.
-            value (Any): Value provided by the caller.
-            identification (dict[str, Any]): Partially resolved identification mapping used to evaluate dependencies.
-
-        Returns:
-            None
-
+            name: The input field name being validated.
+            value: The value to validate.
+            identification: Partially resolved identification mapping used to supply dependent input values when evaluating `possible_values`.
+        
         Raises:
-            TypeError: If the value has the wrong type or possible values are misconfigured.
-            ValueError: If the value is not permitted by the configured `possible_values`.
+            InvalidInputTypeError: If `value` is not an instance of the input's declared `type`.
+            InvalidPossibleValuesTypeError: If `possible_values` is neither callable nor iterable.
+            InvalidInputValueError: If `value` is not contained in the evaluated `possible_values` (only checked when DEBUG is true).
         """
         input_field = self.input_fields[name]
         if not isinstance(value, input_field.type):
@@ -252,7 +295,16 @@ class InterfaceBase(ABC):
 
     @classmethod
     def create(cls, *args: Any, **kwargs: Any) -> Any:
-        """Create a new record via the underlying data source."""
+        """
+        Create a new managed record in the underlying data store using the interface's inputs.
+        
+        Parameters:
+            *args: Positional input values corresponding to the interface's defined input fields.
+            **kwargs: Input values provided by name; unexpected extra keywords will be rejected.
+        
+        Returns:
+            The created record or a manager-specific representation of the newly created entity.
+        """
         raise NotImplementedError
 
     def update(self, *args: Any, **kwargs: Any) -> Any:

@@ -17,6 +17,11 @@ class MissingStartInstanceError(ValueError):
     """Raised when attempting to traverse a path without a starting instance."""
 
     def __init__(self) -> None:
+        """
+        Create the MissingStartInstanceError with its default message.
+        
+        This initializer constructs the exception with the message: "Cannot call goTo on a PathMap without a start instance."
+        """
         super().__init__("Cannot call goTo on a PathMap without a start instance.")
 
 
@@ -28,12 +33,8 @@ class PathMap:
 
     def __new__(cls, *args: object, **kwargs: object) -> PathMap:
         """
-        Create or return the singleton PathMap instance and ensure the path mapping is initialised.
-
-        Parameters:
-            args (tuple): Positional arguments ignored by the constructor.
-            kwargs (dict): Keyword arguments ignored by the constructor.
-
+        Obtain the singleton PathMap, initializing the path mapping on first instantiation.
+        
         Returns:
             PathMap: The singleton PathMap instance.
         """
@@ -113,16 +114,16 @@ class PathMap:
         self, path_destination: PathDestination | type[GeneralManager] | str
     ) -> GeneralManager | Bucket | None:
         """
-        Follow the cached path from the starting point to the requested destination.
-
+        Traverse the cached path from the configured start to the given destination.
+        
         Parameters:
-            path_destination (PathDestination | type[GeneralManager] | str): Target manager identifier, either as a class, instance, or class name.
-
+            path_destination (PathDestination | type[GeneralManager] | str): Destination specified as a GeneralManager class, a destination name, or a PathDestination identifier.
+        
         Returns:
-            GeneralManager | Bucket | None: The resolved manager instance, a bucket of instances, or None when no path exists.
-
+            GeneralManager | Bucket | None: The resolved GeneralManager instance, a Bucket of instances reached by the path, or `None` if no cached path exists.
+        
         Raises:
-            ValueError: If no starting instance was supplied when constructing the PathMap.
+            MissingStartInstanceError: If the cached path requires a concrete start instance but the PathMap was constructed without one.
         """
         if isinstance(path_destination, type):
             path_destination = path_destination.__name__
@@ -136,10 +137,10 @@ class PathMap:
 
     def getAllConnected(self) -> set[str]:
         """
-        List the class names that are reachable from the configured starting point.
-
+        Return the set of destination class names that are reachable from the configured start.
+        
         Returns:
-            set[str]: Collection of destination class names that have a valid traversal path.
+            set[str]: Destination class names reachable from the current start_class_name.
         """
         connected_classes: set[str] = set()
         for path_tuple, path_obj in self.mapping.items():

@@ -10,6 +10,11 @@ class UnexpectedNodeTypeError(ValueError):
     """Raised when a rule handler encounters an unexpected AST node type."""
 
     def __init__(self) -> None:
+        """
+        Initialize the exception indicating an unexpected AST node type was encountered.
+        
+        The exception is constructed with the message "Unexpected node type."
+        """
         super().__init__("Unexpected node type.")
 
 
@@ -17,23 +22,60 @@ class UnsupportedNodeEvaluationError(ValueError):
     """Raised when a rule handler cannot evaluate a particular AST node."""
 
     def __init__(self, node_type: str) -> None:
+        """
+        Initialize the exception indicating a rule handler cannot evaluate an AST node of the given type.
+        
+        Parameters:
+            node_type (str): The name of the AST node type that cannot be evaluated; this value is included in the exception message.
+        """
         super().__init__(f"Cannot eval node of type {node_type}.")
 
 
 class DummyRule:
     def __init__(self, op_symbol: str):
+        """
+        Initialize the DummyRule with a fixed operator symbol.
+        
+        Parameters:
+            op_symbol (str): Operator symbol to store and return for this rule instance.
+        """
         self._op_symbol = op_symbol
 
     def _get_op_symbol(self, op: Optional[ast.cmpop]) -> str:
         return self._op_symbol
 
     def _get_node_name(self, node: ast.AST) -> str:
+        """
+        Get the identifier of an AST Name node.
+        
+        Parameters:
+            node (ast.AST): The AST node expected to be an `ast.Name`.
+        
+        Returns:
+            str: The `id` (identifier) of the `ast.Name` node.
+        
+        Raises:
+            UnexpectedNodeTypeError: If `node` is not an `ast.Name`.
+        """
         if isinstance(node, ast.Name):
             return node.id
         raise UnexpectedNodeTypeError()
 
     def _eval_node(self, node: ast.AST) -> Any:
         # 1) Direktes Literal
+        """
+        Evaluate a simple AST node and return its corresponding Python value.
+        
+        Supports literal constants, negative numeric unary operations, and name nodes.
+        Parameters:
+            node (ast.AST): The AST node to evaluate.
+        
+        Returns:
+            The evaluated value: the literal for `ast.Constant`, the negated number for a numeric `ast.UnaryOp` with `ast.USub`, or `None` for `ast.Name`.
+        
+        Raises:
+            UnsupportedNodeEvaluationError: If the node type is not supported.
+        """
         if isinstance(node, ast.Constant):
             return node.value
         # 2) Negativer Literal-Fall: -2, -3.5, …

@@ -11,6 +11,11 @@ class InvalidPermissionDataError(TypeError):
     """Raised when the permission data manager receives unsupported input."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when a permission data input is not a dict or a GeneralManager instance.
+        
+        The exception carries the message: "permission_data must be either a dict or an instance of GeneralManager."
+        """
         super().__init__(
             "permission_data must be either a dict or an instance of GeneralManager."
         )
@@ -28,14 +33,14 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         manager: Optional[type[GeneralManagerData]] = None,
     ) -> None:
         """
-        Create a permission data manager wrapping either a dict or a manager instance.
-
+        Wrap a mapping or GeneralManager instance to expose permission-related fields via attribute access.
+        
         Parameters:
-            permission_data (dict[str, Any] | GeneralManager): Raw data or manager instance supplying field values.
-            manager (type[GeneralManager] | None): Manager class when `permission_data` is a dict.
-
+            permission_data (dict[str, object] | GeneralManager): Either a dict mapping field names to values or a GeneralManager instance whose attributes provide field values.
+            manager (type[GeneralManager] | None): When `permission_data` is a dict, the manager class associated with that data; otherwise ignored.
+        
         Raises:
-            TypeError: If `permission_data` is neither a dict nor a `GeneralManager`.
+            InvalidPermissionDataError: If `permission_data` is neither a dict nor an instance of GeneralManager.
         """
         self.getData: Callable[[str], object]
         self._permission_data = permission_data
@@ -66,14 +71,14 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         update_data: dict[str, object],
     ) -> PermissionDataManager:
         """
-        Create a data manager that reflects a pending update to an existing manager.
-
+        Create a PermissionDataManager representing `base_data` with `update_data` applied.
+        
         Parameters:
-            base_data (GeneralManager): Existing manager instance.
-            update_data (dict[str, Any]): Fields being updated.
-
+            base_data (GeneralManagerData): Existing manager instance whose data will serve as the base.
+            update_data (dict[str, object]): Fields to add or override on the base data.
+        
         Returns:
-            PermissionDataManager: Wrapper exposing merged data for permission checks.
+            PermissionDataManager: Wrapper exposing the merged data where keys in `update_data` override those from `base_data`.
         """
         merged_data: dict[str, object] = {**dict(base_data), **update_data}
         return cls(merged_data, base_data.__class__)

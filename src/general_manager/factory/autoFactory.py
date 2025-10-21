@@ -19,6 +19,11 @@ class InvalidGeneratedObjectError(TypeError):
     """Raised when factory generation produces non-model instances."""
 
     def __init__(self) -> None:
+        """
+        Initialize the exception indicating a generated object is not a Django model instance.
+        
+        Sets a default error message explaining that the generated object is not a Django model instance.
+        """
         super().__init__("Generated object is not a Django model instance.")
 
 
@@ -26,6 +31,11 @@ class InvalidAutoFactoryModelError(TypeError):
     """Raised when the factory metadata does not reference a Django model class."""
 
     def __init__(self) -> None:
+        """
+        Raised when an AutoFactory target model is not a Django model class.
+        
+        The exception carries a default message explaining that `_meta.model` must be a Django model class.
+        """
         super().__init__("AutoFactory requires _meta.model to be a Django model class.")
 
 
@@ -33,6 +43,9 @@ class UndefinedAdjustmentMethodError(ValueError):
     """Raised when an adjustment method is required but not configured."""
 
     def __init__(self) -> None:
+        """
+        Initialize the UndefinedAdjustmentMethodError with the default message indicating that a generate/adjustment function is not configured.
+        """
         super().__init__("generate_func is not defined.")
 
 
@@ -49,14 +62,18 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls, strategy: Literal["build", "create"], params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         """
-        Generate and populate model instances with automatically derived field values.
-
+        Generate and populate model instances using automatically derived field values.
+        
         Parameters:
-            strategy (Literal["build", "create"]): Whether to persist the generated instances.
-            params (dict[str, Any]): Field values supplied by the caller.
-
+            strategy (Literal["build", "create"]): Either "build" (unsaved instance) or "create" (saved instance).
+            params (dict[str, Any]): Field values supplied by the caller; any missing non-auto fields will be populated automatically.
+        
         Returns:
-            models.Model | list[models.Model]: Generated instance(s) matching the requested strategy.
+            models.Model | list[models.Model]: A generated model instance or a list of generated model instances.
+        
+        Raises:
+            InvalidAutoFactoryModelError: If the factory target `_meta.model` is not a Django model class.
+            InvalidGeneratedObjectError: If an element of a generated list is not a Django model instance.
         """
         model = cls._meta.model
         if not issubclass(model, models.Model):
@@ -212,17 +229,17 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls, use_creation_method: bool, params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         """
-        Create or build instance(s) using the configured adjustment method.
-
+        Create or build model instance(s) using the configured adjustment method.
+        
         Parameters:
-            use_creation_method (bool): Whether generated objects should be saved.
-            params (dict[str, Any]): Arguments forwarded to the adjustment callback.
-
+            use_creation_method (bool): If True, created records are validated and saved; if False, unsaved instances are returned.
+            params (dict[str, Any]): Keyword arguments forwarded to the adjustment method to produce record dict(s).
+        
         Returns:
-            models.Model | list[models.Model]: Created or built instance(s).
-
+            models.Model | list[models.Model]: A single model instance or a list of instances — saved instances when `use_creation_method` is True, unsaved otherwise.
+        
         Raises:
-            ValueError: If no adjustment method has been configured.
+            UndefinedAdjustmentMethodError: If no adjustment method has been configured on the factory.
         """
         model_cls = cls._meta.model
         if cls._adjustmentMethod is None:

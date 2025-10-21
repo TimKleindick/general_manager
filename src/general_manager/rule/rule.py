@@ -27,6 +27,12 @@ class MissingErrorTemplateVariableError(ValueError):
     """Raised when a custom error template omits required variables."""
 
     def __init__(self, missing: List[str]) -> None:
+        """
+        Initialize the exception indicating that one or more variables referenced by a rule are missing from a custom error template.
+        
+        Parameters:
+            missing (List[str]): Names of the variables that are required by the template but were not found; these names will be included in the exception message.
+        """
         super().__init__(
             f"The custom error message does not contain all used variables: {missing}."
         )
@@ -36,6 +42,11 @@ class ErrorMessageGenerationError(ValueError):
     """Raised when generating an error message before evaluating any input."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when no input is available for generating an error message.
+        
+        This exception is initialized with the default message "No input provided for error message generation."
+        """
         super().__init__("No input provided for error message generation.")
 
 
@@ -65,6 +76,14 @@ class Rule(Generic[GeneralManagerType]):
         custom_error_message: Optional[str] = None,
         ignore_if_none: bool = True,
     ) -> None:
+        """
+        Initialize a Rule that wraps a predicate function, captures its source AST to discover referenced variables, and prepares handlers for generating error messages.
+        
+        Parameters:
+            func (Callable[[GeneralManagerType], bool]): Predicate that evaluates a GeneralManager instance.
+            custom_error_message (Optional[str]): Optional template used to format generated error messages; placeholders must match variables referenced by the predicate.
+            ignore_if_none (bool): If True, evaluation will be skipped (result recorded as None) when any referenced variable resolves to None.
+        """
         self._func = func
         self._custom_error_message = custom_error_message
         self._ignore_if_none = ignore_if_none
@@ -124,13 +143,15 @@ class Rule(Generic[GeneralManagerType]):
 
     def evaluate(self, x: GeneralManagerType) -> Optional[bool]:
         """
-        Execute the predicate against a manager instance and record the result.
-
+        Evaluate the rule's predicate against a GeneralManager instance and record evaluation context.
+        
+        Binds the primary parameter to the provided input, extracts referenced variable values, and sets the last evaluation result to the predicate outcome. If `ignore_if_none` is true and any referenced variable value is `None`, the evaluation is skipped and the last result is set to `None`.
+        
         Parameters:
             x (GeneralManagerType): Manager instance supplied to the predicate.
-
+        
         Returns:
-            bool | None: True or False when the predicate executes; None when `ignore_if_none` is set and any referenced value is None.
+            `True` if the predicate evaluates to true, `False` if it evaluates to false, `None` if evaluation was skipped because a referenced value was `None` and `ignore_if_none` is enabled.
         """
         self._last_input = x
         self._last_args = {}
@@ -147,13 +168,10 @@ class Rule(Generic[GeneralManagerType]):
 
     def validateCustomErrorMessage(self) -> None:
         """
-        Ensure the user-defined template references every extracted variable.
-
-        Returns:
-            None
-
+        Validate that a provided custom error message template includes placeholders for every variable referenced by the rule.
+        
         Raises:
-            ValueError: If the custom error message omits a required placeholder.
+            MissingErrorTemplateVariableError: If one or more extracted variables are not present as `{name}` placeholders in the custom template.
         """
         if not self._custom_error_message:
             return
@@ -165,13 +183,13 @@ class Rule(Generic[GeneralManagerType]):
 
     def getErrorMessage(self) -> Optional[Dict[str, str]]:
         """
-        Build a mapping of variable names to error messages for the last evaluation.
-
+        Constructs error messages for the last failed evaluation and returns them keyed by variable name.
+        
         Returns:
-            dict[str, str] | None: Mapping describing validation failures, or None when the predicate passed.
-
+            dict[str, str] | None: Mapping from each referenced variable name to its error message, or `None` if the predicate passed or was not evaluated.
+        
         Raises:
-            ValueError: If called before any input has been evaluated.
+            ErrorMessageGenerationError: If called before any input has been evaluated.
         """
         if self._last_result or self._last_result is None:
             return None
@@ -194,16 +212,38 @@ class Rule(Generic[GeneralManagerType]):
         return errors or None
 
     def _extract_variables(self) -> List[str]:
+        """
+        Collects the dotted attribute names referenced on the rule's parameters.
+        
+        Scans the predicate's AST and returns a sorted list of attribute access paths that originate from any of the predicate's parameter names (for example, "user.name" or "order.total"). If the predicate has no parameters, returns an empty list.
+        
+        Returns:
+            List[str]: Sorted list of dotted variable names referenced from the predicate's parameters.
+        """
         param_names = set(self._param_names)
         if not param_names:
             return []
 
         class VarVisitor(ast.NodeVisitor):
             def __init__(self, params: set[str]) -> None:
+                """
+                Initialize visitor state with a set of parameter names and an empty collection for discovered variables.
+                
+                Parameters:
+                    params (set[str]): Names of function parameters to consider when extracting referenced variables.
+                """
                 self.vars: set[str] = set()
                 self.params = params
 
             def visit_Attribute(self, node: ast.Attribute) -> None:
+                """
+                Record dotted attribute accesses that originate from allowed parameter names.
+                
+                Visits an ast.Attribute node, collects the dotted name components (e.g., "a.b.c") if the base is an ast.Name present in self.params, and adds the joined name to self.vars. Continues generic traversal after handling the node.
+                
+                Parameters:
+                	node (ast.Attribute): The attribute node being visited.
+                """
                 parts: list[str] = []
                 curr: ast.AST = node
                 while isinstance(curr, ast.Attribute):
@@ -231,6 +271,14 @@ class Rule(Generic[GeneralManagerType]):
         return out
 
     def _extract_comparisons(self) -> list[ast.Compare]:
+        """
+        Collect all comparison (ast.Compare) nodes from the predicate AST.
+        
+        Searches the rule's parsed AST stored on self._tree and returns every ast.Compare node found in traversal order.
+        
+        Returns:
+            comps (list[ast.Compare]): The list of comparison nodes present in the predicate AST.
+        """
         class CompVisitor(ast.NodeVisitor):
             def __init__(self) -> None:
                 self.comps: list[ast.Compare] = []
@@ -259,6 +307,17 @@ class Rule(Generic[GeneralManagerType]):
     def _generate_error_messages(
         self, var_values: Dict[str, Optional[object]]
     ) -> Dict[str, str]:
+        """
+        Generate human-readable error messages for each referenced variable using the resolved variable values.
+        
+        Given a mapping of variable names to their evaluated values, produce a dictionary mapping each variable to an explanatory error message derived from the rule's predicate. If specialized rule handlers are registered for particular function calls in the predicate, those handlers will be used to produce messages for the affected variables. When the predicate contains boolean combinations and the last evaluation failed, all referenced variables receive a combined invalid-combination message. If no explicit comparisons are present in the predicate, a generic combination-invalid message is returned for every referenced variable.
+        
+        Parameters:
+            var_values (Dict[str, Optional[object]]): Mapping from variable names (as extracted from the predicate) to their resolved values for the last-evaluated input.
+        
+        Returns:
+            Dict[str, str]: Mapping from variable name to its generated error message.
+        """
         errors: Dict[str, str] = {}
         comparisons = self._extract_comparisons()
         logical = self._contains_logical_ops()
@@ -320,6 +379,17 @@ class Rule(Generic[GeneralManagerType]):
         }.get(type(op), "?")
 
     def _get_node_name(self, node: ast.AST) -> str:
+        """
+        Produce a concise, human-readable name for the given AST node.
+        
+        For attribute access returns the dotted attribute path (e.g., "a.b.c"); for a Name node returns its identifier; for a Call node returns "func(arg1, arg2)" using the same naming rules for subnodes; for Constant nodes or nodes that cannot be represented returns an empty string.
+        
+        Parameters:
+            node (ast.AST): The AST node to derive a readable name from.
+        
+        Returns:
+            str: The human-readable name or an empty string if no sensible name can be produced.
+        """
         if isinstance(node, ast.Attribute):
             parts: list[str] = []
             curr: ast.AST = node
@@ -342,7 +412,22 @@ class Rule(Generic[GeneralManagerType]):
             return ""
 
     def _eval_node(self, node: ast.expr) -> Optional[object]:
-        """Evaluate an AST expression in the context of the last input."""
+        """
+        Evaluate an AST expression against the Rule's last-evaluated input and bound argument context.
+        
+        Parameters:
+            node (ast.expr): The AST expression node to evaluate.
+        
+        Returns:
+            result (Optional[object]): The evaluated value of the expression when resolvable; `None` if the node is not an expression or cannot be evaluated in the current context.
+        
+        Description:
+            Supported evaluations:
+            - Attribute access: resolves chained attributes from the last input or resolved base value.
+            - Name: returns a bound argument value if present, otherwise looks up the name in the predicate function's global namespace.
+            - Unary negative: evaluates numeric negation for integer, float, or Decimal operands.
+            If the expression cannot be resolved (including missing intermediate attributes or unsupported node kinds), `None` is returned.
+        """
         if not isinstance(node, ast.expr):
             return None
         try:

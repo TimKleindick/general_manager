@@ -21,6 +21,13 @@ class PermissionCheckError(PermissionError):
     """Raised when permission evaluation fails for a user."""
 
     def __init__(self, user: AbstractUser | AnonymousUser, errors: list[str]) -> None:
+        """
+        Initialize a PermissionCheckError carrying the requesting user's identity and permission failure details.
+        
+        Parameters:
+            user (AbstractUser | AnonymousUser): The user for whom permission evaluation failed; if the user has an `id`, it is included in the error message, otherwise the user is labeled "anonymous".
+            errors (list[str]): A list of error messages describing individual permission failures.
+        """
         user_id = getattr(user, "id", None)
         user_label = "anonymous" if user_id is None else f"id={user_id}"
         super().__init__(
@@ -57,7 +64,19 @@ class BasePermission(ABC):
         manager: type[GeneralManager],
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
-        """Validate create permissions for the supplied payload."""
+        """
+        Validate that the requesting user is allowed to create each attribute in the provided payload.
+        
+        Checks create permission for every key in `data` using the given `manager`. If any attribute is not permitted, raises a PermissionCheckError that includes the evaluated user and a list of denial messages.
+        
+        Parameters:
+            data (dict[str, Any]): Mapping of attribute names to the values intended for creation.
+            manager (type[GeneralManager]): Manager class that defines the model/schema against which permissions are checked.
+            request_user (AbstractUser | AnonymousUser | Any): User instance or user id (will be resolved to a user or AnonymousUser).
+        
+        Raises:
+            PermissionCheckError: If one or more attributes in `data` are denied for the resolved `request_user`.
+        """
         request_user = cls.getUserWithId(request_user)
         errors = []
         permission_data = PermissionDataManager(permission_data=data, manager=manager)
@@ -78,7 +97,17 @@ class BasePermission(ABC):
         old_manager_instance: GeneralManager,
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
-        """Validate update permissions for the supplied payload."""
+        """
+        Validate whether the request_user can update the given fields on an existing manager instance.
+        
+        Parameters:
+            data (dict[str, Any]): Mapping of attribute names to new values to be applied.
+            old_manager_instance (GeneralManager): Existing manager instance whose current state is used to evaluate update permissions.
+            request_user (AbstractUser | AnonymousUser | Any): User instance or user id; non-user values will be resolved to a User or AnonymousUser via getUserWithId.
+        
+        Raises:
+            PermissionCheckError: Raised with a list of error messages when one or more fields are not permitted to be updated.
+        """
         request_user = cls.getUserWithId(request_user)
 
         errors = []
@@ -101,7 +130,18 @@ class BasePermission(ABC):
         manager_instance: GeneralManager,
         request_user: AbstractUser | AnonymousUser | Any,
     ) -> None:
-        """Validate delete permissions for the supplied manager instance."""
+        """
+        Validate that the request_user has delete permission for every attribute of the given manager instance.
+        
+        This resolves the provided request_user to a User/AnonymousUser, evaluates delete permission for each attribute present on manager_instance, collects any denied attributes into error messages, and raises PermissionCheckError if any permissions are denied.
+        
+        Parameters:
+            manager_instance (GeneralManager): The manager object whose attributes will be checked for delete permission.
+            request_user (AbstractUser | AnonymousUser | Any): The user (or user id) to evaluate; non-user values will be resolved to AnonymousUser.
+        
+        Raises:
+            PermissionCheckError: If one or more attributes are not permitted for deletion by request_user. The exception carries the user and the list of denial messages.
+        """
         request_user = cls.getUserWithId(request_user)
 
         errors = []
@@ -120,7 +160,17 @@ class BasePermission(ABC):
     def getUserWithId(
         user: Any | AbstractUser | AnonymousUser,
     ) -> AbstractUser | AnonymousUser:
-        """Return a ``User`` instance given a primary key or user object."""
+        """
+        Resolve a user identifier or user-like object to a Django User or AnonymousUser instance.
+        
+        If the input is already an AbstractUser or AnonymousUser, it is returned unchanged. If the input is a primary key (or other value used to look up a User by id), the corresponding User is returned; if no such User exists, an AnonymousUser is returned.
+        
+        Parameters:
+            user (Any | AbstractUser | AnonymousUser): A user object or a value to look up a User by primary key.
+        
+        Returns:
+            AbstractUser | AnonymousUser: The resolved User instance, or an AnonymousUser when no matching User is found.
+        """
         from django.contrib.auth.models import User
 
         if isinstance(user, (AbstractUser, AnonymousUser)):
@@ -157,7 +207,18 @@ class BasePermission(ABC):
     def _getPermissionFilter(
         self, permission: str
     ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
-        """Resolve a filter definition for the given permission string."""
+        """
+        Resolve the filter/exclude constraints associated with a permission expression.
+        
+        Parameters:
+            permission (str): Permission expression of the form "<function_name>[:config,...]"; the leading name selects a permission function and the optional colon-separated values are passed as configuration.
+        
+        Returns:
+            dict: A mapping with keys "filter" and "exclude", each a dict[str, str] describing query constraints to apply. If the resolved permission provides no constraints, both will be empty dicts.
+        
+        Raises:
+            PermissionNotFoundError: If no permission function matches the leading name in `permission`.
+        """
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise PermissionNotFoundError(permission)

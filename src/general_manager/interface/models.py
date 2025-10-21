@@ -83,10 +83,10 @@ class GeneralManagerModel(GeneralManagerBasisModel):
     @_history_user.setter
     def _history_user(self, value: AbstractUser | None) -> None:
         """
-        Set the user responsible for the most recent change to the model instance.
-
+        Assign the given user as the author of the most recent change recorded for this model instance.
+        
         Parameters:
-            value (AbstractUser): The user to associate with the latest modification.
+            value (AbstractUser | None): The user to associate with the latest modification, or `None` to clear the recorded user.
         """
         self.changed_by = value
 

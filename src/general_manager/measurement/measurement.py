@@ -25,6 +25,11 @@ class InvalidMeasurementInitializationError(ValueError):
     """Raised when a measurement cannot be constructed from the provided value."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when a Measurement cannot be constructed from the provided value.
+        
+        This error indicates the initializer received a value that is not a Decimal, float, int, or otherwise compatible numeric type suitable for constructing a Measurement.
+        """
         super().__init__("Value must be a Decimal, float, int or compatible.")
 
 
@@ -32,6 +37,11 @@ class InvalidDimensionlessValueError(ValueError):
     """Raised when parsing a dimensionless measurement with an invalid value."""
 
     def __init__(self) -> None:
+        """
+        Initialize the exception indicating an invalid or malformed dimensionless measurement value.
+        
+        The exception carries a default message: "Invalid value for dimensionless measurement."
+        """
         super().__init__("Invalid value for dimensionless measurement.")
 
 
@@ -39,6 +49,11 @@ class InvalidMeasurementStringError(ValueError):
     """Raised when a measurement string is not in the expected format."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when a measurement string is not in the expected "<value> <unit>" format.
+        
+        Initializes the exception with the default message: "String must be in the format 'value unit'."
+        """
         super().__init__("String must be in the format 'value unit'.")
 
 
@@ -46,6 +61,11 @@ class MissingExchangeRateError(ValueError):
     """Raised when a currency conversion lacks a required exchange rate."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when a currency-to-currency conversion is attempted without an exchange rate.
+        
+        This exception indicates that an explicit exchange rate is required to convert between two different currency units.
+        """
         super().__init__("Conversion between currencies requires an exchange rate.")
 
 
@@ -53,6 +73,12 @@ class MeasurementOperandTypeError(TypeError):
     """Raised when arithmetic operations receive non-measurement operands."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Create an exception indicating an arithmetic operation was attempted with a non-Measurement operand.
+        
+        Parameters:
+            operation (str): The name of the operation (e.g., '+', '-', '*', '/') used to format the exception message.
+        """
         super().__init__(f"{operation} is only allowed between Measurement instances.")
 
 
@@ -60,6 +86,12 @@ class CurrencyMismatchError(ValueError):
     """Raised when performing arithmetic between mismatched currencies."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Initialize the exception with a message describing the attempted currency operation that is disallowed.
+        
+        Parameters:
+            operation (str): Name of the attempted operation (e.g., "add", "divide") used to construct the error message.
+        """
         super().__init__(f"{operation} between different currencies is not allowed.")
 
 
@@ -67,6 +99,12 @@ class IncompatibleUnitsError(ValueError):
     """Raised when operations involve incompatible physical units."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Initialize the exception indicating that two units are incompatible for a given operation.
+        
+        Parameters:
+            operation (str): Name or description of the operation that failed due to incompatible units (e.g., 'addition', 'comparison').
+        """
         super().__init__(f"Units are not compatible for {operation}.")
 
 
@@ -74,6 +112,12 @@ class MixedUnitOperationError(TypeError):
     """Raised when mixing currency and physical units in arithmetic."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Create a MixedUnitOperationError indicating an attempted operation mixing currency and physical units.
+        
+        Parameters:
+            operation (str): The name of the attempted operation (e.g., "addition", "multiplication"); used to build the exception message.
+        """
         super().__init__(
             f"{operation} between currency and physical unit is not allowed."
         )
@@ -83,6 +127,12 @@ class CurrencyScalarOperationError(TypeError):
     """Raised when multiplication/division uses unsupported currency operands."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Exception raised when attempting an arithmetic operation between two currency amounts that is not allowed.
+        
+        Parameters:
+            operation (str): The name of the attempted operation (e.g., "multiplication", "division"); used to compose the exception message.
+        """
         super().__init__(f"{operation} between two currency amounts is not allowed.")
 
 
@@ -90,6 +140,12 @@ class MeasurementScalarTypeError(TypeError):
     """Raised when operations expect a measurement or numeric operand."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Initialize the exception indicating an invalid operand type for the specified operation.
+        
+        Parameters:
+            operation (str): Name of the operation that only accepts Measurement or numeric operands; used to construct the exception message.
+        """
         super().__init__(
             f"{operation} is only allowed with Measurement or numeric values."
         )
@@ -99,6 +155,11 @@ class UnsupportedComparisonError(TypeError):
     """Raised when comparing measurements with non-measurement types."""
 
     def __init__(self) -> None:
+        """
+        Initialize the exception with a fixed message indicating comparisons require Measurement instances.
+        
+        This constructor sets the exception's message to "Comparison is only allowed between Measurement instances."
+        """
         super().__init__("Comparison is only allowed between Measurement instances.")
 
 
@@ -106,23 +167,25 @@ class IncomparableMeasurementError(ValueError):
     """Raised when measurements of different dimensions are compared."""
 
     def __init__(self) -> None:
+        """
+        Raised when attempting to compare two measurements whose units belong to different physical dimensions (for example, length vs mass), indicating they are not comparable.
+        """
         super().__init__("Cannot compare measurements with different dimensions.")
 
 
 class Measurement:
     def __init__(self, value: Decimal | float | int | str, unit: str) -> None:
         """
-        Create a measurement from a numeric value and a unit string.
-
+        Create a Measurement from a numeric value and a unit label.
+        
+        Converts the provided numeric-like value to a Decimal and constructs the internal quantity using the given unit.
+        
         Parameters:
-            value (Decimal | float | int | str): Numeric value, which will be coerced to `Decimal` if needed.
-            unit (str): Unit name registered in the unit registry, including currencies and physical units.
-
-        Returns:
-            None
-
+            value (Decimal | float | int | str): Numeric value to use as the measurement magnitude; strings and numeric types are coerced to Decimal.
+            unit (str): Unit label registered in the module's unit registry (currency codes or physical unit names).
+        
         Raises:
-            ValueError: If the numeric value cannot be converted to `Decimal`.
+            InvalidMeasurementInitializationError: If `value` cannot be converted to a Decimal.
         """
         if not isinstance(value, (Decimal, float, int)):
             try:
@@ -193,16 +256,18 @@ class Measurement:
     @classmethod
     def from_string(cls, value: str) -> Measurement:
         """
-        Create a measurement from a textual representation of magnitude and unit.
-
+        Parse a textual representation into a Measurement.
+        
         Parameters:
-            value (str): String formatted as `"<number> <unit>"`; a single numeric value is treated as dimensionless.
-
+            value (str): A string in the form "<number> <unit>" or a single numeric token for a dimensionless value.
+        
         Returns:
-            Measurement: Measurement parsed from the provided string.
-
+            Measurement: Measurement constructed from the parsed magnitude and unit.
+        
         Raises:
-            ValueError: If the string lacks a unit, has too many tokens, or contains a non-numeric magnitude.
+            InvalidDimensionlessValueError: If a single-token input cannot be parsed as a number.
+            InvalidMeasurementStringError: If the string does not contain exactly one or two space-separated tokens.
+            InvalidMeasurementInitializationError: If constructing the Measurement from the parsed parts fails.
         """
         splitted = value.split(" ")
         if len(splitted) == 1:
@@ -242,19 +307,17 @@ class Measurement:
         exchange_rate: float | None = None,
     ) -> Measurement:
         """
-        Convert this measurement to a specified target unit, supporting both currency and physical unit conversions.
-
-        For currency conversions between different currencies, an explicit exchange rate must be provided; if converting to the same currency, the original measurement is returned. For physical units, standard unit conversion is performed using the unit registry.
-
+        Convert this measurement to the specified target unit, handling currency conversions when applicable.
+        
         Parameters:
-            target_unit (str): The unit to convert to.
-            exchange_rate (float, optional): Required for currency conversion between different currencies.
-
+            target_unit (str): Unit label or currency code to convert the measurement into.
+            exchange_rate (float | None): Exchange rate to use when converting between different currencies; ignored for same-currency conversions and physical-unit conversions.
+        
         Returns:
-            Measurement: The converted measurement in the target unit.
-
+            Measurement: The measurement expressed in the target unit.
+        
         Raises:
-            ValueError: If converting between different currencies without an exchange rate.
+            MissingExchangeRateError: If converting between two different currencies without providing an exchange rate.
         """
         if self.is_currency():
             if self.unit == ureg(target_unit):
@@ -283,17 +346,21 @@ class Measurement:
 
     def __add__(self, other: Any) -> Measurement:
         """
-        Add another measurement while enforcing currency and dimensional rules.
-
+        Return the sum of this Measurement and another Measurement while enforcing currency and dimensional rules.
+        
+        If both operands are currency units their currency codes must match. If both are physical units their dimensionalities must match. Mixing currency and physical units is not permitted.
+        
         Parameters:
-            other (Any): Measurement or compatible value used as the addend.
-
+            other (Measurement): The addend measurement.
+        
         Returns:
-            Measurement: Measurement representing the sum.
-
+            Measurement: A new Measurement representing the sum.
+        
         Raises:
-            TypeError: If the operand is not a measurement or mixes currency with non-currency units.
-            ValueError: If the operands use incompatible currency codes or physical dimensions.
+            MeasurementOperandTypeError: If `other` is not a Measurement.
+            CurrencyMismatchError: If both operands are currencies with different currency codes.
+            IncompatibleUnitsError: If both operands are physical units but have different dimensionalities or the result cannot be represented as a pint.Quantity.
+            MixedUnitOperationError: If one operand is a currency and the other is a physical unit.
         """
         if not isinstance(other, Measurement):
             raise MeasurementOperandTypeError("Addition")
@@ -322,17 +389,21 @@ class Measurement:
 
     def __sub__(self, other: Any) -> Measurement:
         """
-        Subtract another measurement while enforcing unit compatibility.
-
+        Subtract another Measurement from this one, enforcing currency and unit compatibility.
+        
+        Performs subtraction for two currency Measurements only when they share the same currency code, or for two physical Measurements only when they have the same dimensionality; mixing currency and physical units is disallowed.
+        
         Parameters:
-            other (Any): Measurement or compatible value that should be subtracted.
-
+            other (Measurement): The measurement to subtract from this measurement.
+        
         Returns:
-            Measurement: Measurement representing the difference.
-
+            Measurement: A new Measurement representing the difference.
+        
         Raises:
-            TypeError: If the operand is not a measurement or mixes currency with non-currency units.
-            ValueError: If the operands use incompatible currency codes or physical dimensions.
+            MeasurementOperandTypeError: If `other` is not a Measurement.
+            CurrencyMismatchError: If both operands are currencies but use different currency codes.
+            IncompatibleUnitsError: If both operands are physical units but have incompatible dimensionality.
+            MixedUnitOperationError: If one operand is a currency and the other is a physical unit.
         """
         if not isinstance(other, Measurement):
             raise MeasurementOperandTypeError("Subtraction")
@@ -353,16 +424,17 @@ class Measurement:
 
     def __mul__(self, other: Any) -> Measurement:
         """
-        Multiply the measurement by another measurement or scalar.
-
+        Multiply this measurement by another measurement or by a numeric scalar.
+        
         Parameters:
-            other (Any): Measurement or numeric value used as the multiplier.
-
+            other (Measurement | Decimal | float | int): The multiplier. When a Measurement is provided, units are combined according to unit algebra; when a numeric scalar is provided, the magnitude is scaled and the unit is preserved.
+        
         Returns:
-            Measurement: Product expressed as a measurement.
-
+            Measurement: The product as a Measurement with the resulting magnitude and unit.
+        
         Raises:
-            TypeError: If multiplying two currency amounts or using an unsupported type.
+            CurrencyScalarOperationError: If both operands are currency measurements (multiplying two currencies is not allowed).
+            MeasurementScalarTypeError: If `other` is not a Measurement or a supported numeric type.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():
@@ -381,16 +453,17 @@ class Measurement:
 
     def __truediv__(self, other: Any) -> Measurement:
         """
-        Divide the measurement by another measurement or scalar value.
-
+        Divide this measurement by another measurement or by a numeric scalar.
+        
         Parameters:
-            other (Any): Measurement or numeric divisor.
-
+            other (Measurement | Decimal | float | int): The divisor; when a Measurement, must be compatible (currencies require same unit).
+        
         Returns:
-            Measurement: Quotient expressed as a measurement.
-
+            Measurement: The quotient as a new Measurement. If `other` is a Measurement the result carries the derived units; if `other` is a scalar the result retains this measurement's unit.
+        
         Raises:
-            TypeError: If dividing currency amounts with different units or using an unsupported type.
+            CurrencyMismatchError: If both operands are currencies with different units.
+            MeasurementScalarTypeError: If `other` is not a Measurement or a numeric type.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency() and self.unit != other.unit:
@@ -409,10 +482,10 @@ class Measurement:
 
     def __str__(self) -> str:
         """
-        Format the measurement as a string, including the unit when present.
-
+        Return a human-readable string of the measurement, including its unit when not dimensionless.
+        
         Returns:
-            str: Text representation of the magnitude and unit.
+            A string formatted as "<magnitude> <unit>" for measurements with a unit, or as "<magnitude>" for dimensionless measurements.
         """
         if not str(self.unit) == "dimensionless":
             return f"{self.magnitude} {self.unit}"
@@ -429,18 +502,18 @@ class Measurement:
 
     def _compare(self, other: Any, operation: Callable[..., bool]) -> bool:
         """
-        Normalise operands into comparable measurements before applying a comparison.
-
+        Compare this measurement to another value by normalizing both to the same unit and applying a comparison operation.
+        
         Parameters:
-            other (Any): Measurement instance or string representation used for the comparison.
-            operation (Callable[..., bool]): Callable that consumes two magnitudes and returns a comparison result.
-
+            other (Any): A Measurement instance or a string parseable by Measurement.from_string; empty or null-like values return False.
+            operation (Callable[..., bool]): A callable that accepts two magnitudes (self and other, after unit normalization) and returns a boolean result.
+        
         Returns:
-            bool: Outcome of the supplied comparison function.
-
+            bool: Result of applying `operation` to the two magnitudes; `False` for empty/null-like `other`.
+        
         Raises:
-            TypeError: If `other` cannot be interpreted as a measurement.
-            ValueError: If the operands use incompatible dimensions.
+            UnsupportedComparisonError: If `other` cannot be interpreted as a Measurement.
+            IncomparableMeasurementError: If the two measurements have incompatible dimensions and cannot be converted to the same unit.
         """
         if other is None or other in ("", [], (), {}):
             return False
@@ -457,13 +530,13 @@ class Measurement:
 
     def __radd__(self, other: Any) -> Measurement:
         """
-        Support sum() by treating zero as a neutral element.
-
+        Allow right-side addition so sum() treats 0 as the neutral element.
+        
         Parameters:
-            other (Any): Left operand supplied by Python's arithmetic machinery.
-
+            other (Any): Left operand supplied by Python's arithmetic machinery; typically 0 when used with sum().
+        
         Returns:
-            Measurement: Either `self` or the result of addition.
+            Measurement: `self` if `other` is 0, otherwise the result of adding `other` to `self`.
         """
         if other == 0:
             return self

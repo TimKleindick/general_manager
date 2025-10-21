@@ -543,14 +543,34 @@ class HashablePayload:
         """Raised when HashablePayload receives a non-integer foo value."""
 
         def __init__(self) -> None:
+            """
+            Initialize the InvalidFooTypeError with a default error message.
+            
+            This constructor sets the exception message to "foo must be an int." to indicate the provided `foo` value has an invalid (non-int) type.
+            """
             super().__init__("foo must be an int.")
 
     def __init__(self, foo: int):
+        """
+        Initialize a HashablePayload instance with the given integer value.
+        
+        Parameters:
+            foo (int): Integer value to store on the instance.
+        
+        Raises:
+            HashablePayload.InvalidFooTypeError: If `foo` is not an int.
+        """
         if not isinstance(foo, int):
             raise HashablePayload.InvalidFooTypeError()
         self.foo = foo
 
     def __repr__(self):
+        """
+        Provide an unambiguous string representation of the HashablePayload instance.
+        
+        Returns:
+            str: A string in the form "HashablePayload(foo=<value>)" showing the `foo` attribute.
+        """
         return f"HashablePayload(foo={self.foo})"
 
     def __eq__(self, other):
@@ -612,6 +632,11 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate,
         mock_get_index,
     ):
+        """
+        Ensures keys listed under an exclude rule are invalidated and removed when the exclude condition changes.
+        
+        Sets up an index containing an exclude rule for DummyManager2 (count__gt 5) and simulates a transition from an old value that matched the exclude (count = 10) to a new instance value that no longer matches (count = 3); asserts that the affected cache key is invalidated and removed.
+        """
         mock_get_index.return_value = {
             "filter": {},
             "exclude": {"DummyManager2": {"count__gt": {"5": ["X"]}}},

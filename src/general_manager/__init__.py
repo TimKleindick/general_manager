@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    """
+    Dynamically resolve and return a requested export when a module attribute is accessed but not defined.
+    
+    Parameters:
+        name (str): The attribute name being accessed on the module.
+    
+    Returns:
+        Any: The resolved export object or value corresponding to `name`.
+    """
     return resolve_export(
         name,
         module_all=__all__,

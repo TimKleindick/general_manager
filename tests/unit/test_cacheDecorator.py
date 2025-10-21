@@ -9,7 +9,12 @@ from contextlib import suppress
 
 
 def _trusted_pickle_loads(data: bytes) -> object:
-    """Deserialize pickle data from the trusted in-memory cache used in tests."""
+    """
+    Deserialize pickle-serialized bytes produced by the in-memory test cache.
+    
+    Returns:
+        object: The deserialized Python object.
+    """
 
     return pickle.loads(data)  # noqa: S301 - test cache operates on controlled input
 
@@ -39,12 +44,12 @@ class FakeCacheBackend:
 
     def set(self, key, value, timeout=None):
         """
-        Stores a value in the cache under the specified key after serializing it.
-
-        Args:
-            key: The cache key under which the value will be stored.
-            value: The value to cache; will be serialized before storage.
-            timeout: Optional expiration time for the cache entry (not used in this implementation).
+        Store `value` in the in-memory cache under `key`, serializing it before storage.
+        
+        Parameters:
+            key: Cache key under which the value will be stored.
+            value: The Python object to cache; it is serialized with pickle prior to storage.
+            timeout: Optional expiration time for the cache entry. This backend does not enforce expiration.
         """
         self.store[key] = pickle.dumps(value)
 
@@ -275,10 +280,9 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
     def test_nested_cache_decorator(self):
         """
-        Tests nested usage of the cached decorator with dependency tracking and recording.
-
-        Verifies that both inner and outer cached functions store results and record dependencies
-        correctly on cache misses, and that dependency recording does not occur on cache hits.
+        Verify nested cached functions cache results and record their dependencies on cache misses.
+        
+        Ensures that both inner and outer functions store their computed results in the provided cache backend and that the recording function is invoked once per miss with the correct dependency sets (inner first, then outer). Also verifies that subsequent calls that hit the cache do not trigger dependency recording.
         """
 
         @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)

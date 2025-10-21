@@ -400,6 +400,11 @@ class GraphQLSubscriptionConsumerSendProtocolMessageTests(unittest.TestCase):
         consumer = GraphQLSubscriptionConsumer()
 
         async def test_send() -> None:
+            """
+            Verifies that _send_protocol_message delegates sending the given protocol message to the consumer's send_json method.
+            
+            Asserts that send_json is called exactly once with the provided message.
+            """
             with patch.object(
                 consumer, "send_json", new_callable=AsyncMock
             ) as mock_send:
