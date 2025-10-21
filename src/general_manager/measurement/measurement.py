@@ -469,6 +469,62 @@ class Measurement:
             return self
         return self.__add__(other)
 
+    def __rsub__(self, other: Any) -> Measurement:
+        """
+        Support right-side subtraction.
+
+        Parameters:
+            other (Any): Left operand supplied by Python's arithmetic machinery.
+
+        Returns:
+            Measurement: Result of subtracting `self` from `other`.
+
+        Raises:
+            TypeError: If `other` is not a Measurement instance.
+        """
+        if other == 0:
+            return self * -1
+        if not isinstance(other, Measurement):
+            raise MeasurementOperandTypeError("Subtraction")
+        return other.__sub__(self)
+
+    def __rmul__(self, other: Any) -> Measurement:
+        """
+        Support right-side multiplication.
+
+        Parameters:
+            other (Any): Left operand supplied by Python's arithmetic machinery.
+
+        Returns:
+            Measurement: Result of multiplying `other` by `self`.
+        """
+        return self.__mul__(other)
+
+    def __rtruediv__(self, other: Any) -> Measurement:
+        """
+        Support right-side division.
+
+        Parameters:
+            other (Any): Left operand supplied by Python's arithmetic machinery.
+
+        Returns:
+            Measurement: Result of dividing `other` by `self`.
+
+        Raises:
+            TypeError: If `other` is not a Measurement instance.
+        """
+        if isinstance(other, (Decimal, float, int)):
+            if not isinstance(other, Decimal):
+                other = Decimal(str(other))
+            result_quantity = other / self.quantity
+            return Measurement(
+                Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
+            )
+
+        if not isinstance(other, Measurement):
+            raise MeasurementOperandTypeError("Division")
+        return other.__truediv__(self)
+
     # Comparison Operators
     def __eq__(self, other: Any) -> bool:
         return self._compare(other, eq)
