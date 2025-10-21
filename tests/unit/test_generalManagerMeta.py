@@ -90,6 +90,14 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertEqual(self.dummy_manager1.dummy_manager2, self.dummy_manager2)  # type: ignore
 
     def test_circular_nested_manager_property(self):
+        """
+        Verifies creation of circular nested manager properties between two manager classes and their instances.
+        
+        Sets up mutual _attributes on two manager instances, invokes property creation for each side, and asserts that:
+        - class-level properties reference the other manager class,
+        - instance-level properties return the corresponding manager instance,
+        - nested access through the created properties resolves back to the original instance.
+        """
         self.dummy_manager1._attributes = {
             "dummy_manager2": self.dummy_manager2,
         }
@@ -196,6 +204,11 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertIsInstance(self.dummy_manager1.test_int, int)  # type: ignore
 
     def test_property_with_non_existent_attribute(self):
+        """
+        Verifies that accessing an attribute not present on the manager instance raises AttributeError.
+        
+        Asserts that attempting to retrieve 'non_existent_field' from the DummyManager1 instance raises an AttributeError.
+        """
         self.dummy_manager1._attributes = {}
 
         GeneralManagerMeta.createAtPropertiesForAttributes(
@@ -208,6 +221,11 @@ class TestPropertyInitialization(SimpleTestCase):
             getattr(self.dummy_manager1, missing_attr)
 
     def test_property_with_callable_error(self):
+        """
+        Verifies that if a property's callable raises an exception, accessing that property raises an AttributeError with a descriptive message.
+        
+        The test installs a callable for the attribute `test_field` that raises a simulated PropertyExecutionError, creates the corresponding property on the manager class, and asserts that accessing the attribute on the instance raises an AttributeError containing "Error calling attribute test_field".
+        """
         class PropertyExecutionError(ValueError):
             """Raised to simulate an exception inside a property callable."""
 
@@ -262,6 +280,19 @@ class DummyInterface(InterfaceBase):
 
     @classmethod
     def create(cls, *args, **kwargs):
+        """
+        Create and return a new managed object or resource using the provided arguments.
+        
+        Parameters:
+            *args: Positional arguments forwarded to the concrete creation implementation.
+            **kwargs: Keyword arguments forwarded to the concrete creation implementation.
+        
+        Returns:
+            The newly created object.
+        
+        Raises:
+            NotImplementedError: If the concrete class does not implement this method.
+        """
         raise NotImplementedError
 
     def update(self, *args, **kwargs):
@@ -447,10 +478,11 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
     def test_multiple_classes_register_in_order(self):
         """
-        Define two different DummyInterface variants, each with its own hooks.
-        Verify that all_classes and pending_attribute_initialization
-        appear in the correct order: [ManagerA, ManagerB],
-        and that each manager has the attributes set by its hooks.
+        Ensure multiple manager classes register in declaration order and receive their interface hook modifications.
+        
+        Verifies that GeneralManagerMeta.all_classes and GeneralManagerMeta.pending_attribute_initialization
+        list ManagerA then ManagerB, and that ManagerA and ManagerB have the attributes set by their
+        interfaces' preCreation and postCreation hooks (`fromA` / `a_post` and `fromB` / `b_post` respectively).
         """
 
         # DummyInterfaceA: adds 'fromA' and 'a_post'
@@ -459,6 +491,17 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
             @classmethod
             def create(cls, *args, **kwargs):
+                """
+                Create and return a new managed instance for this interface.
+                
+                Parameters:
+                    cls: The manager class that is requesting creation.
+                    *args: Positional arguments forwarded to the concrete creation implementation.
+                    **kwargs: Keyword arguments forwarded to the concrete creation implementation.
+                
+                Returns:
+                    The newly created managed instance.
+                """
                 raise NotImplementedError
 
             def update(self, *args, **kwargs):
@@ -507,6 +550,17 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
             @classmethod
             def create(cls, *args, **kwargs):
+                """
+                Create and return a new managed instance for this interface.
+                
+                Parameters:
+                    cls: The manager class that is requesting creation.
+                    *args: Positional arguments forwarded to the concrete creation implementation.
+                    **kwargs: Keyword arguments forwarded to the concrete creation implementation.
+                
+                Returns:
+                    The newly created managed instance.
+                """
                 raise NotImplementedError
 
             def update(self, *args, **kwargs):

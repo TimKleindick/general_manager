@@ -16,9 +16,13 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Initializes test-specific `Employee` and `TaxCalculation` manager classes with their interfaces for use in integration tests.
-
-        Defines an `Employee` class with database fields for name and salary (in EUR), and a `TaxCalculation` class that references an employee and exposes a calculation property for computing 20% tax on the employee's salary. Assigns these classes to class variables for use in test methods.
+        Prepare test manager classes used across tests.
+        
+        Defines two inner manager classes on the test class:
+        - Employee: a database-backed manager with `name` and `salary` fields (salary measured in EUR).
+        - TaxCalculation: a manager that references an Employee and exposes a sortable GraphQL property `calculatedTax` that computes 20% of the referenced employee's salary.
+        
+        After definition, assigns `Employee`, `TaxCalculation`, and `general_manager_classes` to the test class for use in test methods.
         """
 
         class Employee(GeneralManager):
@@ -53,7 +57,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Prepares the test environment by creating and logging in a test user, and defines the GraphQL query for tax calculation.
+        Set up a test user and the GraphQL query used by tests.
+        
+        Creates a test user and logs them in, then assigns:
+        - self.user: the created user instance
+        - self.mutation: GraphQL query string for retrieving a TaxCalculation's `calculatedTax` (value and unit)
         """
         User = get_user_model()
         password = get_random_string(12)
@@ -88,7 +96,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def test_sort_by_calculation_property(self):
         """
-        Tests that the tax calculation can be sorted by the employee's name.
+        Verify TaxCalculation entries can be ordered by the `calculatedTax` property.
+        
+        Asserts the initial retrieval order is by employee name, then checks that sorting by
+        `calculatedTax` yields employees ordered by their salary-derived tax (ascending),
+        and that sorting with `reverse=True` yields the reverse order.
         """
         self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
@@ -120,7 +132,9 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def test_sort_by_calculation_property_and_name(self):
         """
-        Tests that the tax calculation can be sorted by the employee's name.
+        Verifies that TaxCalculation entries are ordered by `calculatedTax` and then by `employee.name`, both in ascending order.
+        
+        Creates employees with different salaries, sorts the TaxCalculation bucket by the tuple ("calculatedTax", "employee.name") ascending, and asserts the resulting employee name order is: "Tim", "Alice", "Tina", "Bob".
         """
         self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
@@ -145,7 +159,14 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def test_filter_by_calculation_property(self):
         """
-        Tests that the tax calculation can be filtered by the employee's name.
+        Verifies that TaxCalculation entries can be filtered by employee name prefix and by calculatedTax, and that combined filters produce the expected subsets and ordering.
+        
+        Checks:
+        - Filtering by employee name prefix "T" yields two entries ordered by employee name: Tim, Tina.
+        - Further filtering that subset by calculatedTax == 3000 EUR * 0.2 yields a single entry (Tina).
+        - Filtering all TaxCalculation entries by calculatedTax == 3000 EUR * 0.2 yields two entries ordered: Alice, Tina.
+        - Applying the calculatedTax filter to the name-prefixed subset produces the same result as filtering the subset directly.
+        - The filtered-by-both bucket is not equal to the original name-prefixed bucket.
         """
         self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id

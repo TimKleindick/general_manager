@@ -43,12 +43,14 @@ class PersonInterface(DBBasedInterface):
     @classmethod
     def handleInterface(cls):
         """
-        Provides pre- and post-processing functions for dynamically handling interface class creation.
-
+        Provide pre- and post-processing callables used when creating a dynamic interface-backed class.
+        
+        The returned `pre` callable prepares the attributes and resolves the interface class and model to use for class creation. The returned `post` callable finalizes the association by assigning the interface class to the new class and recording the new class on the interface.
+        
         Returns:
-            A tuple containing:
-                - pre: A function that prepares attributes, the interface class, and the associated model for class creation.
-                - post: A function that finalizes the setup by linking the new class and interface class.
+            tuple: A pair `(pre, post)` where:
+                - `pre(name, attrs, interface)` returns `(attrs, interface_class, model)`.
+                - `post(new_cls, interface_cls, model)` sets `new_cls.Interface = interface_cls` and `interface_cls._parent_class = new_cls`.
         """
 
         def pre(name, attrs, interface):

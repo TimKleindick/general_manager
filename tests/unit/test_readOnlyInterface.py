@@ -105,6 +105,16 @@ class GetUniqueFieldsTests(SimpleTestCase):
         Field = SimpleNamespace  # mit .name, .unique, .column
 
         def always_false_instancecheck(_: type, __: object) -> bool:
+            """
+            Always returns False for any type-instance check inputs.
+            
+            Parameters:
+                _ (type): Ignored type argument.
+                __ (object): Ignored instance/object argument.
+            
+            Returns:
+                bool: `False` always.
+            """
             return False
 
         fake_meta = SimpleNamespace(
@@ -165,6 +175,15 @@ class EnsureSchemaTests(TestCase):
         """
 
         def table_names(_: object) -> list[str]:
+            """
+            Provide an empty list of database table names for tests.
+            
+            Parameters:
+                _ (object): Ignored database connection or introspection object.
+            
+            Returns:
+                list[str]: An empty list representing no table names.
+            """
             return []
 
         connection.introspection.table_names = table_names  # type: ignore[assignment]
@@ -180,6 +199,15 @@ class EnsureSchemaTests(TestCase):
         """
 
         def table_names(_: object) -> list[str]:
+            """
+            Return a list containing the DummyModel's database table name.
+            
+            Parameters:
+                _ (object): Ignored connection/introspection object.
+            
+            Returns:
+                list[str]: A single-item list with DummyModel._meta.db_table.
+            """
             return [DummyModel._meta.db_table]
 
         connection.introspection.table_names = table_names  # type: ignore[assignment]
@@ -187,6 +215,16 @@ class EnsureSchemaTests(TestCase):
         fake_desc = [SimpleNamespace(name="col1"), SimpleNamespace(name="col2")]
 
         def get_table_description(_: object, __: object) -> list[SimpleNamespace]:
+            """
+            Return a fake table description for database introspection used in tests.
+            
+            Both parameters are ignored; they exist to match the signature of Django's
+            introspection.get_table_description.
+            
+            Returns:
+                list[SimpleNamespace]: A list of SimpleNamespace objects representing
+                column descriptions.
+            """
             return fake_desc
 
         connection.introspection.get_table_description = (  # type: ignore[assignment]
@@ -213,7 +251,9 @@ class SyncDataTests(SimpleTestCase):
     def setUp(self):
         # leere Manager-Instanzen
         """
-        Set up test environment by resetting dummy model state, patching transaction atomicity, stubbing key methods, and capturing logs for the SyncDataTests.
+        Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and interface methods, and capturing logs.
+        
+        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyInterface.getUniqueFields to return {'name'} and ReadOnlyInterface.ensureSchemaIsUpToDate to return an empty list, and starts a logger patch that captures log calls.
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
@@ -221,9 +261,20 @@ class SyncDataTests(SimpleTestCase):
         self.atomic_cm = mock.MagicMock()
 
         def _atomic_enter(_: object) -> None:
+            """
+            No-op context manager __enter__ function used in tests.
+            
+            Parameters:
+                _ (object): Ignored context manager instance or resource placeholder.
+            """
             return None
 
         def _atomic_exit(*_: object) -> None:
+            """
+            No-op context manager exit callable that accepts any arguments and does nothing.
+            
+            Ignores all passed-in values and returns None, suitable as a dummy `__exit__` for stubbing context managers.
+            """
             return None
 
         self.atomic_patch = mock.patch(
