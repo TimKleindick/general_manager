@@ -198,7 +198,6 @@ class TestRelationFieldValue(TestCase):
     def test_fk_with_factory_existing_instance(self):
         """
         Verifies that when a related model has a factory but the random choice selects an existing instance, getFieldValue returns a LazyFunction that yields one of the existing instances when evaluated.
-
         The test sets up a General Manager Class (GMC) with a Factory that would create dummy1, patches the RNG to choose the "existing" branch, and patches the model manager to return [dummy1, dummy2]. It asserts the declaration is a LazyFunction and that evaluating it returns either dummy1 or dummy2.
         """
         dummy1 = DummyForeignKey(name="a")
@@ -295,7 +294,6 @@ class TestGetManyToManyFieldValue(TestCase):
     def test_m2m_with_factory_and_existing(self):
         """
         Verifies that getManyToManyFieldValue returns a list containing only existing related instances when a related-model factory is available.
-
         Sets up a factory that produces one instance and an existing queryset of two instances, then asserts the result is a list and every returned item is one of the existing instances.
         """
         dummy1 = DummyManyToMany(name="foo", id=1)

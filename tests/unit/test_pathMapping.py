@@ -566,7 +566,6 @@ class PathMappingUnitTests(SimpleTestCase):
         def capture_thread_exception(args: threading.ExceptHookArgs) -> None:
             """
             Append the exception value from a thread's excepthook args to the shared errors list.
-
             Parameters:
                 args (threading.ExceptHookArgs): The exception hook arguments provided by threading.excepthook; `args.exc_value` is appended to `errors`.
             """

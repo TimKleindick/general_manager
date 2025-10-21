@@ -12,7 +12,6 @@ class UnexpectedNodeTypeError(ValueError):
     def __init__(self) -> None:
         """
         Initialize the exception indicating an unexpected AST node type was encountered.
-
         The exception is constructed with the message "Unexpected node type."
         """
         super().__init__("Unexpected node type.")
@@ -24,7 +23,6 @@ class UnsupportedNodeEvaluationError(ValueError):
     def __init__(self, node_type: str) -> None:
         """
         Initialize the exception indicating a rule handler cannot evaluate an AST node of the given type.
-
         Parameters:
             node_type (str): The name of the AST node type that cannot be evaluated; this value is included in the exception message.
         """
@@ -35,7 +33,6 @@ class DummyRule:
     def __init__(self, op_symbol: str):
         """
         Initialize the DummyRule with a fixed operator symbol.
-
         Parameters:
             op_symbol (str): Operator symbol to store and return for this rule instance.
         """

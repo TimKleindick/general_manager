@@ -18,7 +18,6 @@ class RuleTests(TestCase):
     def test_rule_with_floats(self):
         """
         Verifies that a Rule comparing a float field produces a failing evaluation and the correct error message.
-
         Creates a DummyObject with price 150.75, constructs a Rule checking price < 100.0, expects evaluate() to return False and getErrorMessage() to return {"price": "[price] (150.75) must be < 100.0!"}.
         """
 
@@ -166,7 +165,6 @@ class RuleTests(TestCase):
     def test_rule_with_lists(self):
         """
         Verifies that a Rule based on list length marks an empty list as invalid and produces the expected error message.
-
         The test constructs a Rule that requires len(item.items) > 0, evaluates it against an object with an empty list, asserts the evaluation is False, and checks the returned error message matches the expected mapping for the `items` field.
         """
 
@@ -193,7 +191,6 @@ class RuleTests(TestCase):
     def test_rule_with_custom_error_message(self):
         """
         Verifies that a Rule constructed with a custom error message template formats that template for each referenced variable when the rule fails.
-
         The test provides a template containing placeholders for `quantity` and `stock`, ensures the template is considered valid, evaluates the rule against an object where `quantity > stock`, and asserts that the resulting error mapping contains the formatted message for both `quantity` and `stock`.
         """
 
@@ -340,7 +337,6 @@ class RuleTests(TestCase):
     def test_rule_with_type_hint(self):
         """
         Verifies a Rule correctly evaluates a predicate that uses a type hint cast.
-
         Creates a Rule whose predicate casts item.price to float and compares it to 100.0, asserts the evaluation is False for price 150.75, and asserts no error message is produced.
         """
 
