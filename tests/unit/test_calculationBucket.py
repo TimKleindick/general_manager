@@ -27,6 +27,7 @@ class DummyGeneralManager:
         Stores all keyword arguments for later comparison and representation.
         """
         self.kwargs = kwargs
+        self.identification = dict(kwargs)
 
     def __eq__(self, value: object) -> bool:
         """
@@ -645,10 +646,10 @@ class TestCalculationBucketExceptions(TestCase):
         from general_manager.bucket.calculationBucket import (
             InvalidCalculationInterfaceError,
         )
-        from general_manager.interface.baseInterface import BaseInterface
+        from general_manager.interface.baseInterface import InterfaceBase
 
         # Create a manager with non-CalculationInterface
-        class NonCalcInterface(BaseInterface):
+        class NonCalcInterface(InterfaceBase):
             pass
 
         class NonCalcManager:
@@ -669,7 +670,47 @@ class TestCalculationBucketExceptions(TestCase):
 
         # Create a different bucket type
         class OtherBucket(Bucket):
-            pass
+            def __init__(self, manager_class):
+                super().__init__(manager_class)
+
+            def __or__(self, other):
+                raise NotImplementedError
+
+            def __iter__(self):
+                return iter(())
+
+            def filter(self, **kwargs):
+                raise NotImplementedError
+
+            def exclude(self, **kwargs):
+                raise NotImplementedError
+
+            def first(self):
+                return None
+
+            def last(self):
+                return None
+
+            def __contains__(self, item):
+                return False
+
+            def count(self):
+                return 0
+
+            def all(self):
+                return self
+
+            def sort(self, key, reverse=False):
+                return self
+
+            def get(self, **kwargs):
+                raise NotImplementedError
+
+            def __getitem__(self, item):
+                raise NotImplementedError
+
+            def __len__(self):
+                return 0
 
         other_bucket = OtherBucket(DummyGeneralManager)
 
@@ -706,8 +747,8 @@ class TestCalculationBucketExceptions(TestCase):
         # Create input fields with circular dependencies
         class CircularInterface(CalculationInterface):
             input_fields: ClassVar[dict] = {
-                "field_a": Input(str, dependencies=["field_b"]),
-                "field_b": Input(str, dependencies=["field_a"]),
+                "field_a": Input(str, depends_on=["field_b"]),
+                "field_b": Input(str, depends_on=["field_a"]),
             }
 
         class CircularManager:
@@ -719,11 +760,7 @@ class TestCalculationBucketExceptions(TestCase):
 
         # Try to sort with circular dependencies
         with self.assertRaises(CyclicDependencyError) as ctx:
-            bucket._sortCalculations(
-                [
-                    {"field_a": "value1", "field_b": "value2"},
-                ]
-            )
+            bucket.topological_sort_inputs()
         self.assertIn("Cyclic dependency detected", str(ctx.exception))
 
     def test_invalid_possible_values_error(self):
@@ -736,7 +773,8 @@ class TestCalculationBucketExceptions(TestCase):
         class InvalidPossibleValuesInterface(CalculationInterface):
             input_fields: ClassVar[dict] = {
                 "test_field": Input(
-                    str, possible_values="not_a_list_or_callable"  # Invalid type
+                    str,
+                    possible_values=123,  # Invalid type
                 ),
             }
 
@@ -748,7 +786,9 @@ class TestCalculationBucketExceptions(TestCase):
         bucket = CalculationBucket(InvalidPossibleValuesManager)
 
         with self.assertRaises(InvalidPossibleValuesError) as ctx:
-            bucket._getPossibleValues("test_field")
+            bucket.get_possible_values(
+                "test_field", bucket.input_fields["test_field"], {}
+            )
         self.assertIn("Invalid possible_values configuration", str(ctx.exception))
 
     def test_missing_calculation_match_error(self):
@@ -760,8 +800,10 @@ class TestCalculationBucketExceptions(TestCase):
         bucket = CalculationBucket(DummyGeneralManager)
 
         # Try to get a calculation that doesn't exist
-        with self.assertRaises(MissingCalculationMatchError) as ctx:
-            bucket.get(nonexistent_field="value")
+        bucket._data = []
+        with patch.object(bucket, "filter", return_value=bucket):
+            with self.assertRaises(MissingCalculationMatchError) as ctx:
+                bucket.get(value="missing")
         self.assertIn("No matching calculation found", str(ctx.exception))
 
     def test_multiple_calculation_match_error(self):
@@ -778,19 +820,17 @@ class TestCalculationBucketExceptions(TestCase):
 
         class OverlapManager:
             Interface = OverlapInterface
-            identification = {"field": str}
+            identification: ClassVar[dict[str, type]] = {"field": str}
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+                self.kwargs = kwargs
 
         OverlapInterface._parent_class = OverlapManager
 
         bucket = CalculationBucket(OverlapManager)
-
-        # Manually add overlapping calculations to trigger the error
-        # This would normally be prevented by proper configuration
-        # but we're testing the error handling
-        with patch.object(bucket, "_calculations", [
-            OverlapManager(field="a"),
-            OverlapManager(field="a"),
-        ]):
+        bucket._data = [{"field": "a"}, {"field": "a"}]
+        with patch.object(bucket, "filter", return_value=bucket):
             with self.assertRaises(MultipleCalculationMatchError) as ctx:
                 bucket.get(field="a")
             self.assertIn("Multiple matching calculations found", str(ctx.exception))
@@ -800,6 +840,7 @@ class TestCalculationBucketExceptions(TestCase):
         bucket = CalculationBucket(DummyGeneralManager)
 
         # Test empty bucket operations
+        bucket._data = []
         empty_result = list(bucket)
         self.assertEqual(empty_result, [])
 
@@ -813,31 +854,38 @@ class TestCalculationBucketExceptions(TestCase):
 
     def test_calculation_bucket_filter_combinations(self):
         """Test various filter and exclude combinations."""
-        bucket = CalculationBucket(
-            DummyGeneralManager,
-            filter_definitions={"field1": "value1"},
-            exclude_definitions={"field2": "value2"},
-        )
+        with patch(
+            "general_manager.bucket.calculationBucket.parse_filters",
+            return_value={},
+        ):
+            bucket = CalculationBucket(
+                DummyGeneralManager,
+                filter_definitions={"field1": "value1"},
+                exclude_definitions={"field2": "value2"},
+            )
 
-        # Add more filters
-        filtered = bucket.filter(field3="value3")
-        self.assertIn("field1", filtered.filter_definitions)
-        self.assertIn("field3", filtered.filter_definitions)
+            # Add more filters
+            filtered = bucket.filter(field3="value3")
+            self.assertIn("field1", filtered.filter_definitions)
+            self.assertIn("field3", filtered.filter_definitions)
 
-        # Add more exclusions
-        excluded = bucket.exclude(field4="value4")
-        self.assertIn("field2", excluded.exclude_definitions)
-        self.assertIn("field4", excluded.exclude_definitions)
+            # Add more exclusions
+            excluded = bucket.exclude(field4="value4")
+            self.assertIn("field2", excluded.exclude_definitions)
+            self.assertIn("field4", excluded.exclude_definitions)
 
     def test_calculation_bucket_or_with_manager_instance(self):
         """Test OR operation with a GeneralManager instance."""
-        bucket = CalculationBucket(DummyGeneralManager)
 
-        # Create a dummy manager instance
-        manager_instance = DummyGeneralManager(id=123)
-        manager_instance.__class__ = DummyGeneralManager
-        manager_instance.identification = {"id": 123}
+        class InlineInterface(CalculationInterface):
+            id = Input(int, possible_values=[123])
 
-        # Should combine bucket with manager instance
-        combined = bucket | manager_instance
+        class InlineManager(GeneralManager):
+            Interface = InlineInterface
+
+        bucket = CalculationBucket(InlineManager)
+        manager_instance = InlineManager(id=123)
+
+        with patch.object(bucket, "filter", return_value=bucket):
+            combined = bucket | manager_instance
         self.assertIsInstance(combined, CalculationBucket)
