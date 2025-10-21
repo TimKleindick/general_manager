@@ -27,14 +27,16 @@ def dataChange(func: Callable[P, R]) -> Callable[P, R]:
     @wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         """
-        Execute the wrapped function while emitting data change signals.
-
+        Emit pre_data_change and post_data_change signals around the wrapped function call.
+        
+        Emits a pre_data_change signal before invoking the wrapped function and a post_data_change signal afterwards. Signals are sent with `sender`, `instance`, and `action`; the post-change signal also includes `old_relevant_values`. After signaling, the wrapper removes the `_old_values` attribute from the pre-change instance if it exists.
+        
         Parameters:
             *args: Positional arguments forwarded to the wrapped function.
             **kwargs: Keyword arguments forwarded to the wrapped function.
-
+        
         Returns:
-            R: Result produced by the wrapped function.
+            R: The result returned by the wrapped function.
         """
         action = func.__name__
         if func.__name__ == "create":

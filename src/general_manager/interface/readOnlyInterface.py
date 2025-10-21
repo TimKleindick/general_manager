@@ -29,6 +29,12 @@ class MissingReadOnlyDataError(ValueError):
     """Raised when a ReadOnlyInterface lacks the required `_data` attribute."""
 
     def __init__(self, interface_name: str) -> None:
+        """
+        Exception raised when a ReadOnlyInterface is missing the required `_data` attribute.
+        
+        Parameters:
+            interface_name (str): Name of the interface class; used to construct the exception message.
+        """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must define a '_data' attribute."
         )
@@ -38,6 +44,12 @@ class MissingUniqueFieldError(ValueError):
     """Raised when a ReadOnlyInterface has no unique fields defined."""
 
     def __init__(self, interface_name: str) -> None:
+        """
+        Initialize an error for a read-only interface that defines no unique fields.
+        
+        Parameters:
+            interface_name (str): Name of the interface class missing at least one unique field; this name is included in the exception message.
+        """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must declare at least one unique field."
         )
@@ -47,6 +59,11 @@ class InvalidReadOnlyDataFormatError(TypeError):
     """Raised when the `_data` JSON does not decode to a list of dictionaries."""
 
     def __init__(self) -> None:
+        """
+        Exception raised when the `_data` JSON does not decode to a list of dictionaries.
+        
+        Initializes the exception with the message "_data JSON must decode to a list of dictionaries."
+        """
         super().__init__("_data JSON must decode to a list of dictionaries.")
 
 
@@ -54,6 +71,11 @@ class InvalidReadOnlyDataTypeError(TypeError):
     """Raised when the `_data` attribute is neither JSON string nor list."""
 
     def __init__(self) -> None:
+        """
+        Initialize the InvalidReadOnlyDataTypeError with a standard error message.
+        
+        Raises a TypeError indicating that the `_data` attribute must be either a JSON string or a list of dictionaries.
+        """
         super().__init__("_data must be a JSON string or a list of dictionaries.")
 
 
@@ -66,13 +88,15 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @staticmethod
     def getUniqueFields(model: Type[models.Model]) -> set[str]:
         """
-        Return names of fields that uniquely identify instances of ``model``.
-
+        Determine which fields on the given Django model uniquely identify its instances.
+        
+        The result includes fields declared with `unique=True` (excluding a primary key named "id"), any fields in `unique_together` tuples, and fields referenced by `UniqueConstraint` objects.
+        
         Parameters:
-            model (type[models.Model]): Django model inspected for uniqueness metadata.
-
+            model (type[models.Model]): Django model to inspect.
+        
         Returns:
-            set[str]: Field names that participate in unique constraints.
+            set[str]: Names of fields that participate in unique constraints for the model.
         """
         opts = model._meta
         unique_fields: set[str] = set()
@@ -94,7 +118,17 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
 
     @classmethod
     def syncData(cls) -> None:
-        """Synchronise the backing model with the class-level JSON data."""
+        """
+        Synchronize the Django model with the parent manager's class-level `_data` JSON.
+        
+        Parses the parent class's `_data` (JSON string or list of dicts), ensures the model schema is up to date, and within a single transaction creates, updates, or deactivates model instances to match the parsed data. Newly created or updated instances are marked `is_active = True`; existing active instances absent from the data are marked `is_active = False`. Logs a summary when any changes occur.
+        
+        Raises:
+            MissingReadOnlyDataError: If the parent manager class does not define `_data`.
+            InvalidReadOnlyDataFormatError: If `_data` is a JSON string that does not decode to a list of dictionaries.
+            InvalidReadOnlyDataTypeError: If `_data` is neither a string nor a list.
+            MissingUniqueFieldError: If the model exposes no unique fields to identify records.
+        """
         if cls.ensureSchemaIsUpToDate(cls._parent_class, cls._model):
             logger.warning(
                 f"Schema for ReadOnlyInterface '{cls._parent_class.__name__}' is not up to date."

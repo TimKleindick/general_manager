@@ -6,14 +6,16 @@ class TestMakeCacheKey(SimpleTestCase):
     def test_make_cache_key(self):
         def sample_function(x, y):
             """
-            Returns the sum of two values.
-
-            Args:
-                x: The first value to add.
-                y: The second value to add.
-
+            Compute the sum of two values.
+            
+            Both operands must support the `+` operator; the result is the value produced by adding `x` and `y`.
+            
+            Parameters:
+                x: The first addend.
+                y: The second addend.
+            
             Returns:
-                The result of adding x and y.
+                The result of `x + y`.
             """
             return x + y
 

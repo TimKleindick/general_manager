@@ -12,6 +12,12 @@ class UnsupportedUnionOperandError(TypeError):
     """Raised when attempting to union a manager with an incompatible operand."""
 
     def __init__(self, operand_type: type) -> None:
+        """
+        Exception raised when attempting to perform a union with an unsupported operand type.
+        
+        Parameters:
+            operand_type (type): The operand type that is not supported for the union; its representation is included in the exception message.
+        """
         super().__init__(f"Unsupported type for union: {operand_type}.")
 
 
@@ -28,14 +34,11 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
-        Instantiate the manager by delegating to the interface and record its identification.
-
+        Create a manager by constructing its Interface and record the resulting identification.
+        
         Parameters:
-            *args: Positional arguments forwarded to the interface constructor.
-            **kwargs: Keyword arguments forwarded to the interface constructor.
-
-        Returns:
-            None
+            *args: Positional arguments forwarded to the Interface constructor.
+            **kwargs: Keyword arguments forwarded to the Interface constructor.
         """
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
@@ -65,16 +68,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         other: Self | Bucket[Self],
     ) -> Bucket[Self]:
         """
-        Merge this manager with another manager or bucket.
-
+        Combine this manager with another manager or a Bucket into a Bucket representing their union.
+        
         Parameters:
-            other (Self | Bucket[Self]): Manager instance or bucket to combine.
-
+            other (Self | Bucket[Self]): A manager of the same class or a Bucket to union with.
+        
         Returns:
-            Bucket[Self]: Bucket containing the union of both inputs.
-
+            Bucket[Self]: A Bucket containing the union of the managed objects represented by this manager and `other`.
+        
         Raises:
-            TypeError: If `other` is neither a compatible bucket nor manager.
+            UnsupportedUnionOperandError: If `other` is not a Bucket and not a GeneralManager instance of the same class.
         """
         if isinstance(other, Bucket):
             return other | self
@@ -88,13 +91,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         other: object,
     ) -> bool:
         """
-        Compare managers based on their identification values.
-
-        Parameters:
-            other (object): Object to compare against this manager.
-
+        Determine whether another object represents the same managed entity.
+        
         Returns:
-            bool: True when `other` is a manager with the same identification.
+            `true` if `other` is a `GeneralManager` whose identification equals this manager's, `false` otherwise.
         """
         if not isinstance(other, GeneralManager):
             return False

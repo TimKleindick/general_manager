@@ -11,9 +11,10 @@ class DummyManager:
         @staticmethod
         def getAttributes():
             """
-            Returns a dictionary with attribute names as keys and None as values.
-
-            Provides a fixed set of attribute keys for use in testing or as an interface example.
+            Provide a fixed mapping of attribute names to None.
+            
+            Returns:
+                attributes (dict): A dictionary with keys 'a', 'b', and 'c', each mapped to None.
             """
             return {"a": None, "b": None, "c": None}
 
@@ -23,6 +24,12 @@ class MultipleMatchesError(ValueError):
     """Raised when DummyBucket.get encounters more than one matching item."""
 
     def __init__(self, count: int) -> None:
+        """
+        Initialize the error with a message indicating how many matching items were found.
+        
+        Parameters:
+            count (int): Number of matches that were found; used in the exception message "get() returned {count} matches."
+        """
         super().__init__(f"get() returned {count} matches.")
 
 
@@ -30,24 +37,36 @@ class SingleMatchRequiredError(ValueError):
     """Raised when DummyBucket.get requires exactly one value but none are available."""
 
     def __init__(self) -> None:
+        """
+        Create the exception signaling that `get()` requires exactly one match.
+        
+        The exception instance carries the message "get() requires exactly one match."
+        """
         super().__init__("get() requires exactly one match.")
 
 
 class DummyBucket(Bucket[int]):
     def __init__(self, manager_class, data=None):
         """
-        Initializes a DummyBucket with a manager class and optional data.
-
-        If data is provided, the bucket is populated with its items; otherwise, it is initialized empty.
+        Create a DummyBucket bound to a manager class, optionally seeded with initial items.
+        
+        Parameters:
+            manager_class: The manager class associated with this bucket.
+            data (iterable[int] | None): Optional iterable of items to populate the bucket; items are copied into the bucket's internal list.
         """
         super().__init__(manager_class)
         self._data = list(data or [])
 
     def __or__(self, other):
         """
-        Returns a new DummyBucket with data combined from this bucket and another bucket or integer.
-
-        If `other` is a DummyBucket, the result contains elements from both buckets. If `other` is an integer, it is appended to this bucket's data. Returns NotImplemented for unsupported types.
+        Create a new DummyBucket by combining this bucket's contents with another bucket or by appending an integer.
+        
+        Parameters:
+            other (DummyBucket | int): A DummyBucket whose elements will be concatenated to this bucket, or an integer to append.
+        
+        Returns:
+            DummyBucket: A new bucket containing the combined elements.
+            NotImplemented: If `other` is not a DummyBucket or an int.
         """
         if isinstance(other, DummyBucket):
             return DummyBucket(self._manager_class, [*self._data, *other._data])
@@ -57,15 +76,24 @@ class DummyBucket(Bucket[int]):
 
     def __iter__(self):
         """
-        Returns an iterator over the elements contained in the bucket.
+        Provide an iterator over the bucket's elements.
+        
+        Returns:
+            iterator: An iterator that yields each element in the bucket in order.
         """
         return iter(self._data)
 
     def filter(self, **kwargs):
         """
-        Returns a new DummyBucket with the same data and updated filters.
-
-        The returned bucket's filters dictionary is merged with the provided keyword arguments.
+        Create a new DummyBucket with merged filter criteria.
+        
+        Merges the provided keyword arguments into the bucket's existing filters and returns a new DummyBucket instance with the same data and manager class.
+        
+        Parameters:
+            **kwargs: Filter expressions to add or override in the returned bucket's filters.
+        
+        Returns:
+            DummyBucket: A new bucket with the same data and manager class and filters updated to include the provided kwargs.
         """
         new = DummyBucket(self._manager_class, self._data)
         new.filters = {**self.filters, **kwargs}
@@ -73,9 +101,15 @@ class DummyBucket(Bucket[int]):
 
     def exclude(self, **kwargs):
         """
-        Returns a new DummyBucket with exclusion filters updated by the provided criteria.
-
-        The returned bucket contains the same data but with its exclusion filters merged with the given keyword arguments.
+        Create a new DummyBucket with updated exclusion criteria.
+        
+        The returned bucket contains the same manager class and data as the original, but its excludes mapping is merged with the provided keyword arguments (provided keys override existing excludes).
+        
+        Parameters:
+            **kwargs: Exclusion criteria keyed by attribute name; values are the exclusion values.
+        
+        Returns:
+            DummyBucket: A new bucket whose `excludes` is the original `excludes` updated with `kwargs`.
         """
         new = DummyBucket(self._manager_class, self._data)
         new.excludes = {**self.excludes, **kwargs}
@@ -108,9 +142,19 @@ class DummyBucket(Bucket[int]):
     def get(self, **kwargs):
         # support lookup by 'value'
         """
-        Returns the unique item from the bucket matching the specified criteria.
-
-        If called with a 'value' keyword argument, returns the single item equal to that value. If called with no arguments, returns the item if the bucket contains exactly one element. Raises ValueError if zero or multiple matches are found.
+        Return the single item from the bucket that matches the provided criteria.
+        
+        If called with the keyword argument `value`, return the item equal to that value; if the number of matching items is not exactly one, raise a MultipleMatchesError containing the match count. If called with no keyword arguments, return the single element in the bucket when the bucket contains exactly one item; otherwise raise SingleMatchRequiredError.
+        
+        Parameters:
+            value: (optional) The value to match against items in the bucket.
+        
+        Returns:
+            The matching item.
+        
+        Raises:
+            MultipleMatchesError: When `value` is provided and the count of matching items is not exactly one.
+            SingleMatchRequiredError: When no criteria are provided and the bucket does not contain exactly one item.
         """
         if "value" in kwargs:
             matches = [item for item in self._data if item == kwargs["value"]]
@@ -124,9 +168,13 @@ class DummyBucket(Bucket[int]):
 
     def __getitem__(self, item):
         """
-        Retrieves an element by index or returns a new DummyBucket for a slice.
-
-        If a slice is provided, returns a new DummyBucket containing the sliced elements.
+        Retrieve an item by index or a new DummyBucket for a slice.
+        
+        Parameters:
+            item (int or slice): Index of the element to return, or a slice describing the subset to return.
+        
+        Returns:
+            The element at the given index, or a new DummyBucket containing the sliced elements.
         """
         if isinstance(item, slice):
             return DummyBucket(self._manager_class, self._data[item])
@@ -146,11 +194,12 @@ class DummyBucket(Bucket[int]):
 
     def sort(self, key, reverse=False):
         """
-        Returns a new DummyBucket with elements sorted in ascending or descending order.
-
-        Args:
-            reverse: If True, sorts elements in descending order.
-
+        Create a new DummyBucket containing the bucket's elements in sorted order.
+        
+        Parameters:
+            key: Ignored — accepted for API compatibility.
+            reverse (bool): If True, sort in descending order; otherwise sort in ascending order.
+        
         Returns:
             A new DummyBucket containing the sorted elements.
         """

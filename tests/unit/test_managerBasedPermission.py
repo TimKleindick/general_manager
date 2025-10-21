@@ -69,6 +69,21 @@ class CustomManagerBasedPermissionNoBasis(ManagerBasedPermission):
 class ManagerBasedPermissionTests(TestCase):
     def setUp(self):
         # Create a test user
+        """
+        Prepare fixtures for ManagerBasedPermission tests.
+        
+        Sets up test users (regular and staff admin), an AnonymousUser, a Mock instance, and a DummyPermission used as a potential based-on permission. Stores a copy of the current permission_functions and starts a patch for ManagerBasedPermission.__getBasedOnPermission, configuring that patched method to return None by default.
+        
+        Attributes set on self:
+            user: regular test User
+            admin_user: staff User
+            anonymous_user: AnonymousUser instance
+            mock_instance: Mock used as the manager/instance under test
+            original_permission_functions: copy of permission_functions prior to test modifications
+            check_patcher: patcher for ManagerBasedPermission.__getBasedOnPermission
+            mock_check: started patch object for the patched method
+            mock_permission: DummyPermission instance
+        """
         user_password = get_random_string(12)
         self.user = User.objects.create_user(
             username="testuser", email="test@example.com", password=user_password

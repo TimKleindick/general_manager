@@ -18,6 +18,11 @@ class SafeDict(dict):
 class DatabaseInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """
+        Prepare test fixtures for DatabaseInterface tests by defining in-test manager and interface classes and creating the BookModel table.
+        
+        Defines UserInterface and its UserManager, BookInterface and its BookManager, and a BookModel Django model attached to the test case. Creates the database schema for BookModel so tests can run against the model.
+        """
         super().setUpClass()
 
         class UserInterface(DatabaseInterface):
@@ -27,6 +32,17 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
 
             @classmethod
             def handleInterface(cls):
+                """
+                Provide pre/post handler callables used when attaching an interface to a class.
+                
+                Parameters:
+                    cls (type): The class that will act as the parent/owner of the interface.
+                
+                Returns:
+                    tuple: A pair `(pre, post)` where:
+                        - `pre(name, attrs, interface)` returns a three-tuple `(attrs, parent_class, model)` to be used when preparing the interface class.
+                        - `post(new_cls, interface_cls, model)` is called after the interface class is created; it assigns the interface to the new class and sets the interface's `_parent_class` to that new class.
+                """
                 def pre(name, attrs, interface):
                     return attrs, cls, cls._model
 
@@ -61,6 +77,17 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
 
             @classmethod
             def handleInterface(cls):
+                """
+                Provide pre/post handler callables used when attaching an interface to a class.
+                
+                Parameters:
+                    cls (type): The class that will act as the parent/owner of the interface.
+                
+                Returns:
+                    tuple: A pair `(pre, post)` where:
+                        - `pre(name, attrs, interface)` returns a three-tuple `(attrs, parent_class, model)` to be used when preparing the interface class.
+                        - `post(new_cls, interface_cls, model)` is called after the interface class is created; it assigns the interface to the new class and sets the interface's `_parent_class` to that new class.
+                """
                 def pre(name, attrs, interface):
                     return attrs, cls, cls._model
 

@@ -263,6 +263,16 @@ class MutationDecoratorTests(TestCase):
     def test_missing_required_argument_raises(self):
         @graphQlMutation()
         def required(info, value: int) -> int:
+            """
+            Return the provided integer value unchanged.
+
+            Parameters:
+                info: GraphQL resolver info object (ignored by this function).
+                value (int): The integer to return.
+
+            Returns:
+                int: The same integer passed in via `value`.
+            """
             _ = info
             return value
 

@@ -205,9 +205,9 @@ class MeasurementTestCase(TestCase):
 
     def test_inequality(self):
         """
-        Test inequality comparisons between Measurement instances.
+        Verify inequality behavior of Measurement instances.
 
-        Checks that measurements with the same value and unit are considered equal, while those with different values or incompatible units are not. Also verifies that comparing a Measurement to an incompatible type raises the appropriate exception.
+        Asserts that two measurements with the same value and unit are not unequal (`!=` is False), that measurements with different magnitudes are unequal, and that comparisons with incompatible types or incompatible units raise the expected exceptions: `ValueError` for non-Measurement types that are not numeric (e.g., strings) and for measurements with incompatible units, and `TypeError` for numeric types that are not Measurement instances.
         """
         m1 = Measurement(10, "meter")
         m2 = Measurement(10, "meter")

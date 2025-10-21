@@ -38,6 +38,12 @@ class DependencyLockTimeoutError(TimeoutError):
     """Raised when the dependency index lock cannot be acquired within the timeout."""
 
     def __init__(self, operation: str) -> None:
+        """
+        Error raised when acquiring the dependency index lock times out.
+        
+        Parameters:
+            operation (str): Name or description of the operation during which lock acquisition timed out.
+        """
         super().__init__(
             f"Timed out acquiring dependency index lock during {operation}."
         )
@@ -124,18 +130,17 @@ def record_dependencies(
     ],
 ) -> None:
     """
-    Register cache keys against the filters and exclusions they depend on.
-
+    Register a cache key as dependent on the given manager-level filters, exclusions, or identifications.
+    
     Parameters:
-        cache_key (str): Cache key produced for the cached queryset.
+        cache_key (str): The cache key to associate with the declared dependencies.
         dependencies (Iterable[tuple[str, Literal["filter", "exclude", "identification"], str]]):
-            Collection describing manager name, dependency type, and identifying data.
-
-    Returns:
-        None
-
+            Iterable of tuples describing each dependency as (manager_name, action, identifier).
+            - For `filter` and `exclude`, `identifier` is a string representation of a mapping of lookups to values.
+            - For `identification`, `identifier` is the identifying value (treated as a lookup on `id`).
+    
     Raises:
-        TimeoutError: If the dependency lock cannot be acquired within `LOCK_TIMEOUT`.
+        DependencyLockTimeoutError: If a lock cannot be acquired within the configured timeout while updating the index.
     """
     start = time.time()
     while not acquire_lock():
@@ -178,16 +183,15 @@ def record_dependencies(
 # -----------------------------------------------------------------------------
 def remove_cache_key_from_index(cache_key: str) -> None:
     """
-    Remove a cache entry from all dependency mappings.
-
+    Remove a cache key from all dependency mappings in the stored dependency index.
+    
+    Acquires the dependency lock to update and persist the index; if the lock cannot be obtained within LOCK_TIMEOUT the operation fails.
+    
     Parameters:
-        cache_key (str): Cache key that should be expunged from the index.
-
-    Returns:
-        None
-
+        cache_key (str): The cache key to expunge from all recorded filter, exclude, and identification mappings.
+    
     Raises:
-        TimeoutError: If the dependency lock cannot be acquired within `LOCK_TIMEOUT`.
+        DependencyLockTimeoutError: If the dependency lock cannot be acquired within LOCK_TIMEOUT.
     """
     start = time.time()
     while not acquire_lock():
@@ -245,15 +249,10 @@ def capture_old_values(
     **kwargs: object,
 ) -> None:
     """
-    Cache the field values referenced by tracked filters before an update.
-
+    Record the current values of fields referenced by tracked filters on the given manager instance before it changes.
+    
     Parameters:
-        sender (type[GeneralManager]): Manager class dispatching the signal.
-        instance (GeneralManager | None): Manager instance about to change.
-        **kwargs: Additional signal metadata.
-
-    Returns:
-        None
+        instance (GeneralManager | None): Manager instance about to change; if provided, this function sets instance._old_values to a mapping of lookup keys to their current values for use by post-change invalidation logic.
     """
     if instance is None:
         return
@@ -294,16 +293,14 @@ def generic_cache_invalidation(
     **kwargs: object,
 ) -> None:
     """
-    Invalidate cached query results affected by a data change.
-
+    Invalidate cache entries whose recorded dependencies are affected by changes to a GeneralManager instance.
+    
+    Uses the dependency index to compare previously captured values against the instance's current values for tracked lookups, evaluates both simple and composite dependency conditions for "filter" and "exclude" actions, and for any dependency that warrants invalidation it deletes the corresponding cache entry and removes its references from the index.
+    
     Parameters:
-        sender (type[GeneralManager]): Manager class that triggered the signal.
-        instance (GeneralManager): Updated manager instance.
-        old_relevant_values (dict[str, Any]): Previously captured values for tracked lookups.
-        **kwargs: Additional signal metadata.
-
-    Returns:
-        None
+        sender (type[GeneralManager]): Manager class that emitted the signal.
+        instance (GeneralManager): The manager instance that was changed.
+        old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
     manager_name = sender.__name__
     idx = get_full_index()
@@ -317,6 +314,22 @@ def generic_cache_invalidation(
         return value
 
     def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
+        """
+        Coerces a raw value to match the type and semantics of a sample value.
+        
+        Attempts to convert `raw` into the same type as `sample`. Handles:
+        - datetimes: parses ISO-like strings, preserves or aligns timezone info with `sample`,
+        - dates: parses ISO date strings,
+        - booleans: recognizes common textual and numeric boolean representations,
+        - other types: attempts to call the sample's type on `raw`.
+        
+        Parameters:
+            sample: A value whose type and semantics should be used as the target.
+            raw: The input value to coerce.
+        
+        Returns:
+            The coerced value of the same type as `sample`, or `None` if `raw` cannot be sensibly converted.
+        """
         if sample is None:
             return None
 
@@ -370,6 +383,29 @@ def generic_cache_invalidation(
             return None
 
     def matches(op: str, value: Any, val_key: Any) -> bool:
+        """
+        Evaluate whether a given value satisfies a lookup operation described by `op` and `val_key`.
+        
+        Supports operators:
+        - "eq": equality; attempts to interpret `val_key` as a literal and coerce it to `value`'s type before comparing.
+        - "in": membership; expects `val_key` to be a literal iterable and checks if any coerced element equals `value`.
+        - "gt", "gte", "lt", "lte": numeric/date comparisons; `val_key` is interpreted as a literal and coerced to `value`'s type.
+        - "contains", "startswith", "endswith": string containment/prefix/suffix checks; both sides are compared as strings.
+        - "regex": treats `val_key` as a regular expression pattern and tests it against the string form of `value`.
+        
+        Behavior notes:
+        - If `value` is None the function returns `False`.
+        - Literal parsing of `val_key` is attempted via AST literal evaluation; if parsing or coercion fails, the function falls back to conservative comparisons or returns `False` where appropriate.
+        - Regex patterns that fail to compile are treated as non-matching.
+        
+        Parameters:
+            op (str): The lookup operator name (one of the supported operators above).
+            value (Any): The runtime value to test.
+            val_key (Any): The stored comparison key (often a string representation) to interpret for the comparison.
+        
+        Returns:
+            bool: `True` if the comparison defined by `op` and `val_key` matches `value`, `False` otherwise.
+        """
         if value is None:
             return False
 
@@ -440,6 +476,15 @@ def generic_cache_invalidation(
         return False
 
     def current_value_for_path(path: list[str]) -> Any:
+        """
+        Fetches the current value from the captured `instance` by following a sequence of attribute names.
+        
+        Parameters:
+            path (list[str]): Ordered attribute names to traverse on the instance (e.g., ["user", "profile", "email"]).
+        
+        Returns:
+            The value found at the end of the attribute path, or `None` if any attribute along the path is missing.
+        """
         current: object = instance
         for attr in path:
             current = getattr(current, attr, UNDEFINED)
@@ -453,6 +498,24 @@ def generic_cache_invalidation(
         action: Literal["filter", "exclude"],
         model_section: dict[str, dict[str, set[str]]],
     ) -> bool | None:
+        """
+        Determine whether a composite dependency (multiple lookup params grouped under a single identifier)
+        for a given cache key and lookup should cause cache invalidation.
+        
+        Parameters:
+            cache_key (str): The cache key being evaluated.
+            lookup_key (str): The specific lookup (operator and attribute path joined by `"__"`) that prompted evaluation.
+            action (Literal["filter", "exclude"]): The dependency action context; "filter" treats a match as cause for invalidation,
+                "exclude" treats a change in match membership as cause for invalidation.
+            model_section (dict[str, dict[str, set[str]]]): The index section for the model containing lookup maps and an
+                optional "__cache_dependencies__" mapping from cache keys to sets of identifier strings (each identifier
+                encodes multiple lookup parameters).
+        
+        Returns:
+            bool | None: `True` if the composite dependency indicates the cache entry should be invalidated,
+            `False` if it indicates no invalidation is required, or `None` if there are no composite identifiers
+            registered for `cache_key`.
+        """
         cache_dependencies = model_section.get("__cache_dependencies__", {})
         identifiers = cache_dependencies.get(cache_key) if cache_dependencies else None
         if not identifiers:

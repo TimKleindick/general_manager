@@ -16,9 +16,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Create and register a dynamic TestProject model with name, number, and budget fields for use in tests.
+        
+        The model defines a required `name`, an optional `number`, and a `budget` MeasurementField with base unit "EUR"; it is assigned to `cls.TestProject` and added to `cls.general_manager_classes`.
         """
 
         class TestProject(GeneralManager):
@@ -37,7 +37,9 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Prepares the test environment by creating and logging in a test user and setting the GraphQL mutation string for creating a TestProject instance.
+        Set up a test user, authenticate the test client, and prepare the GraphQL createTestProject mutation string.
+        
+        Creates a test user with a random password, logs the user into the test client, and assigns the GraphQL mutation used to create TestProject instances to self.create_mutation.
         """
         User = get_user_model()
         password = get_random_string(12)
@@ -161,9 +163,9 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Dynamically defines TestProject and TestProject2 models and registers them on the test class for use in integration tests.
+        
+        Both models expose an Interface with a required `name` (CharField, max_length=100), an optional `number` (IntegerField, null and blank allowed), and a `budget` (MeasurementField with base_unit "EUR"). TestProject2 additionally declares a Permission class that allows public creation. The created model classes are attached to the test class as `TestProject` and `TestProject2` and listed in `general_manager_classes`.
         """
 
         class TestProject(GeneralManager):
@@ -306,7 +308,9 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Prepares the test environment by creating a test user, logging them in, creating an initial TestProject instance, and defining GraphQL mutation strings for updating a TestProject with and without the budget field.
+        Prepare test state for update-mutation tests.
+        
+        Creates and logs in a test user, creates an initial TestProject instance with name, number, and budget, and defines GraphQL mutation strings for updating a TestProject with and without the budget field.
         """
         User = get_user_model()
         password = get_random_string(12)
@@ -414,9 +418,9 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Defines a dynamic `TestProject` model with specified fields for use in integration tests.
-
-        The model includes a required `name`, an optional `number`, and a `budget` field with a base unit of EUR. Registers the model for use in test cases.
+        Create and register a dynamic TestProject model with name, number, and budget fields for use in tests.
+        
+        The model defines a required `name`, an optional `number`, and a `budget` MeasurementField with base unit "EUR"; it is assigned to `cls.TestProject` and added to `cls.general_manager_classes`.
         """
 
         class TestProject(GeneralManager):
@@ -435,7 +439,12 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Prepares the test case by creating and logging in a user, initializing a TestProject instance, and defining the GraphQL mutation for deactivating a project.
+        Set up test fixtures: create and log in a user, create a TestProject instance, and prepare the deactivate GraphQL mutation.
+        
+        Sets these attributes on the test instance:
+            - self.user: the created and authenticated user.
+            - self.project: the created TestProject instance to be deactivated in tests.
+            - self.deactivate_mutation: GraphQL mutation string for deactivating a TestProject.
         """
         User = get_user_model()
         password = get_random_string(12)

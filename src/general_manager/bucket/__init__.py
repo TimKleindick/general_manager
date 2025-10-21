@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    """
+    Dynamically resolve and return a named bucket export from this module's public API.
+    
+    Parameters:
+        name (str): The attribute name to resolve from the module's exports.
+    
+    Returns:
+        Any: The resolved export object for `name`.
+    """
     return resolve_export(
         name,
         module_all=__all__,

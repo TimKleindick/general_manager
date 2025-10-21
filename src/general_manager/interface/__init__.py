@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    """
+    Lazily resolve a public API export and return the object for the given attribute name.
+    
+    Parameters:
+        name (str): Name of the attribute to resolve from the module's public exports.
+    
+    Returns:
+        Any: The resolved export object associated with `name`.
+    """
     return resolve_export(
         name,
         module_all=__all__,

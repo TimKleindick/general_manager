@@ -248,13 +248,13 @@ class TestGenerateCombinations(TestCase):
         # Dynamically create an interface and manager class with given input_fields
 
         """
-        Creates a CalculationBucket with dynamically defined input fields.
+        Create a CalculationBucket configured with a manager whose interface exposes the given input fields.
 
-        Args:
-            fields: A list of input field definitions to assign to the generated interface.
+        Parameters:
+            fields (list): Input field definitions to assign to the generated interface's `input_fields`.
 
         Returns:
-                CalculationBucket: An instance configured with a manager and interface using the specified input fields.
+            CalculationBucket: An instance whose manager class has `Interface.input_fields` set to `fields`.
         """
 
         class DynInterface(CalculationInterface):
@@ -320,13 +320,13 @@ class TestGenerateCombinations(TestCase):
 
         def pv_func(a):
             """
-            Return a list containing the input value multiplied by 10.
+            Multiply a value by 10 and return it in a single-element list.
 
             Parameters:
-                a (int or float): The value to be multiplied.
+                a (int or float): Value to be multiplied by 10.
 
             Returns:
-                list: A single-element list with the result of a * 10.
+                list: A single-element list containing the product of `a` and 10.
             """
             return [a * 10]
 

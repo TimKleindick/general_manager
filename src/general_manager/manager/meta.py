@@ -17,6 +17,12 @@ class InvalidInterfaceTypeError(TypeError):
     """Raised when a GeneralManager is configured with an incompatible Interface class."""
 
     def __init__(self, interface_name: str) -> None:
+        """
+        Initialize an InvalidInterfaceTypeError indicating a configured interface is not a subclass of InterfaceBase.
+        
+        Parameters:
+            interface_name (str): Name of the configured interface class that is invalid; included in the exception message.
+        """
         super().__init__(f"{interface_name} must be a subclass of InterfaceBase.")
 
 
@@ -24,6 +30,15 @@ class MissingAttributeError(AttributeError):
     """Raised when a dynamically generated descriptor cannot locate the attribute."""
 
     def __init__(self, attribute_name: str, class_name: str) -> None:
+        """
+        Initialize the MissingAttributeError with the missing attribute and its owning class.
+        
+        Parameters:
+            attribute_name (str): Name of the attribute that was not found.
+            class_name (str): Name of the class where the attribute lookup occurred.
+        
+        The exception message is set to "`{attribute_name} not found in {class_name}.`".
+        """
         super().__init__(f"{attribute_name} not found in {class_name}.")
 
 
@@ -31,6 +46,13 @@ class AttributeEvaluationError(AttributeError):
     """Raised when evaluating a callable attribute raises an exception."""
 
     def __init__(self, attribute_name: str, error: Exception) -> None:
+        """
+        Initialize an AttributeEvaluationError that wraps an exception raised while evaluating a descriptor attribute.
+        
+        Parameters:
+            attribute_name (str): Name of the attribute whose evaluation failed.
+            error (Exception): The original exception that was raised; retained for inspection.
+        """
         super().__init__(f"Error calling attribute {attribute_name}: {error}.")
 
 
@@ -54,15 +76,18 @@ class GeneralManagerMeta(type):
         attrs: dict[str, Any],
     ) -> type:
         """
-        Create a new GeneralManager subclass and register its interface hooks.
-
+        Create a GeneralManager subclass, integrate any declared Interface hooks, and register the class for pending initialization and GraphQL processing.
+        
+        If the class body defines an `Interface`, validates it is a subclass of `InterfaceBase`, invokes the interface's `handleInterface()` pre-creation hook to allow modification of the class namespace, creates the class, then invokes the post-creation hook and registers the class for attribute initialization and global tracking. If `Interface` is not defined, creates the class directly. If `settings.AUTOCREATE_GRAPHQL` is true, registers the created class for GraphQL interface processing.
+        
         Parameters:
+            mcs (type): The metaclass creating the class.
             name (str): Name of the class being created.
-            bases (tuple[type, ...]): Base classes inherited by the new class.
+            bases (tuple[type, ...]): Base classes for the new class.
             attrs (dict[str, Any]): Class namespace supplied during creation.
-
+        
         Returns:
-            type: Newly created class augmented with interface integration.
+            type: The newly created subclass, possibly modified by Interface hooks.
         """
 
         def createNewGeneralManagerClass(
@@ -98,18 +123,31 @@ class GeneralManagerMeta(type):
         attributes: Iterable[str], new_class: Type[GeneralManager]
     ) -> None:
         """
-        Attach descriptor-based properties for each attribute declared on the interface.
-
+        Attach descriptor properties to new_class for each name in attributes.
+        
+        Each generated descriptor returns the interface field type when accessed on the class and resolves the corresponding value from instance._attributes when accessed on an instance. If the stored value is callable it is invoked with instance._interface; a missing attribute raises MissingAttributeError and an exception raised while invoking a callable is wrapped in AttributeEvaluationError.
+        
         Parameters:
-            attributes (Iterable[str]): Names of attributes for which descriptors are created.
-            new_class (Type[GeneralManager]): Class receiving the generated descriptors.
+            attributes (Iterable[str]): Names of attributes for which descriptors will be created.
+            new_class (Type[GeneralManager]): Class that will receive the generated descriptor attributes.
         """
 
         def descriptorMethod(
             attr_name: str,
             new_class: type,
         ) -> object:
-            """Create a descriptor that resolves attribute values from the interface at runtime."""
+            """
+            Create a descriptor that provides attribute access backed by an instance's interface attributes.
+            
+            When accessed on the class, the descriptor returns the field type by delegating to the class's `Interface.getFieldType` for the configured attribute name. When accessed on an instance, it returns the value stored in `instance._attributes[attr_name]`. If the stored value is callable, it is invoked with `instance._interface` and the resulting value is returned. If the attribute is not present on the instance, a `MissingAttributeError` is raised. If invoking a callable attribute raises an exception, that error is wrapped in `AttributeEvaluationError`.
+            
+            Parameters:
+                attr_name (str): The name of the attribute the descriptor resolves.
+                new_class (type): The class that will receive the descriptor; used to access its `Interface`.
+            
+            Returns:
+                descriptor (object): A descriptor object suitable for assigning as a class attribute.
+            """
 
             class Descriptor:
                 def __init__(
@@ -123,7 +161,20 @@ class GeneralManagerMeta(type):
                     instance: Any | None,
                     owner: type | None = None,
                 ) -> Any:
-                    """Return the field type on the class or the stored value on an instance."""
+                    """
+                    Provide the class field type when accessed on the class, or resolve and return the stored attribute value for an instance.
+                    
+                    When accessed on a class, returns the field type from the class's Interface via Interface.getFieldType.
+                    When accessed on an instance, retrieves the value stored in instance._attributes for this descriptor's attribute name;
+                    if the stored value is callable, it is invoked with instance._interface and the result is returned.
+                    
+                    Returns:
+                    	The field type (when accessed on the class) or the resolved attribute value from the instance.
+                    
+                    Raises:
+                    	MissingAttributeError: If the attribute is not present in instance._attributes.
+                    	AttributeEvaluationError: If calling a callable attribute raises an exception; the original exception is wrapped.
+                    """
                     if instance is None:
                         return self._class.Interface.getFieldType(self._attr_name)
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)

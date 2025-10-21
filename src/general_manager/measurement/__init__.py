@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
+    """
+    Dynamically resolve and return a public API attribute by name.
+    
+    Parameters:
+        name (str): The attribute name requested from the module's public API.
+    
+    Returns:
+        Any: The object or submodule bound to `name` as defined by the module export mapping.
+    """
     return resolve_export(
         name,
         module_all=__all__,
