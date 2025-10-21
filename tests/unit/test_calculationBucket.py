@@ -27,6 +27,7 @@ class DummyGeneralManager:
         Stores all keyword arguments for later comparison and representation.
         """
         self.kwargs = kwargs
+        self.identification = dict(kwargs)
 
     def __eq__(self, value: object) -> bool:
         """
@@ -248,10 +249,10 @@ class TestGenerateCombinations(TestCase):
 
         """
         Create a CalculationBucket configured with a manager whose interface exposes the given input fields.
-        
+
         Parameters:
             fields (list): Input field definitions to assign to the generated interface's `input_fields`.
-        
+
         Returns:
             CalculationBucket: An instance whose manager class has `Interface.input_fields` set to `fields`.
         """
@@ -320,10 +321,10 @@ class TestGenerateCombinations(TestCase):
         def pv_func(a):
             """
             Multiply a value by 10 and return it in a single-element list.
-            
+
             Parameters:
                 a (int or float): Value to be multiplied by 10.
-            
+
             Returns:
                 list: A single-element list containing the product of `a` and 10.
             """
@@ -635,3 +636,256 @@ class TestCalculationBucketAdditional(TestCase):
         combined = b1 | b2
         self.assertEqual(combined.filter_definitions, f1)  # identical preserved
         self.assertEqual(combined.exclude_definitions, {})  # non-identical removed
+
+
+class TestCalculationBucketExceptions(TestCase):
+    """Test new custom exception classes in CalculationBucket."""
+
+    def test_invalid_calculation_interface_error(self):
+        """Test that InvalidCalculationInterfaceError is raised for non-CalculationInterface managers."""
+        from general_manager.bucket.calculationBucket import (
+            InvalidCalculationInterfaceError,
+        )
+        from general_manager.interface.baseInterface import InterfaceBase
+
+        # Create a manager with non-CalculationInterface
+        class NonCalcInterface(InterfaceBase):
+            pass
+
+        class NonCalcManager:
+            Interface = NonCalcInterface
+
+        with self.assertRaises(InvalidCalculationInterfaceError) as ctx:
+            CalculationBucket(NonCalcManager)
+        self.assertIn("CalculationInterface", str(ctx.exception))
+
+    def test_incompatible_bucket_type_error(self):
+        """Test that IncompatibleBucketTypeError is raised when combining different bucket types."""
+        from general_manager.bucket.calculationBucket import (
+            IncompatibleBucketTypeError,
+        )
+        from general_manager.bucket.baseBucket import Bucket
+
+        bucket1 = CalculationBucket(DummyGeneralManager)
+
+        # Create a different bucket type
+        class OtherBucket(Bucket):
+            def __init__(self, manager_class):
+                super().__init__(manager_class)
+
+            def __or__(self, other):
+                raise NotImplementedError
+
+            def __iter__(self):
+                return iter(())
+
+            def filter(self, **kwargs):
+                raise NotImplementedError
+
+            def exclude(self, **kwargs):
+                raise NotImplementedError
+
+            def first(self):
+                return None
+
+            def last(self):
+                return None
+
+            def __contains__(self, item):
+                return False
+
+            def count(self):
+                return 0
+
+            def all(self):
+                return self
+
+            def sort(self, key, reverse=False):
+                return self
+
+            def get(self, **kwargs):
+                raise NotImplementedError
+
+            def __getitem__(self, item):
+                raise NotImplementedError
+
+            def __len__(self):
+                return 0
+
+        other_bucket = OtherBucket(DummyGeneralManager)
+
+        with self.assertRaises(IncompatibleBucketTypeError) as ctx:
+            bucket1 | other_bucket
+        self.assertIn("Cannot combine", str(ctx.exception))
+
+    def test_incompatible_bucket_manager_error(self):
+        """Test that IncompatibleBucketManagerError is raised when combining buckets with different managers."""
+        from general_manager.bucket.calculationBucket import (
+            IncompatibleBucketManagerError,
+        )
+
+        # Create another dummy manager
+        class AnotherDummyInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {}
+
+        class AnotherDummyManager:
+            Interface = AnotherDummyInterface
+
+        AnotherDummyInterface._parent_class = AnotherDummyManager
+
+        bucket1 = CalculationBucket(DummyGeneralManager)
+        bucket2 = CalculationBucket(AnotherDummyManager)
+
+        with self.assertRaises(IncompatibleBucketManagerError) as ctx:
+            bucket1 | bucket2
+        self.assertIn("Cannot combine buckets for", str(ctx.exception))
+
+    def test_cyclic_dependency_error(self):
+        """Test that CyclicDependencyError is raised when cyclic dependencies detected."""
+        from general_manager.bucket.calculationBucket import CyclicDependencyError
+
+        # Create input fields with circular dependencies
+        class CircularInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "field_a": Input(str, depends_on=["field_b"]),
+                "field_b": Input(str, depends_on=["field_a"]),
+            }
+
+        class CircularManager:
+            Interface = CircularInterface
+
+        CircularInterface._parent_class = CircularManager
+
+        bucket = CalculationBucket(CircularManager)
+
+        # Try to sort with circular dependencies
+        with self.assertRaises(CyclicDependencyError) as ctx:
+            bucket.topological_sort_inputs()
+        self.assertIn("Cyclic dependency detected", str(ctx.exception))
+
+    def test_invalid_possible_values_error(self):
+        """Test that InvalidPossibleValuesError is raised for invalid possible_values configuration."""
+        from general_manager.bucket.calculationBucket import (
+            InvalidPossibleValuesError,
+        )
+
+        # Create interface with invalid possible_values
+        class InvalidPossibleValuesInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "test_field": Input(
+                    str,
+                    possible_values=123,  # Invalid type
+                ),
+            }
+
+        class InvalidPossibleValuesManager:
+            Interface = InvalidPossibleValuesInterface
+
+        InvalidPossibleValuesInterface._parent_class = InvalidPossibleValuesManager
+
+        bucket = CalculationBucket(InvalidPossibleValuesManager)
+
+        with self.assertRaises(InvalidPossibleValuesError) as ctx:
+            bucket.get_possible_values(
+                "test_field", bucket.input_fields["test_field"], {}
+            )
+        self.assertIn("Invalid possible_values configuration", str(ctx.exception))
+
+    def test_missing_calculation_match_error(self):
+        """Test that MissingCalculationMatchError is raised when no calculation matches."""
+        from general_manager.bucket.calculationBucket import (
+            MissingCalculationMatchError,
+        )
+
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        # Try to get a calculation that doesn't exist
+        bucket._data = []
+        with patch.object(bucket, "filter", return_value=bucket):
+            with self.assertRaises(MissingCalculationMatchError) as ctx:
+                bucket.get(value="missing")
+        self.assertIn("No matching calculation found", str(ctx.exception))
+
+    def test_multiple_calculation_match_error(self):
+        """Test that MultipleCalculationMatchError is raised when multiple calculations match."""
+        from general_manager.bucket.calculationBucket import (
+            MultipleCalculationMatchError,
+        )
+
+        # Create interface with overlapping calculations
+        class OverlapInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "field": Input(str, possible_values=["a", "b"]),
+            }
+
+        class OverlapManager:
+            Interface = OverlapInterface
+            identification: ClassVar[dict[str, type]] = {"field": str}
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+                self.kwargs = kwargs
+
+        OverlapInterface._parent_class = OverlapManager
+
+        bucket = CalculationBucket(OverlapManager)
+        bucket._data = [{"field": "a"}, {"field": "a"}]
+        with patch.object(bucket, "filter", return_value=bucket):
+            with self.assertRaises(MultipleCalculationMatchError) as ctx:
+                bucket.get(field="a")
+            self.assertIn("Multiple matching calculations found", str(ctx.exception))
+
+    def test_calculation_bucket_edge_cases(self):
+        """Test edge cases in CalculationBucket functionality."""
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        # Test empty bucket operations
+        bucket._data = []
+        empty_result = list(bucket)
+        self.assertEqual(empty_result, [])
+
+        # Test filter with empty definitions
+        filtered = bucket.filter()
+        self.assertIsInstance(filtered, CalculationBucket)
+
+        # Test exclude with empty definitions
+        excluded = bucket.exclude()
+        self.assertIsInstance(excluded, CalculationBucket)
+
+    def test_calculation_bucket_filter_combinations(self):
+        """Test various filter and exclude combinations."""
+        with patch(
+            "general_manager.bucket.calculationBucket.parse_filters",
+            return_value={},
+        ):
+            bucket = CalculationBucket(
+                DummyGeneralManager,
+                filter_definitions={"field1": "value1"},
+                exclude_definitions={"field2": "value2"},
+            )
+
+            # Add more filters
+            filtered = bucket.filter(field3="value3")
+            self.assertIn("field1", filtered.filter_definitions)
+            self.assertIn("field3", filtered.filter_definitions)
+
+            # Add more exclusions
+            excluded = bucket.exclude(field4="value4")
+            self.assertIn("field2", excluded.exclude_definitions)
+            self.assertIn("field4", excluded.exclude_definitions)
+
+    def test_calculation_bucket_or_with_manager_instance(self):
+        """Test OR operation with a GeneralManager instance."""
+
+        class InlineInterface(CalculationInterface):
+            id = Input(int, possible_values=[123])
+
+        class InlineManager(GeneralManager):
+            Interface = InlineInterface
+
+        bucket = CalculationBucket(InlineManager)
+        manager_instance = InlineManager(id=123)
+
+        with patch.object(bucket, "filter", return_value=bucket):
+            combined = bucket | manager_instance
+        self.assertIsInstance(combined, CalculationBucket)
