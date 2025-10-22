@@ -1598,10 +1598,7 @@ class GraphQL:
                     **kwargs, creator_id=info.context.user.id
                 )
             except HANDLED_MANAGER_ERRORS as error:
-                GraphQL._handleGraphQLError(error)
-                return {
-                    "success": False,
-                }
+                raise GraphQL._handleGraphQLError(error) from error
 
             return {
                 "success": True,
@@ -1666,19 +1663,13 @@ class GraphQL:
             """
             manager_id = kwargs.pop("id", None)
             if manager_id is None:
-                GraphQL._handleGraphQLError(MissingManagerIdentifierError())
-                return {
-                    "success": False,
-                }
+                raise GraphQL._handleGraphQLError(MissingManagerIdentifierError())
             try:
                 instance = generalManagerClass(id=manager_id).update(
                     creator_id=info.context.user.id, **kwargs
                 )
             except HANDLED_MANAGER_ERRORS as error:
-                GraphQL._handleGraphQLError(error)
-                return {
-                    "success": False,
-                }
+                raise GraphQL._handleGraphQLError(error) from error
 
             return {
                 "success": True,
@@ -1742,19 +1733,13 @@ class GraphQL:
             """
             manager_id = kwargs.pop("id", None)
             if manager_id is None:
-                GraphQL._handleGraphQLError(MissingManagerIdentifierError())
-                return {
-                    "success": False,
-                }
+                raise GraphQL._handleGraphQLError(MissingManagerIdentifierError())
             try:
                 instance = generalManagerClass(id=manager_id).deactivate(
                     creator_id=info.context.user.id
                 )
             except HANDLED_MANAGER_ERRORS as error:
-                GraphQL._handleGraphQLError(error)
-                return {
-                    "success": False,
-                }
+                raise GraphQL._handleGraphQLError(error) from error
 
             return {
                 "success": True,
@@ -1783,7 +1768,7 @@ class GraphQL:
         )
 
     @staticmethod
-    def _handleGraphQLError(error: Exception) -> None:
+    def _handleGraphQLError(error: Exception) -> GraphQLError:
         """
         Convert an exception into a GraphQL error with an appropriate extensions['code'].
 
@@ -1795,25 +1780,25 @@ class GraphQL:
         Parameters:
             error (Exception): The original exception to convert.
 
-        Raises:
+        Returns:
             GraphQLError: GraphQL error containing the original message and an `extensions['code']` indicating the error category.
         """
         if isinstance(error, PermissionError):
-            raise GraphQLError(
+            return GraphQLError(
                 str(error),
                 extensions={
                     "code": "PERMISSION_DENIED",
                 },
             )
         elif isinstance(error, (ValueError, ValidationError, TypeError)):
-            raise GraphQLError(
+            return GraphQLError(
                 str(error),
                 extensions={
                     "code": "BAD_USER_INPUT",
                 },
             )
         else:
-            raise GraphQLError(
+            return GraphQLError(
                 str(error),
                 extensions={
                     "code": "INTERNAL_SERVER_ERROR",
