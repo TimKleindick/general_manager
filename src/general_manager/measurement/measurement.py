@@ -320,7 +320,7 @@ class Measurement:
             MissingExchangeRateError: If converting between two different currencies without providing an exchange rate.
         """
         if self.is_currency():
-            if self.unit == ureg(target_unit):
+            if str(self.unit) == str(target_unit):
                 return self  # Same currency, no conversion needed
             elif exchange_rate is not None:
                 # Convert using the provided exchange rate
