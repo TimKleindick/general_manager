@@ -150,7 +150,9 @@ class GMTestCaseMeta(type):
                     )
                     if model_class._meta.db_table not in existing:
                         editor.create_model(model_class)
-                        editor.create_model(model_class.history.model)  # type: ignore
+                        history_model = getattr(model_class, "history", None)
+                        if history_model:
+                            editor.create_model(history_model.model)  # type: ignore[attr-defined]
             # 4) GM & GraphQL initialization
             GeneralmanagerConfig.initializeGeneralManagerClasses(
                 cls.general_manager_classes, cls.general_manager_classes
