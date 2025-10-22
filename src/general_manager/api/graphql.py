@@ -657,21 +657,26 @@ class GraphQL:
         Raises:
             UnsupportedGraphQLFieldTypeError: If `field_type` is `dict`, which is not supported for GraphQL mapping.
         """
-        if issubclass(field_type, dict):
-            raise UnsupportedGraphQLFieldTypeError(field_type)
-        if issubclass(field_type, str):
+        base_type = (
+            get_origin(field_type) or field_type
+        )  # Handle typing generics safely.
+        if not isinstance(base_type, type):
             return graphene.String
-        elif issubclass(field_type, bool):
+        if issubclass(base_type, dict):
+            raise UnsupportedGraphQLFieldTypeError(field_type)
+        if issubclass(base_type, str):
+            return graphene.String
+        elif issubclass(base_type, bool):
             return graphene.Boolean
-        elif issubclass(field_type, int):
+        elif issubclass(base_type, int):
             return graphene.Int
-        elif issubclass(field_type, (float, Decimal)):
+        elif issubclass(base_type, (float, Decimal)):
             return graphene.Float
-        elif issubclass(field_type, datetime):
+        elif issubclass(base_type, datetime):
             return graphene.DateTime
-        elif issubclass(field_type, date):
+        elif issubclass(base_type, date):
             return graphene.Date
-        elif issubclass(field_type, Measurement):
+        elif issubclass(base_type, Measurement):
             return MeasurementScalar
         else:
             return graphene.String
