@@ -19,6 +19,7 @@ class InvalidFunctionNodeError(ValueError):
         Parameters:
             function_name (str): Name of the function with the invalid left node; stored on the exception and used to form the message "Invalid left node for {function_name}() function."
         """
+        self.function_name = function_name
         super().__init__(f"Invalid left node for {function_name}() function.")
 
 

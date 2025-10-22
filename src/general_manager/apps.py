@@ -520,7 +520,8 @@ class GeneralmanagerConfig(AppConfig):
             if not (
                 isinstance(permission, type) and issubclass(permission, BasePermission)
             ):
-                raise InvalidPermissionClassError(permission.__name__)
+                permission_name = getattr(permission, "__name__", repr(permission))
+                raise InvalidPermissionClassError(permission_name)
             general_manager_class.Permission = permission
         else:
             general_manager_class.Permission = ManagerBasedPermission
