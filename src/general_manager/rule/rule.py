@@ -22,6 +22,21 @@ from general_manager.manager.generalManager import GeneralManager
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
+NOTEXISTENT = object()
+
+
+class NonexistentAttributeError(AttributeError):
+    """Raised when a referenced attribute does not exist on the GeneralManager instance."""
+
+    def __init__(self, attribute: str) -> None:
+        """
+        Initialize the exception indicating that a referenced attribute does not exist.
+
+        Parameters:
+            attribute (str): The name of the nonexistent attribute; this name will be included in the exception message.
+        """
+        super().__init__(f"The attribute '{attribute}' does not exist.")
+
 
 class MissingErrorTemplateVariableError(ValueError):
     """Raised when a custom error template omits required variables."""
@@ -264,7 +279,9 @@ class Rule(Generic[GeneralManagerType]):
         for var in self._variables:
             obj: object = x  # type: ignore
             for part in var.split("."):
-                obj = getattr(obj, part)
+                obj = getattr(obj, part, NOTEXISTENT)
+                if obj is NOTEXISTENT:
+                    raise NonexistentAttributeError(var)
                 if obj is None:
                     break
             out[var] = obj
@@ -355,7 +372,7 @@ class Rule(Generic[GeneralManagerType]):
                 combo = ", ".join(f"[{v}]" for v in self._variables)
                 msg = f"{combo} combination is not valid"
                 for v in self._variables:
-                    errors[v] = msg
+                    errors.setdefault(v, msg)  # keep specific messages
 
             return errors
 
