@@ -326,7 +326,6 @@ class BasePermissionTests(TestCase):
         User = get_user_model()
         user = User.objects.create_user(
             username="test_user",
-            password="secret123",  # noqa: S106
         )
 
         result = BasePermission.getUserWithId(user)
