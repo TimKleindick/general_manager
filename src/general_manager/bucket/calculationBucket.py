@@ -831,6 +831,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
         own = self.all()
         own._data = []
-        own.filters = {}
-        own.excludes = {}
+        own.filter_definitions = {}
+        own.exclude_definitions = {}
+        own._filters = {}
+        own._excludes = {}
         return own
