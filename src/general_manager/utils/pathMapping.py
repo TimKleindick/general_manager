@@ -31,7 +31,7 @@ class PathMap:
     instance: PathMap
     mapping: ClassVar[dict[tuple[PathStart, PathDestination], PathTracer]] = {}
 
-    def __new__(cls) -> PathMap:
+    def __new__(cls, *args: Any, **kwargs: Any) -> PathMap:
         """
         Obtain the singleton PathMap, initializing the path mapping on first instantiation.
 
