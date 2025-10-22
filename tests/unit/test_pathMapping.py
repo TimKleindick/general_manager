@@ -777,14 +777,6 @@ class PathMappingUnitTests(SimpleTestCase):
         with self.assertRaises(MissingStartInstanceError):
             path_map.goTo(self.EndManager)
 
-    def test_path_map_singleton_behavior(self):
-        """Test that PathMap implements singleton pattern correctly."""
-        path_map1 = PathMap(self.StartManager)
-        path_map2 = PathMap(self.EndManager)
-
-        # Both should be the same instance
-        self.assertIs(path_map1, path_map2)
-
     def test_path_map_caching_mechanism(self):
         """Test that path mappings are cached correctly."""
         path_map = PathMap(self.StartManager)

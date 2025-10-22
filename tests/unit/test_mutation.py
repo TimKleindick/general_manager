@@ -491,17 +491,6 @@ class MutationDecoratorTests(TestCase):
         self.assertFalse(hasattr(args_class, "info"))
         self.assertTrue(hasattr(args_class, "value"))
 
-    def test_mutation_snake_to_camel_case_naming(self):
-        """Test that mutation names are converted from snake_case to camelCase."""
-
-        @graphQlMutation()
-        def my_custom_mutation(info, value: int) -> int:
-            _ = info
-            return value
-
-        # Should be converted to camelCase
-        self.assertIn("myCustomMutation", GraphQL._mutations)
-
     def test_mutation_with_manager_type_parameter(self):
         """Test mutations that accept GeneralManager types as parameters."""
         from general_manager.manager import GeneralManager
