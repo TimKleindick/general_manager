@@ -1,7 +1,7 @@
 from django.test import TestCase
 from general_manager.measurement.measurement import Measurement, ureg
 from decimal import Decimal
-from random import SystemRandom
+from random import Random
 import pickle
 from typing import Any
 
@@ -143,7 +143,7 @@ class MeasurementTestCase(TestCase):
         Randomly generates pairs of Measurement objects using both physical and currency units, verifying that arithmetic operations succeed when units match and raise appropriate exceptions when units are incompatible or when mixing currency and physical units.
         """
         units = ["meter", "second", "kilogram", "liter", "EUR", "USD"]
-        rng = SystemRandom()
+        rng = Random(42)  # noqa: S311 - use a fixed seed for reproducibility
         for _ in range(100):
             random_value_1 = Decimal(rng.uniform(1, 1000))
             random_value_2 = Decimal(rng.uniform(1, 1000))
