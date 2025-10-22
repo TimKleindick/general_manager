@@ -18,7 +18,7 @@ class MissingGroupAttributeError(AttributeError):
     def __init__(self, manager_name: str, attribute: str) -> None:
         """
         Initialize the exception indicating that a GroupManager attempted to access an undefined attribute.
-        
+
         Parameters:
             manager_name (str): Name of the manager where the attribute access occurred.
             attribute (str): The missing attribute name that was accessed.
@@ -127,13 +127,13 @@ class GroupManager(Generic[GeneralManagerType]):
     def combineValue(self, item: str) -> Any:
         """
         Aggregate the values of a named attribute across all records in the group.
-        
+
         Parameters:
             item (str): Attribute name to aggregate from each grouped record.
-        
+
         Returns:
             Any: The aggregated value for `item` according to its type (e.g., merged Bucket/GeneralManager, concatenated list, merged dict, deduplicated comma-separated string, boolean OR, numeric sum, or latest datetime). Returns `None` if all values are `None` or if `item` is `"id"`.
-        
+
         Raises:
             MissingGroupAttributeError: If the attribute does not exist or its type cannot be determined on the manager.
         """

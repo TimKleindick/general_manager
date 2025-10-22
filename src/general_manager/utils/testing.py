@@ -103,7 +103,7 @@ class GMTestCaseMeta(type):
         ) -> None:
             """
             Prepare the test environment for GeneralManager GraphQL tests.
-            
+
             Resets GraphQL and manager registries, optionally overrides Django's app-config lookup to use a fallback app, clears the default GraphQL URL pattern, creates missing database tables for models referenced by the test class's `general_manager_classes`, initializes GeneralManager classes and read-only interfaces, registers GraphQL types/fields, and then invokes the base class `setUpClass`.
             """
             GraphQL._query_class = None
@@ -202,7 +202,7 @@ class LoggingCache(LocMemCache):
     ) -> None:
         """
         Store a value in the cache and record the set operation in the cache's operation log.
-        
+
         Parameters:
             key (str): Cache key under which to store the value.
             value (object): Value to store.
@@ -238,7 +238,7 @@ class GeneralManagerTransactionTestCase(
     def setUp(self) -> None:
         """
         Install a logging cache backend and reset its operation log for the test.
-        
+
         Replaces Django's default cache connection with a LoggingCache instance and clears any prior cache operation records so tests start with a fresh cache operation log.
         """
         super().setUp()
@@ -249,7 +249,7 @@ class GeneralManagerTransactionTestCase(
     def tearDownClass(cls) -> None:
         """
         Tear down test-class state by removing dynamically created models and restoring patched global state.
-        
+
         Performs these actions: removes the GraphQL URL pattern added during setup; drops database tables for any models created for the test (including associated history models); unregisters those models from Django's app registry and clears the app cache; removes the test's GeneralManager classes from metaclass registries; restores the original app-config lookup function; and finally calls the superclass teardown.
         """
         # remove GraphQL URL pattern added during setUpClass

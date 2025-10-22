@@ -36,7 +36,7 @@ class MissingParameterTypeHintError(TypeError):
     def __init__(self, parameter_name: str, function_name: str) -> None:
         """
         Initialize the exception indicating a missing type hint for a function parameter.
-        
+
         Parameters:
             parameter_name (str): Name of the parameter that lacks a type hint.
             function_name (str): Name of the function containing the parameter.
@@ -52,7 +52,7 @@ class MissingMutationReturnAnnotationError(TypeError):
     def __init__(self, function_name: str) -> None:
         """
         Initialize the exception indicating a mutation is missing a return annotation.
-        
+
         Parameters:
             function_name (str): Name of the mutation function that lacks a return annotation.
         """
@@ -65,7 +65,7 @@ class InvalidMutationReturnTypeError(TypeError):
     def __init__(self, function_name: str, return_type: object) -> None:
         """
         Initialize an InvalidMutationReturnTypeError for a mutation whose return annotation is not a valid type.
-        
+
         Parameters:
             function_name (str): Name of the mutation function that provided the invalid return annotation.
             return_type (object): The invalid return annotation value that triggered the error.
@@ -195,12 +195,12 @@ def graphQlMutation(
         ) -> graphene.Mutation:
             """
             Execute the mutation resolver, enforce an optional permission check, and convert the resolver result into the mutation's output fields.
-            
+
             Parameters:
                 root: Graphene root object (unused).
                 info: GraphQL execution info provided by Graphene.
                 **kwargs: Mutation arguments provided by the client.
-            
+
             Returns:
                 mutation_class: Instance of the mutation with output fields populated; `success` is `True` on successful execution and `False` if a handled manager error occurred (after being forwarded to GraphQL._handleGraphQLError).
             """

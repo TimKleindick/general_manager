@@ -17,10 +17,10 @@ SNAPSHOT_PATH = (
 def _load_snapshot() -> dict[str, dict[str, tuple[str, str]]]:
     """
     Load the stored public API snapshot and convert each export target to a tuple.
-    
+
     Reads the JSON file at SNAPSHOT_PATH and returns a mapping from module path to a mapping
     of export name to a `(target_module, target_attr)` tuple as recorded in the snapshot.
-    
+
     Returns:
         snapshot (dict[str, dict[str, tuple[str, str]]]): Mapping of module path -> export name -> (target_module, target_attr).
     """
@@ -96,7 +96,7 @@ def test_public_api_dir_includes_exports(module_path: str) -> None:
 def test_public_api_invalid_attribute_raises(module_path: str) -> None:
     """
     Verifies that the specified module does not expose an attribute named "does_not_exist".
-    
+
     Parameters:
         module_path (str): Dotted import path of the module to inspect (e.g., "package.submodule").
     """

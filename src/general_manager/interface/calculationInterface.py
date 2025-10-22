@@ -28,10 +28,10 @@ class CalculationInterface(InterfaceBase):
     def getData(self, search_date: datetime | None = None) -> Any:
         """
         Indicates that calculation interfaces do not provide stored data.
-        
+
         Parameters:
             search_date (datetime | None): Date for which data would be requested.
-        
+
         Raises:
             NotImplementedError: Always raised with the message "Calculations do not store data."
         """
@@ -86,12 +86,12 @@ class CalculationInterface(InterfaceBase):
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
         Prepare and attach a generated Interface subclass into the attributes for a GeneralManager class before its creation.
-        
+
         Parameters:
             _name (generalManagerClassName): Name of the manager class being created.
             attrs (attributes): Mutable attribute dictionary for the manager class under construction; will be modified to include the generated Interface and interface type.
             interface (interfaceBaseClass): Base interface class from which the generated Interface subclass is derived.
-        
+
         Returns:
             tuple[attributes, interfaceBaseClass, None]: The updated attributes dict, the newly created Interface subclass, and None for the related model.
         """
@@ -118,12 +118,12 @@ class CalculationInterface(InterfaceBase):
     ) -> None:
         """
         Link the generated interface class to its manager class after creation.
-        
+
         Parameters:
             new_class: The newly created GeneralManager class to attach.
             interface_class: The generated interface class that will reference the manager.
             _model: Unused placeholder for the related model class; ignored.
-        
+
         Description:
             Sets `interface_class._parent_class` to `new_class` so the interface knows its owning manager.
         """
@@ -143,10 +143,10 @@ class CalculationInterface(InterfaceBase):
     def getFieldType(cls, field_name: str) -> type:
         """
         Get the Python type for an input field.
-        
+
         Returns:
             The Python type associated with the specified input field.
-        
+
         Raises:
             KeyError: If `field_name` is not present in `cls.input_fields`.
         """

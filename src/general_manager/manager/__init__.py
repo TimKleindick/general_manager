@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 def __getattr__(name: str) -> Any:
     """
     Resolve and return a public export by name for dynamic attribute access.
-    
+
     Parameters:
         name (str): The attribute name to resolve.
-    
+
     Returns:
         Any: The object bound to the requested public name.
     """

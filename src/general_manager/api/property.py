@@ -12,7 +12,7 @@ class GraphQLPropertyReturnAnnotationError(TypeError):
     def __init__(self) -> None:
         """
         Indicates a GraphQLProperty-decorated function is missing a return type annotation.
-        
+
         This exception is raised to signal that a property resolver intended for use with GraphQLProperty must have an explicit return type hint. The exception message is: "GraphQLProperty requires a return type hint for the property function."
         """
         super().__init__(
@@ -38,14 +38,14 @@ class GraphQLProperty(property):
     ) -> None:
         """
         Initialize the GraphQLProperty descriptor with GraphQL-specific metadata.
-        
+
         Parameters:
             fget (Callable[..., Any]): The resolver function to wrap; its unwrapped form must include a return type annotation.
             doc (str | None): Optional documentation string exposed on the descriptor.
             sortable (bool): Whether the property should be considered for sorting.
             filterable (bool): Whether the property should be considered for filtering.
             query_annotation (Any | None): Optional annotation to apply when querying/queryset construction.
-        
+
         Raises:
             GraphQLPropertyReturnAnnotationError: If the underlying resolver function does not declare a return type annotation.
         """
@@ -69,7 +69,7 @@ class GraphQLProperty(property):
     def __set_name__(self, owner: type, name: str) -> None:
         """
         Record the owner class and attribute name for the descriptor to support later introspection.
-        
+
         Parameters:
             owner (type): The class that owns this descriptor.
             name (str): The attribute name under which this descriptor is assigned.
@@ -80,7 +80,7 @@ class GraphQLProperty(property):
     def _try_resolve_type_hint(self) -> None:
         """
         Resolve and cache the wrapped resolver's return type hint.
-        
+
         When successful, stores the resolved return annotation on self._graphql_type_hint; if resolution fails or cannot be determined, sets self._graphql_type_hint to None.
         """
         if self._graphql_type_hint is not None:

@@ -25,7 +25,7 @@ class InvalidBasedOnConfigurationError(ValueError):
     def __init__(self, attribute_name: str) -> None:
         """
         Initialize the exception for an invalid or missing based-on configuration attribute.
-        
+
         Parameters:
             attribute_name (str): Name of the configured `__based_on__` attribute that is missing or invalid.
         """
@@ -40,7 +40,7 @@ class InvalidBasedOnTypeError(TypeError):
     def __init__(self, attribute_name: str) -> None:
         """
         Initialize the exception indicating that the configured based-on attribute does not resolve to a GeneralManager.
-        
+
         Parameters:
             attribute_name (str): Name of the configured based-on attribute that failed type validation; included in the exception message.
         """
@@ -53,7 +53,7 @@ class UnknownPermissionActionError(ValueError):
     def __init__(self, action: str) -> None:
         """
         Initialize the exception for an unsupported permission action.
-        
+
         Parameters:
             action (str): The permission action name that is not recognized; used to build the exception message "Action {action} not found."
         """
@@ -114,12 +114,12 @@ class ManagerBasedPermission(BasePermission):
     def __getBasedOnPermission(self) -> Optional[BasePermission]:
         """
         Resolve and return a BasePermission instance from the manager attribute named by the class-level `__based_on__` configuration.
-        
+
         If `__based_on__` is None or not configured on this class, returns None. If the referenced attribute exists on the target instance but is None, resets permissions to skip based-on evaluation and returns None. If the referenced attribute resolves to a manager that exposes a valid `Permission` subclass, constructs and returns that permission with the corresponding manager instance and the current request user.
-        
+
         Returns:
             BasePermission | None: The resolved permission instance for the related manager, or `None` when no based-on permission applies.
-        
+
         Raises:
             InvalidBasedOnConfigurationError: If the configured `__based_on__` attribute does not exist on the target instance.
             InvalidBasedOnTypeError: If the configured attribute exists but does not resolve to a `GeneralManager` or subclass.
@@ -167,24 +167,24 @@ class ManagerBasedPermission(BasePermission):
     def checkPermission(
         self,
         action: permission_type,
-        attriubte: str,
+        attribute: str,
     ) -> bool:
         """
         Determine whether the request user is allowed to perform a CRUD action on a specific attribute.
-        
+
         Parameters:
             action (permission_type): CRUD action to evaluate ("create", "read", "update", "delete").
-            attriubte (str): Name of the attribute to check permission for.
-        
+            attribute (str): Name of the attribute to check permission for.
+
         Returns:
             bool: True if the action is permitted on the attribute, False otherwise.
-        
+
         Raises:
             UnknownPermissionActionError: If `action` is not one of "create", "read", "update", or "delete".
         """
         if (
             self.__based_on_permission
-            and not self.__based_on_permission.checkPermission(action, attriubte)
+            and not self.__based_on_permission.checkPermission(action, attribute)
         ):
             return False
 
@@ -200,8 +200,8 @@ class ManagerBasedPermission(BasePermission):
             raise UnknownPermissionActionError(action)
 
         has_attribute_permissions = (
-            attriubte in self.__attribute_permissions
-            and action in self.__attribute_permissions[attriubte]
+            attribute in self.__attribute_permissions
+            and action in self.__attribute_permissions[attribute]
         )
 
         if not has_attribute_permissions:
@@ -211,7 +211,7 @@ class ManagerBasedPermission(BasePermission):
             attribute_permission = True
         else:
             attribute_permission = self.__checkSpecificPermission(
-                self.__attribute_permissions[attriubte][action]
+                self.__attribute_permissions[attribute][action]
             )
 
         permission = self.__checkSpecificPermission(permissions)
@@ -235,9 +235,9 @@ class ManagerBasedPermission(BasePermission):
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         """
         Builds queryset filter and exclude mappings derived from this permission configuration.
-        
+
         If a based-on permission exists, its filters and excludes are included with each key prefixed by the name in __based_on__. Then appends filters produced from this class's read permissions via _getPermissionFilter.
-        
+
         Returns:
             list[dict[Literal["filter", "exclude"], dict[str, str]]]: A list of dictionaries each containing "filter" and "exclude" mappings where keys are queryset lookups and values are lookup values.
         """

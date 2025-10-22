@@ -18,7 +18,7 @@ class SimpleBucket(Bucket):
     def __init__(self, manager_class, items=None):
         """
         Initialize the SimpleBucket with a manager class and optional initial items.
-        
+
         Parameters:
             manager_class: Class used to manage or instantiate items stored in the bucket.
             items (iterable, optional): Iterable of items to populate the bucket; defaults to an empty list.
@@ -29,12 +29,12 @@ class SimpleBucket(Bucket):
     def __or__(self, other):
         """
         Combine this bucket with another bucket or a manager instance.
-        
+
         If `other` is a SimpleBucket, returns a new SimpleBucket containing items from this bucket followed by items from `other`. If `other` is an instance of this bucket's manager class, returns a new SimpleBucket with `other` appended. If `other` is neither, returns a shallow copy of this bucket.
-        
+
         Parameters:
             other: The value to combine with this bucket — either a SimpleBucket, an instance of this bucket's manager class, or any other object.
-        
+
         Returns:
             SimpleBucket: A new bucket containing the combined or copied items.
         """
@@ -47,7 +47,7 @@ class SimpleBucket(Bucket):
     def __iter__(self):  # type: ignore
         """
         Iterate over the items in the bucket.
-        
+
         Returns:
             iterator: An iterator that yields each item stored in the bucket.
         """
@@ -102,10 +102,10 @@ class SimpleBucket(Bucket):
     def get(self, **kwargs):
         """
         Retrieve the single item in the bucket when the bucket contains exactly one element.
-        
+
         Returns:
             The single item contained in the bucket.
-        
+
         Raises:
             SingleItemRequiredError: If the bucket does not contain exactly one item.
         """
@@ -116,10 +116,10 @@ class SimpleBucket(Bucket):
     def __getitem__(self, item):
         """
         Retrieve a single item or a sliced bucket from this SimpleBucket.
-        
+
         Parameters:
             item (int | slice): An index to select a single element or a slice to select a range.
-        
+
         Returns:
             SimpleBucket | object: A new SimpleBucket containing the sliced items if `item` is a slice, otherwise the element at the given index.
         """
@@ -161,7 +161,7 @@ class BaseTestInterface(InterfaceBase):
     def create(cls, *args, **kwargs):
         """
         Declare the interface for creating an instance; subclasses must implement this method.
-        
+
         Raises:
             NotImplementedError: Always raised to indicate subclasses must provide an implementation.
         """

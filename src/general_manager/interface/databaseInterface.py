@@ -21,11 +21,11 @@ class InvalidFieldValueError(ValueError):
     def __init__(self, field_name: str, value: object) -> None:
         """
         Initialize an InvalidFieldValueError for a specific model field and value.
-        
+
         Parameters:
-        	field_name (str): Name of the field that received an invalid value.
-        	value (object): The invalid value provided; included in the exception message.
-        
+            field_name (str): Name of the field that received an invalid value.
+            value (object): The invalid value provided; included in the exception message.
+
         """
         super().__init__(f"Invalid value for {field_name}: {value}.")
 
@@ -36,11 +36,11 @@ class InvalidFieldTypeError(TypeError):
     def __init__(self, field_name: str, error: Exception) -> None:
         """
         Initialize the InvalidFieldTypeError with the field name and the originating exception.
-        
+
         Parameters:
             field_name (str): Name of the model field that received an unexpected type.
             error (Exception): The original exception or error encountered for the field.
-        
+
         Notes:
             The exception's message is formatted as "Type error for {field_name}: {error}."
         """
@@ -53,7 +53,7 @@ class UnknownFieldError(ValueError):
     def __init__(self, field_name: str, model_name: str) -> None:
         """
         Initialize an UnknownFieldError indicating a field name is not present on a model.
-        
+
         Parameters:
             field_name (str): The field name that was not found on the model.
             model_name (str): The name of the model in which the field was expected.
@@ -72,15 +72,15 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     ) -> int:
         """
         Create a new model instance using the provided field values.
-        
+
         Parameters:
             creator_id (int | None): ID of the user to record as the change author, or None to leave unset.
             history_comment (str | None): Optional comment to attach to the instance history.
             **kwargs: Field values used to populate the model; many-to-many relations may be provided as `<field>_id_list`.
-        
+
         Returns:
             int: Primary key of the newly created instance.
-        
+
         Raises:
             UnknownFieldError: If kwargs contain names that do not correspond to model fields.
             ValidationError: If model validation fails during save.
@@ -98,15 +98,15 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     ) -> int:
         """
         Update this instance with the provided field values.
-        
+
         Parameters:
             creator_id (int | None): ID of the user recording the change; used to set `changed_by_id`.
             history_comment (str | None): Optional comment to attach to the instance's change history.
             **kwargs (Any): Field names and values to apply to the instance; many-to-many updates may be supplied using the `<relation>_id_list` convention.
-        
+
         Returns:
             int: Primary key of the updated instance.
-        
+
         Raises:
             UnknownFieldError: If any provided kwarg does not correspond to a model field.
             ValidationError: If model validation fails during save.
@@ -179,16 +179,16 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     ) -> GeneralManagerModel:
         """
         Populate non-relational fields on an instance and prepare values for writing.
-        
+
         Converts any GeneralManager value to its `id` and appends `_id` to the attribute name, skips values equal to `NOT_PROVIDED`, sets each attribute on the instance, and translates underlying `ValueError`/`TypeError` from attribute assignment into `InvalidFieldValueError` and `InvalidFieldTypeError` respectively.
-        
+
         Parameters:
             instance (GeneralManagerModel): The model instance to modify.
             kwargs (dict[str, Any]): Mapping of attribute names to values to apply.
-        
+
         Returns:
             GeneralManagerModel: The same instance with attributes updated.
-        
+
         Raises:
             InvalidFieldValueError: If setting an attribute raises a `ValueError`.
             InvalidFieldTypeError: If setting an attribute raises a `TypeError`.
@@ -215,11 +215,11 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     ) -> None:
         """
         Validate that each key in `kwargs` corresponds to an attribute or field on `model`.
-        
+
         Parameters:
             model (type[models.Model]): The Django model class to validate against.
             kwargs (dict[str, Any]): Mapping of keyword names to values; keys ending with `_id_list` are validated after stripping that suffix.
-        
+
         Raises:
             UnknownFieldError: If any provided key (after removing a trailing `_id_list`) does not match a model attribute or field name.
         """
@@ -236,13 +236,13 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
         """
         Separate provided kwargs into simple model-field arguments and many-to-many relation arguments.
-        
+
         This function removes keys targeting many-to-many relations from the input kwargs and returns them separately. A many-to-many key is identified by the suffix "_id_list" whose base name matches a many-to-many field on the given model.
-        
+
         Parameters:
             model (Type[models.Model]): Django model whose many-to-many field names are inspected.
             kwargs (dict[Any, Any]): Mapping of keyword arguments to partition; keys matching many-to-many relations are removed in-place.
-        
+
         Returns:
             tuple[dict[str, Any], dict[str, list[Any]]]: A tuple where the first element is the original kwargs dict with many-to-many keys removed, and the second element maps the removed many-to-many keys to their values.
         """

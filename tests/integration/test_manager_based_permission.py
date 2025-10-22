@@ -17,7 +17,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Configure and attach three nested GeneralManager-based test models to the test class.
-        
+
         Creates TestCountry, TestHuman, and TestFamily models with their database interfaces, relations, and ManagerBasedPermission settings, then assigns them to cls.TestCountry, cls.TestHuman, cls.TestFamily, and cls.general_manager_classes for use in integration tests.
         """
 

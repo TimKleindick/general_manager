@@ -26,7 +26,7 @@ class DummyPermission(BasePermission):
     def checkPermission(
         self,
         action: Literal["create", "read", "update", "delete"],
-        attriubte: str,
+        attribute: str,
     ) -> bool:
         return True
 
@@ -71,9 +71,9 @@ class ManagerBasedPermissionTests(TestCase):
         # Create a test user
         """
         Prepare fixtures for ManagerBasedPermission tests.
-        
+
         Sets up test users (regular and staff admin), an AnonymousUser, a Mock instance, and a DummyPermission used as a potential based-on permission. Stores a copy of the current permission_functions and starts a patch for ManagerBasedPermission.__getBasedOnPermission, configuring that patched method to return None by default.
-        
+
         Attributes set on self:
             user: regular test User
             admin_user: staff User

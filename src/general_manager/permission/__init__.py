@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 def __getattr__(name: str) -> Any:
     """
     Resolve and return a lazily-exposed public attribute for this module.
-    
+
     Parameters:
         name (str): The attribute name being accessed on the module.
-    
+
     Returns:
         Any: The resolved attribute value associated with `name`.
     """

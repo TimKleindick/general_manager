@@ -15,7 +15,7 @@ class InvalidFunctionNodeError(ValueError):
     def __init__(self, function_name: str) -> None:
         """
         Initialize the exception for an invalid left-hand AST node used with a function call.
-        
+
         Parameters:
             function_name (str): Name of the function with the invalid left node; stored on the exception and used to form the message "Invalid left node for {function_name}() function."
         """
@@ -28,7 +28,7 @@ class InvalidLenThresholdError(TypeError):
     def __init__(self) -> None:
         """
         Exception raised when a len() threshold is not a numeric value.
-        
+
         Initializes the exception with a default message indicating invalid arguments for the len function.
         """
         super().__init__("Invalid arguments for len function.")
@@ -40,7 +40,7 @@ class InvalidNumericThresholdError(TypeError):
     def __init__(self, function_name: str) -> None:
         """
         Create an InvalidFunctionNodeError with a formatted message for the given function name.
-        
+
         Parameters:
             function_name (str): Name of the function that received an invalid AST node; incorporated into the exception message.
         """
@@ -53,7 +53,7 @@ class NonEmptyIterableError(ValueError):
     def __init__(self, function_name: str) -> None:
         """
         Initialize the error indicating an aggregate function received an empty iterable.
-        
+
         Parameters:
             function_name (str): Name of the aggregate function (e.g., 'sum', 'max', 'len') used to build the error message.
         """
@@ -66,7 +66,7 @@ class NumericIterableError(TypeError):
     def __init__(self, function_name: str) -> None:
         """
         Initialize the exception indicating that a function expected an iterable of numeric values.
-        
+
         Parameters:
             function_name (str): Name of the function included in the exception message (message: "<function_name> expects an iterable of numbers.").
         """
@@ -121,7 +121,7 @@ class FunctionHandler(BaseRuleHandler, ABC):
     ) -> Dict[str, str]:
         """
         Handle a comparison AST node whose left side is a function call and delegate analysis to the subclass aggregate method.
-        
+
         Parameters:
             node (ast.AST): The AST node to inspect; processing only occurs if it is an `ast.Compare`.
             left (Optional[ast.expr]): Original left operand from the rule (may be unused by this handler).
@@ -129,10 +129,10 @@ class FunctionHandler(BaseRuleHandler, ABC):
             op (Optional[ast.cmpop]): Comparison operator from the rule; used to determine operator symbol.
             var_values (Dict[str, Optional[object]]): Mapping of variable names to their resolved values for message construction.
             rule (Rule): Rule instance used to obtain the textual operator symbol and any rule-specific context.
-        
+
         Returns:
             Dict[str, str]: Mapping from variable name to generated error message; empty if `node` is not an `ast.Compare`.
-        
+
         Raises:
             InvalidFunctionNodeError: If the compare left-hand side is not a function call with at least one argument.
         """
@@ -194,17 +194,17 @@ class LenHandler(FunctionHandler):
     ) -> Dict[str, str]:
         """
         Produce an error message for a len() comparison against a numeric threshold.
-        
+
         Parameters:
             arg_node (ast.expr): AST node representing the value passed to `len`.
             right_node (ast.expr): AST node representing the comparison threshold.
             op_symbol (str): Comparison operator symbol (e.g., ">", ">=", "<", "<=").
             var_values (Dict[str, Optional[object]]): Runtime values for variables keyed by name.
             rule (Rule): Rule helper used to resolve node names and evaluate nodes.
-        
+
         Returns:
             Dict[str, str]: A single-entry mapping from the variable name to a human-readable violation message.
-        
+
         Raises:
             InvalidLenThresholdError: If the comparison threshold cannot be interpreted as a number.
         """
@@ -253,18 +253,18 @@ class SumHandler(FunctionHandler):
     ) -> Dict[str, str]:
         """
         Evaluate the sum of the iterable referenced by `arg_node` and produce a descriptive error message when the sum does not satisfy the comparison against the provided threshold.
-        
+
         Parameters:
             arg_node (ast.expr): AST node identifying the iterable variable whose elements will be summed.
             right_node (ast.expr): AST node representing the threshold value to compare against.
             op_symbol (str): Comparison operator symbol (e.g., ">", "<=", "==") used to form the message.
             var_values (Dict[str, Optional[object]]): Mapping of variable names to their evaluated runtime values.
             rule (Rule): Rule helper used to resolve node names and evaluate AST nodes.
-        
+
         Returns:
             Dict[str, str]: A mapping containing a single entry: the variable name mapped to a human-readable message
             describing how the computed sum relates to the threshold (too small, too large, or must equal).
-        
+
         Raises:
             NonEmptyIterableError: If the referenced iterable is missing or empty.
             NumericIterableError: If the iterable contains non-numeric elements.
@@ -314,17 +314,17 @@ class MaxHandler(FunctionHandler):
     ) -> Dict[str, str]:
         """
         Compare the maximum element of an iterable variable against a numeric threshold and produce an error message when the comparison fails.
-        
+
         Parameters:
             arg_node (ast.expr): AST node identifying the iterable variable passed to `max`.
             right_node (ast.expr): AST node that evaluates to the numeric threshold to compare against.
             op_symbol (str): Comparison operator symbol (e.g., ">", ">=", "<", "<=", "==") used to shape the message.
             var_values (Dict[str, Optional[object]]): Mapping of variable names to their evaluated runtime values.
             rule (Rule): Rule helper used to resolve node names and evaluate `right_node`.
-        
+
         Returns:
             Dict[str, str]: Single-item mapping from the variable name to a human-readable message describing the max value and the threshold comparison.
-        
+
         Raises:
             NonEmptyIterableError: If the resolved iterable is not a non-empty list or tuple.
             NumericIterableError: If any element of the iterable is not an int or float.
@@ -367,17 +367,17 @@ class MinHandler(FunctionHandler):
     ) -> Dict[str, str]:
         """
         Compare the minimum element of an iterable against a numeric threshold and produce an error message describing the violation.
-        
+
         Parameters:
             arg_node (ast.expr): AST node for the iterable argument passed to `min`.
             right_node (ast.expr): AST node for the threshold value to compare against.
             op_symbol (str): Comparison operator symbol (e.g., ">", ">=", "<", "<=", "==").
             var_values (Dict[str, Optional[object]]): Mapping of variable names to their evaluated values.
             rule (Rule): Rule instance used to evaluate AST nodes and obtain variable names.
-        
+
         Returns:
             dict[str, str]: Mapping with the variable name as key and the generated error message as value.
-        
+
         Raises:
             NonEmptyIterableError: If the iterable is not a non-empty list/tuple.
             NumericIterableError: If the iterable contains non-numeric elements.

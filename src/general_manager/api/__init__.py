@@ -18,13 +18,13 @@ if TYPE_CHECKING:
 def __getattr__(name: str) -> Any:
     """
     Dynamically resolve and return a named export from this module.
-    
+
     Parameters:
         name (str): The attribute name to resolve from the module's public API.
-    
+
     Returns:
         The resolved exported object corresponding to `name`.
-    
+
     Raises:
         AttributeError: If `name` is not a registered export for this module.
     """

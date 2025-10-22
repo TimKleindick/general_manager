@@ -17,11 +17,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Prepare test manager classes used across tests.
-        
+
         Defines two inner manager classes on the test class:
         - Employee: a database-backed manager with `name` and `salary` fields (salary measured in EUR).
         - TaxCalculation: a manager that references an Employee and exposes a sortable GraphQL property `calculatedTax` that computes 20% of the referenced employee's salary.
-        
+
         After definition, assigns `Employee`, `TaxCalculation`, and `general_manager_classes` to the test class for use in test methods.
         """
 
@@ -58,7 +58,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def setUp(self):
         """
         Set up a test user and the GraphQL query used by tests.
-        
+
         Creates a test user and logs them in, then assigns:
         - self.user: the created user instance
         - self.mutation: GraphQL query string for retrieving a TaxCalculation's `calculatedTax` (value and unit)
@@ -97,7 +97,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def test_sort_by_calculation_property(self):
         """
         Verify TaxCalculation entries can be ordered by the `calculatedTax` property.
-        
+
         Asserts the initial retrieval order is by employee name, then checks that sorting by
         `calculatedTax` yields employees ordered by their salary-derived tax (ascending),
         and that sorting with `reverse=True` yields the reverse order.
@@ -133,7 +133,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def test_sort_by_calculation_property_and_name(self):
         """
         Verifies that TaxCalculation entries are ordered by `calculatedTax` and then by `employee.name`, both in ascending order.
-        
+
         Creates employees with different salaries, sorts the TaxCalculation bucket by the tuple ("calculatedTax", "employee.name") ascending, and asserts the resulting employee name order is: "Tim", "Alice", "Tina", "Bob".
         """
         self.Employee.create(
@@ -160,7 +160,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def test_filter_by_calculation_property(self):
         """
         Verifies that TaxCalculation entries can be filtered by employee name prefix and by calculatedTax, and that combined filters produce the expected subsets and ordering.
-        
+
         Checks:
         - Filtering by employee name prefix "T" yields two entries ordered by employee name: Tim, Tina.
         - Further filtering that subset by calculatedTax == 3000 EUR * 0.2 yields a single entry (Tina).

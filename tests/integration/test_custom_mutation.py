@@ -15,9 +15,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Prepare class-level fixtures for integration tests.
-        
+
         Defines a TestMaterial GeneralManager with a name field, registers it in the test's general_manager_classes, declares an IsAuthenticated mutation permission, and exposes a create_material GraphQL mutation on the test class that creates TestMaterial instances.
         """
+
         class TestMaterial(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=100)
@@ -35,11 +36,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         def create_material(info, name: str) -> TestMaterial:
             """
             Create a TestMaterial with the given name and assign the calling user as creator.
-            
+
             Parameters:
                 info: GraphQL resolver info object; used to obtain the context user id for creator assignment.
                 name (str): Name for the new TestMaterial.
-            
+
             Returns:
                 TestMaterial: The newly created TestMaterial instance.
             """
@@ -81,12 +82,13 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Prepare class-level test fixtures: define a TestProject GeneralManager subclass, register it for tests, create an IsAuthenticated mutation permission, and attach a GraphQL `create_project` mutation function to the test class as `cls.create_project`.
-        
+
         The created attributes are:
         - `cls.TestProject`: the TestProject manager class with a `title` field.
         - `cls.general_manager_classes`: list containing the TestProject class for test registration.
         - `cls.create_project`: a GraphQL mutation that creates a TestProject with the provided title and sets the creator from the request context.
         """
+
         class TestProject(GeneralManager):
             class Interface(DatabaseInterface):
                 title = CharField(max_length=100)
@@ -104,11 +106,11 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         def create_project(info, title: str) -> TestProject:
             """
             Create a TestProject with the given title and set its creator to the current user from the GraphQL resolver info context.
-            
+
             Parameters:
                 info: GraphQL resolver info object whose context.user supplies the creator's user.
                 title (str): Title for the new project.
-            
+
             Returns:
                 TestProject: The newly created TestProject instance.
             """
@@ -150,13 +152,14 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Set up a test ToDo GeneralManager type, register it for tests, and define GraphQL mutations to toggle its finished state.
-        
+
         Defines an inner ToDo manager with `headline` and `finished` fields and public read/create/update/delete permissions, assigns it to `cls.ToDo` and `cls.general_manager_classes`, and registers two GraphQL mutations:
         - `mark_todo_as_finished`: sets a ToDo's `finished` field to True.
         - `reset_todo`: sets a ToDo's `finished` field to False and requires authentication via `ResetToDoPermission`.
-        
+
         Both mutations derive `creator_id` from `info.context.user.id` when a user is present and return the updated ToDo.
         """
+
         class ToDo(GeneralManager):
             class Interface(DatabaseInterface):
                 headline = CharField(max_length=100)
@@ -178,10 +181,10 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
         def mark_todo_as_finished(info, id: int) -> ToDo:
             """
             Mark a ToDo item as finished and return the updated instance.
-            
+
             Parameters:
                 id (int): Identifier of the ToDo to mark as finished. The resolver's context user, if present, will be recorded as `creator_id`.
-            
+
             Returns:
                 ToDo: The updated ToDo instance with `finished` set to `True` and `creator_id` set to the context user's id when available.
             """

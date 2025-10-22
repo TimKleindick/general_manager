@@ -55,7 +55,7 @@ class DummyPermission(BasePermission):
     def checkPermission(
         self,
         action: Literal["create", "read", "update", "delete"],
-        attriubte: str,
+        attribute: str,
     ) -> bool:
         permission_map: dict[str, dict[str, str]] = {
             "create": self.__class__.create_permissions,
@@ -63,7 +63,7 @@ class DummyPermission(BasePermission):
             "update": self.__class__.update_permissions,
             "delete": self.__class__.delete_permissions,
         }
-        configured_permission = permission_map.get(action, {}).get(attriubte)
+        configured_permission = permission_map.get(action, {}).get(attribute)
         if configured_permission is None:
             return True
         return self.validatePermissionString(configured_permission)
@@ -325,8 +325,9 @@ class BasePermissionTests(TestCase):
         """Test getUserWithId with authenticated user."""
         User = get_user_model()
         user = User.objects.create_user(
-            username="test_user", password="secret123"
-        )  # noqa: S106
+            username="test_user",
+            password="secret123",  # noqa: S106
+        )
 
         result = BasePermission.getUserWithId(user)
         self.assertEqual(result, user)

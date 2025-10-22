@@ -89,7 +89,7 @@ class GeneralManagerTestCase(TestCase):
         def temp_post_receiver(sender, **kwargs):
             """
             Record a signal's keyword arguments by appending them to self.post_list.
-            
+
             Parameters:
                 sender: The signal sender (unused).
                 **kwargs: Keyword arguments provided by the signal; appended as a dict to self.post_list.
