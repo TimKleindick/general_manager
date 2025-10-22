@@ -95,10 +95,12 @@ def test_public_api_dir_includes_exports(module_path: str) -> None:
 @pytest.mark.parametrize("module_path", MODULE_EXPORTS.keys())
 def test_public_api_invalid_attribute_raises(module_path: str) -> None:
     """
-    Verifies that the specified module does not expose an attribute named "does_not_exist".
+    Verifies that accessing a non-existent attribute raises AttributeError.
 
     Parameters:
         module_path (str): Dotted import path of the module to inspect (e.g., "package.submodule").
     """
     module = import_module(module_path)
-    assert not hasattr(module, "does_not_exist")
+
+    with pytest.raises(AttributeError):
+        module.does_not_exist  # noqa: B018
