@@ -167,14 +167,27 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             json_unique_values: set[Any] = set()
 
             # data synchronization
-            for data in data_list:
-                lookup = {field: data[field] for field in unique_fields}
+            for idx, data in enumerate(data_list):
+                try:
+                    lookup = {field: data[field] for field in unique_fields}
+                except KeyError as e:
+                    missing = e.args[0]
+                    raise InvalidReadOnlyDataFormatError() from KeyError(
+                        f"Item {idx} missing unique field '{missing}'."
+                    )
                 unique_identifier = tuple(lookup[field] for field in unique_fields)
                 json_unique_values.add(unique_identifier)
 
                 instance, is_created = model.objects.get_or_create(**lookup)
                 updated = False
-                for field_name, value in data.items():
+                editable_fields = {
+                    f.name
+                    for f in model._meta.local_fields
+                    if getattr(f, "editable", True)
+                    and not getattr(f, "primary_key", False)
+                } - {"is_active"}
+                for field_name in editable_fields.intersection(data.keys()):
+                    value = data[field_name]
                     if getattr(instance, field_name, None) != value:
                         setattr(instance, field_name, value)
                         updated = True

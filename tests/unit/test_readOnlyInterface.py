@@ -74,6 +74,25 @@ class FakeManager:
         return [inst for inst in self._instances if inst.is_active]
 
 
+class FakeField:
+    """
+    Minimal stand-in for a Django model field that exposes the attributes required in tests.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        editable: bool = True,
+        primary_key: bool = False,
+        column: str | None = None,
+    ) -> None:
+        self.name = name
+        self.editable = editable
+        self.primary_key = primary_key
+        self.column = column or name
+
+
 class DummyModel:
     # simuliertes Django-Modell
     objects = FakeManager()
@@ -257,6 +276,13 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
+        self._orig_local_fields = getattr(DummyModel._meta, "local_fields", None)
+        DummyModel._meta.local_fields = (
+            FakeField("id", editable=False, primary_key=True),
+            FakeField("name"),
+            FakeField("other"),
+            FakeField("is_active", editable=False),
+        )
         # stub transaction.atomic
         self.atomic_cm = mock.MagicMock()
 
@@ -302,6 +328,10 @@ class SyncDataTests(SimpleTestCase):
         """
         Stops all active patches and restores original behaviors after each test.
         """
+        if self._orig_local_fields is None:
+            delattr(DummyModel._meta, "local_fields")
+        else:
+            DummyModel._meta.local_fields = self._orig_local_fields
         self.atomic_patch.stop()
         self.gu_patch.stop()
         self.es_patch.stop()
@@ -357,7 +387,6 @@ class SyncDataTests(SimpleTestCase):
             self.assertEqual(DummyModel.objects._instances, [])
 
     def test_sync_creates_updates_and_deactivates(self):
-        # Setup: schon ein Eintrag a vorhanden
         """
         Tests that syncData creates new instances, updates existing ones, and does not deactivate any when all input data matches active instances.
 
