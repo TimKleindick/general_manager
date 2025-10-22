@@ -42,7 +42,7 @@ class InvalidNumericThresholdError(TypeError):
         Create an InvalidFunctionNodeError with a formatted message for the given function name.
 
         Parameters:
-            function_name (str): Name of the function that received an invalid AST node; incorporated into the exception message.
+            function_name (str): Name of the aggregate function (e.g., "sum", "max", "min") included in the message.
         """
         super().__init__(f"Invalid arguments for {function_name} function.")
 

@@ -13,6 +13,9 @@ import uuid
 fake = Faker()
 _RNG = SystemRandom()
 
+_AVG_DELTA_DAYS_ERROR = "avg_delta_days must be >= 0"
+_EMPTY_OPTIONS_ERROR = "options must be a non-empty list"
+
 
 def LazyMeasurement(
     min_value: int | float, max_value: int | float, unit: str
@@ -45,7 +48,12 @@ def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
 
     Returns:
         date: The base date shifted by the randomly chosen number of days.
+
+    Raises:
+        ValueError: If avg_delta_days is negative.
     """
+    if avg_delta_days < 0:
+        raise ValueError(_AVG_DELTA_DAYS_ERROR)
     return LazyAttribute(
         lambda instance: (getattr(instance, base_attribute) or date.today())
         + timedelta(days=_RNG.randint(avg_delta_days // 2, avg_delta_days * 3 // 2))
@@ -149,6 +157,8 @@ def LazyChoice(options: list[Any]) -> LazyFunction:
     Returns:
         Any: One element randomly chosen from `options`.
     """
+    if not options:
+        raise ValueError(_EMPTY_OPTIONS_ERROR)
     return LazyFunction(lambda: _RNG.choice(options))
 
 

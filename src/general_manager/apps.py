@@ -517,7 +517,9 @@ class GeneralmanagerConfig(AppConfig):
 
         if hasattr(general_manager_class, "Permission"):
             permission = general_manager_class.Permission
-            if not issubclass(permission, BasePermission):
+            if not (
+                isinstance(permission, type) and issubclass(permission, BasePermission)
+            ):
                 raise InvalidPermissionClassError(permission.__name__)
             general_manager_class.Permission = permission
         else:
