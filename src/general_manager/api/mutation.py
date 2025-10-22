@@ -226,8 +226,7 @@ def graphQlMutation(
                 data["success"] = True
                 return mutation_class(**data)
             except HANDLED_MANAGER_ERRORS as error:
-                GraphQL._handleGraphQLError(error)
-                return mutation_class(**{"success": False})
+                raise GraphQL._handleGraphQLError(error) from error
 
         # Assemble class dict
         class_dict: dict[str, Any] = {
