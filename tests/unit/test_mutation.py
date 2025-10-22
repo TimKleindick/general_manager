@@ -14,6 +14,10 @@ from graphql import GraphQLError
 
 type test123 = str
 
+type int_1 = int
+type int_2 = int
+type int_3 = int
+
 
 class DummyInterface(InterfaceBase):
     input_fields: ClassVar[dict] = {}
@@ -460,11 +464,24 @@ class MutationDecoratorTests(TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.int, 10)
 
-    def test_mutation_with_tuple_unpacking(self):
+    def test_mutation_with_tuple_unpacking_duplicate_names_raises(self):
+        """Enforce that duplicate output field names trigger an error."""
+        from general_manager.api.mutation import DuplicateMutationOutputNameError
+
+        with self.assertRaises(DuplicateMutationOutputNameError):
+
+            @graphQlMutation()
+            def tuple_mutation(info, a: int, b: int) -> tuple[int, int, int]:
+                _ = info
+                return a + b, a - b, a * b
+
+        self.assertNotIn("tupleMutation", GraphQL._mutations)
+
+    def test_mutation_with_tuple_unpacking_with_custom_names(self):
         """Test that tuple returns are properly unpacked into mutation fields."""
 
         @graphQlMutation()
-        def tuple_mutation(info, a: int, b: int) -> tuple[int, int, int]:
+        def tuple_mutation(info, a: int, b: int) -> tuple[int_1, int_2, int_3]:
             _ = info
             return a + b, a - b, a * b
 
@@ -474,7 +491,9 @@ class MutationDecoratorTests(TestCase):
 
         result = mutation.mutate(None, Info, a=10, b=5)
         self.assertTrue(result.success)
-        self.assertEqual(result.int, 15)  # First tuple element
+        self.assertEqual(result.int_1, 15)  # First tuple element
+        self.assertEqual(result.int_2, 5)  # Second tuple element
+        self.assertEqual(result.int_3, 50)  # Third tuple element
 
     def test_mutation_info_parameter_skipping(self):
         """Test that 'info' parameter is correctly skipped in Arguments."""
@@ -493,18 +512,15 @@ class MutationDecoratorTests(TestCase):
 
     def test_mutation_with_manager_type_parameter(self):
         """Test mutations that accept GeneralManager types as parameters."""
-        from general_manager.manager import GeneralManager
-
-        # This would need proper setup with a real manager class
-        # Testing the type resolution mechanism
 
         @graphQlMutation()
-        def manager_mutation(info, id: int) -> int:
+        def manager_mutation(info, item: DummyGM) -> str:
             _ = info
-            return id
+            return item.name
 
         mutation = GraphQL._mutations["managerMutation"]
-        self.assertIsNotNone(mutation)
+        arg = mutation._meta.arguments["item"]
+        self.assertIsInstance(arg, graphene.ID)
 
     def test_mutation_graphql_type_resolution(self):
         """Test that mutations properly resolve Python types to GraphQL types."""
