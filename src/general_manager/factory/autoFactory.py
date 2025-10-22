@@ -76,8 +76,12 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             InvalidGeneratedObjectError: If an element of a generated list is not a Django model instance.
         """
         model = cls._meta.model
-        if not issubclass(model, models.Model):
-            raise InvalidAutoFactoryModelError()
+        try:
+            is_model = isinstance(model, type) and issubclass(model, models.Model)
+        except TypeError:
+            is_model = False
+        if not is_model:
+            raise InvalidAutoFactoryModelError
         field_name_list, to_ignore_list = cls.interface.handleCustomFields(model)
 
         fields = [

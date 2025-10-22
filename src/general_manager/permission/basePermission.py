@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 from general_manager.permission.permissionChecks import permission_functions
 
-from django.contrib.auth.models import AnonymousUser, AbstractUser
+from django.contrib.auth.models import AnonymousUser, AbstractBaseUser, AbstractUser
 from general_manager.permission.permissionDataManager import PermissionDataManager
 from general_manager.permission.utils import (
     validatePermissionString,
@@ -19,16 +19,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+UserLike: TypeAlias = AbstractBaseUser | AnonymousUser
+
 
 class PermissionCheckError(PermissionError):
     """Raised when permission evaluation fails for a user."""
 
-    def __init__(self, user: AbstractUser | AnonymousUser, errors: list[str]) -> None:
+    def __init__(self, user: UserLike, errors: list[str]) -> None:
         """
         Initialize a PermissionCheckError carrying the requesting user's identity and permission failure details.
 
         Parameters:
-            user (AbstractUser | AnonymousUser): The user for whom permission evaluation failed; if the user has an `id`, it is included in the error message, otherwise the user is labeled "anonymous".
+            user (UserLike): The user for whom permission evaluation failed; if the user has an `id`, it is included in the error message, otherwise the user is labeled "anonymous".
             errors (list[str]): A list of error messages describing individual permission failures.
         """
         user_id = getattr(user, "id", None)
@@ -44,7 +46,7 @@ class BasePermission(ABC):
     def __init__(
         self,
         instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-        request_user: AbstractUser | AnonymousUser,
+        request_user: UserLike,
     ) -> None:
         """Initialise the permission context for a specific manager and user."""
         self._instance = instance
@@ -56,7 +58,7 @@ class BasePermission(ABC):
         return self._instance
 
     @property
-    def request_user(self) -> AbstractUser | AnonymousUser:
+    def request_user(self) -> UserLike:
         """Return the user being evaluated for permission checks."""
         return self._request_user
 
@@ -65,7 +67,7 @@ class BasePermission(ABC):
         cls,
         data: dict[str, Any],
         manager: type[GeneralManager],
-        request_user: AbstractUser | AnonymousUser | Any,
+        request_user: UserLike | Any,
     ) -> None:
         """
         Validate that the requesting user is allowed to create each attribute in the provided payload.
@@ -75,7 +77,7 @@ class BasePermission(ABC):
         Parameters:
             data (dict[str, Any]): Mapping of attribute names to the values intended for creation.
             manager (type[GeneralManager]): Manager class that defines the model/schema against which permissions are checked.
-            request_user (AbstractUser | AnonymousUser | Any): User instance or user id (will be resolved to a user or AnonymousUser).
+            request_user (UserLike | Any): User instance or user id (will be resolved to a user or AnonymousUser).
 
         Raises:
             PermissionCheckError: If one or more attributes in `data` are denied for the resolved `request_user`.
@@ -99,7 +101,7 @@ class BasePermission(ABC):
         cls,
         data: dict[str, Any],
         old_manager_instance: GeneralManager,
-        request_user: AbstractUser | AnonymousUser | Any,
+        request_user: UserLike | Any,
     ) -> None:
         """
         Validate whether the request_user can update the given fields on an existing manager instance.
@@ -107,7 +109,7 @@ class BasePermission(ABC):
         Parameters:
             data (dict[str, Any]): Mapping of attribute names to new values to be applied.
             old_manager_instance (GeneralManager): Existing manager instance whose current state is used to evaluate update permissions.
-            request_user (AbstractUser | AnonymousUser | Any): User instance or user id; non-user values will be resolved to a User or AnonymousUser via getUserWithId.
+            request_user (UserLike | Any): User instance or user id; non-user values will be resolved to a User or AnonymousUser via getUserWithId.
 
         Raises:
             PermissionCheckError: Raised with a list of error messages when one or more fields are not permitted to be updated.
@@ -133,7 +135,7 @@ class BasePermission(ABC):
     def checkDeletePermission(
         cls,
         manager_instance: GeneralManager,
-        request_user: AbstractUser | AnonymousUser | Any,
+        request_user: UserLike | Any,
     ) -> None:
         """
         Validate that the request_user has delete permission for every attribute of the given manager instance.
@@ -142,7 +144,7 @@ class BasePermission(ABC):
 
         Parameters:
             manager_instance (GeneralManager): The manager object whose attributes will be checked for delete permission.
-            request_user (AbstractUser | AnonymousUser | Any): The user (or user id) to evaluate; non-user values will be resolved to AnonymousUser.
+            request_user (UserLike | Any): The user (or user id) to evaluate; non-user values will be resolved to AnonymousUser.
 
         Raises:
             PermissionCheckError: If one or more attributes are not permitted for deletion by request_user. The exception carries the user and the list of denial messages.
@@ -164,22 +166,23 @@ class BasePermission(ABC):
 
     @staticmethod
     def getUserWithId(
-        user: Any | AbstractUser | AnonymousUser,
-    ) -> AbstractUser | AnonymousUser:
+        user: Any | UserLike,
+    ) -> UserLike:
         """
         Resolve a user identifier or user-like object to a Django User or AnonymousUser instance.
 
-        If the input is already an AbstractUser or AnonymousUser, it is returned unchanged. If the input is a primary key (or other value used to look up a User by id), the corresponding User is returned; if no such User exists, an AnonymousUser is returned.
+        If the input is already an AbstractBaseUser or AnonymousUser, it is returned unchanged. If the input is a primary key (or other value used to look up a User by id), the corresponding User is returned; if no such User exists, an AnonymousUser is returned.
 
         Parameters:
-            user (Any | AbstractUser | AnonymousUser): A user object or a value to look up a User by primary key.
+            user (Any | UserLike): A user object or a value to look up a User by primary key.
 
         Returns:
-            AbstractUser | AnonymousUser: The resolved User instance, or an AnonymousUser when no matching User is found.
+            UserLike: The resolved User instance, or an AnonymousUser when no matching User is found.
         """
-        from django.contrib.auth.models import User
+        from django.contrib.auth import get_user_model
 
-        if isinstance(user, (AbstractUser, AnonymousUser)):
+        User = get_user_model()
+        if isinstance(user, (AbstractBaseUser, AnonymousUser)):
             return user
         try:
             return User.objects.get(id=user)
@@ -230,7 +233,10 @@ class BasePermission(ABC):
             raise PermissionNotFoundError(permission)
         permission_filter = permission_functions[permission_function][
             "permission_filter"
-        ](self.request_user, config)
+        ](
+            cast(AbstractUser | AnonymousUser, self.request_user),
+            config,
+        )
         if permission_filter is None:
             return {"filter": {}, "exclude": {}}
         return permission_filter
@@ -248,4 +254,8 @@ class BasePermission(ABC):
         Returns:
             bool: True when every sub-permission evaluates to True for the current user.
         """
-        return validatePermissionString(permission, self.instance, self.request_user)
+        return validatePermissionString(
+            permission,
+            self.instance,
+            cast(AbstractUser | AnonymousUser, self.request_user),
+        )

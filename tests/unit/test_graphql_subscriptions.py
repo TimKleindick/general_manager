@@ -746,10 +746,12 @@ def allow_simple_interface_only(cls):
         The class decorated with a patch that makes `issubclass(X, Y)` return `True` when `X.__name__ == "SimpleInterface"`, otherwise delegating to the original `issubclass`.
     """
 
+    import builtins as _builtins
+
     def fake_issubclass(a, b):
         if getattr(a, "__name__", None) == "SimpleInterface":
             return True
-        return issubclass(a, b)
+        return _builtins.issubclass(a, b)
 
     return patch("builtins.issubclass", side_effect=fake_issubclass)(cls)
 
