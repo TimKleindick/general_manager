@@ -2,14 +2,11 @@
 """Unit tests for GraphQL subscription helper methods and utilities."""
 
 import asyncio
-import hashlib
-import json
 from types import SimpleNamespace
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 import unittest
 
-import graphene
 from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 
@@ -149,10 +146,10 @@ class GraphQLPrimePropertiesWithExceptionsTests(unittest.TestCase):
             def getGraphQLProperties(cls) -> dict[str, object]:
                 """
                 Return a mapping of GraphQL property names to their property objects for the given manager class.
-                
+
                 Parameters:
                     cls (type): Manager class whose GraphQL properties should be collected.
-                
+
                 Returns:
                     dict[str, object]: A dictionary mapping property names to the corresponding property objects.
                 """
@@ -271,7 +268,7 @@ class GraphQLSubscriptionPropertySelectionAdvancedTests(unittest.TestCase):
             def getGraphQLProperties(cls) -> dict[str, object]:
                 """
                 Provide the default mapping of GraphQL-selectable property names for the class.
-                
+
                 Returns:
                     dict[str, object]: A dictionary mapping property names ("propA", "propB", "propC") to placeholder objects representing those GraphQL properties.
                 """
@@ -313,10 +310,10 @@ class GraphQLSubscriptionPropertySelectionAdvancedTests(unittest.TestCase):
             def getGraphQLProperties(cls) -> dict[str, object]:
                 """
                 Return the mapping of GraphQL-exposed property names to their descriptor objects for the given class.
-                
+
                 Parameters:
                     cls: The class whose GraphQL properties are being described.
-                
+
                 Returns:
                     A dict mapping property name (str) to a property descriptor/object for that property.
                 """
@@ -347,7 +344,7 @@ class GraphQLSubscriptionPropertySelectionAdvancedTests(unittest.TestCase):
     def test_empty_item_selection(self) -> None:
         """
         Ensure _subscription_property_names yields no property names when the selection for `item` contains only `__typename`.
-        
+
         Builds a subscription info object whose `item` selection includes only `__typename` and asserts the extracted property name set is empty.
         """
 
@@ -356,7 +353,7 @@ class GraphQLSubscriptionPropertySelectionAdvancedTests(unittest.TestCase):
             def getGraphQLProperties(cls) -> dict[str, object]:
                 """
                 Map GraphQL property names to their descriptor objects (placeholder values).
-                
+
                 Returns:
                     A dictionary mapping GraphQL property names to descriptor objects; each value is a placeholder object.
                 """
@@ -572,11 +569,11 @@ class GraphQLChannelListenerRobustnessTests(unittest.TestCase):
         async def test_listener() -> list[str]:
             """
             Run a mocked channel listener and collect enqueued action strings.
-            
+
             The test starts GraphQL._channel_listener with a mock channel layer that yields a sequence of messages
             (some malformed). It cancels the listener after a short time and gathers any action values that were
             put into the provided queue.
-            
+
             Returns:
                 actions (list[str]): FIFO-ordered list of action strings that were enqueued by the listener.
             """

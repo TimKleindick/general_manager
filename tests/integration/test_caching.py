@@ -64,7 +64,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def budget_left(self) -> Measurement:
                 """
                 Compute the project's remaining budget.
-                
+
                 Returns:
                     Measurement: The project's budget minus its actual costs.
                 """
@@ -74,7 +74,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def budget_used(self) -> Measurement:
                 """
                 Compute the project's used budget as a percentage.
-                
+
                 Returns:
                     Measurement: Fraction of the project's budget that has been consumed, expressed as a percentage.
                 """
@@ -91,7 +91,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def has_duplicate_name(self) -> bool:
                 """
                 Determine whether another project has the same name as this instance.
-                
+
                 Returns:
                     True if more than one project exists with the same name, False otherwise.
                 """
@@ -104,7 +104,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def other_project_count(self) -> int:
                 """
                 Return the count of projects whose `number` differs from this instance's project's `number`.
-                
+
                 Returns:
                     int: Number of projects with a different `number` than this instance's project.
                 """
@@ -116,7 +116,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def has_budget_buffer(self) -> bool:
                 """
                 Indicates whether the project has a positive remaining budget.
-                
+
                 Returns:
                     `true` if the project's remaining budget is greater than zero EUR, `false` otherwise.
                 """
@@ -126,7 +126,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def similar_name_count(self) -> int:
                 """
                 Count projects whose names contain the first word of this instance's associated project's name.
-                
+
                 Returns:
                     int: Number of projects whose `name` contains that first word.
                 """
@@ -146,7 +146,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def same_name_excluding_self(self) -> int:
                 """
                 Count projects that have the same name as the current project's name, excluding the current project by its number.
-                
+
                 Returns:
                     int: Number of matching projects excluding the current project.
                 """
@@ -160,7 +160,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def project_keyword_number_range_count(self) -> int:
                 """
                 Count projects whose name contains "Project" and whose number is between 1 and 3 inclusive.
-                
+
                 Returns:
                     count (int): Number of projects matching the filters.
                 """
@@ -175,9 +175,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def recent_project_window_count(self) -> int:
                 """
                 Count projects whose start_date falls within seven days before or after this instance's project.start_date and whose completion_at is no later than seven days after this instance's project.completion_at.
-                
+
                 Returns:
-                	int: Number of projects matching the date window and completion threshold.
+                        int: Number of projects matching the date window and completion threshold.
                 """
                 window_start = (self.project.start_date - timedelta(days=7)).isoformat()
                 window_end = (self.project.start_date + timedelta(days=7)).isoformat()
@@ -194,9 +194,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             def staged_bucket_count(self) -> int:
                 """
                 Count TestProjectForCommercials that match a specific sequence of chained filters relative to this instance's project.
-                
+
                 Applies a contains filter on the name, a minimum-number filter, an exclusion by actual_costs, and a start_date upper bound based on this instance's project start_date.
-                
+
                 Returns:
                     count (int): Number of projects matching the chained filter and exclude criteria.
                 """

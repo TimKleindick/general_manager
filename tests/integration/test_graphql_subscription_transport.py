@@ -27,7 +27,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Register a temporary Project GeneralManager on the test class and run superclass setup.
-        
+
         Defines an inner GeneralManager named `Project` with a `name` CharField and a permissive
         ManagerBasedPermission (all CRUD allowed for `"public"`), assigns it to
         `cls.general_manager_classes`, `cls.read_only_classes`, and `cls.Project`, and then
@@ -61,14 +61,14 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     def test_subscription_snapshot_event(self) -> None:
         """
         Establish a graphql-transport-ws websocket subscription and assert the initial "snapshot" event is delivered.
-        
+
         Performs the connection_init handshake, subscribes to ProjectChanges for the test project ID, verifies the first "next" message for the subscription contains payload.data.onProjectChange.action == "snapshot", sends a complete for the subscription, and disconnects.
         """
 
         async def run_subscription_test() -> None:
             """
             Run a GraphQL subscription flow that verifies the subscription yields an initial snapshot event.
-            
+
             Performs a GraphQL Transport WS handshake, starts a subscription for the test project's ProjectChanges, and asserts that the first `next` payload contains `data.onProjectChange.action` equal to `"snapshot"`. The coroutine closes the subscription and disconnects the test WebSocket as part of the test.
             """
             communicator, _ = await self._connect()
@@ -128,7 +128,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Verify that a WebSocket connection without the graphql-transport-ws subprotocol is accepted and yields a connection_ack.
-            
+
             Establishes a websocket connection with no subprotocols, sends a `connection_init` message, asserts the server accepted the connection without selecting a subprotocol and responded with a `connection_ack` message, then closes the connection.
             """
             communicator, accept = await self._connect(subprotocols=[])
@@ -154,7 +154,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Test that sending `connection_init` twice causes the server to close the WebSocket with code 4429.
-            
+
             Performs a websocket connection handshake, sends an initial `connection_init` and consumes the `connection_ack`, then sends a second `connection_init` and asserts the server responds with a `websocket.close` event whose `code` is 4429 before awaiting communicator shutdown.
             """
             communicator, _ = await self._connect()
@@ -179,7 +179,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Verify that sending a `subscribe` message before completing `connection_init` causes the server to close the WebSocket with code 4401.
-            
+
             The test connects to the GraphQL websocket endpoint, sends a `subscribe` payload without performing the connection initialization handshake, and asserts that the connection is closed with code 4401.
             """
             communicator, _ = await self._connect()
@@ -204,7 +204,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Verify that sending a `subscribe` message with a non-string `id` causes the server to close the WebSocket with code 4403.
-            
+
             This test establishes a connection, performs the connection init handshake, sends a `subscribe` payload whose `id` is a number, and asserts that the communicator receives a `websocket.close` event with code 4403.
             """
             communicator, _ = await self._connect()
@@ -225,9 +225,10 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     def test_subscribe_without_schema(self) -> None:
         """
         Verify that subscribing when GraphQL subscriptions are not configured yields an error and then a completion for the subscription id.
-        
+
         Patches GraphQL.get_schema to return None, sends a `subscribe` message, asserts an `error` payload whose message starts with "GraphQL subscriptions are not configured." for the given id, and then asserts a `complete` message for the same id.
         """
+
         async def run_test() -> None:
             """
             Verify that attempting to subscribe when GraphQL subscriptions are not configured results in an error message for the subscription id followed by a completion message.
@@ -352,7 +353,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Test that subscribing with non-object `variables` produces an error and then a complete message.
-            
+
             Sends a connection initialization, submits a `subscribe` payload whose `variables` field is not an object, asserts the first response contains an error message beginning with "Variables must be provided as an object.", asserts a following `complete` message for the same subscription id, and then closes the connection.
             """
             communicator, _ = await self._connect()
@@ -385,7 +386,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Validate that sending a subscribe message with a non-string operationName produces an error followed by a complete message.
-            
+
             Asserts the server returns an error payload whose message starts with "The operation name must be a string" for the subscription id, and then sends a `complete` message for the same id.
             """
             communicator, _ = await self._connect()
@@ -421,9 +422,10 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     def test_subscribe_parse_error(self) -> None:
         """
         Verify that an invalid GraphQL subscription query produces a syntax error payload for the subscription id and then a complete message.
-        
+
         Asserts the server sends an "error" message whose payload message starts with "Syntax Error" for the given subscription id, followed by a "complete" message with the same id.
         """
+
         async def run_test() -> None:
             """
             Verify that sending an invalid GraphQL subscription query produces a syntax error payload for the subscription id and a following complete message.
@@ -467,7 +469,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Verifies that a GraphQL subscription that yields an ExecutionResult sends a `next` message with the result data followed by a `complete` message.
-            
+
             Patches the subscription handler to return an ExecutionResult with data {"ok": True}, performs the graphql-transport-ws subscribe flow (after connection_init), and asserts the websocket receives a `next` payload containing the data and then a `complete` for the same subscription id.
             """
             communicator, _ = await self._connect()
@@ -511,7 +513,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             """
             Verifies that a websocket ping elicits a matching pong payload.
-            
+
             Connects to the test GraphQL websocket, performs the connection handshake, sends a ping with payload {"trace": "123"}, asserts that a pong with the identical payload is received, and then closes the connection.
             """
             communicator, _ = await self._connect()
@@ -534,9 +536,10 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     def test_connection_init_non_dict_payload(self) -> None:
         """
         Verify the server acknowledges a `connection_init` message whose `payload` is not a mapping.
-        
+
         Sends a `connection_init` with a non-dictionary payload, asserts a `connection_ack` is received, and then closes the connection.
         """
+
         async def run_test() -> None:
             """
             Perform a WebSocket connection, send a `connection_init` with a non-dictionary payload, and assert the server responds with `connection_ack`.
@@ -560,10 +563,10 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     ) -> tuple[ApplicationCommunicator, dict[str, object]]:
         """
         Establishes a test WebSocket connection to the GraphQL ASGI application and returns the communicator and the server's accept event.
-        
+
         Parameters:
             subprotocols (list[str] | None): Subprotocols to request during the WebSocket handshake. If None, defaults to ["graphql-transport-ws"].
-        
+
         Returns:
             tuple[ApplicationCommunicator, dict[str, object]]: The connected ApplicationCommunicator and the server's `websocket.accept` event dictionary.
         """
@@ -603,9 +606,9 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
     async def _disconnect(self, communicator: ApplicationCommunicator) -> None:
         """
         Close the ASGI test websocket connection and wait for it to shut down.
-        
+
         Sends a websocket.disconnect event with code 1000 to the provided ApplicationCommunicator, suppresses any exceptions raised while sending the disconnect, and then waits for the communicator to finish processing and close.
-        
+
         Parameters:
             communicator (ApplicationCommunicator): The ASGI test communicator representing the websocket connection.
         """

@@ -61,11 +61,11 @@ class MutationPermission:
     ) -> None:
         """
         Validate that the given user is authorized to perform the mutation described by `data`.
-        
+
         Parameters:
             data (dict[str, Any]): Mutation payload mapping field names to values.
             request_user (AbstractUser | AnonymousUser | Any): A user object or a user identifier; if an identifier is provided it will be resolved to a user.
-        
+
         Raises:
             PermissionCheckError: Raised with the `request_user` and a list of field-level error messages when one or more fields fail their permission checks.
         """
@@ -87,12 +87,12 @@ class MutationPermission:
     ) -> bool:
         """
         Determine whether the request user is allowed to modify a specific attribute in the mutation payload.
-        
+
         Updates the instance's cached overall permission result based on the class-level mutate permissions.
-        
+
         Parameters:
             attribute (str): Name of the attribute to validate.
-        
+
         Returns:
             True if modification of the attribute is allowed, False otherwise.
         """

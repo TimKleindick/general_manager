@@ -18,12 +18,13 @@ class MeasurementFieldTests(TestCase):
     def setUpTestData(cls):
         """
         Create and attach a dynamic TestModel used by the test suite.
-        
+
         Defines a Django model named TestModel with two MeasurementField fields:
         - length: base_unit "meter", nullable and blankable.
         - price: base_unit "USD", nullable and blankable.
         Sets the model's Meta.app_label to "my_app" and assigns the class to cls.TestModel for use in tests.
         """
+
         class TestModel(models.Model):
             length = MeasurementField(base_unit="meter", null=True, blank=True)
             price = MeasurementField(base_unit="USD", null=True, blank=True)

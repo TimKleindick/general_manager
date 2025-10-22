@@ -11,7 +11,7 @@ from contextlib import suppress
 def _trusted_pickle_loads(data: bytes) -> object:
     """
     Deserialize pickle-serialized bytes produced by the in-memory test cache.
-    
+
     Returns:
         object: The deserialized Python object.
     """
@@ -45,7 +45,7 @@ class FakeCacheBackend:
     def set(self, key, value, timeout=None):
         """
         Store `value` in the in-memory cache under `key`, serializing it before storage.
-        
+
         Parameters:
             key: Cache key under which the value will be stored.
             value: The Python object to cache; it is serialized with pickle prior to storage.
@@ -281,7 +281,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
     def test_nested_cache_decorator(self):
         """
         Verify nested cached functions cache results and record their dependencies on cache misses.
-        
+
         Ensures that both inner and outer functions store their computed results in the provided cache backend and that the recording function is invoked once per miss with the correct dependency sets (inner first, then outer). Also verifies that subsequent calls that hit the cache do not trigger dependency recording.
         """
 

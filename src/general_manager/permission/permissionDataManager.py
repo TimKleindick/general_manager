@@ -13,7 +13,7 @@ class InvalidPermissionDataError(TypeError):
     def __init__(self) -> None:
         """
         Exception raised when a permission data input is not a dict or a GeneralManager instance.
-        
+
         The exception carries the message: "permission_data must be either a dict or an instance of GeneralManager."
         """
         super().__init__(
@@ -34,11 +34,11 @@ class PermissionDataManager(Generic[GeneralManagerData]):
     ) -> None:
         """
         Wrap a mapping or GeneralManager instance to expose permission-related fields via attribute access.
-        
+
         Parameters:
             permission_data (dict[str, object] | GeneralManager): Either a dict mapping field names to values or a GeneralManager instance whose attributes provide field values.
             manager (type[GeneralManager] | None): When `permission_data` is a dict, the manager class associated with that data; otherwise ignored.
-        
+
         Raises:
             InvalidPermissionDataError: If `permission_data` is neither a dict nor an instance of GeneralManager.
         """
@@ -72,11 +72,11 @@ class PermissionDataManager(Generic[GeneralManagerData]):
     ) -> PermissionDataManager:
         """
         Create a PermissionDataManager representing `base_data` with `update_data` applied.
-        
+
         Parameters:
             base_data (GeneralManagerData): Existing manager instance whose data will serve as the base.
             update_data (dict[str, object]): Fields to add or override on the base data.
-        
+
         Returns:
             PermissionDataManager: Wrapper exposing the merged data where keys in `update_data` override those from `base_data`.
         """

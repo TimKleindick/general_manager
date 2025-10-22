@@ -11,7 +11,7 @@ class UnknownInputFieldError(ValueError):
     def __init__(self, field_name: str) -> None:
         """
         Initialize the UnknownInputFieldError with a message indicating which input field was not recognized.
-        
+
         Parameters:
             field_name (str): Name of the input field referenced in the filter that is not defined.
         """
@@ -23,16 +23,16 @@ def parse_filters(
 ) -> dict[str, dict]:
     """
     Parse raw filter keyword arguments into structured criteria aligned with configured input fields.
-    
+
     Parameters:
         filter_kwargs (dict[str, Any]): Mapping of filter expressions keyed by "<field>[__lookup]".
         possible_values (dict[str, Input]): Mapping of field names to Input definitions used for casting and type information.
-    
+
     Returns:
         dict[str, dict]: Mapping from input field name to a dictionary containing either:
             - "filter_kwargs": dict of lookup names to values for bucket (GeneralManager) fields, or
             - "filter_funcs": list of callables that evaluate non-bucket field conditions.
-    
+
     Raises:
         UnknownInputFieldError: If a filter references a field name not present in `possible_values`.
     """

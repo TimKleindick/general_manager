@@ -14,7 +14,7 @@ class UnsupportedUnionOperandError(TypeError):
     def __init__(self, operand_type: type) -> None:
         """
         Exception raised when attempting to perform a union with an unsupported operand type.
-        
+
         Parameters:
             operand_type (type): The operand type that is not supported for the union; its representation is included in the exception message.
         """
@@ -35,7 +35,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
         Create a manager by constructing its Interface and record the resulting identification.
-        
+
         Parameters:
             *args: Positional arguments forwarded to the Interface constructor.
             **kwargs: Keyword arguments forwarded to the Interface constructor.
@@ -69,13 +69,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     ) -> Bucket[Self]:
         """
         Combine this manager with another manager or a Bucket into a Bucket representing their union.
-        
+
         Parameters:
             other (Self | Bucket[Self]): A manager of the same class or a Bucket to union with.
-        
+
         Returns:
             Bucket[Self]: A Bucket containing the union of the managed objects represented by this manager and `other`.
-        
+
         Raises:
             UnsupportedUnionOperandError: If `other` is not a Bucket and not a GeneralManager instance of the same class.
         """
@@ -92,7 +92,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     ) -> bool:
         """
         Determine whether another object represents the same managed entity.
-        
+
         Returns:
             `true` if `other` is a `GeneralManager` whose identification equals this manager's, `false` otherwise.
         """

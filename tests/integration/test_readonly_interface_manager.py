@@ -10,9 +10,10 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Define a TestCountry GeneralManager subclass with a read-only Interface and register it on the test class.
-        
+
         Creates an inner TestCountry class that exposes two seeded records (codes "US" and "DE") via a class-level `_data` list, defines `code` and `name` fields, and provides a read-only `Interface` with corresponding CharField definitions. Assigns this class to `cls.TestCountry` and adds it to `cls.general_manager_classes` and `cls.read_only_classes` for use by the tests.
         """
+
         class TestCountry(GeneralManager):
             _data: ClassVar[list[dict[str, str]]] = [
                 {"code": "US", "name": "United States"},

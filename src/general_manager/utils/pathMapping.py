@@ -19,7 +19,7 @@ class MissingStartInstanceError(ValueError):
     def __init__(self) -> None:
         """
         Create the MissingStartInstanceError with its default message.
-        
+
         This initializer constructs the exception with the message: "Cannot call goTo on a PathMap without a start instance."
         """
         super().__init__("Cannot call goTo on a PathMap without a start instance.")
@@ -31,10 +31,10 @@ class PathMap:
     instance: PathMap
     mapping: ClassVar[dict[tuple[PathStart, PathDestination], PathTracer]] = {}
 
-    def __new__(cls, *args: object, **kwargs: object) -> PathMap:
+    def __new__(cls) -> PathMap:
         """
         Obtain the singleton PathMap, initializing the path mapping on first instantiation.
-        
+
         Returns:
             PathMap: The singleton PathMap instance.
         """
@@ -115,13 +115,13 @@ class PathMap:
     ) -> GeneralManager | Bucket | None:
         """
         Traverse the cached path from the configured start to the given destination.
-        
+
         Parameters:
             path_destination (PathDestination | type[GeneralManager] | str): Destination specified as a GeneralManager class, a destination name, or a PathDestination identifier.
-        
+
         Returns:
             GeneralManager | Bucket | None: The resolved GeneralManager instance, a Bucket of instances reached by the path, or `None` if no cached path exists.
-        
+
         Raises:
             MissingStartInstanceError: If the cached path requires a concrete start instance but the PathMap was constructed without one.
         """
@@ -138,7 +138,7 @@ class PathMap:
     def getAllConnected(self) -> set[str]:
         """
         Return the set of destination class names that are reachable from the configured start.
-        
+
         Returns:
             set[str]: Destination class names reachable from the current start_class_name.
         """

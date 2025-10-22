@@ -12,9 +12,9 @@ class MissingExportError(AttributeError):
     def __init__(self, module_name: str, attribute: str) -> None:
         """
         Initialize the MissingExportError with the originating module name and the missing attribute.
-        
+
         Constructs the exception message "module 'module_name' has no attribute 'attribute'".
-        
+
         Parameters:
             module_name (str): Name of the module where the attribute was expected.
             attribute (str): Name of the missing attribute.
@@ -49,18 +49,18 @@ def resolve_export(
 ) -> Any:
     """
     Resolve and cache a lazily-loaded export for a package __init__ module.
-    
+
     Parameters:
-    	name (str): The public export name to resolve.
-    	module_all (Iterable[str]): Iterable of names declared in the module's __all__; used to validate that `name` is an allowed export.
-    	module_map (ModuleMap): Mapping from public export names to target module paths or (module path, attribute) pairs used to locate the actual object.
-    	module_globals (MutableMapping[str, Any]): The module's globals dict; the resolved value will be stored here under `name`.
-    
+        name (str): The public export name to resolve.
+        module_all (Iterable[str]): Iterable of names declared in the module's __all__; used to validate that `name` is an allowed export.
+        module_map (ModuleMap): Mapping from public export names to target module paths or (module path, attribute) pairs used to locate the actual object.
+        module_globals (MutableMapping[str, Any]): The module's globals dict; the resolved value will be stored here under `name`.
+
     Returns:
-    	Any: The resolved attribute value for `name`.
-    
+        Any: The resolved attribute value for `name`.
+
     Raises:
-    	MissingExportError: If `name` is not present in `module_all`.
+        MissingExportError: If `name` is not present in `module_all`.
     """
     if name not in module_all:
         raise MissingExportError(module_globals["__name__"], name)

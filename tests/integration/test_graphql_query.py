@@ -15,7 +15,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Register two test GeneralManager models, Commercials and Project, with their database interfaces and relationship.
-        
+
         Commercials exposes name, capex, opex, and a nullable date. Project exposes name, optional description, and a ForeignKey to Commercials. Stores the created classes on the test class as `general_manager_classes`, `project`, and `commercials`.
         """
 
@@ -42,7 +42,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
     def setUp(self):
         """
         Set up the test environment by creating and logging in a test user and creating 10 Commercials instances.
-        
+
         Creates a user with a randomly generated 12-character password, logs the test client in as that user, and populates the Commercials model via its Factory with 10 instances.
         """
         super().setUp()

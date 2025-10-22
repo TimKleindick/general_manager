@@ -25,9 +25,9 @@ def _normalize_target(name: str, target: str | tuple[str, str]) -> tuple[str, st
 def _write_module(module_name: str, names: Iterable[str], imports: list[str]) -> None:
     """
     Create a type-only module under the TYPES_PACKAGE containing a __all__ export list and the given import lines.
-    
+
     The target file path is derived from the dotted module_name by dropping its leading package component and placing the resulting path inside TYPES_PACKAGE; parent directories are created as needed. The generated file starts with future annotations, a module docstring, a __all__ assignment (listing provided names or an empty list), followed by the provided import lines, and is written as UTF-8 text ending with a newline.
-    
+
     Parameters:
         module_name (str): Dotted module name that determines the output file location inside TYPES_PACKAGE.
         names (Iterable[str]): Public names to include in the module's __all__ in the given order.
@@ -59,7 +59,7 @@ def _write_module(module_name: str, names: Iterable[str], imports: list[str]) ->
 def main() -> None:
     """
     Generate type-only helper modules for the public API and write a snapshot of the export registry.
-    
+
     Reads EXPORT_REGISTRY, emits a typed-only module under the TYPES_PACKAGE for each registry entry (populating each module's __all__ and type-only import lines), and writes a JSON snapshot of the resolved export targets to SNAPSHOT_PATH. The function also ensures the TYPES_PACKAGE directory and its __init__.py exist and creates parent directories for the snapshot file as needed.
     """
     TYPES_PACKAGE.mkdir(parents=True, exist_ok=True)

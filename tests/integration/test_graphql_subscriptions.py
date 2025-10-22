@@ -35,7 +35,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Register three in-test GeneralManager models (Employee, TaxRule, TaxCalculation) on the test class for subscription tests.
-        
+
         Creates:
         - Employee: DatabaseInterface with `name` and `salary` (EUR) fields.
         - TaxRule: DatabaseInterface with `name` and `multiplier` fields.
@@ -43,7 +43,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
           - `calculatedTax`: records access and returns employee.salary * 0.2.
           - `configuredTax`: records access and returns employee.salary * rule.multiplier using the rule identified by `default_rule_id`; raises MissingTaxRuleConfigurationError if no rule is configured.
           - `unusedTax`: records access and returns employee.salary * 0.5.
-        
+
         Side effects:
         - Attaches `TaxRule`, `Employee`, `TaxCalculation`, and `general_manager_classes` to the test class (`cls`) for use by test methods.
         """
@@ -69,9 +69,9 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
             def calculatedTax(self) -> Measurement:
                 """
                 Compute the calculated tax for this calculation based on the associated employee's salary.
-                
+
                 Appends "calculatedTax" to the class-level `access_log`.
-                
+
                 Returns:
                     Measurement: Tax amount equal to `employee.salary * 0.2`.
                 """
@@ -82,10 +82,10 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
             def configuredTax(self) -> Measurement:
                 """
                 Compute the tax for this calculation using the currently configured TaxRule.
-                
+
                 Returns:
                     Measurement: Tax amount computed as employee.salary multiplied by the configured TaxRule.multiplier.
-                
+
                 Raises:
                     MissingTaxRuleConfigurationError: If no tax rule is configured for this TaxCalculation.
                 """
@@ -100,9 +100,9 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
             def unusedTax(self) -> Measurement:
                 """
                 Compute an unused tax equal to half of the employee's salary and record that the property was accessed.
-                
+
                 Appends "unusedTax" to the class-level `access_log`.
-                
+
                 Returns:
                     Measurement: A measurement equal to 50% of the employee's salary (same unit as the salary).
                 """
@@ -171,7 +171,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
     def test_calculation_subscription_reacts_to_dependency(self) -> None:
         """
         Verify a calculation GraphQL subscription updates when an underlying dependency changes.
-        
+
         Subscribes to `onTaxcalculationChange` for a created employee, asserts the initial snapshot contains the expected calculated tax, updates the employee's salary to provoke a recalculation, and asserts the subsequent update event reflects the new calculated tax and that `calculatedTax` was accessed.
         """
         employee = self.Employee.create(
@@ -198,10 +198,10 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> tuple[object, object]:
             """
             Subscribe to the given GraphQL subscription, apply an employee salary update, and return the subscription's initial snapshot and the subsequent update event.
-            
+
             Raises:
                 AssertionError: If the subscription generator exposes `errors` before iteration begins.
-            
+
             Returns:
                 tuple[first_event, second_event]: `first_event` is the initial snapshot event object from the subscription; `second_event` is the follow-up update event object produced after the employee salary change.
             """
@@ -277,7 +277,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> tuple[object, object]:
             """
             Subscribe to the prepared GraphQL subscription, consume the initial snapshot and the subsequent event produced after mutating the tax rule.
-            
+
             Returns:
                 tuple[first_event, second_event]: The first subscription event (snapshot) and the following event (update).
             """
@@ -350,7 +350,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> tuple[object, object]:
             """
             Subscribe to the prepared GraphQL subscription, consume the initial snapshot and the subsequent event produced after mutating the tax rule.
-            
+
             Returns:
                 tuple[first_event, second_event]: The first subscription event (snapshot) and the following event (update).
             """
@@ -421,12 +421,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> tuple[object, object]:
             """
             Advance a GraphQL subscription to capture an initial snapshot event and a subsequent update event, and return both.
-            
+
             The subscription is executed for the current employee context and a tax-rule change is triggered to produce the update event.
-            
+
             Returns:
                 tuple[object, object]: The first (snapshot) event and the second (update) event produced by the subscription.
-            
+
             Raises:
                 AssertionError: If the subscription generator exposes an `errors` attribute.
             """
@@ -494,12 +494,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         async def run_subscription() -> tuple[object, object]:
             """
             Subscribe to the GraphQL subscription for the current employee and return the initial snapshot and the subsequent update events.
-            
+
             The coroutine consumes the first emitted event (snapshot), performs an update to the employee's salary, then consumes the next emitted event (update) before closing the subscription.
-            
+
             Returns:
                 tuple[first_event, second_event]: `first_event` is the initial snapshot event object; `second_event` is the subsequent update event object.
-            
+
             Raises:
                 AssertionError: If the subscription generator reports errors on creation.
             """

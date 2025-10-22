@@ -31,7 +31,7 @@ class MissingReadOnlyDataError(ValueError):
     def __init__(self, interface_name: str) -> None:
         """
         Exception raised when a ReadOnlyInterface is missing the required `_data` attribute.
-        
+
         Parameters:
             interface_name (str): Name of the interface class; used to construct the exception message.
         """
@@ -46,7 +46,7 @@ class MissingUniqueFieldError(ValueError):
     def __init__(self, interface_name: str) -> None:
         """
         Initialize an error for a read-only interface that defines no unique fields.
-        
+
         Parameters:
             interface_name (str): Name of the interface class missing at least one unique field; this name is included in the exception message.
         """
@@ -61,7 +61,7 @@ class InvalidReadOnlyDataFormatError(TypeError):
     def __init__(self) -> None:
         """
         Exception raised when the `_data` JSON does not decode to a list of dictionaries.
-        
+
         Initializes the exception with the message "_data JSON must decode to a list of dictionaries."
         """
         super().__init__("_data JSON must decode to a list of dictionaries.")
@@ -73,7 +73,7 @@ class InvalidReadOnlyDataTypeError(TypeError):
     def __init__(self) -> None:
         """
         Initialize the InvalidReadOnlyDataTypeError with a standard error message.
-        
+
         Raises a TypeError indicating that the `_data` attribute must be either a JSON string or a list of dictionaries.
         """
         super().__init__("_data must be a JSON string or a list of dictionaries.")
@@ -89,12 +89,12 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     def getUniqueFields(model: Type[models.Model]) -> set[str]:
         """
         Determine which fields on the given Django model uniquely identify its instances.
-        
+
         The result includes fields declared with `unique=True` (excluding a primary key named "id"), any fields in `unique_together` tuples, and fields referenced by `UniqueConstraint` objects.
-        
+
         Parameters:
             model (type[models.Model]): Django model to inspect.
-        
+
         Returns:
             set[str]: Names of fields that participate in unique constraints for the model.
         """
@@ -120,9 +120,9 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     def syncData(cls) -> None:
         """
         Synchronize the Django model with the parent manager's class-level `_data` JSON.
-        
+
         Parses the parent class's `_data` (JSON string or list of dicts), ensures the model schema is up to date, and within a single transaction creates, updates, or deactivates model instances to match the parsed data. Newly created or updated instances are marked `is_active = True`; existing active instances absent from the data are marked `is_active = False`. Logs a summary when any changes occur.
-        
+
         Raises:
             MissingReadOnlyDataError: If the parent manager class does not define `_data`.
             InvalidReadOnlyDataFormatError: If `_data` is a JSON string that does not decode to a list of dictionaries.

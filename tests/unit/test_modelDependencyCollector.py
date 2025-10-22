@@ -8,7 +8,7 @@ class FakeGM:
     def __init__(self, identification):
         """
         Initialize the FakeGM with an identification value.
-        
+
         Parameters:
             identification: Value used to identify this FakeGM instance; stored on the instance as `identification`.
         """
@@ -20,7 +20,7 @@ class FakeBucket:
     def __init__(self, manager_class, filters, excludes):
         """
         Create a FakeBucket that records its manager class and filter/exclude criteria.
-        
+
         Parameters:
             manager_class: Reference to the manager class associated with this bucket.
             filters: Dictionary of filter criteria to store on the bucket.
@@ -64,7 +64,7 @@ class TestModelDependencyCollector(SimpleTestCase):
     def test_collect_nested_structures(self):
         """
         Verify that ModelDependencyCollector.collect extracts dependencies from nested containers containing FakeGM and FakeBucket instances.
-        
+
         Asserts that identification, filter, and exclude dependency tuples are collected from dictionaries, lists, and tuples nested within the input.
         """
         gm = FakeGM("root")
@@ -87,7 +87,7 @@ class TestModelDependencyCollector(SimpleTestCase):
         # GM with nested attribute child (another GM)
         """
         Verify that ModelDependencyCollector.addArgs collects identification dependencies from a FakeGM positional argument and its nested child attribute.
-        
+
         Asserts that the resulting deps_set contains identification tuples for both the root and child FakeGM instances.
         """
         gm = FakeGM("root")

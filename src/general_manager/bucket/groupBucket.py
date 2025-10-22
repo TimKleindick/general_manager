@@ -12,7 +12,7 @@ class InvalidGroupByKeyTypeError(TypeError):
     def __init__(self) -> None:
         """
         Error raised when a non-string group-by key is provided.
-        
+
         Initializes the exception with the message "groupBy() arguments must be strings."
         """
         super().__init__("groupBy() arguments must be strings.")
@@ -24,7 +24,7 @@ class UnknownGroupByKeyError(ValueError):
     def __init__(self, manager_name: str) -> None:
         """
         Create an UnknownGroupByKeyError indicating a missing attribute on a manager.
-        
+
         Parameters:
             manager_name (str): Name of the manager whose attributes were expected; used to format the error message.
         """
@@ -37,11 +37,11 @@ class GroupBucketTypeMismatchError(TypeError):
     def __init__(self, first_type: type, second_type: type) -> None:
         """
         Initialize the error for attempting to combine two incompatible bucket types.
-        
+
         Parameters:
             first_type (type): The first type involved in the attempted combination.
             second_type (type): The second type involved in the attempted combination.
-        
+
         Notes:
             The exception message is formatted as "Cannot combine {first_type.__name__} with {second_type.__name__}."
         """
@@ -56,7 +56,7 @@ class GroupBucketManagerMismatchError(ValueError):
     def __init__(self, first_manager: type, second_manager: type) -> None:
         """
         Initialize the exception indicating two group buckets track different manager classes.
-        
+
         Parameters:
             first_manager (type): The first manager class involved in the mismatch.
             second_manager (type): The second manager class involved in the mismatch.
@@ -72,7 +72,7 @@ class GroupItemNotFoundError(ValueError):
     def __init__(self, manager_name: str, criteria: dict[str, Any]) -> None:
         """
         Initialize an error indicating a grouped manager matching the provided lookup criteria could not be found.
-        
+
         Parameters:
             manager_name (str): Name of the manager type searched for.
             criteria (dict[str, Any]): Lookup criteria used to locate the manager; included in the error message.
@@ -86,7 +86,7 @@ class EmptyGroupBucketSliceError(ValueError):
     def __init__(self) -> None:
         """
         Initialize the EmptyGroupBucketSliceError indicating that slicing a GroupBucket produced no results.
-        
+
         The exception carries the message "Cannot slice an empty GroupBucket."
         """
         super().__init__("Cannot slice an empty GroupBucket.")
@@ -98,7 +98,7 @@ class InvalidGroupBucketIndexError(TypeError):
     def __init__(self, received_type: type) -> None:
         """
         Initialize the exception for an unsupported GroupBucket index argument type.
-        
+
         Parameters:
             received_type (type): The actual type that was passed as the index; used to construct the error message.
         """
@@ -160,10 +160,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
     def __checkGroupByArguments(self, group_by_keys: tuple[str, ...]) -> None:
         """
         Validate that each provided group-by key is a string and is exposed by the manager interface.
-        
+
         Parameters:
             group_by_keys (tuple[str, ...]): Attribute names to use for grouping.
-        
+
         Raises:
             InvalidGroupByKeyTypeError: If any element of `group_by_keys` is not a string.
             UnknownGroupByKeyError: If any key is not listed in the manager class's interface attributes.
@@ -182,10 +182,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
     ) -> list[GroupManager[GeneralManagerType]]:
         """
         Builds a GroupManager for each distinct combination of configured group-by attribute values.
-        
+
         Parameters:
             data (Bucket[GeneralManagerType]): Source bucket whose entries are partitioned by the bucket's configured group-by keys.
-        
+
         Returns:
             list[GroupManager[GeneralManagerType]]: A list of GroupManager objects, one per unique tuple of group-by key values; groups are produced in order sorted by the string representation of their key tuples.
         """
@@ -208,13 +208,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
     def __or__(self, other: object) -> GroupBucket[GeneralManagerType]:
         """
         Return a new GroupBucket representing the union of this bucket and another compatible GroupBucket.
-        
+
         Parameters:
             other (GroupBucket): The grouping bucket to merge with this one.
-        
+
         Returns:
             GroupBucket[GeneralManagerType]: A GroupBucket with the same manager class and grouping keys whose basis data is the union of both inputs.
-        
+
         Raises:
             GroupBucketTypeMismatchError: If `other` is not a GroupBucket of the same class.
             GroupBucketManagerMismatchError: If `other` tracks a different manager class.
@@ -319,13 +319,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
     def get(self, **kwargs: Any) -> GroupManager[GeneralManagerType]:
         """
         Retrieve the first GroupManager matching the provided lookups.
-        
+
         Parameters:
             **kwargs: Field lookups used to filter the grouped managers.
-        
+
         Returns:
             The first matching GroupManager.
-        
+
         Raises:
             GroupItemNotFoundError: If no grouped manager matches the filters.
         """
@@ -339,13 +339,13 @@ class GroupBucket(Bucket[GeneralManagerType]):
     ) -> GroupManager[GeneralManagerType] | GroupBucket[GeneralManagerType]:
         """
         Retrieve a single grouped manager by index or construct a new GroupBucket from a slice of groups.
-        
+
         Parameters:
             item (int | slice): Integer index to select a single GroupManager, or a slice to select a subsequence of groups.
-        
+
         Returns:
             GroupManager[GeneralManagerType] if `item` is an int, otherwise a GroupBucket[GeneralManagerType] built from the selected groups.
-        
+
         Raises:
             EmptyGroupBucketSliceError: If the slice selects no groups.
             InvalidGroupBucketIndexError: If `item` is not an int or slice.

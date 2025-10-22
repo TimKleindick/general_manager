@@ -57,10 +57,10 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, code: int) -> None:
         """
         Perform cleanup on WebSocket disconnect by cancelling and awaiting active subscription tasks and clearing the subscription registry.
-        
+
         Parameters:
             code (int): WebSocket close code received from the connection.
-        
+
         Notes:
             Awaiting cancelled tasks suppresses asyncio.CancelledError so task cancellation completes silently.
         """
@@ -75,9 +75,9 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     async def receive_json(self, content: dict[str, Any], **_: Any) -> None:
         """
         Route an incoming graphql-transport-ws protocol message to the corresponding handler based on its "type" field.
-        
+
         Valid message types: "connection_init", "ping", "subscribe", and "complete". Messages with an unrecognized or missing "type" cause the connection to be closed with code 4400.
-        
+
         Parameters:
             content (dict[str, Any]): The received JSON message; expected to include a "type" key indicating the protocol action.
         """
@@ -134,7 +134,7 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     async def _handle_subscribe(self, content: dict[str, Any]) -> None:
         """
         Handle an incoming GraphQL "subscribe" protocol message and initiate or deliver the corresponding subscription results.
-        
+
         Parameters:
             content (dict[str, Any]): The incoming protocol message. Expected keys:
                 - "id" (str): Operation identifier.
@@ -285,13 +285,13 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     ) -> None:
         """
         Stream execution results from an async iterator to the client for a subscription operation.
-        
+
         Sends each yielded execution result for the given operation_id to the client. If a recoverable error occurs while iterating, sends an error payload for the operation. In all cases, attempts to close the iterator, sends a completion message for the operation, and removes the operation from active_subscriptions.
-        
+
         Parameters:
             operation_id (str): The subscription operation identifier used in protocol messages.
             async_iterator (Any): An asynchronous iterator that yields execution result objects to be sent to the client.
-        
+
         Raises:
             asyncio.CancelledError: Propagated when the surrounding subscription task is cancelled.
         """
@@ -407,10 +407,10 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     def _format_error(error: Exception) -> dict[str, Any]:
         """
         Format an exception as a GraphQL-compatible error dictionary.
-        
+
         Parameters:
             error (Exception): The exception to format; if a `GraphQLError`, its `.formatted` representation is used.
-        
+
         Returns:
             dict[str, Any]: The error payload: the `GraphQLError.formatted` mapping for GraphQLError instances, otherwise `{"message": str(error)}`.
         """
@@ -422,7 +422,7 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     async def _close_iterator(async_iterator: Any) -> None:
         """
         Close an asynchronous iterator by awaiting its `aclose` coroutine if present.
-        
+
         Parameters:
             async_iterator (Any): The iterator to close; if it defines an `aclose` coroutine method, that coroutine will be awaited.
         """

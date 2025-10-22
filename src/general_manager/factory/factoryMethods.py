@@ -19,12 +19,12 @@ def LazyMeasurement(
 ) -> LazyFunction:
     """
     Create a lazy factory that produces Measurement values with a numeric magnitude sampled between the given bounds and the specified unit.
-    
+
     Parameters:
         min_value (int | float): Lower bound (inclusive) for the sampled magnitude.
         max_value (int | float): Upper bound (inclusive) for the sampled magnitude.
         unit (str): Unit string to attach to the Measurement.
-    
+
     Returns:
         LazyFunction: A factory that yields a Measurement whose numeric value is drawn uniformly between min_value and max_value (formatted to six decimal places) and uses the provided unit.
     """
@@ -36,13 +36,13 @@ def LazyMeasurement(
 def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
     """
     Compute a date by offsetting an instance's base date attribute by a randomized number of days.
-    
+
     Parameters:
         avg_delta_days (int): Average number of days for the offset; the actual offset is randomly chosen
             between floor(avg_delta_days / 2) and floor(avg_delta_days * 3 / 2), inclusive.
         base_attribute (str): Name of the attribute on the instance that provides the base date. If that
             attribute is missing or evaluates to false, today's date is used as the base.
-    
+
     Returns:
         date: The base date shifted by the randomly chosen number of days.
     """
@@ -72,11 +72,11 @@ def LazyDateToday() -> LazyFunction:
 def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
     """
     Produce a lazy attribute that yields a date between two given dates (inclusive).
-    
+
     Parameters:
         start_date (date): The start of the date range. If later than end_date, the range will be corrected.
         end_date (date): The end of the date range. If earlier than start_date, the range will be corrected.
-    
+
     Returns:
         date: A date between start_date and end_date, inclusive.
     """
@@ -90,13 +90,13 @@ def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
 def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
     """
     Produce a lazy attribute that yields a datetime within the inclusive range defined by `start` and `end`.
-    
+
     If `start` is after `end`, the two endpoints are swapped before selecting a value.
-    
+
     Parameters:
         start (datetime): The start of the datetime range.
         end (datetime): The end of the datetime range.
-    
+
     Returns:
         LazyAttribute: A lazy attribute that produces a `datetime` between `start` and `end` (inclusive).
     """
@@ -112,11 +112,11 @@ def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
 def LazyInteger(min_value: int, max_value: int) -> LazyFunction:
     """
     Return a lazy factory that produces an integer within the provided bounds.
-    
+
     Parameters:
         min_value (int): Lower bound (inclusive) for generated integers.
         max_value (int): Upper bound (inclusive) for generated integers.
-    
+
     Returns:
         int: A random integer greater than or equal to min_value and less than or equal to max_value.
     """
@@ -126,12 +126,12 @@ def LazyInteger(min_value: int, max_value: int) -> LazyFunction:
 def LazyDecimal(min_value: float, max_value: float, precision: int = 2) -> LazyFunction:
     """
     Create a lazy factory that produces Decimal values between min_value and max_value, rounded to the specified precision.
-    
+
     Parameters:
         min_value (float): Lower bound of the generated value.
         max_value (float): Upper bound of the generated value.
         precision (int): Number of decimal places to round the generated value to.
-    
+
     Returns:
         Decimal: A Decimal value between min_value and max_value (inclusive), rounded to `precision` decimal places.
     """
@@ -142,10 +142,10 @@ def LazyDecimal(min_value: float, max_value: float, precision: int = 2) -> LazyF
 def LazyChoice(options: list[Any]) -> LazyFunction:
     """
     Create a lazy factory that selects a random element from the provided options.
-    
+
     Parameters:
         options (list[Any]): Candidate values to choose from.
-    
+
     Returns:
         Any: One element randomly chosen from `options`.
     """
@@ -155,13 +155,13 @@ def LazyChoice(options: list[Any]) -> LazyFunction:
 def LazySequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
     """
     Produce a sequence attribute that yields successive integer values.
-    
+
     Each produced value equals start + index * step where index is the zero-based position in the sequence.
-    
+
     Parameters:
         start (int): Initial value of the sequence.
         step (int): Increment between successive values.
-    
+
     Returns:
         LazyAttributeSequence: An attribute sequence that yields integers as described.
     """
@@ -171,10 +171,10 @@ def LazySequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
 def LazyBoolean(trues_ratio: float = 0.5) -> LazyFunction:
     """
     Return booleans where each value is True with the specified probability.
-    
+
     Parameters:
         trues_ratio (float): Probability that the generated value is True; expected between 0 and 1.
-    
+
     Returns:
         bool: `True` with probability `trues_ratio`, `False` otherwise.
     """
@@ -184,7 +184,7 @@ def LazyBoolean(trues_ratio: float = 0.5) -> LazyFunction:
 def LazyUUID() -> LazyFunction:
     """
     Create a lazy factory that yields RFC 4122 version 4 UUID strings.
-    
+
     Returns:
         uuid_str (str): A UUID4 string in standard 36-character representation.
     """

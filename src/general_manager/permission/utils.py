@@ -16,7 +16,7 @@ class PermissionNotFoundError(ValueError):
     def __init__(self, permission: str) -> None:
         """
         Exception raised when a referenced permission function cannot be found.
-        
+
         Parameters:
             permission (str): The permission identifier that was not found; used to format the exception message.
         """
@@ -30,15 +30,15 @@ def validatePermissionString(
 ) -> bool:
     """
     Evaluate a compound permission expression joined by '&' operators.
-    
+
     Parameters:
         permission (str): Permission expression where sub-permissions are joined with '&'. Individual sub-permissions may include ':'-separated configuration parts (for example, "isAuthenticated&admin:level").
         data (PermissionDataManager | GeneralManager | GeneralManagerMeta): Object passed to each permission function.
         request_user (AbstractUser | AnonymousUser): User for whom permissions are evaluated.
-    
+
     Returns:
         `true` if every sub-permission evaluates to True, `false` otherwise.
-    
+
     Raises:
         PermissionNotFoundError: If a referenced permission function is not registered.
     """
@@ -48,15 +48,15 @@ def validatePermissionString(
     ) -> bool:
         """
         Evaluate a single sub-permission expression against the registered permission functions.
-        
+
         Parameters:
-        	permission (str): A single permission fragment in the form "permission_name[:config...]" where parts after the first colon are passed as configuration.
-        
+                permission (str): A single permission fragment in the form "permission_name[:config...]" where parts after the first colon are passed as configuration.
+
         Returns:
-        	bool: `true` if the referenced permission function grants the permission, `false` otherwise.
-        
+                bool: `true` if the referenced permission function grants the permission, `false` otherwise.
+
         Raises:
-        	PermissionNotFoundError: If no registered permission function matches the `permission_name`.
+                PermissionNotFoundError: If no registered permission function matches the `permission_name`.
         """
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:

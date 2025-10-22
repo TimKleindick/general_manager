@@ -19,7 +19,7 @@ class MeasurementFieldNotEditableError(ValidationError):
     def __init__(self, field_name: str) -> None:
         """
         Initialize the exception indicating an attempt to assign to a non-editable measurement field.
-        
+
         Parameters:
             field_name (str): Name of the field that was attempted to be modified; used to compose the error message.
         """
@@ -42,7 +42,7 @@ class MeasurementField(models.Field):
     ) -> None:
         """
         Configure a measurement field backed by separate value and unit columns.
-        
+
         Parameters:
             base_unit (str): Canonical unit used to normalise stored measurements.
             *args: Positional arguments forwarded to the base Field implementation.
@@ -105,7 +105,7 @@ class MeasurementField(models.Field):
     ) -> None:
         """
         Attach the measurement field and its backing value and unit fields to the model and install the descriptor.
-        
+
         Parameters:
             cls: Model class receiving the field.
             name: Attribute name to use on the model for this field.
@@ -303,11 +303,11 @@ class MeasurementField(models.Field):
     ) -> None:
         """
         Set a measurement on a model instance after validating editability, type, and unit compatibility.
-        
+
         Parameters:
             instance (models.Model): Model instance receiving the value.
             value (Measurement | str | None): A Measurement, a string parseable to a Measurement, or None to clear the field.
-        
+
         Raises:
             MeasurementFieldNotEditableError: If the field is not editable.
             ValidationError: If the value is not a Measurement (or valid parseable string), if currency unit rules are violated, or if the unit is incompatible with the field's base unit.
