@@ -2,6 +2,137 @@
 
 <!-- version list -->
 
+## v0.18.0 (2025-10-22)
+
+### Bug Fixes
+
+- Add DuplicateMutationOutputNameError to handle duplicate output field names in mutations and
+  update tests accordingly
+  ([`eb9dcc9`](https://github.com/TimKleindick/general_manager/commit/eb9dcc91998c40e8f31060bfe8411ae281c61f3c))
+
+- Enhance boolean handling in generic_cache_invalidation function
+  ([`ab70592`](https://github.com/TimKleindick/general_manager/commit/ab70592c969955ed5f02bdb224c4a2c23b4be5c2))
+
+- Enhance getFieldValue to handle field choices and update tests accordingly
+  ([`99746d2`](https://github.com/TimKleindick/general_manager/commit/99746d233a83f0237be868c383e14b9a541d19ce))
+
+- Enhance model creation logic to check for history model existence before creation
+  ([`2380248`](https://github.com/TimKleindick/general_manager/commit/2380248801b3fba714377fe2d545ecc6154f856b))
+
+- Ensure old values are cleared after data change signals
+  ([`d6c801c`](https://github.com/TimKleindick/general_manager/commit/d6c801cc3f2dd4ec3e654bc5849907d2da1169d0))
+
+- Handle None list sources by falling back to fallback_manager_class.all() before filtering.
+  ([`d6ea118`](https://github.com/TimKleindick/general_manager/commit/d6ea1183ec2acb7ee053bacb3990a198393f2dc7))
+
+- Handle typing generics safely
+  ([`ebf330b`](https://github.com/TimKleindick/general_manager/commit/ebf330b177b14aff53ac935731183b8cc99b9741))
+
+- Improve attribute resolution in Rule class and enhance error handling
+  ([`edcc7be`](https://github.com/TimKleindick/general_manager/commit/edcc7beb6e8073e0941a3b9a54f8f083dfa66025))
+
+- Improve error handling in ReadOnlyInterface for missing unique fields and enhance test setup with
+  FakeField class
+  ([`2d817e9`](https://github.com/TimKleindick/general_manager/commit/2d817e9a18cbf86327da32940d9f378a54536b5d))
+
+- Improve error message for InvalidPermissionClassError and add function_name to
+  InvalidFunctionNodeError
+  ([`35ee382`](https://github.com/TimKleindick/general_manager/commit/35ee382d4aa45e77602640dd0e44752cdd9f1a9b))
+
+- Improve error message formatting in PermissionCheckError
+  ([`1e6e921`](https://github.com/TimKleindick/general_manager/commit/1e6e921d93dfe2bc426d153f73f1a2ce8afdddad))
+
+- Improve permission class validation and error handling in GeneralManager and AutoFactory
+  ([`f3f74ae`](https://github.com/TimKleindick/general_manager/commit/f3f74aecf4f08cb1cfa79f018d804edc27d45a0a))
+
+- Marked warnings from new linter rules
+  ([`e4c36f5`](https://github.com/TimKleindick/general_manager/commit/e4c36f50042a2ba1c54d8241cd625ba6b9471f37))
+
+- Namespace collision
+  ([`f0b40fe`](https://github.com/TimKleindick/general_manager/commit/f0b40fe7dc526e1ab49caa0e5925a426238fdaa0))
+
+- Raise InvalidGeneratedObjectError for non-model instances in AutoFactory
+  ([`2a25ac6`](https://github.com/TimKleindick/general_manager/commit/2a25ac69f1c3c165fe84ea0562ef1648ea3564de))
+
+- Refactor error handling in GraphQL and mutation to raise exceptions instead of returning error
+  states
+  ([`8492bc3`](https://github.com/TimKleindick/general_manager/commit/8492bc30ffc110d3875efde4f5cc8b481d5ebbd4))
+
+- Remove hardcoded password from user creation in tests
+  ([`b18ae37`](https://github.com/TimKleindick/general_manager/commit/b18ae37834a1fb5a6b2a8b6c0b957d51d67f4dbb))
+
+- Update __new__ method signature in PathMap class to accept additional arguments
+  ([`c81f2b2`](https://github.com/TimKleindick/general_manager/commit/c81f2b2c64198b230813b5ef410ad9040d6b9bed))
+
+- Update currency comparison to use string representation for accuracy
+  ([`0524b95`](https://github.com/TimKleindick/general_manager/commit/0524b952312d5fe909370accc5955275744c4814))
+
+- Update filter and exclude attributes in CalculationBucket for clarity
+  ([`a118cf2`](https://github.com/TimKleindick/general_manager/commit/a118cf2eff2a4aa226307ed8a6df317aa096cb74))
+
+### Continuous Integration
+
+- Add ignore rule for ARG004 in Ruff linting configuration
+  ([`f35d0ab`](https://github.com/TimKleindick/general_manager/commit/f35d0ab6e0af0df6ba400f49a61b191fd7be2d96))
+
+- Add linting and type checking workflow using Ruff and pre-commit
+  ([`bcc3d69`](https://github.com/TimKleindick/general_manager/commit/bcc3d695927016811d275f884f8cb7ec5241271f))
+
+- Add pre-commit configuration and update dependencies for improved linting and formatting
+  ([`29a182b`](https://github.com/TimKleindick/general_manager/commit/29a182bab7bd2efd4760c3069964811169c5b80d))
+
+- Change docs workflow to check on pull requests in main and publish on push in main
+  ([`5981b9e`](https://github.com/TimKleindick/general_manager/commit/5981b9e852c22e74b8712133ba4eae45bcd96103))
+
+- Pin ruff version to 0.14.1 in lint workflows
+  ([`3662660`](https://github.com/TimKleindick/general_manager/commit/3662660ef0421a82dda6763145337057a8fd513f))
+
+- Specify configuration file for Ruff linting and formatting checks
+  ([`8054d27`](https://github.com/TimKleindick/general_manager/commit/8054d279a89c0f1b30f7602222fb5ee500f41c24))
+
+### Features
+
+- Add support for right-side arithmetic operations in Measurement class
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+### Refactoring
+
+- Update type hints to fix mypy errors
+  ([`22f3d2d`](https://github.com/TimKleindick/general_manager/commit/22f3d2d1ba753d0b5bf39eb1565ebd7d8a38022b))
+
+### Testing
+
+- Add additional unit tests for edge cases
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+- Enhance DummyPermission class with permission handling and filtering logic
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+- Enhance getFieldValue and getManyToManyFieldValue with improved type handling and validation
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+- Fix test errors
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+- Improve exception message formatting and handling in Measurement tests
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+- Remove duplicated tests
+  ([`25cd40b`](https://github.com/TimKleindick/general_manager/commit/25cd40b58ed75cf1810908e8f873d182c8f1cd66))
+
+- Replace SystemRandom with Random for consistent random number generation in tests
+  ([`da2a20d`](https://github.com/TimKleindick/general_manager/commit/da2a20dad4f171a0abfef6bbdaf8fc990148a441))
+
+- Update error message for age validation in RuleTests for clarity
+  ([`4650a6b`](https://github.com/TimKleindick/general_manager/commit/4650a6b4143c36b8b654d5766fcf9526d700982c))
+
+- Update exception handling and improve identification logic in CalculationBucket tests
+  ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
+
+- Update test for non-existent attribute to raise AttributeError
+  ([`794d378`](https://github.com/TimKleindick/general_manager/commit/794d378de8461b8dc2ee1a5df355d9d5e28785d1))
+
+
 ## v0.17.0 (2025-10-19)
 
 ### Bug Fixes
