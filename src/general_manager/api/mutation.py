@@ -75,6 +75,22 @@ class InvalidMutationReturnTypeError(TypeError):
         )
 
 
+class DuplicateMutationOutputNameError(ValueError):
+    """Raised when a mutation resolver would expose duplicate output field names."""
+
+    def __init__(self, function_name: str, field_name: str) -> None:
+        """
+        Initialize the exception indicating duplicate output field names.
+
+        Parameters:
+            function_name (str): Name of the mutation function that produced duplicates.
+            field_name (str): The conflicting output field name.
+        """
+        super().__init__(
+            f"Mutation {function_name} produces duplicate output field name '{field_name}'."
+        )
+
+
 def graphQlMutation(
     _func: FuncT | type[MutationPermission] | None = None,
     permission: Optional[Type[MutationPermission]] = None,
@@ -180,6 +196,8 @@ def graphQlMutation(
                 raise InvalidMutationReturnTypeError(fn.__name__, out)
             name = out.__name__
             field_name = name[0].lower() + name[1:]
+            if field_name in outputs:
+                raise DuplicateMutationOutputNameError(fn.__name__, field_name)
 
             basis_type = out.__value__ if is_named_type else out
 
