@@ -67,7 +67,7 @@ class InvalidRelatedModelTypeError(TypeError):
 
 def getFieldValue(
     field: models.Field[Any, Any] | models.ForeignObjectRel,
-) -> object:
+) -> Any:
     """
     Generate a realistic sample value for a Django model field or relation.
 
@@ -103,6 +103,19 @@ def getFieldValue(
             return Measurement(value, field.base_unit)
 
         return LazyFunction(_measurement)
+    elif (
+        getattr(field, "choices", None)
+        and not getattr(field, "many_to_one", False)
+        and not getattr(field, "many_to_many", False)
+    ):
+        # Use any declared choices directly to keep generated values valid.
+        flat_choices = [
+            choice[0] if isinstance(choice, (list, tuple)) and choice else choice
+            for choice in list(getattr(field, "flatchoices", ()))
+        ]
+        if flat_choices:
+            return LazyFunction(lambda: _RNG.choice(flat_choices))
+        # Fall through to default behaviour when no usable choices were discovered.
     elif isinstance(field, models.TextField):
         return cast(str, Faker("paragraph"))
     elif isinstance(field, models.IntegerField):

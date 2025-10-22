@@ -547,7 +547,7 @@ class TestGetManyToManyFieldValue(TestCase):
 
         result = getFieldValue(field)  # type: ignore[arg-type]
 
-        # Should return a LazyFunction
+        # Should return a value appropriate for CharField with choices
         self.assertIsNotNone(result)
 
         # Execute multiple times to check it picks from choices
@@ -555,6 +555,7 @@ class TestGetManyToManyFieldValue(TestCase):
             for _ in range(10):
                 value = result.evaluate(None, None, {"locale": "en_US"})
                 self.assertIsInstance(value, str)
+                self.assertIn(value, [choice[0] for choice in choices])
 
     def test_system_random_usage(self):
         """Test that SystemRandom is used instead of standard random module."""
