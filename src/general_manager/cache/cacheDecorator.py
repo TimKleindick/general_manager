@@ -88,6 +88,9 @@ def cached(
 
             return result
 
+        # fix for python 3.14:
+        wrapper.__annotations__ = func.__annotations__
+
         return cast(FuncT, wrapper)
 
     return decorator
