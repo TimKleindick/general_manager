@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.19.0 (2025-10-24)
+
+### Features
+
+- Add support for Python version 3.14
+  ([`de0fa05`](https://github.com/TimKleindick/general_manager/commit/de0fa05e4af95b2ec2cd113f54a751711f2758f5))
+
+
 ## v0.18.0 (2025-10-22)
 
 ### Bug Fixes
