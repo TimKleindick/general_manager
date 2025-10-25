@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: 📚 Documentation
+    url: https://timkleindick.github.io/general_manager/
+    about: Please check the official GeneralManager documentation before opening a new issue.

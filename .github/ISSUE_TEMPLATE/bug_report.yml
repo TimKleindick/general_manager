@@ -1,0 +1,77 @@
+name: 🐛 Bug Report
+description: Report a problem you encountered while using the project
+title: "[Bug]: "
+labels: ["bug", "triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please provide enough detail so we can reproduce and fix it.
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Project, Python, and key deps (Django, etc.)
+      placeholder: e.g., GeneralManager 0.16.1 • Python 3.12 • Django 5.1
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Windows 11 / macOS 26 / Ubuntu 22.04
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Local (dev)
+        - Docker / Container
+        - CI (GitHub Actions)
+        - Production
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect to happen instead?
+      placeholder: Clear and concise description of the bug and the expected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce / Minimal Repro
+      description: Provide the smallest possible code/config to reproduce the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+        Minimal reproducible example (code/config):
+        ```python
+        # your minimal example
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / Traceback
+      description: Paste relevant logs or tracebacks (use fenced code blocks).
+      render: shell
+
+  - type: textarea
+    id: extras
+    attributes:
+      label: Additional context, screenshots, or references
+      description: Anything else that might help.
