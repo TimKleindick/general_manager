@@ -10,9 +10,9 @@ Security fixes are backported only to actively maintained branches.
 
 | Version | Supported |
 | ------- | --------- |
-| `main`  | ✅
-| Latest released minor (currently `0.19.x`) | ✅
-| Older releases | ❌
+| `main`  | ✅ |
+| Latest released minor (currently `0.19.x`) | ✅ |
+| Older releases | ❌ |
 
 If you rely on an older release, please upgrade before requesting a fix.
 
