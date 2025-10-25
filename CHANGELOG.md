@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.19.1 (2025-10-25)
+
+### Bug Fixes
+
+- Update postCreateCommand to use pre-commit directly
+  ([`416262f`](https://github.com/TimKleindick/general_manager/commit/416262f8012947c4f04946b70c8ff425a4b4ed1e))
+
+
 ## v0.19.0 (2025-10-24)
 
 ### Features
