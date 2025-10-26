@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
 import hashlib
+import re
 from types import UnionType
 from typing import (
     Any,
@@ -1093,6 +1094,23 @@ class GraphQL:
         cls._query_fields[f"resolve_{item_field_name}"] = resolver
 
     @staticmethod
+    def _normalize_graphql_name(name: str) -> str:
+        """
+        Convert a GraphQL selection name (potentially camelCase) to the corresponding Python attribute name.
+
+        Parameters:
+            name (str): GraphQL field name from a selection set.
+
+        Returns:
+            str: The snake_case representation matching the GraphQLProperty definition.
+        """
+        if "_" in name:
+            return name
+        snake = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+        snake = re.sub("([a-z0-9])([A-Z])", r"\1_\2", snake)
+        return snake.lower()
+
+    @staticmethod
     def _prime_graphql_properties(
         instance: GeneralManager, property_names: Iterable[str] | None = None
     ) -> None:
@@ -1189,8 +1207,9 @@ class GraphQL:
             for selection in selection_set.selections:
                 if isinstance(selection, FieldNode):
                     name = selection.name.value
-                    if name in available_properties:
-                        property_names.add(name)
+                    normalized = cls._normalize_graphql_name(name)
+                    if normalized in available_properties:
+                        property_names.add(normalized)
                 elif isinstance(selection, FragmentSpreadNode):
                     fragment = info.fragments.get(selection.name.value)
                     if fragment is not None:
