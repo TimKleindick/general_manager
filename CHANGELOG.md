@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v0.19.2 (2025-10-26)
+
+### Bug Fixes
+
+- Add normalization for GraphQL field names work with pep8 style snake_case
+  ([`800833d`](https://github.com/TimKleindick/general_manager/commit/800833d2caca757b84cdbb18d9ad86d94cd36483))
+
+- Enhance extra arguments handling in InterfaceBase class
+  ([`853e9ba`](https://github.com/TimKleindick/general_manager/commit/853e9ba1ca365ef00d0930444a35c6db31169d5d))
+
+- Improve handling of extra arguments in InterfaceBase class
+  ([`6843636`](https://github.com/TimKleindick/general_manager/commit/6843636f84017ec973b70a7335013f62e35e682b))
+
+- Type casting for Faker time_delta
+  ([`08b6f8f`](https://github.com/TimKleindick/general_manager/commit/08b6f8f278f7843d6afd29d85934f049729c6068))
+
+### Documentation
+
+- Add contributing and security policy documentation
+  ([`98f881c`](https://github.com/TimKleindick/general_manager/commit/98f881cec1a15112af55193fb0979d0daef15777))
+
+- Add Contributor Covenant Code of Conduct to promote a respectful community
+  ([`e2a3cf6`](https://github.com/TimKleindick/general_manager/commit/e2a3cf65b68a5dcc544942805d36371ac5655e57))
+
+- Fix markdown table error
+  ([`a76f64d`](https://github.com/TimKleindick/general_manager/commit/a76f64d7226c3bbd9c88334d56cdf50be9591392))
+
+- Update AGENTS.md to enhance contribution guidelines and coding standards
+  ([`2282b35`](https://github.com/TimKleindick/general_manager/commit/2282b35ec52aa028ac60815fbf3618f39d875752))
+
+- Update comments for clarity and consistency in test_rule_handler.py
+  ([`6e772e0`](https://github.com/TimKleindick/general_manager/commit/6e772e0c1e2ebccaf1a978cdb4181add074f2225))
+
+- Update German comments to English for consistency across the codebase
+  ([`5ee358e`](https://github.com/TimKleindick/general_manager/commit/5ee358ed9c5eae228d1fc1b6e674a48187594d21))
+
+### Refactoring
+
+- Function names to match pep8 convention
+  ([`29e9d45`](https://github.com/TimKleindick/general_manager/commit/29e9d4592a695dfe3256d0085a89965d36644522))
+
+- Rename files to match pep8 convention
+  ([`7ea26cd`](https://github.com/TimKleindick/general_manager/commit/7ea26cd256bc8eaca2a03d7b763d435778b18502))
+
+
 ## v0.19.1 (2025-10-25)
 
 ### Bug Fixes
