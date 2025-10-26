@@ -5,10 +5,10 @@ from general_manager.manager import GeneralManager, Input
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
-from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.interface.calculationInterface import CalculationInterface
+from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface.calculation_interface import CalculationInterface
 from general_manager.api.property import graphQlProperty
-from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 
 
 class CachingTestCase(GeneralManagerTransactionTestCase):

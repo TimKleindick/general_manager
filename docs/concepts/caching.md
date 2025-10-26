@@ -16,10 +16,10 @@ Successive filter/exclude calls still register individually. If you need to keep
 
 ## Caching helper
 
-Use the `@general_manager.cache.cacheDecorator.cached` decorator to memoise expensive functions while automatically tracking dependencies:
+Use the `@general_manager.cache.cache_decorator.cached` decorator to memoise expensive functions while automatically tracking dependencies:
 
 ```python
-from general_manager.cache.cacheDecorator import cached
+from general_manager.cache.cache_decorator import cached
 
 @cached
 def project_forecast(project_id: int) -> dict[str, float]:

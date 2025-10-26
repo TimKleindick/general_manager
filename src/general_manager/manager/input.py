@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Iterable, Optional, Callable, List, TypeVar, Generic, Any, Type, cast
 import inspect
 
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 from datetime import date, datetime
 from general_manager.measurement import Measurement
 

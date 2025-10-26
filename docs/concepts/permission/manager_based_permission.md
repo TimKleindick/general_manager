@@ -1,11 +1,11 @@
 # Manager-Based Permissions
 
-`ManagerBasedPermission` (`general_manager.permission.managerBasedPermission.ManagerBasedPermission`) is the default implementation used by most managers. It interprets class-level lists that describe who may perform CRUD actions.
+`ManagerBasedPermission` (`general_manager.permission.manager_based_permission.ManagerBasedPermission`) is the default implementation used by most managers. It interprets class-level lists that describe who may perform CRUD actions.
 
 ## Configuration
 
 ```python
-from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 
 class Project(GeneralManager):
     ...

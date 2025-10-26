@@ -1,6 +1,6 @@
 # Computed Data Interfaces
 
-`CalculationInterface` (`general_manager.interface.calculationInterface.CalculationInterface`) models dynamic data that is derived rather than stored. It combines declarative inputs with lazy evaluation to calculate results on demand.
+`CalculationInterface` (`general_manager.interface.calculation_interface.CalculationInterface`) models dynamic data that is derived rather than stored. It combines declarative inputs with lazy evaluation to calculate results on demand.
 
 ## Declaring inputs
 
@@ -9,7 +9,7 @@ Inputs use the `Input` descriptor to specify the expected type and optional valu
 ```python
 from datetime import date
 
-from general_manager.interface.calculationInterface import CalculationInterface
+from general_manager.interface.calculation_interface import CalculationInterface
 from general_manager.manager import GeneralManager, Input, graphQlProperty
 
 class ProjectSummary(GeneralManager):

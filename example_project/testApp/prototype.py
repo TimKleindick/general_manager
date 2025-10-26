@@ -15,9 +15,9 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 
-from general_manager.interface.calculationInterface import CalculationInterface
-from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.bucket.databaseBucket import DatabaseBucket
+from general_manager.interface.calculation_interface import CalculationInterface
+from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.manager import GeneralManager, graphQlProperty, Input
 from general_manager.permission import ManagerBasedPermission
 from general_manager.measurement import (
@@ -30,9 +30,9 @@ from general_manager.factory import (
     LazyDeltaDate,
     LazyProjectName,
 )
-from general_manager.utils import noneToZero
+from general_manager.utils import none_to_zero
 from general_manager.api.mutation import graphQlMutation
-from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+from general_manager.interface.read_only_interface import ReadOnlyInterface
 
 
 class ProjectType(GeneralManager):
@@ -255,7 +255,7 @@ class ProjectCommercial(GeneralManager):
     @graphQlProperty(sortable=True)
     def total_volume(self) -> int | float | Measurement:
         return sum(
-            noneToZero(volume.volume)
+            none_to_zero(volume.volume)
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
@@ -263,7 +263,7 @@ class ProjectCommercial(GeneralManager):
     @graphQlProperty(filterable=True, sortable=True)
     def total_shipment(self) -> Optional[Measurement]:
         total = sum(
-            noneToZero(derivative.estimated_weight) * noneToZero(volume.volume)
+            none_to_zero(derivative.estimated_weight) * none_to_zero(volume.volume)
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )
@@ -274,7 +274,7 @@ class ProjectCommercial(GeneralManager):
     @graphQlProperty
     def total_revenue(self) -> Optional[Measurement]:
         total = sum(
-            noneToZero(derivative.price) * noneToZero(volume.volume)
+            none_to_zero(derivative.price) * none_to_zero(volume.volume)
             for derivative in self.project.derivative_list
             for volume in derivative.derivativevolume_list.filter(date=self.date)
         )

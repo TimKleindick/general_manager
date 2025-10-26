@@ -4,7 +4,7 @@ GeneralManager extends Django with a declarative layer that keeps business logic
 
 ## Managers
 
-A manager is a lightweight wrapper around an interface. It exposes attributes declared as type hints and proxies CRUD operations to the interface. Each instance maintains an `identification` dictionary that uniquely identifies the underlying record. The implementation lives in `general_manager.manager.generalManager.GeneralManager`.
+A manager is a lightweight wrapper around an interface. It exposes attributes declared as type hints and proxies CRUD operations to the interface. Each instance maintains an `identification` dictionary that uniquely identifies the underlying record. The implementation lives in `general_manager.manager.general_manager.GeneralManager`.
 
 Key properties:
 
@@ -28,7 +28,7 @@ Buckets (`general_manager.bucket`) behave like querysets tailored for managers. 
 
 ## Dependency tracking and caching
 
-Every data-changing operation emits signals captured by the dependency tracker (`general_manager.cache.cacheTracker.DependencyTracker`). The tracker maps attribute access to cache keys and invalidates dependent entries when mutations occur. This mechanism powers automatic cache expiry, incremental recalculations, and GraphQL query caching.
+Every data-changing operation emits signals captured by the dependency tracker (`general_manager.cache.cache_tracker.DependencyTracker`). The tracker maps attribute access to cache keys and invalidates dependent entries when mutations occur. This mechanism powers automatic cache expiry, incremental recalculations, and GraphQL query caching.
 
 To take advantage of the tracker:
 

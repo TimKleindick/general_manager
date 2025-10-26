@@ -10,8 +10,8 @@ __all__ = [
     "graphQlProperty",
 ]
 
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.manager.groupManager import GroupManager
+from general_manager.manager.group_manager import GroupManager
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty

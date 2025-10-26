@@ -1,15 +1,15 @@
 {
   "general_manager": {
     "CalculationInterface": [
-      "general_manager.interface.calculationInterface",
+      "general_manager.interface.calculation_interface",
       "CalculationInterface"
     ],
     "DatabaseInterface": [
-      "general_manager.interface.databaseInterface",
+      "general_manager.interface.database_interface",
       "DatabaseInterface"
     ],
     "GeneralManager": [
-      "general_manager.manager.generalManager",
+      "general_manager.manager.general_manager",
       "GeneralManager"
     ],
     "GraphQL": [
@@ -21,11 +21,11 @@
       "Input"
     ],
     "ManagerBasedPermission": [
-      "general_manager.permission.managerBasedPermission",
+      "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
     ],
     "ReadOnlyInterface": [
-      "general_manager.interface.readOnlyInterface",
+      "general_manager.interface.read_only_interface",
       "ReadOnlyInterface"
     ],
     "Rule": [
@@ -65,147 +65,147 @@
   },
   "general_manager.bucket": {
     "Bucket": [
-      "general_manager.bucket.baseBucket",
+      "general_manager.bucket.base_bucket",
       "Bucket"
     ],
     "CalculationBucket": [
-      "general_manager.bucket.calculationBucket",
+      "general_manager.bucket.calculation_bucket",
       "CalculationBucket"
     ],
     "DatabaseBucket": [
-      "general_manager.bucket.databaseBucket",
+      "general_manager.bucket.database_bucket",
       "DatabaseBucket"
     ],
     "GroupBucket": [
-      "general_manager.bucket.groupBucket",
+      "general_manager.bucket.group_bucket",
       "GroupBucket"
     ]
   },
   "general_manager.cache": {
     "CacheBackend": [
-      "general_manager.cache.cacheDecorator",
+      "general_manager.cache.cache_decorator",
       "CacheBackend"
     ],
     "DependencyTracker": [
-      "general_manager.cache.cacheTracker",
+      "general_manager.cache.cache_tracker",
       "DependencyTracker"
     ],
     "cached": [
-      "general_manager.cache.cacheDecorator",
+      "general_manager.cache.cache_decorator",
       "cached"
     ],
     "invalidate_cache_key": [
-      "general_manager.cache.dependencyIndex",
+      "general_manager.cache.dependency_index",
       "invalidate_cache_key"
     ],
     "record_dependencies": [
-      "general_manager.cache.dependencyIndex",
+      "general_manager.cache.dependency_index",
       "record_dependencies"
     ],
     "remove_cache_key_from_index": [
-      "general_manager.cache.dependencyIndex",
+      "general_manager.cache.dependency_index",
       "remove_cache_key_from_index"
     ]
   },
   "general_manager.factory": {
     "AutoFactory": [
-      "general_manager.factory.autoFactory",
+      "general_manager.factory.auto_factory",
       "AutoFactory"
     ],
     "LazyBoolean": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyBoolean"
     ],
     "LazyChoice": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyChoice"
     ],
     "LazyDateBetween": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyDateBetween"
     ],
     "LazyDateTimeBetween": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyDateTimeBetween"
     ],
     "LazyDateToday": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyDateToday"
     ],
     "LazyDecimal": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyDecimal"
     ],
     "LazyDeltaDate": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyDeltaDate"
     ],
     "LazyFakerAddress": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyFakerAddress"
     ],
     "LazyFakerEmail": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyFakerEmail"
     ],
     "LazyFakerName": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyFakerName"
     ],
     "LazyFakerSentence": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyFakerSentence"
     ],
     "LazyFakerUrl": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyFakerUrl"
     ],
     "LazyInteger": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyInteger"
     ],
     "LazyMeasurement": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyMeasurement"
     ],
     "LazyProjectName": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyProjectName"
     ],
     "LazySequence": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazySequence"
     ],
     "LazyUUID": [
-      "general_manager.factory.factoryMethods",
+      "general_manager.factory.factory_methods",
       "LazyUUID"
     ]
   },
   "general_manager.interface": {
     "CalculationInterface": [
-      "general_manager.interface.calculationInterface",
+      "general_manager.interface.calculation_interface",
       "CalculationInterface"
     ],
     "DBBasedInterface": [
-      "general_manager.interface.databaseBasedInterface",
+      "general_manager.interface.database_based_interface",
       "DBBasedInterface"
     ],
     "DatabaseInterface": [
-      "general_manager.interface.databaseInterface",
+      "general_manager.interface.database_interface",
       "DatabaseInterface"
     ],
     "InterfaceBase": [
-      "general_manager.interface.baseInterface",
+      "general_manager.interface.base_interface",
       "InterfaceBase"
     ],
     "ReadOnlyInterface": [
-      "general_manager.interface.readOnlyInterface",
+      "general_manager.interface.read_only_interface",
       "ReadOnlyInterface"
     ]
   },
   "general_manager.manager": {
     "GeneralManager": [
-      "general_manager.manager.generalManager",
+      "general_manager.manager.general_manager",
       "GeneralManager"
     ],
     "GeneralManagerMeta": [
@@ -213,7 +213,7 @@
       "GeneralManagerMeta"
     ],
     "GroupManager": [
-      "general_manager.manager.groupManager",
+      "general_manager.manager.group_manager",
       "GroupManager"
     ],
     "Input": [
@@ -231,7 +231,7 @@
       "Measurement"
     ],
     "MeasurementField": [
-      "general_manager.measurement.measurementField",
+      "general_manager.measurement.measurement_field",
       "MeasurementField"
     ],
     "currency_units": [
@@ -245,15 +245,15 @@
   },
   "general_manager.permission": {
     "BasePermission": [
-      "general_manager.permission.basePermission",
+      "general_manager.permission.base_permission",
       "BasePermission"
     ],
     "ManagerBasedPermission": [
-      "general_manager.permission.managerBasedPermission",
+      "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
     ],
     "MutationPermission": [
-      "general_manager.permission.mutationPermission",
+      "general_manager.permission.mutation_permission",
       "MutationPermission"
     ]
   },
@@ -269,47 +269,47 @@
   },
   "general_manager.utils": {
     "CustomJSONEncoder": [
-      "general_manager.utils.jsonEncoder",
+      "general_manager.utils.json_encoder",
       "CustomJSONEncoder"
     ],
     "PathMap": [
-      "general_manager.utils.pathMapping",
+      "general_manager.utils.path_mapping",
       "PathMap"
     ],
     "args_to_kwargs": [
-      "general_manager.utils.argsToKwargs",
+      "general_manager.utils.args_to_kwargs",
       "args_to_kwargs"
     ],
     "camel_to_snake": [
-      "general_manager.utils.formatString",
+      "general_manager.utils.format_string",
       "camel_to_snake"
     ],
     "create_filter_function": [
-      "general_manager.utils.filterParser",
+      "general_manager.utils.filter_parser",
       "create_filter_function"
     ],
     "make_cache_key": [
-      "general_manager.utils.makeCacheKey",
+      "general_manager.utils.make_cache_key",
       "make_cache_key"
     ],
-    "noneToZero": [
-      "general_manager.utils.noneToZero",
-      "noneToZero"
+    "none_to_zero": [
+      "general_manager.utils.none_to_zero",
+      "none_to_zero"
     ],
     "parse_filters": [
-      "general_manager.utils.filterParser",
+      "general_manager.utils.filter_parser",
       "parse_filters"
     ],
     "pascal_to_snake": [
-      "general_manager.utils.formatString",
+      "general_manager.utils.format_string",
       "pascal_to_snake"
     ],
     "snake_to_camel": [
-      "general_manager.utils.formatString",
+      "general_manager.utils.format_string",
       "snake_to_camel"
     ],
     "snake_to_pascal": [
-      "general_manager.utils.formatString",
+      "general_manager.utils.format_string",
       "snake_to_pascal"
     ]
   }

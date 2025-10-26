@@ -16,7 +16,7 @@ from general_manager.measurement import (
     MeasurementField,
     Measurement,
 )
-from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from django.db.models import (
     CharField,

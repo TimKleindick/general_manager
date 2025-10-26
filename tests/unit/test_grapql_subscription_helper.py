@@ -11,7 +11,7 @@ from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 
 from general_manager.api.graphql import GraphQL, SubscriptionEvent
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 from tests.utils.simple_manager_interface import BaseTestInterface
 
 

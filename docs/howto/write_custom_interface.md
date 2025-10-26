@@ -5,7 +5,7 @@ Sometimes your data lives outside of Django or requires a bespoke persistence st
 ## Step 1: Subclass InterfaceBase
 
 ```python
-from general_manager.interface.baseInterface import InterfaceBase
+from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager import GeneralManager, Input
 from typing import Generator
 
@@ -45,7 +45,7 @@ class ExternalReportInterface(InterfaceBase):
 Call `DependencyTracker.track()` when you fetch data so cache invalidation works:
 
 ```python
-from general_manager.cache.cacheTracker import DependencyTracker
+from general_manager.cache.cache_tracker import DependencyTracker
 
     def fetch_report(self) -> dict[str, object]:
         DependencyTracker.track("ExternalReport", "fetch", str(self.identification))

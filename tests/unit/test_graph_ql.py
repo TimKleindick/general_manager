@@ -15,9 +15,9 @@ from general_manager.api.graphql import (
     getReadPermissionFilter,
 )
 from general_manager.measurement.measurement import Measurement, ureg
-from general_manager.manager.generalManager import GeneralManager, GeneralManagerMeta
+from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
-from general_manager.interface.baseInterface import InterfaceBase
+from general_manager.interface.base_interface import InterfaceBase
 from graphql import GraphQLError
 
 
@@ -53,13 +53,13 @@ class GraphQLTests(TestCase):
         self.info = MagicMock()
         self.info.context.user = AnonymousUser()
 
-    @patch("general_manager.interface.baseInterface.InterfaceBase")
+    @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_no_interface(self, _mock_interface):
         self.general_manager_class.Interface = None
         result = GraphQL.createGraphqlInterface(self.general_manager_class)
         self.assertIsNone(result)
 
-    @patch("general_manager.interface.baseInterface.InterfaceBase")
+    @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_with_interface(self, mock_interface):
         mock_interface.getAttributeTypes.return_value = {"test_field": {"type": str}}
         self.general_manager_class.Interface = mock_interface
@@ -123,7 +123,7 @@ class GraphQLTests(TestCase):
             mock_queryset.filter.assert_called_with(field="value")
             mock_filtered.exclude.assert_called_with(other_field="value")
 
-    @patch("general_manager.interface.baseInterface.InterfaceBase")
+    @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):
         """
         Test that a GraphQL interface is created and registered when a manager class defines a GraphQLProperty attribute.

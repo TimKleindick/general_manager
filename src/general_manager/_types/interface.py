@@ -10,8 +10,8 @@ __all__ = [
     "ReadOnlyInterface",
 ]
 
-from general_manager.interface.calculationInterface import CalculationInterface
-from general_manager.interface.databaseBasedInterface import DBBasedInterface
-from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.interface.baseInterface import InterfaceBase
-from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+from general_manager.interface.calculation_interface import CalculationInterface
+from general_manager.interface.database_based_interface import DBBasedInterface
+from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.read_only_interface import ReadOnlyInterface

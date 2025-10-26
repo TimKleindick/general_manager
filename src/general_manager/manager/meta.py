@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from django.conf import settings
 from typing import Any, Type, TYPE_CHECKING, ClassVar, TypeVar, Iterable, cast
-from general_manager.interface.baseInterface import InterfaceBase
+from general_manager.interface.base_interface import InterfaceBase
 
 if TYPE_CHECKING:
-    from general_manager.manager.generalManager import GeneralManager
+    from general_manager.manager.general_manager import GeneralManager
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")

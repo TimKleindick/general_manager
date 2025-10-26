@@ -1,12 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.db.models import CharField, BooleanField
 from django.utils.crypto import get_random_string
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.api.mutation import graphQlMutation
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
-from general_manager.permission.mutationPermission import MutationPermission
-from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.permission.mutation_permission import MutationPermission
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from typing import ClassVar
 
 

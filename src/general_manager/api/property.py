@@ -126,7 +126,7 @@ def graphQlProperty(
     filterable: bool = False,
     query_annotation: Any | None = None,
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
-    from general_manager.cache.cacheDecorator import cached
+    from general_manager.cache.cache_decorator import cached
 
     """
     Decorate a resolver to return a cached ``GraphQLProperty`` descriptor.

@@ -1,7 +1,7 @@
 # type: ignore
 from django.db import models
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.measurement import Measurement, MeasurementField
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from django.core.exceptions import ValidationError

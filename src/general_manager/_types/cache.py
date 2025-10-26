@@ -11,9 +11,9 @@ __all__ = [
     "remove_cache_key_from_index",
 ]
 
-from general_manager.cache.cacheDecorator import CacheBackend
-from general_manager.cache.cacheTracker import DependencyTracker
-from general_manager.cache.cacheDecorator import cached
-from general_manager.cache.dependencyIndex import invalidate_cache_key
-from general_manager.cache.dependencyIndex import record_dependencies
-from general_manager.cache.dependencyIndex import remove_cache_key_from_index
+from general_manager.cache.cache_decorator import CacheBackend
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.cache_decorator import cached
+from general_manager.cache.dependency_index import invalidate_cache_key
+from general_manager.cache.dependency_index import record_dependencies
+from general_manager.cache.dependency_index import remove_cache_key_from_index

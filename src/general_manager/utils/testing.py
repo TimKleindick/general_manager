@@ -15,8 +15,8 @@ from unittest.mock import ANY
 
 from general_manager.api.graphql import GraphQL
 from general_manager.apps import GeneralmanagerConfig
-from general_manager.cache.cacheDecorator import _SENTINEL
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.cache.cache_decorator import _SENTINEL
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 
 _original_get_app: Callable[[str], AppConfig | None] = (

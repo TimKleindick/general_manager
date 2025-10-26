@@ -8,7 +8,7 @@ from graphene_django.views import GraphQLView  # type: ignore[import]
 from importlib import import_module, util
 import importlib.abc
 import sys
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import graphQlProperty
@@ -43,7 +43,7 @@ class InvalidPermissionClassError(TypeError):
 
 
 if TYPE_CHECKING:
-    from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+    from general_manager.interface.read_only_interface import ReadOnlyInterface
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class GeneralmanagerConfig(AppConfig):
             read_only_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose Interface implements a ReadOnlyInterface; each class will have its read-only data synchronized before management commands and a Django system check registered to verify the Interface schema is up to date.
         """
         GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
-        from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+        from general_manager.interface.read_only_interface import ReadOnlyInterface
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
 
@@ -133,7 +133,7 @@ class GeneralmanagerConfig(AppConfig):
         Returns:
             The result returned by the original `BaseCommand.run_from_argv` call.
         """
-        from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+        from general_manager.interface.read_only_interface import ReadOnlyInterface
 
         original_run_from_argv = BaseCommand.run_from_argv
 
@@ -510,8 +510,8 @@ class GeneralmanagerConfig(AppConfig):
         Raises:
             InvalidPermissionClassError: If the existing Permission attribute is not a subclass of BasePermission.
         """
-        from general_manager.permission.basePermission import BasePermission
-        from general_manager.permission.managerBasedPermission import (
+        from general_manager.permission.base_permission import BasePermission
+        from general_manager.permission.manager_based_permission import (
             ManagerBasedPermission,
         )
 

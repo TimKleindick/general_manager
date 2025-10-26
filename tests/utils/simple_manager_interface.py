@@ -1,7 +1,7 @@
 from typing import ClassVar
 
-from general_manager.interface.baseInterface import InterfaceBase
-from general_manager.bucket.baseBucket import Bucket
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.bucket.base_bucket import Bucket
 
 
 class SingleItemRequiredError(ValueError):
