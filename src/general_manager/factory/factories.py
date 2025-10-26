@@ -1,21 +1,18 @@
 """Helpers for generating realistic factory values for Django models."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from factory.declarations import LazyFunction
 from factory.faker import Faker
 import exrex  # type: ignore[import-untyped]
 from django.core.validators import RegexValidator
 from django.db import models
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal
 from random import SystemRandom
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurement_field import MeasurementField
-
-if TYPE_CHECKING:
-    from general_manager.factory.auto_factory import AutoFactory
 
 
 _RNG = SystemRandom()
@@ -158,7 +155,7 @@ def get_field_value(
     elif isinstance(field, models.UUIDField):
         return cast(str, Faker("uuid4"))
     elif isinstance(field, models.DurationField):
-        return cast(time, Faker("time_delta"))
+        return cast(timedelta, Faker("time_delta"))
     elif isinstance(field, models.CharField):
         max_length = field.max_length or 100
         # Check for RegexValidator
