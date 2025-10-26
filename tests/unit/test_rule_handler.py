@@ -117,9 +117,9 @@ min_handler = MinHandler()
             {"z": "abcdef"},
             {"z": "[z] (abcdef) is too long (max length 4)!"},
         ),
-        # len(w) <= 1  und w="" (len=0) → 0<=1 → ok, aber Meldung
+        # Case: len(w) <= 1 and w="" (len=0) → 0 <= 1 → valid comparison but still yields "too long"
         ("len(w) <= 1", "<=", {"w": ""}, {"w": "[w] () is too long (max length 1)!"}),
-        # len(a) == 4  und a="abcd" → 4==4 → ok, aber Meldung
+        # Case: len(a) == 4 and a="abcd" → 4 == 4 → valid comparison but still yields explicit length message
         (
             "len(a) == 4",
             "==",
@@ -129,9 +129,9 @@ min_handler = MinHandler()
     ],
 )
 def test_len_handler_success(expr, op_symbol, var_values, expected):
-    # AST erzeugen
+    # Build AST nodes for the expression under test
     node = ast.parse(expr, mode="eval").body
-    # DummyRule mit vorgegebener Op-Symbol-Antwort
+    # DummyRule configured with the comparison operator symbol
     rule = DummyRule(op_symbol)
     result = len_handler.handle(
         node,
@@ -145,7 +145,7 @@ def test_len_handler_success(expr, op_symbol, var_values, expected):
 
 
 def test_non_compare_node_returns_empty():
-    # z. B. ein Call-Knoten statt Compare
+    # Example: a call node instead of a comparison node
     node = ast.parse("print('hallo')", mode="eval").body
     rule = DummyRule(">")
     assert len_handler.handle(node, None, None, None, {}, rule) == {}  # type: ignore
@@ -154,8 +154,8 @@ def test_non_compare_node_returns_empty():
 @pytest.mark.parametrize(
     "bad_expr, op",
     [
-        ("len(x) > 'z'", ">"),  # right kein Zahl-Literal
-        ("x + 1 > 2", ">"),  # left kein Call
+        ("len(x) > 'z'", ">"),  # Right operand is not numeric
+        ("x + 1 > 2", ">"),  # Left side is not a function call
     ],
 )
 def test_len_handler_invalid_raises1(bad_expr, op):
@@ -434,7 +434,7 @@ def test_min_handler_invalid(expr, var_values, error_msg):
 def test_mixed_numeric_types(expr, op_symbol, var_values, expected):
     node = ast.parse(expr, mode="eval").body
     rule = DummyRule(op_symbol)
-    # dispatch auf den richtigen Handler
+    # Dispatch to the correct handler for the function name
     if expr.startswith("sum"):
         result = sum_handler.handle(
             node,
@@ -465,7 +465,7 @@ def test_mixed_numeric_types(expr, op_symbol, var_values, expected):
     assert result == expected
 
 
-# --- Very large collections (funktionale Korrektheit, kein Benchmark) ---
+# --- Very large collections (functional correctness, not a benchmark) ---
 def test_sum_handler_large_collection():
     n = 100_000
     large = [1] * n
