@@ -208,7 +208,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             kwarg_filter[key].append(value)
         return kwarg_filter
 
-    def __parse_filter_deifintions(
+    def __parse_filter_definitions(
         self,
         **kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any], list[tuple[str, Any, str]]]:
@@ -290,7 +290,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             InvalidQueryAnnotationTypeError: If a query-annotation callback returns a non-QuerySet.
             QuerysetFilteringError: If the ORM rejects the filter arguments or filtering fails.
         """
-        annotations, orm_kwargs, python_filters = self.__parse_filter_deifintions(
+        annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
         qs = self._data
@@ -331,7 +331,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Raises:
             InvalidQueryAnnotationTypeError: If an annotation callable is applied and does not return a Django QuerySet.
         """
-        annotations, orm_kwargs, python_filters = self.__parse_filter_deifintions(
+        annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
         qs = self._data
