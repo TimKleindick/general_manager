@@ -40,20 +40,18 @@ class MeasurementFieldTests(TestCase):
     def test_valid_measurement_creation(self):
         measurement = Measurement(5, "meter")
         self.instance.length = measurement
-        self.instance.full_clean()  # Überprüft Validierung
+        self.instance.full_clean()  # Validate field values
         self.assertEqual(self.instance.length.quantity.magnitude, Decimal("5"))
         self.assertEqual(self.instance.length.quantity.units, ureg("meter"))
 
     def test_conversion_to_base_unit(self):
-        measurement = Measurement(
-            500, "centimeter"
-        )  # Sollte als 5 Meter gespeichert werden
+        measurement = Measurement(500, "centimeter")  # Should be stored as 5 meters
         self.instance.length = measurement
         self.instance.full_clean()
         self.assertEqual(
             self.instance.length_value,
             Decimal("5"),  # type: ignore
-        )  # In Basis-Einheit Meter
+        )  # In base unit (meters)
         self.assertEqual(self.instance.length_unit, "centimeter")  # type: ignore
 
     def test_setting_none(self):
@@ -65,27 +63,25 @@ class MeasurementFieldTests(TestCase):
         with self.assertRaises(ValidationError):
             self.instance.length = Measurement(
                 1, "second"
-            )  # Sekunde ist inkompatibel mit Meter
+            )  # Seconds are incompatible with meters
             self.instance.full_clean()
 
     def test_currency_unit_for_physical_field(self):
         with self.assertRaises(ValidationError):
-            self.instance.length = Measurement(
-                100, "USD"
-            )  # USD ist keine physische Maßeinheit
+            self.instance.length = Measurement(100, "USD")  # USD is not a physical unit
             self.instance.full_clean()
 
     def test_valid_currency_for_currency_field(self):
         self.instance.price = Measurement(
             100, "USD"
-        )  # Angenommen, price ist ein Währungsfeld
+        )  # The price field expects a currency unit
         self.instance.full_clean()
         self.assertEqual(self.instance.price.quantity.magnitude, Decimal("100"))
         self.assertEqual(self.instance.price.quantity.units, ureg("USD"))
 
     def test_invalid_currency_for_currency_field(self):
         with self.assertRaises(ValidationError):
-            self.instance.price = Measurement(1, "meter")  # Meter ist keine Währung
+            self.instance.price = Measurement(1, "meter")  # Meter is not a currency
             self.instance.full_clean()
 
     def test_invalid_value_type(self):
@@ -118,7 +114,7 @@ class MeasurementFieldTests(TestCase):
         """
         The Value is bigger than the maximum digits before the decimal point allowed in this field
         """
-        large_value = Decimal("1e25")  # Sehr großer Wert
+        large_value = Decimal("1e25")  # Extremely large value
         self.instance.length = Measurement(large_value, "meter")
         with self.assertRaises(ValidationError):
             self.instance.full_clean()
@@ -127,5 +123,5 @@ class MeasurementFieldTests(TestCase):
         with self.assertRaises(ValidationError):
             self.instance.length = Measurement(
                 1, "liter"
-            )  # Liter passt nicht zur Basis Meter
+            )  # Liters are incompatible with the meter dimension
             self.instance.full_clean()

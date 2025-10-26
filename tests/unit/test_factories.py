@@ -178,13 +178,13 @@ class TestGetFieldValue(TestCase):
 
 class TestRelationFieldValue(TestCase):
     def setUp(self):
-        # Aufräumen: kein _general_manager_class voraussetzen
+        # Clean up: ensure no _general_manager_class attribute lingers
         for M in (DummyForeignKey, DummyForeignKey2):
             if hasattr(M, "_general_manager_class"):
                 delattr(M, "_general_manager_class")
 
     def test_fk_with_factory_new_instance(self):
-        # 1) _general_manager_class.Factory liefert direkt ein Objekt
+        # 1) _general_manager_class.Factory returns an object directly
         dummy = DummyForeignKey(name="foo")
 
         class GMC:
@@ -195,7 +195,7 @@ class TestRelationFieldValue(TestCase):
         with patch("general_manager.factory.factories._RNG.choice", return_value=True):
             field = DummyModel._meta.get_field("dummy_fk")
             result = get_field_value(field)
-            # Hier kommt kein LazyFunction, sondern direkt das factory-Ergebnis
+            # In this branch we expect the factory result directly, not a LazyFunction
             self.assertIs(result, dummy)
 
     def test_fk_with_factory_existing_instance(self):
@@ -239,7 +239,7 @@ class TestRelationFieldValue(TestCase):
         self.assertIs(result, dummy)
 
     def test_fk_without_factory_with_existing_instances(self):
-        # 2) kein factory, aber vorhandene Objekte → LazyFunction
+        # 2) No factory but existing objects → expect LazyFunction
         dummy1 = DummyForeignKey(name="a")
         dummy2 = DummyForeignKey(name="b")
         field = DummyModel._meta.get_field("dummy_fk")
@@ -249,7 +249,7 @@ class TestRelationFieldValue(TestCase):
         ):
             decl = get_field_value(field)
             self.assertIsInstance(decl, LazyFunction)
-            # beim Evaluieren sollte eins der beiden Objekte zurückkommen
+            # Evaluating the declaration should return one of the existing objects
             inst = decl.evaluate(None, None, None)  # type: ignore
             self.assertIn(inst, (dummy1, dummy2))
 

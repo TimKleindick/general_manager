@@ -59,7 +59,7 @@ class DummyRule:
         raise UnexpectedNodeTypeError()
 
     def _eval_node(self, node: ast.AST) -> Any:
-        # 1) Direktes Literal
+        # 1) Direct literal
         """
         Evaluate a simple AST node and return its corresponding Python value.
 
@@ -75,18 +75,18 @@ class DummyRule:
         """
         if isinstance(node, ast.Constant):
             return node.value
-        # 2) Negativer Literal-Fall: -2, -3.5, …
+        # 2) Negative literal case: -2, -3.5, …
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
             val = self._eval_node(node.operand)
             if isinstance(val, (int, float)):
                 return -val
-        # 3) Name-Knoten für var_values lookup
+        # 3) Name node for var_values lookup
         if isinstance(node, ast.Name):
             return None
         raise UnsupportedNodeEvaluationError(type(node).__name__)
 
 
-# Handler-Instanz
+# Handler instances
 len_handler = LenHandler()
 sum_handler = SumHandler()
 max_handler = MaxHandler()
@@ -96,21 +96,21 @@ min_handler = MinHandler()
 @pytest.mark.parametrize(
     "expr, op_symbol, var_values, expected",
     [
-        # Fall: len(x) > 3  und x="abc"  → len("abc")==3 → 3 ist nicht >3 → Meldung "too short"
+        # Case: len(x) > 3 and x="abc" → len("abc")==3 → 3 is not >3 → expect "too short"
         (
             "len(x) > 3",
             ">",
             {"x": "abc"},
             {"x": "[x] (abc) is too short (min length 4)!"},
         ),
-        # len(y) >= 2  und y="ab" → 2 >=2 → Meldung "too short" mit threshold==2
+        # Case: len(y) >= 2 and y="ab" → 2 >= 2 → expect "too short" with threshold==2
         (
             "len(y) >= 2",
             ">=",
             {"y": "ab"},
             {"y": "[y] (ab) is too short (min length 2)!"},
         ),
-        # len(z) < 5   und z="abcdef" (len=6) → 6<5 ist False → "too long"
+        # Case: len(z) < 5 and z="abcdef" (len=6) → 6<5 is False → expect "too long"
         (
             "len(z) < 5",
             "<",
@@ -220,8 +220,9 @@ def test_sum_handler_success(expr, op_symbol, var_values, expected):
     )
     assert result == expected
 
+    # Failure cases for SumHandler
 
-# Fehler-Fälle für SumHandler
+
 def test_sum_handler_non_compare_returns_empty():
     node = ast.parse("print(1)", mode="eval").body
     rule = DummyRule(">")

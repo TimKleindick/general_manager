@@ -213,7 +213,7 @@ class LenHandler(FunctionHandler):
         var_name = rule._get_node_name(arg_node)
         var_value = var_values.get(var_name)
 
-        # --- Hier der Typ-Guard für right_value ---
+        # --- Type guard for right_value ---
         raw = rule._eval_node(right_node)
         if not isinstance(raw, (int, float)):
             raise InvalidLenThresholdError()
@@ -230,7 +230,7 @@ class LenHandler(FunctionHandler):
         else:
             threshold = right_value
 
-        # Fehlermeldung formulieren
+        # Formulate the error message
         if op_symbol in (">", ">="):
             msg = f"[{var_name}] ({var_value}) is too short (min length {threshold})!"
         elif op_symbol in ("<", "<="):
