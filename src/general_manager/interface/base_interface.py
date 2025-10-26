@@ -191,13 +191,20 @@ class InterfaceBase(ABC):
         )
         # Check for extra arguments
         extra_args = set(kwargs.keys()) - set(self.input_fields.keys())
-        for extra_arg in extra_args:
-            if extra_arg.endswith("_id"):
-                base = extra_arg[:-3]
-                if base in self.input_fields:
-                    kwargs[base] = kwargs.pop(extra_arg)
-            else:
-                raise UnexpectedInputArgumentsError(extra_args)
+        if extra_args:
+            handled: set[str] = set()
+            for extra_arg in list(extra_args):
+                if extra_arg.endswith("_id"):
+                    base = extra_arg[:-3]
+                    if base in self.input_fields:
+                        kwargs[base] = kwargs.pop(extra_arg)
+                        handled.add(extra_arg)
+            # recompute remaining unknown keys after handling known *_id aliases
+            remaining = (extra_args - handled) | (
+                set(kwargs.keys()) - set(self.input_fields.keys())
+            )
+            if remaining:
+                raise UnexpectedInputArgumentsError(remaining)
 
         missing_args = set(self.input_fields.keys()) - set(kwargs.keys())
         if missing_args:
