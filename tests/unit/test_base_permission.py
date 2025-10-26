@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, cast, ClassVar
 from django.test import TestCase
-from django.contrib.auth.models import AnonymousUser  # als Dummy-User
+from django.contrib.auth.models import AnonymousUser  # as Dummy-User
 from general_manager.permission.base_permission import BasePermission
 from general_manager.permission.permission_checks import (
     permission_functions,
@@ -15,7 +15,6 @@ from general_manager.permission.permission_data_manager import (
 from django.contrib.auth import get_user_model
 
 if TYPE_CHECKING:
-    from general_manager.manager.general_manager import GeneralManager
     from django.contrib.auth.models import AbstractUser
 
 # Dummy-Funktionen für permission_functions
