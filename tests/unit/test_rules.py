@@ -7,7 +7,7 @@ from typing import cast
 
 
 class DummyObject:
-    """Ein generisches Objekt zum Testen mit beliebigen Attributen."""
+    """Generic helper object that accepts arbitrary attributes for tests."""
 
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
@@ -42,7 +42,7 @@ class RuleTests(TestCase):
         self.assertEqual(error_message, expected_error)
 
     def test_rule_with_booleans(self):
-        """Testet die Rule-Klasse mit booleschen Werten."""
+        """Validate Rule behavior with boolean fields."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -65,7 +65,7 @@ class RuleTests(TestCase):
         self.assertEqual(error_message, expected_error)
 
     def test_rule_with_dates(self):
-        """Testet die Rule-Klasse mit Datumswerten."""
+        """Validate Rule behavior with date comparisons."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -94,7 +94,7 @@ class RuleTests(TestCase):
         self.assertEqual(error_message, expected_error)
 
     def test_rule_with_integers(self):
-        """Testet die Rule-Klasse mit Ganzzahlen."""
+        """Validate Rule behavior with integer comparisons."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -117,7 +117,7 @@ class RuleTests(TestCase):
         self.assertEqual(error_message, expected_error)
 
     def test_rule_with_integers_reverse(self):
-        """Testet die Rule-Klasse mit Ganzzahlen."""
+        """Validate Rule behavior with integer comparisons when operands are reversed."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -140,7 +140,7 @@ class RuleTests(TestCase):
         self.assertEqual(error_message, expected_error)
 
     def test_rule_with_strings(self):
-        """Testet die Rule-Klasse mit Zeichenketten."""
+        """Validate Rule behavior with string length checks."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -276,7 +276,7 @@ class RuleTests(TestCase):
         self.assertIn(error_message, [expected_error_a, expected_error_b])
 
     def test_rule_with_no_variables(self):
-        """Testet die Rule-Klasse mit einer Funktion ohne Variablen."""
+        """Ensure a Rule whose predicate uses no variables evaluates and reports correctly."""
 
         def func(_: DummyObject) -> bool:
             """
@@ -298,7 +298,7 @@ class RuleTests(TestCase):
         self.assertIsNone(error_message)
 
     def test_rule_with_exception_in_function(self):
-        """Testet die Rule-Klasse, wenn die Funktion eine Ausnahme auslöst."""
+        """Verify the Rule class propagates exceptions raised by the predicate."""
 
         def func(x):
             return x.non_existent_attribute > 0
@@ -309,7 +309,7 @@ class RuleTests(TestCase):
             rule.evaluate(x)
 
     def test_rule_property_access(self):
-        """Testet den Zugriff auf die Eigenschaften der Rule-Klasse."""
+        """Ensure Rule exposes the expected property accessors."""
 
         def func(item: DummyObject) -> bool:
             """
@@ -360,7 +360,7 @@ class RuleTests(TestCase):
         self.assertIsNone(error_message)
 
     def test_rule_with_none_value(self):
-        """Testet die Rule-Klasse mit None-Werten."""
+        """Ensure Rules handle None values correctly when ignore_if_none is enabled."""
 
         def func(item: DummyObject) -> bool:
             """

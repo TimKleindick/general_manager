@@ -217,7 +217,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         @cached(timeout=None, cache_backend=self.fake_cache, record_fn=self.record_fn)
         def fn(x, y):
-            # echte Abhängigkeiten aufzeichnen
+            # Record actual dependencies
             DependencyTracker.track("User", "identification", str(x))
             DependencyTracker.track("Profile", "identification", str(y))
             return x + y
@@ -253,7 +253,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         @cached(timeout=5, cache_backend=self.fake_cache, record_fn=self.record_fn)
         def fn(x, y):
-            # echte Abhängigkeiten aufzeichnen
+            # Record actual dependencies
             DependencyTracker.track("User", "identification", str(x))
             DependencyTracker.track("Profile", "identification", str(y))
             return x + y

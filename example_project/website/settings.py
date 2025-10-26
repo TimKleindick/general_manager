@@ -131,10 +131,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "unique-snowflake",  # Eine eindeutige Kennung für deinen Cache
+        "LOCATION": "unique-snowflake",  # Unique identifier for this cache
         "OPTIONS": {
-            "MAX_ENTRIES": 10000,  # Erhöht die maximale Anzahl der Einträge
-            "CULL_FREQUENCY": 3,  # Legt fest, wie viele Einträge entfernt werden, wenn das Limit erreicht wird
+            "MAX_ENTRIES": 10000,  # Raise the maximum number of entries
+            "CULL_FREQUENCY": 3,  # Remove this fraction of entries when the limit is reached
         },
     }
 }

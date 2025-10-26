@@ -17,16 +17,16 @@ from django.contrib.auth import get_user_model
 if TYPE_CHECKING:
     from django.contrib.auth.models import AbstractUser
 
-# Dummy-Funktionen für permission_functions
+# Dummy helpers for permission_functions
 
 
 def dummy_permission_filter(
     user: AnonymousUser | AbstractUser, config: list[str]
 ) -> dict[Literal["filter", "exclude"], dict[str, str]] | None:
     """
-    Dummy-Implementierung der Filter-Funktion:
-    - Gibt einen Filter zurück, wenn der erste Parameter "allow" ist,
-    - sonst None.
+    Dummy implementation of the filter function:
+    - Returns a filter mapping when the first parameter is "allow"
+    - Returns None otherwise
     """
     if config and config[0] == "allow":
         return {"filter": {"dummy": "allowed"}, "exclude": {}}
@@ -35,16 +35,16 @@ def dummy_permission_filter(
 
 def dummy_permission_method(instance, user, config):
     """
-    Dummy-Implementierung der Berechtigungsmethode:
-    - Gibt True zurück, wenn der erste Parameter "pass" ist,
-    - sonst False.
+    Dummy implementation of the permission method:
+    - Returns True when the first parameter is "pass"
+    - Returns False otherwise
     """
     if config and config[0] == "pass":
         return True
     return False
 
 
-# Dummy-Implementierung von BasePermission
+# Dummy implementation of BasePermission
 class DummyPermission(BasePermission):
     create_permissions: ClassVar[dict[str, str]] = {}
     update_permissions: ClassVar[dict[str, str]] = {}
@@ -82,7 +82,7 @@ class DummyPermission(BasePermission):
 
 class BasePermissionTests(TestCase):
     def setUp(self):
-        # Backup der originalen permission_functions und Überschreiben für Tests
+        # Backup the original permission_functions and override them for tests
         self.original_permission_functions = permission_functions.copy()
         permission_functions.clear()
         permission_functions["dummy"] = cast(
@@ -92,7 +92,7 @@ class BasePermissionTests(TestCase):
                 "permission_method": dummy_permission_method,
             },
         )
-        # Dummy-Instanzen für instance und request_user
+        # Dummy instances for `instance` and `request_user`
         self.dummy_instance = Mock(spec=PermissionDataManager)
         self.dummy_user = AnonymousUser()
         self.user = self.dummy_user
@@ -105,7 +105,7 @@ class BasePermissionTests(TestCase):
         }
 
     def tearDown(self):
-        # Wiederherstellen der originalen permission_functions
+        # Restore the original permission_functions
         permission_functions.clear()
         permission_functions.update(self.original_permission_functions)
         DummyPermission.create_permissions = self.original_class_permissions[
@@ -123,8 +123,7 @@ class BasePermissionTests(TestCase):
 
     def test_get_permission_filter_valid(self):
         """
-        Testet _get_permission_filter mit einem gültigen
-        permission-String, der einen nicht-leeren Filter zurückgibt.
+        Test _get_permission_filter with a valid permission string that yields a non-empty filter.
         """
         result = self.permission_obj._get_permission_filter("dummy:allow")
         expected = {"filter": {"dummy": "allowed"}, "exclude": {}}
@@ -132,8 +131,7 @@ class BasePermissionTests(TestCase):
 
     def test_get_permission_filter_default(self):
         """
-        Testet _get_permission_filter, wenn der Dummy-Filter None zurückgibt,
-        sodass der Default-Wert zurückgegeben wird.
+        Test _get_permission_filter when the dummy filter returns None to ensure the default value is produced.
         """
         result = self.permission_obj._get_permission_filter("dummy:deny")
         expected = {"filter": {}, "exclude": {}}
@@ -141,16 +139,13 @@ class BasePermissionTests(TestCase):
 
     def test_get_permission_filter_invalid_permission(self):
         """
-        Testet _get_permission_filter mit einem ungültigen permission-String.
-        Es sollte ein ValueError ausgelöst werden.
+        Test _get_permission_filter with an invalid permission string; should raise PermissionNotFoundError.
         """
         with self.assertRaises(PermissionNotFoundError):
             self.permission_obj._get_permission_filter("nonexistent:whatever")
 
     def test_validate_permission_string_all_true(self):
-        """
-        Testet validate_permission_string, wenn alle Sub-Permissions true ergeben.
-        """
+        """Test validate_permission_string when all sub-permissions evaluate to True."""
         result = self.permission_obj.validate_permission_string("dummy:pass")
         self.assertTrue(result)
         result2 = self.permission_obj.validate_permission_string(
@@ -159,30 +154,21 @@ class BasePermissionTests(TestCase):
         self.assertTrue(result2)
 
     def test_validate_permission_string_one_false(self):
-        """
-        Testet validate_permission_string, wenn eine der Sub-Permissions false ist.
-        """
+        """Test validate_permission_string when one sub-permission evaluates to False."""
         result = self.permission_obj.validate_permission_string("dummy:pass&dummy:fail")
         self.assertFalse(result)
 
     def test_validate_permission_string_invalid_permission(self):
-        """
-        Testet validate_permission_string mit einem ungültigen permission-String.
-        Es sollte ein ValueError ausgelöst werden.
-        """
+        """Test validate_permission_string with an invalid permission string; should raise ValueError."""
         with self.assertRaises(ValueError):
             self.permission_obj.validate_permission_string("nonexistent:whatever")
 
     def test_check_permission(self):
-        """
-        Testet die concrete Implementierung der check_permission-Methode.
-        """
+        """Test the concrete check_permission implementation."""
         self.assertTrue(self.permission_obj.check_permission("create", "attribute"))
 
     def test_get_permission_filter_public(self):
-        """
-        Testet die public get_permission_filter-Methode der DummyPermission.
-        """
+        """Test the public get_permission_filter method of DummyPermission."""
         DummyPermission.read_permissions = {"field": "dummy:allow"}
         result = self.permission_obj.get_permission_filter()
         expected = [{"filter": {"dummy": "allowed"}, "exclude": {}}]

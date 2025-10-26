@@ -49,7 +49,7 @@ def parse_filters(
         lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
 
         if issubclass(input_field.type, GeneralManager):
-            # Sammle die Filter-Keyword-Argumente für das InputField
+            # Collect filter keyword arguments for the input field
             if lookup == "":
                 lookup = "id"
                 if not isinstance(value, GeneralManager):
@@ -59,7 +59,7 @@ def parse_filters(
                 lookup
             ] = value
         else:
-            # Erstelle Filterfunktionen für Nicht-Bucket-Typen
+            # Build filter functions for non-bucket types
             if isinstance(value, (list, tuple)) and not isinstance(
                 value, input_field.type
             ):

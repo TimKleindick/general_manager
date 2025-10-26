@@ -924,7 +924,7 @@ class GraphQL:
     @staticmethod
     def _create_normal_resolver(field_name: str) -> Callable[..., Any]:
         """
-        Erzeugt einen Resolver für Standardfelder (keine Listen, keine Measurements).
+        Create a resolver for scalar fields (no lists, no Measurement instances).
         """
 
         def resolver(self: GeneralManager, info: GraphQLResolveInfo) -> Any:

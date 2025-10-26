@@ -15,11 +15,11 @@ from django.db import models
 
 
 # ------------------------------------------------------------
-# Hilfsklassen für die Tests
+# Helper classes for the tests
 # ------------------------------------------------------------
 class FakeInstance:
     def __init__(self, **kwargs):
-        # initialisiere alle übergebenen Attribute
+        # Initialize all provided attributes
         """
         Initialize a fake instance with dynamic attributes.
 
@@ -45,7 +45,7 @@ class FakeManager:
         self._instances: list[FakeInstance] = []
 
     def get_or_create(self, **lookup):
-        # Suche nach bestehendem Objekt
+        # Look up an existing object
         """
         Return an existing instance matching the given lookup parameters, or create and return a new one.
 
@@ -58,13 +58,13 @@ class FakeManager:
         for inst in self._instances:
             if all(getattr(inst, k) == v for k, v in lookup.items()):
                 return inst, False
-        # neu anlegen
+        # Create a new instance when none matched
         inst = FakeInstance(**lookup)
         self._instances.append(inst)
         return inst, True
 
     def filter(self, **kwargs):
-        # nur aktive Instanzen
+        # Return only active instances
         """
         Return a list of active instances managed by this manager.
 
@@ -94,16 +94,16 @@ class FakeField:
 
 
 class DummyModel:
-    # simuliertes Django-Modell
+    # Simulated Django model
     objects = FakeManager()
 
     class _meta:
         db_table = "dummy_table"
-        # für get_unique_fields irrelevant, wir patchen direkt
+        # Irrelevant for get_unique_fields; patched directly in tests
 
 
 class DummyManager:
-    # simuliert den GeneralManager
+    # Simulates the GeneralManager
     _data = None
 
 
@@ -113,15 +113,15 @@ class DummyInterface(ReadOnlyInterface):
 
 
 # ------------------------------------------------------------
-# Tests für get_unique_fields
+# Tests for get_unique_fields
 # ------------------------------------------------------------
 class GetUniqueFieldsTests(SimpleTestCase):
     def test_field_unique_true_and_together_and_constraint(self):
-        # Erzeuge eine Fake-Meta mit lokalen Feldern, unique_together und UniqueConstraint
+        # Build a fake _meta with local fields, unique_together, and UniqueConstraint
         """
         Tests that get_unique_fields correctly identifies unique fields from unique attributes, unique_together, and UniqueConstraint in a model's _meta.
         """
-        Field = SimpleNamespace  # mit .name, .unique, .column
+        Field = SimpleNamespace  # exposes .name, .unique, and .column
 
         def always_false_instancecheck(_: type, __: object) -> bool:
             """
@@ -158,18 +158,18 @@ class GetUniqueFieldsTests(SimpleTestCase):
             ],
         )
 
-        # patchen
+        # Patch the model metadata
         class M:
             _meta = fake_meta
 
         result = ReadOnlyInterface.get_unique_fields(M)
-        # id wird ignoriert, email (unique), username (über unique_together),
-        # other (unique_together), other_field (constraint), extra (UniqueConstraint)
+        # id is ignored; email (unique); username (via unique_together);
+        # other (unique_together); other_field (constraint); extra (UniqueConstraint)
         self.assertSetEqual(result, {"email", "username", "other", "extra"})
 
 
 # ------------------------------------------------------------
-# Tests für ensure_schema_is_up_to_date
+# Tests for ensure_schema_is_up_to_date
 # ------------------------------------------------------------
 class EnsureSchemaTests(TestCase):
     def setUp(self):
@@ -214,7 +214,7 @@ class EnsureSchemaTests(TestCase):
         self.assertIn("does not exist", warnings[0].hint)
 
     def test_schema_up_to_date(self):
-        # table_names enthält unseren Tabellennamen
+        # table_names returns the target table name
         """
         Tests that ensure_schema_is_up_to_date returns no warnings when the database schema matches the model's fields.
         """
@@ -232,7 +232,7 @@ class EnsureSchemaTests(TestCase):
             return [DummyModel._meta.db_table]
 
         connection.introspection.table_names = table_names  # type: ignore[assignment]
-        # description liefert genau die Spalten, die model._meta.local_fields vorgibt
+        # description returns exactly the columns defined by model._meta.local_fields
         fake_desc = [SimpleNamespace(name="col1"), SimpleNamespace(name="col2")]
 
         def get_table_description(_: object, __: object) -> list[SimpleNamespace]:
@@ -252,7 +252,7 @@ class EnsureSchemaTests(TestCase):
             get_table_description
         )
 
-        # FakeModel mit passenden local_fields
+        # Fake model with matching local_fields
         class M:
             class _meta:
                 db_table = DummyModel._meta.db_table
@@ -266,11 +266,11 @@ class EnsureSchemaTests(TestCase):
 
 
 # ------------------------------------------------------------
-# Tests für sync_data
+# Tests for sync_data
 # ------------------------------------------------------------
 class SyncDataTests(SimpleTestCase):
     def setUp(self):
-        # leere Manager-Instanzen
+        # Reset manager instances
         """
         Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and interface methods, and capturing logs.
 
@@ -310,17 +310,17 @@ class SyncDataTests(SimpleTestCase):
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
-        # stub get_unique_fields auf {'name'}
+        # Stub get_unique_fields to return {'name'}
         self.gu_patch = mock.patch.object(
             ReadOnlyInterface, "get_unique_fields", return_value={"name"}
         )
         self.gu_patch.start()
-        # stub ensure_schema_is_up_to_date immer leer
+        # Stub ensure_schema_is_up_to_date to always return an empty list
         self.es_patch = mock.patch.object(
             ReadOnlyInterface, "ensure_schema_is_up_to_date", return_value=[]
         )
         self.es_patch.start()
-        # log-capture
+        # Capture log output
         self.log_patcher = mock.patch(
             "general_manager.interface.read_only_interface.logger"
         )
@@ -358,7 +358,7 @@ class SyncDataTests(SimpleTestCase):
         self.assertIn("_data must be a JSON string or a list", str(cm.exception))
 
     def test_no_unique_fields_raises(self):
-        # stop get_unique_fields und liefere leere Menge
+        # Stop the existing get_unique_fields stub and return an empty set
         """
         Test that sync_data raises a ValueError when no unique fields are defined on the model.
         """
@@ -372,7 +372,7 @@ class SyncDataTests(SimpleTestCase):
             self.assertIn("must declare at least one unique field", str(cm.exception))
 
     def test_ensure_schema_not_up_to_date_logs_and_exits(self):
-        # ersetze ensure_schema_is_up_to_date durch Warnung
+        # Replace ensure_schema_is_up_to_date with a warning response
         """
         Test that sync_data logs a warning and exits without saving if schema validation returns warnings.
         """
@@ -385,7 +385,7 @@ class SyncDataTests(SimpleTestCase):
             DummyManager._data = "[]"
             DummyInterface.sync_data()
             self.logger.warning.assert_called_once()
-            # keine weiteren Aufrufe an save()
+            # Verify no additional save() calls occurred
             self.assertEqual(DummyModel.objects._instances, [])
 
     def test_sync_creates_updates_and_deactivates(self):
@@ -399,19 +399,19 @@ class SyncDataTests(SimpleTestCase):
         - The logger records the correct counts of created, updated, and deactivated entries.
         """
         DummyModel.objects._instances = [FakeInstance(name="a", other=1)]
-        # neue JSON-Daten: a verändert, b neu
+        # New JSON data: `a` changes, `b` is new
         DummyManager._data = [{"name": "a", "other": 2}, {"name": "b", "other": 3}]
-        # führe sync_data aus
+        # Run sync_data
         DummyInterface.sync_data()
-        # prüfe a wurde updated
+        # Verify `a` was updated
         inst_a = next(i for i in DummyModel.objects._instances if i.name == "a")
         self.assertEqual(inst_a.other, 2)
         self.assertTrue(inst_a.saved)
-        # prüfe b wurde erstellt
+        # Verify `b` was created
         inst_b = next(i for i in DummyModel.objects._instances if i.name == "b")
         self.assertEqual(inst_b.other, 3)
         self.assertTrue(inst_b.saved)
-        # prüfe Log-Info enthält 1 created, 1 updated, 0 deactivated
+        # Verify the log message reports 1 created, 1 updated, 0 deactivated
         self.logger.info.assert_called_once()
         msg = self.logger.info.call_args[0][0]
         self.assertIn("Created: 1", msg)
@@ -420,11 +420,11 @@ class SyncDataTests(SimpleTestCase):
 
 
 # ------------------------------------------------------------
-# Tests für Decorators und handle_interface
+# Tests for decorators and handle_interface
 # ------------------------------------------------------------
 class DecoratorTests(SimpleTestCase):
     def test_read_only_post_create_appends_class(self):
-        # reset Liste
+        # Reset tracked classes
         """
         Tests that the read_only_post_create decorator appends the class to the read_only_classes list and calls the decorated hook.
         """
@@ -432,10 +432,10 @@ class DecoratorTests(SimpleTestCase):
 
         GeneralManagerMeta.read_only_classes = []
 
-        # Dummy-Funktion
+        # Dummy function
         @ReadOnlyInterface.read_only_post_create
         def post_hook(new_cls, interface_cls, model):
-            # setze eine Marke
+            # Mark the class when the hook executes
             """
             Marks the given class to indicate that the post hook has been called.
 
@@ -463,7 +463,7 @@ class DecoratorTests(SimpleTestCase):
 
         wrapper = ReadOnlyInterface.read_only_pre_create(pre_hook)
         result = wrapper("MyName", {"a": 1}, "iface")
-        # der letzte Parameter muss GeneralManagerBasisModel sein
+        # The last parameter must be GeneralManagerBasisModel
         self.assertEqual(
             result, ("MyName", {"a": 1}, "iface", GeneralManagerBasisModel)
         )
