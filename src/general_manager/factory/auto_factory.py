@@ -4,7 +4,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Type, Callable, Union, Any, TypeVar, Literal
 from django.db import models
 from factory.django import DjangoModelFactory
-from general_manager.factory.factories import getFieldValue, getManyToManyFieldValue
+from general_manager.factory.factories import (
+    get_field_value,
+    get_many_to_many_field_value,
+)
 from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
@@ -82,7 +85,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             is_model = False
         if not is_model:
             raise InvalidAutoFactoryModelError
-        field_name_list, to_ignore_list = cls.interface.handleCustomFields(model)
+        field_name_list, to_ignore_list = cls.interface.handle_custom_fields(model)
 
         fields = [
             field
@@ -107,20 +110,20 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
-            params[field.name] = getFieldValue(field)
+            params[field.name] = get_field_value(field)
 
         obj: list[models.Model] | models.Model = super()._generate(strategy, params)
         if isinstance(obj, list):
             for item in obj:
                 if not isinstance(item, models.Model):
                     raise InvalidGeneratedObjectError()
-                cls._handleManyToManyFieldsAfterCreation(item, params)
+                cls._handle_many_to_many_fields_after_creation(item, params)
         else:
-            cls._handleManyToManyFieldsAfterCreation(obj, params)
+            cls._handle_many_to_many_fields_after_creation(obj, params)
         return obj
 
     @classmethod
-    def _handleManyToManyFieldsAfterCreation(
+    def _handle_many_to_many_fields_after_creation(
         cls, obj: models.Model, attrs: dict[str, Any]
     ) -> None:
         """
@@ -134,7 +137,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             if field.name in attrs:
                 m2m_values = attrs[field.name]
             else:
-                m2m_values = getManyToManyFieldValue(field)
+                m2m_values = get_many_to_many_field_value(field)
             if m2m_values:
                 getattr(obj, field.name).set(m2m_values)
 
@@ -172,8 +175,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         kwargs = cls._adjust_kwargs(**kwargs)
         if cls._adjustmentMethod is not None:
-            return cls.__createWithGenerateFunc(use_creation_method=True, params=kwargs)
-        return cls._modelCreation(model_class, **kwargs)
+            return cls.__create_with_generate_func(
+                use_creation_method=True, params=kwargs
+            )
+        return cls._model_creation(model_class, **kwargs)
 
     @classmethod
     def _build(
@@ -192,13 +197,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         kwargs = cls._adjust_kwargs(**kwargs)
         if cls._adjustmentMethod is not None:
-            return cls.__createWithGenerateFunc(
+            return cls.__create_with_generate_func(
                 use_creation_method=False, params=kwargs
             )
-        return cls._modelBuilding(model_class, **kwargs)
+        return cls._model_building(model_class, **kwargs)
 
     @classmethod
-    def _modelCreation(
+    def _model_creation(
         cls, model_class: Type[models.Model], **kwargs: Any
     ) -> models.Model:
         """
@@ -219,7 +224,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return obj
 
     @classmethod
-    def _modelBuilding(
+    def _model_building(
         cls, model_class: Type[models.Model], **kwargs: Any
     ) -> models.Model:
         """Construct an unsaved model instance with the provided field values."""
@@ -229,7 +234,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return obj
 
     @classmethod
-    def __createWithGenerateFunc(
+    def __create_with_generate_func(
         cls, use_creation_method: bool, params: dict[str, Any]
     ) -> models.Model | list[models.Model]:
         """
@@ -251,13 +256,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         records = cls._adjustmentMethod(**params)
         if isinstance(records, dict):
             if use_creation_method:
-                return cls._modelCreation(model_cls, **records)
-            return cls._modelBuilding(model_cls, **records)
+                return cls._model_creation(model_cls, **records)
+            return cls._model_building(model_cls, **records)
 
         created_objects: list[models.Model] = []
         for record in records:
             if use_creation_method:
-                created_objects.append(cls._modelCreation(model_cls, **record))
+                created_objects.append(cls._model_creation(model_cls, **record))
             else:
-                created_objects.append(cls._modelBuilding(model_cls, **record))
+                created_objects.append(cls._model_building(model_cls, **record))
         return created_objects

@@ -7,7 +7,7 @@ from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.interface.calculation_interface import CalculationInterface
-from general_manager.api.property import graphQlProperty
+from general_manager.api.property import graph_ql_property
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 
 
@@ -60,7 +60,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     possible_values=lambda: TestProjectForCommercials.all(),
                 )
 
-            @graphQlProperty
+            @graph_ql_property
             def budget_left(self) -> Measurement:
                 """
                 Compute the project's remaining budget.
@@ -70,7 +70,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return self.project.budget - self.project.actual_costs
 
-            @graphQlProperty
+            @graph_ql_property
             def budget_used(self) -> Measurement:
                 """
                 Compute the project's used budget as a percentage.
@@ -80,14 +80,14 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return (self.project.actual_costs / self.project.budget).to("percent")
 
-            @graphQlProperty
+            @graph_ql_property
             def is_over_budget(self) -> bool:
                 """
                 Return True if the project's actual costs exceed its budget, otherwise False.
                 """
                 return self.project.actual_costs > self.project.budget
 
-            @graphQlProperty
+            @graph_ql_property
             def has_duplicate_name(self) -> bool:
                 """
                 Determine whether another project has the same name as this instance.
@@ -100,7 +100,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 ).count()
                 return matching_count > 1
 
-            @graphQlProperty
+            @graph_ql_property
             def other_project_count(self) -> int:
                 """
                 Return the count of projects whose `number` differs from this instance's project's `number`.
@@ -112,7 +112,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     number=self.project.number
                 ).count()
 
-            @graphQlProperty
+            @graph_ql_property
             def has_budget_buffer(self) -> bool:
                 """
                 Indicates whether the project has a positive remaining budget.
@@ -122,7 +122,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return self.budget_left > Measurement(0, "EUR")
 
-            @graphQlProperty
+            @graph_ql_property
             def similar_name_count(self) -> int:
                 """
                 Count projects whose names contain the first word of this instance's associated project's name.
@@ -135,14 +135,14 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     name__contains=search_term
                 ).count()
 
-            @graphQlProperty
+            @graph_ql_property
             def active_project_count(self) -> int:
                 """
                 Count all active projects to ensure deactivation triggers cache invalidation.
                 """
                 return TestProjectForCommercials.filter(is_active=True).count()
 
-            @graphQlProperty
+            @graph_ql_property
             def same_name_excluding_self(self) -> int:
                 """
                 Count projects that have the same name as the current project's name, excluding the current project by its number.
@@ -156,7 +156,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .count()
                 )
 
-            @graphQlProperty
+            @graph_ql_property
             def project_keyword_number_range_count(self) -> int:
                 """
                 Count projects whose name contains "Project" and whose number is between 1 and 3 inclusive.
@@ -171,7 +171,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     number__in=[1, 2, 3],
                 ).count()
 
-            @graphQlProperty
+            @graph_ql_property
             def recent_project_window_count(self) -> int:
                 """
                 Count projects whose start_date falls within seven days before or after this instance's project.start_date and whose completion_at is no later than seven days after this instance's project.completion_at.
@@ -190,7 +190,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     completion_at__lte=completion_threshold,
                 ).count()
 
-            @graphQlProperty
+            @graph_ql_property
             def staged_bucket_count(self) -> int:
                 """
                 Count TestProjectForCommercials that match a specific sequence of chained filters relative to this instance's project.
@@ -252,15 +252,15 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials3 = self.TestCommercials(project=self.project3)
 
         self.assertEqual(commercials1.budget_left, Measurement(800, "EUR"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials3.budget_left, Measurement(-300, "EUR"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
         for commercials in self.TestCommercials.all():
             self.assertTrue(commercials.budget_left)
-            self.assertCacheHit()
+            self.assert_cache_hit()
 
     def test_caching_each_attribute_individually(self):
         """
@@ -273,20 +273,20 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials3 = self.TestCommercials(project=self.project3)
 
         self.assertEqual(commercials1.budget_used, Measurement(20, "percent"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials2.budget_used, Measurement(25, "percent"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(
             commercials3.budget_used,
             Measurement(120, "percent"),
         )
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
         for commercials in self.TestCommercials.all():
             self.assertTrue(commercials.budget_used)
-            self.assertCacheHit()
+            self.assert_cache_hit()
             self.assertTrue(commercials.budget_left)
-            self.assertCacheMiss()
+            self.assert_cache_miss()
 
     def test_cache_invalidation_after_related_update(self):
         """
@@ -296,14 +296,14 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials2 = self.TestCommercials(project=self.project2)
 
         self.assertEqual(commercials1.budget_left, Measurement(800, "EUR"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
         self.assertEqual(commercials1.budget_left, Measurement(800, "EUR"))
-        self.assertCacheHit()
+        self.assert_cache_hit()
         self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project1 = self.project1.update(
             actual_costs=Measurement(600, "EUR"), ignore_permission=True
@@ -311,13 +311,13 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.budget_left, Measurement(400, "EUR"))
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
         self.assertEqual(refreshed_commercials1.budget_left, Measurement(400, "EUR"))
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.assertEqual(commercials2.budget_left, Measurement(1500, "EUR"))
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_filter_dependency_invalidation(self):
         """
@@ -326,9 +326,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertFalse(commercials1.has_duplicate_name)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertFalse(commercials1.has_duplicate_name)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2 = self.project2.update(
             name="Test Project", ignore_permission=True
@@ -336,10 +336,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertTrue(refreshed_commercials1.has_duplicate_name)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
         self.assertTrue(refreshed_commercials1.has_duplicate_name)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_exclude_dependency_invalidation(self):
         """
@@ -348,18 +348,18 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.other_project_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.other_project_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2 = self.project2.update(number=1, ignore_permission=True)
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.other_project_count, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
         self.assertEqual(refreshed_commercials1.other_project_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_chained_graphql_properties_invalidation(self):
         """
@@ -368,21 +368,21 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertTrue(commercials1.has_budget_buffer)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertTrue(commercials1.has_budget_buffer)
-        self.assertCacheHit()
+        self.assert_cache_hit()
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertTrue(refreshed_commercials1.has_budget_buffer)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project1 = self.project1.update(
             actual_costs=Measurement(1200, "EUR"), ignore_permission=True
         )
 
         self.assertFalse(commercials1.has_budget_buffer)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.budget_left, Measurement(-200, "EUR"))
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_contains_lookup_invalidation(self):
         """
@@ -391,24 +391,24 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.similar_name_count, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.similar_name_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2 = self.project2.update(
             name="Test Another Project", ignore_permission=True
         )
 
         self.assertEqual(commercials1.similar_name_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.similar_name_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project3 = self.project3.update(
             name="Not matching Project", ignore_permission=True
         )
         self.assertEqual(commercials1.similar_name_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_deactivation_invalidation(self):
         """
@@ -417,17 +417,17 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.active_project_count, 3)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.active_project_count, 3)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project3 = self.project3.deactivate(ignore_permission=True)
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.active_project_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(refreshed_commercials1.active_project_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_combined_filter_and_exclude_invalidation(self):
         """
@@ -436,23 +436,23 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.same_name_excluding_self, 0)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.same_name_excluding_self, 0)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2.update(name="Test Project", ignore_permission=True)
 
         self.assertEqual(commercials1.same_name_excluding_self, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.same_name_excluding_self, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2.update(number=1, ignore_permission=True)
 
         self.assertEqual(commercials1.same_name_excluding_self, 0)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.same_name_excluding_self, 0)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         project4 = self.TestProject.create(
             name="Test Project",
@@ -464,16 +464,16 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         )
 
         self.assertEqual(commercials1.same_name_excluding_self, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.same_name_excluding_self, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         # Also ensure newly created project reports expected count
         commercials4 = self.TestCommercials(project=project4)
         self.assertEqual(commercials4.same_name_excluding_self, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials4.same_name_excluding_self, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_complex_filter_invalidation(self):
         """
@@ -482,25 +482,25 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.project_keyword_number_range_count, 3)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.project_keyword_number_range_count, 3)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2.update(number=4, ignore_permission=True)
 
         self.assertEqual(commercials1.project_keyword_number_range_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.project_keyword_number_range_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project3 = self.project3.update(
             name="Third Initiative", ignore_permission=True
         )
 
         self.assertEqual(commercials1.project_keyword_number_range_count, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.project_keyword_number_range_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.TestProject.create(
             name="Project Phoenix",
@@ -512,7 +512,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         )
 
         self.assertEqual(commercials1.project_keyword_number_range_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.TestProject.create(
             name="Project Phoenix",
@@ -524,7 +524,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         )
 
         self.assertEqual(commercials1.project_keyword_number_range_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
 
     def test_datetime_range_filter_invalidation(self):
         """
@@ -533,9 +533,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.recent_project_window_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.recent_project_window_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2 = self.project2.update(
             start_date=date(2024, 2, 1),
@@ -545,10 +545,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         result = refreshed_commercials1.recent_project_window_count
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(result, 1)
         self.assertEqual(refreshed_commercials1.recent_project_window_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project3 = self.project3.update(
             start_date=date(2023, 12, 28),
@@ -558,9 +558,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.recent_project_window_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(refreshed_commercials1.recent_project_window_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
     def test_staged_bucket_chain_invalidation(self):
         """
@@ -569,9 +569,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         commercials1 = self.TestCommercials(project=self.project1)
 
         self.assertEqual(commercials1.staged_bucket_count, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(commercials1.staged_bucket_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2 = self.project2.update(
             start_date=date(2023, 12, 25),
@@ -581,9 +581,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.staged_bucket_count, 2)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(refreshed_commercials1.staged_bucket_count, 2)
-        self.assertCacheHit()
+        self.assert_cache_hit()
 
         self.project2 = self.project2.update(
             actual_costs=Measurement(1500, "EUR"), ignore_permission=True
@@ -591,6 +591,6 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.staged_bucket_count, 1)
-        self.assertCacheMiss()
+        self.assert_cache_miss()
         self.assertEqual(refreshed_commercials1.staged_bucket_count, 1)
-        self.assertCacheHit()
+        self.assert_cache_hit()

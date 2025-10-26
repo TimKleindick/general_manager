@@ -32,13 +32,13 @@
       "general_manager.rule.rule",
       "Rule"
     ],
-    "graphQlMutation": [
+    "graph_ql_mutation": [
       "general_manager.api.mutation",
-      "graphQlMutation"
+      "graph_ql_mutation"
     ],
-    "graphQlProperty": [
+    "graph_ql_property": [
       "general_manager.api.property",
-      "graphQlProperty"
+      "graph_ql_property"
     ]
   },
   "general_manager.api": {
@@ -54,13 +54,13 @@
       "general_manager.api.graphql",
       "MeasurementType"
     ],
-    "graphQlMutation": [
+    "graph_ql_mutation": [
       "general_manager.api.mutation",
-      "graphQlMutation"
+      "graph_ql_mutation"
     ],
-    "graphQlProperty": [
+    "graph_ql_property": [
       "general_manager.api.property",
-      "graphQlProperty"
+      "graph_ql_property"
     ]
   },
   "general_manager.bucket": {
@@ -112,73 +112,73 @@
       "general_manager.factory.auto_factory",
       "AutoFactory"
     ],
-    "LazyBoolean": [
+    "lazy_boolean": [
       "general_manager.factory.factory_methods",
-      "LazyBoolean"
+      "lazy_boolean"
     ],
-    "LazyChoice": [
+    "lazy_choice": [
       "general_manager.factory.factory_methods",
-      "LazyChoice"
+      "lazy_choice"
     ],
-    "LazyDateBetween": [
+    "lazy_date_between": [
       "general_manager.factory.factory_methods",
-      "LazyDateBetween"
+      "lazy_date_between"
     ],
-    "LazyDateTimeBetween": [
+    "lazy_date_time_between": [
       "general_manager.factory.factory_methods",
-      "LazyDateTimeBetween"
+      "lazy_date_time_between"
     ],
-    "LazyDateToday": [
+    "lazy_date_today": [
       "general_manager.factory.factory_methods",
-      "LazyDateToday"
+      "lazy_date_today"
     ],
-    "LazyDecimal": [
+    "lazy_decimal": [
       "general_manager.factory.factory_methods",
-      "LazyDecimal"
+      "lazy_decimal"
     ],
-    "LazyDeltaDate": [
+    "lazy_delta_date": [
       "general_manager.factory.factory_methods",
-      "LazyDeltaDate"
+      "lazy_delta_date"
     ],
-    "LazyFakerAddress": [
+    "lazy_faker_address": [
       "general_manager.factory.factory_methods",
-      "LazyFakerAddress"
+      "lazy_faker_address"
     ],
-    "LazyFakerEmail": [
+    "lazy_faker_email": [
       "general_manager.factory.factory_methods",
-      "LazyFakerEmail"
+      "lazy_faker_email"
     ],
-    "LazyFakerName": [
+    "lazy_faker_name": [
       "general_manager.factory.factory_methods",
-      "LazyFakerName"
+      "lazy_faker_name"
     ],
-    "LazyFakerSentence": [
+    "lazy_faker_sentence": [
       "general_manager.factory.factory_methods",
-      "LazyFakerSentence"
+      "lazy_faker_sentence"
     ],
-    "LazyFakerUrl": [
+    "lazy_faker_url": [
       "general_manager.factory.factory_methods",
-      "LazyFakerUrl"
+      "lazy_faker_url"
     ],
-    "LazyInteger": [
+    "lazy_integer": [
       "general_manager.factory.factory_methods",
-      "LazyInteger"
+      "lazy_integer"
     ],
-    "LazyMeasurement": [
+    "lazy_measurement": [
       "general_manager.factory.factory_methods",
-      "LazyMeasurement"
+      "lazy_measurement"
     ],
-    "LazyProjectName": [
+    "lazy_project_name": [
       "general_manager.factory.factory_methods",
-      "LazyProjectName"
+      "lazy_project_name"
     ],
-    "LazySequence": [
+    "lazy_sequence": [
       "general_manager.factory.factory_methods",
-      "LazySequence"
+      "lazy_sequence"
     ],
-    "LazyUUID": [
+    "lazy_uuid": [
       "general_manager.factory.factory_methods",
-      "LazyUUID"
+      "lazy_uuid"
     ]
   },
   "general_manager.interface": {
@@ -220,9 +220,9 @@
       "general_manager.manager.input",
       "Input"
     ],
-    "graphQlProperty": [
+    "graph_ql_property": [
       "general_manager.api.property",
-      "graphQlProperty"
+      "graph_ql_property"
     ]
   },
   "general_manager.measurement": {

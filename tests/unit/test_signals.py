@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.dispatch import Signal
 from contextlib import contextmanager
 
-from general_manager.cache.signals import dataChange, pre_data_change, post_data_change
+from general_manager.cache.signals import data_change, pre_data_change, post_data_change
 
 
 @contextmanager
@@ -21,7 +21,7 @@ def capture_signal(signal: Signal):
 
 
 class Dummy:
-    """Test helper class decorated with @dataChange for create and update."""
+    """Test helper class decorated with @data_change for create and update."""
 
     def __init__(self):
         # simulate existing state storage
@@ -29,13 +29,13 @@ class Dummy:
         self.value = None
 
     @classmethod
-    @dataChange
+    @data_change
     def create(cls, new_value):
         inst = cls()
         inst.value = new_value
         return inst
 
-    @dataChange
+    @data_change
     def update(self, new_value):
         # store old relevant values before change
         self._old_values = getattr(self, "_old_values", {})

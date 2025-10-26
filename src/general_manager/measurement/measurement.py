@@ -194,7 +194,7 @@ class Measurement:
                 raise InvalidMeasurementInitializationError() from error
         if not isinstance(value, Decimal):
             value = Decimal(str(value))
-        self.__quantity = ureg.Quantity(self.formatDecimal(value), unit)
+        self.__quantity = ureg.Quantity(self.format_decimal(value), unit)
 
     def __getstate__(self) -> dict[str, str]:
         """
@@ -221,7 +221,7 @@ class Measurement:
         """
         value = Decimal(state["magnitude"])
         unit = state["unit"]
-        self.__quantity = ureg.Quantity(self.formatDecimal(value), unit)
+        self.__quantity = ureg.Quantity(self.format_decimal(value), unit)
 
     @property
     def quantity(self) -> PlainQuantity:
@@ -282,7 +282,7 @@ class Measurement:
         return cls(value, unit)
 
     @staticmethod
-    def formatDecimal(value: Decimal) -> Decimal:
+    def format_decimal(value: Decimal) -> Decimal:
         """
         Normalise decimals so integers have no fractional component.
 

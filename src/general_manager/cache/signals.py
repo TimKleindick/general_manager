@@ -13,7 +13,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def dataChange(func: Callable[P, R]) -> Callable[P, R]:
+def data_change(func: Callable[P, R]) -> Callable[P, R]:
     """
     Wrap a data-modifying function with pre- and post-change signal dispatching.
 

@@ -4,7 +4,7 @@ import graphene
 from django.test import TestCase
 from django.contrib.auth.models import User
 
-from general_manager.api.mutation import graphQlMutation
+from general_manager.api.mutation import graph_ql_mutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
@@ -25,15 +25,15 @@ class DummyInterface(InterfaceBase):
     def __init__(self, *args, **kwargs):
         pass
 
-    def getData(self, search_date=None):
+    def get_data(self, search_date=None):
         pass
 
     @classmethod
-    def getAttributeTypes(cls):
+    def get_attribute_types(cls):
         return {}
 
     @classmethod
-    def getAttributes(cls):
+    def get_attributes(cls):
         return {}
 
     @classmethod
@@ -45,7 +45,7 @@ class DummyInterface(InterfaceBase):
         raise NotImplementedError("This method should be implemented in a subclass")
 
     @classmethod
-    def handleInterface(cls):
+    def handle_interface(cls):
         def pre(_name, attrs, interface):
             return attrs, interface, None
 
@@ -55,7 +55,7 @@ class DummyInterface(InterfaceBase):
         return pre, post
 
     @classmethod
-    def getFieldType(cls, _field_name: str):
+    def get_field_type(cls, _field_name: str):
         return str
 
 
@@ -74,7 +74,7 @@ class MutationDecoratorTests(TestCase):
     def test_missing_parameter_hint(self):
         with self.assertRaises(TypeError):
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def bad(info, value) -> str:
                 _ = info
                 _ = value
@@ -83,7 +83,7 @@ class MutationDecoratorTests(TestCase):
     def test_missing_return_annotation(self):
         with self.assertRaises(TypeError):
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def bad(info, value: int):
                 _ = info
                 _ = value
@@ -92,14 +92,14 @@ class MutationDecoratorTests(TestCase):
     def test_invalid_return_type(self):
         with self.assertRaises(TypeError):
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def bad(info, value: int) -> List[str]:
                 _ = info
                 _ = value
                 return []
 
     def test_optional_argument_defaults(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def opt(info, value: Optional[int] = None) -> int:
             _ = info
             return value or 0
@@ -110,7 +110,7 @@ class MutationDecoratorTests(TestCase):
         self.assertIsNone(arg.kwargs.get("default_value"))
 
     def test_general_manager_argument_uses_id(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def gm(info, item: DummyGM) -> str:
             _ = info
             _ = item
@@ -121,7 +121,7 @@ class MutationDecoratorTests(TestCase):
         self.assertIsInstance(arg, graphene.ID)
 
     def test_list_argument(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def many(info, items: List[int]) -> int:
             _ = info
             return sum(items)
@@ -136,7 +136,7 @@ class MutationDecoratorTests(TestCase):
         Tests that a GraphQL mutation returning multiple values as a tuple correctly exposes each value as a separate field in the mutation response and that the mutation executes and returns expected results.
         """
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def multi(info, value: int) -> tuple[bool, str]:
             _ = info
             if value > 0:
@@ -159,7 +159,7 @@ class MutationDecoratorTests(TestCase):
         class addPermission(MutationPermission):
             __mutate__: ClassVar[List[str]] = ["isAuthenticated"]
 
-        @graphQlMutation(permission=addPermission)
+        @graph_ql_mutation(permission=addPermission)
         def add(info, a: int, b: int) -> int:
             _ = info
             return a + b
@@ -171,7 +171,7 @@ class MutationDecoratorTests(TestCase):
             mutation.mutate(None, InfoNoAuth, a=1, b=2)
 
     def test_mutation_with_manager_return(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def create_item(info, name: str) -> DummyGM:
             _ = info
             return DummyGM(name=name)
@@ -184,7 +184,7 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.dummyGM.name, "Test Item")
 
     def test_mutation_with_custom_types(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def custom_type(info, value: str) -> test123:
             _ = info
             return value
@@ -207,7 +207,7 @@ class MutationDecoratorTests(TestCase):
     # -------------------------------------------------------------------------
 
     def test_snake_case_to_camelcase_registration(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def my_mutation_case(info, value: int) -> int:
             _ = info
             return value
@@ -217,7 +217,7 @@ class MutationDecoratorTests(TestCase):
         self.assertNotIn("my_mutation_case", GraphQL._mutations)
 
     def test_optional_list_argument_defaults_explicit(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def total(info, items: Optional[List[int]] = None) -> int:
             _ = info
             return sum(items or [])
@@ -230,7 +230,7 @@ class MutationDecoratorTests(TestCase):
         self.assertIsNone(arg.kwargs.get("default_value"))
 
     def test_general_manager_list_argument_uses_ids(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def bulk(info, items: List[DummyGM]) -> int:
             _ = info
             return len(items)
@@ -244,7 +244,7 @@ class MutationDecoratorTests(TestCase):
         class addPermission(MutationPermission):
             __mutate__: ClassVar[List[str]] = ["isAuthenticated"]
 
-        @graphQlMutation(permission=addPermission)
+        @graph_ql_mutation(permission=addPermission)
         def add_nums(info, a: int, b: int) -> int:
             _ = info
             return a + b
@@ -265,7 +265,7 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.int, 3)
 
     def test_missing_required_argument_raises(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def required(info, value: int) -> int:
             """
             Return the provided integer value unchanged.
@@ -288,7 +288,7 @@ class MutationDecoratorTests(TestCase):
             mutation.mutate(None, Info)
 
     def test_list_argument_runtime_empty(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def total_list(info, items: List[int]) -> int:
             _ = info
             return sum(items)
@@ -301,7 +301,7 @@ class MutationDecoratorTests(TestCase):
         self.assertEqual(res.int, 0)
 
     def test_optional_general_manager_argument_defaults(self):
-        @graphQlMutation()
+        @graph_ql_mutation()
         def maybe_gm(info, item: Optional[DummyGM] = None) -> str:
             _ = info
             _ = item
@@ -317,7 +317,7 @@ class MutationDecoratorTests(TestCase):
         # Using an unsupported argument type (e.g., dict) should error at decoration time
         with self.assertRaises(TypeError):
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def bad_arg(info, payload: dict) -> int:
                 _ = info
                 _ = payload
@@ -328,7 +328,7 @@ class MutationDecoratorTests(TestCase):
         Ensure tuple with three primitive return types exposes each as a field and executes correctly.
         """
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def multi3(info, value: int) -> tuple[int, bool, str]:
             _ = info
             return value, value > 0, ("ok" if value > 0 else "no")
@@ -350,7 +350,7 @@ class MutationDecoratorTests(TestCase):
 
         with self.assertRaises(MissingParameterTypeHintError) as ctx:
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def bad_mutation(info, param_without_hint):  # Missing type hint
                 return True
 
@@ -363,7 +363,7 @@ class MutationDecoratorTests(TestCase):
 
         with self.assertRaises(MissingMutationReturnAnnotationError) as ctx:
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def bad_mutation(info, value: int):  # Missing return annotation
                 return value
 
@@ -372,7 +372,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_with_optional_parameters(self):
         """Test mutations with Optional parameters are handled correctly."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def optional_param_mutation(
             info, required: int, optional: int | None = None
         ) -> bool:
@@ -388,7 +388,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_with_list_parameters(self):
         """Test mutations with List parameters."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def list_param_mutation(info, values: list[int]) -> int:
             _ = info
             return sum(values)
@@ -402,7 +402,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_with_default_values(self):
         """Test mutations with default parameter values."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def default_value_mutation(info, multiplier: int = 2) -> int:
             _ = info
             return multiplier * 10
@@ -416,7 +416,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_error_handling(self):
         """Test that mutations properly handle and report errors."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def error_mutation(info, should_fail: bool) -> str:
             _ = info
             if should_fail:
@@ -446,7 +446,7 @@ class MutationDecoratorTests(TestCase):
                 if data.get("value", 0) < 0:
                     raise PermissionError("Value must be non-negative")  # noqa: TRY003
 
-        @graphQlMutation(permission=CustomPermission)
+        @graph_ql_mutation(permission=CustomPermission)
         def protected_mutation(info, value: int) -> int:
             _ = info
             return value * 2
@@ -470,7 +470,7 @@ class MutationDecoratorTests(TestCase):
 
         with self.assertRaises(DuplicateMutationOutputNameError):
 
-            @graphQlMutation()
+            @graph_ql_mutation()
             def tuple_mutation(info, a: int, b: int) -> tuple[int, int, int]:
                 _ = info
                 return a + b, a - b, a * b
@@ -480,7 +480,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_with_tuple_unpacking_with_custom_names(self):
         """Test that tuple returns are properly unpacked into mutation fields."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def tuple_mutation(info, a: int, b: int) -> tuple[int_1, int_2, int_3]:
             _ = info
             return a + b, a - b, a * b
@@ -498,7 +498,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_info_parameter_skipping(self):
         """Test that 'info' parameter is correctly skipped in Arguments."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def info_mutation(info, value: int) -> int:
             # info should be passed but not in Arguments
             return value
@@ -513,7 +513,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_with_manager_type_parameter(self):
         """Test mutations that accept GeneralManager types as parameters."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def manager_mutation(info, item: DummyGM) -> str:
             _ = info
             return item.name
@@ -525,7 +525,7 @@ class MutationDecoratorTests(TestCase):
     def test_mutation_graphql_type_resolution(self):
         """Test that mutations properly resolve Python types to GraphQL types."""
 
-        @graphQlMutation()
+        @graph_ql_mutation()
         def type_resolution_mutation(
             info,
             int_val: int,

@@ -18,11 +18,11 @@ When the permission class encounters `__based_on__`, it loads the referenced man
 
 ## Permission data manager
 
-Behind the scenes, `PermissionDataManager` builds a comparison context containing the payload, the current manager state, and the requesting user. It exposes helper methods for change tracking (for example, `forUpdate`) so that permission expressions can compare old and new values.
+Behind the scenes, `PermissionDataManager` builds a comparison context containing the payload, the current manager state, and the requesting user. It exposes helper methods for change tracking (for example, `for_update`) so that permission expressions can compare old and new values.
 
 ## Filters and delegation
 
-`getPermissionFilter()` merges filters returned by the delegated permission. This ensures bucket queries respect constraints from both the primary manager and the related manager. When delegation fails to load the referenced manager, the permission defaults to no access.
+`get_permission_filter()` merges filters returned by the delegated permission. This ensures bucket queries respect constraints from both the primary manager and the related manager. When delegation fails to load the referenced manager, the permission defaults to no access.
 
 ## Tips
 

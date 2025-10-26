@@ -189,7 +189,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             {},
         )
 
-    def __mergeFilterDefinitions(
+    def __merge_filter_definitions(
         self, basis: dict[str, list[Any]], **kwargs: Any
     ) -> dict[str, list[Any]]:
         """
@@ -211,7 +211,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             kwarg_filter[key].append(value)
         return kwarg_filter
 
-    def __parseFilterDeifintions(
+    def __parse_filter_deifintions(
         self,
         **kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any], list[tuple[str, Any, str]]]:
@@ -233,7 +233,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         annotations: dict[str, Any] = {}
         orm_kwargs: dict[str, Any] = {}
         python_filters: list[tuple[str, Any, str]] = []
-        properties = self._manager_class.Interface.getGraphQLProperties()
+        properties = self._manager_class.Interface.get_graph_ql_properties()
 
         for k, v in kwargs.items():
             root = k.split("__")[0]
@@ -251,7 +251,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         return annotations, orm_kwargs, python_filters
 
-    def __parsePythonFilters(
+    def __parse_python_filters(
         self, query_set: models.QuerySet, python_filters: list[tuple[str, Any, str]]
     ) -> list[int]:
         """
@@ -293,7 +293,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             InvalidQueryAnnotationTypeError: If a query-annotation callback returns a non-QuerySet.
             QuerysetFilteringError: If the ORM rejects the filter arguments or filtering fails.
         """
-        annotations, orm_kwargs, python_filters = self.__parseFilterDeifintions(
+        annotations, orm_kwargs, python_filters = self.__parse_filter_deifintions(
             **kwargs
         )
         qs = self._data
@@ -313,10 +313,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise QuerysetFilteringError(error) from error
 
         if python_filters:
-            ids = self.__parsePythonFilters(qs, python_filters)
+            ids = self.__parse_python_filters(qs, python_filters)
             qs = qs.filter(pk__in=ids)
 
-        merged_filter = self.__mergeFilterDefinitions(self.filters, **kwargs)
+        merged_filter = self.__merge_filter_definitions(self.filters, **kwargs)
         return self.__class__(qs, self._manager_class, merged_filter, self.excludes)
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
@@ -334,7 +334,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Raises:
             InvalidQueryAnnotationTypeError: If an annotation callable is applied and does not return a Django QuerySet.
         """
-        annotations, orm_kwargs, python_filters = self.__parseFilterDeifintions(
+        annotations, orm_kwargs, python_filters = self.__parse_filter_deifintions(
             **kwargs
         )
         qs = self._data
@@ -351,10 +351,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         qs = qs.exclude(**orm_kwargs)
 
         if python_filters:
-            ids = self.__parsePythonFilters(qs, python_filters)
+            ids = self.__parse_python_filters(qs, python_filters)
             qs = qs.exclude(pk__in=ids)
 
-        merged_exclude = self.__mergeFilterDefinitions(self.excludes, **kwargs)
+        merged_exclude = self.__merge_filter_definitions(self.excludes, **kwargs)
         return self.__class__(qs, self._manager_class, self.filters, merged_exclude)
 
     def first(self) -> GeneralManagerType | None:
@@ -499,7 +499,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         if isinstance(key, str):
             key = (key,)
-        properties = self._manager_class.Interface.getGraphQLProperties()
+        properties = self._manager_class.Interface.get_graph_ql_properties()
         annotations: dict[str, Any] = {}
         python_keys: list[str] = []
         qs = self._data

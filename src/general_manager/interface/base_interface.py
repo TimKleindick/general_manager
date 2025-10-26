@@ -159,10 +159,10 @@ class InterfaceBase(ABC):
             *args: Positional identification values corresponding to the interface's input field order.
             **kwargs: Named identification values matching the interface's input field names.
         """
-        identification = self.parseInputFieldsToIdentification(*args, **kwargs)
-        self.identification = self.formatIdentification(identification)
+        identification = self.parse_input_fields_to_identification(*args, **kwargs)
+        self.identification = self.format_identification(identification)
 
-    def parseInputFieldsToIdentification(
+    def parse_input_fields_to_identification(
         self,
         *args: Any,
         **kwargs: Any,
@@ -223,7 +223,7 @@ class InterfaceBase(ABC):
         return identification
 
     @staticmethod
-    def formatIdentification(identification: dict[str, Any]) -> dict[str, Any]:
+    def format_identification(identification: dict[str, Any]) -> dict[str, Any]:
         """
         Normalise identification data by replacing manager instances with their IDs.
 
@@ -245,12 +245,12 @@ class InterfaceBase(ABC):
                         identification[key].append(v.identification)
                     elif isinstance(v, dict):
                         identification[key].append(
-                            InterfaceBase.formatIdentification(v)
+                            InterfaceBase.format_identification(v)
                         )
                     else:
                         identification[key].append(v)
             elif isinstance(value, dict):
-                identification[key] = InterfaceBase.formatIdentification(value)
+                identification[key] = InterfaceBase.format_identification(value)
         return identification
 
     def _process_input(
@@ -316,24 +316,24 @@ class InterfaceBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def getData(self, search_date: datetime | None = None) -> Any:
+    def get_data(self, search_date: datetime | None = None) -> Any:
         """Return data materialised for the manager object."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         """Return metadata describing each attribute exposed on the manager."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def getAttributes(cls) -> dict[str, Any]:
+    def get_attributes(cls) -> dict[str, Any]:
         """Return attribute values exposed via the interface."""
         raise NotImplementedError
 
     @classmethod
-    def getGraphQLProperties(cls) -> dict[str, GraphQLProperty]:
+    def get_graph_ql_properties(cls) -> dict[str, GraphQLProperty]:
         """Return GraphQLProperty descriptors defined on the parent manager class."""
         if not hasattr(cls, "_parent_class"):
             return {}
@@ -357,7 +357,7 @@ class InterfaceBase(ABC):
 
     @classmethod
     @abstractmethod
-    def handleInterface(
+    def handle_interface(
         cls,
     ) -> tuple[
         classPreCreationMethod,
@@ -374,7 +374,7 @@ class InterfaceBase(ABC):
 
     @classmethod
     @abstractmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def get_field_type(cls, field_name: str) -> type:
         """
         Return the declared Python type for an input field.
 

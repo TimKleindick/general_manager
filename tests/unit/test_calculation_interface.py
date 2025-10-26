@@ -27,18 +27,18 @@ class TestCalculationInterface(TestCase):
         """
         self.interface = DummyCalculationInterface("test", 1)
 
-    def test_getData(self):
+    def test_get_data(self):
         """
-        Tests that getData() raises a NotImplementedError when called on the interface instance.
+        Tests that get_data() raises a NotImplementedError when called on the interface instance.
         """
         with self.assertRaises(NotImplementedError):
-            self.interface.getData()
+            self.interface.get_data()
 
-    def test_getAttributeTypes(self):
+    def test_get_attribute_types(self):
         """
-        Tests that getAttributeTypes() returns a dictionary with expected attribute metadata keys.
+        Tests that get_attribute_types() returns a dictionary with expected attribute metadata keys.
         """
-        attribute_types = DummyCalculationInterface.getAttributeTypes()
+        attribute_types = DummyCalculationInterface.get_attribute_types()
         self.assertIsInstance(attribute_types, dict)
         for _name, attr in attribute_types.items():
             self.assertIn("type", attr)
@@ -46,11 +46,11 @@ class TestCalculationInterface(TestCase):
             self.assertIn("is_editable", attr)
             self.assertIn("is_required", attr)
 
-    def test_getAttributes(self):
+    def test_get_attributes(self):
         """
-        Tests that getAttributes() returns a dictionary mapping attribute names to callables that produce the correct values for the interface instance.
+        Tests that get_attributes() returns a dictionary mapping attribute names to callables that produce the correct values for the interface instance.
         """
-        attributes = DummyCalculationInterface.getAttributes()
+        attributes = DummyCalculationInterface.get_attributes()
         self.assertIsInstance(attributes, dict)
         for _name, attr in attributes.items():
             self.assertTrue(callable(attr))
@@ -80,13 +80,13 @@ class TestCalculationInterface(TestCase):
         self.assertIsInstance(bucket, CalculationBucket)
         self.assertEqual(bucket._manager_class, DummyGeneralManager)
 
-    def test_preCreate(self):
+    def test_pre_create(self):
         """
-        Tests that the _preCreate class method initializes attributes and interface metadata correctly.
+        Tests that the _pre_create class method initializes attributes and interface metadata correctly.
 
         Verifies that the returned attributes dictionary contains the provided field values, the correct interface type, and a reference to the interface class. Also checks that the initialized interface is a subclass of DummyCalculationInterface.
         """
-        attr, initialized_interface, _ = DummyCalculationInterface._preCreate(
+        attr, initialized_interface, _ = DummyCalculationInterface._pre_create(
             "test",
             {"field1": "value1", "field2": 42},
             DummyCalculationInterface,
@@ -112,15 +112,15 @@ class TestCalculationInterface(TestCase):
         self.assertEqual(DummyCalculationInterface._parent_class, DummyGeneralManager)
         self.assertEqual(self.interface._parent_class, DummyGeneralManager)
 
-    def test_getFieldType(self):
+    def test_get_field_type(self):
         """
-        Tests that getFieldType returns the correct type for defined fields and raises KeyError for unknown fields.
+        Tests that get_field_type returns the correct type for defined fields and raises KeyError for unknown fields.
         """
-        field_type = DummyCalculationInterface.getFieldType("field1")
+        field_type = DummyCalculationInterface.get_field_type("field1")
         self.assertEqual(field_type, str)
 
-        field_type = DummyCalculationInterface.getFieldType("field2")
+        field_type = DummyCalculationInterface.get_field_type("field2")
         self.assertEqual(field_type, int)
 
         with self.assertRaises(KeyError):
-            DummyCalculationInterface.getFieldType("non_existent_field")
+            DummyCalculationInterface.get_field_type("non_existent_field")

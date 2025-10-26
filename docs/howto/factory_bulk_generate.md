@@ -8,9 +8,9 @@ Factories are automatically generated based on the manager's interface. But you 
 ```python
 from datetime import date
 from general_manager.factory import (
-    LazyMeasurement,
-    LazyDeltaDate,
-    LazyProjectName,
+    lazy_measurement,
+    lazy_delta_date,
+    lazy_project_name,
 )
 from general_manager.measurement import (
     MeasurementField,
@@ -37,9 +37,9 @@ class Project(GeneralManager):
         total_capex = MeasurementField(base_unit="EUR", null=True, blank=True)
 
         class Factory:
-            name = LazyProjectName()
-            end_date = LazyDeltaDate(365 * 6, "start_date")
-            total_capex = LazyMeasurement(75_000, 1_000_000, "EUR")
+            name = lazy_project_name()
+            end_date = lazy_delta_date(365 * 6, "start_date")
+            total_capex = lazy_measurement(75_000, 1_000_000, "EUR")
 ```
 
 ## Step 2: Create batches

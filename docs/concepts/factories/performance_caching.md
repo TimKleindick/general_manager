@@ -4,7 +4,7 @@ Factories generate many objects quickly—use them wisely to keep tests fast and
 
 ## AutoFactory shortcuts
 
-`general_manager.factory.auto_factory.AutoFactory` inspects interface metadata to populate sensible defaults. It derives values for regular fields, many-to-many relations, and handles special fields via `handleCustomFields()`.
+`general_manager.factory.auto_factory.AutoFactory` inspects interface metadata to populate sensible defaults. It derives values for regular fields, many-to-many relations, and handles special fields via `handle_custom_fields()`.
 
 ```python
 class ProjectFactory(AutoFactory):

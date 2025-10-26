@@ -24,7 +24,7 @@ _original_get_app: Callable[[str], AppConfig | None] = (
 )
 
 
-def createFallbackGetApp(fallback_app: str) -> Callable[[str], AppConfig | None]:
+def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | None]:
     """
     Create an app-config lookup that falls back to a specific Django app.
 
@@ -120,7 +120,7 @@ class GMTestCaseMeta(type):
             GraphQL._schema = None
 
             if fallback_app is not None:
-                handler = createFallbackGetApp(fallback_app)
+                handler = create_fallback_get_app(fallback_app)
                 global_apps.get_containing_app_config = cast(  # type: ignore[assignment]
                     Callable[[str], AppConfig | None], handler
                 )
@@ -154,11 +154,11 @@ class GMTestCaseMeta(type):
                         if history_model:
                             editor.create_model(history_model.model)  # type: ignore[attr-defined]
             # 4) GM & GraphQL initialization
-            GeneralmanagerConfig.initializeGeneralManagerClasses(
+            GeneralmanagerConfig.initialize_general_manager_classes(
                 cls.general_manager_classes, cls.general_manager_classes
             )
-            GeneralmanagerConfig.handleReadOnlyInterface(cls.read_only_classes)
-            GeneralmanagerConfig.handleGraphQL(cls.general_manager_classes)
+            GeneralmanagerConfig.handle_read_only_interface(cls.read_only_classes)
+            GeneralmanagerConfig.handle_graph_ql(cls.general_manager_classes)
             # 5) GraphQLTransactionTestCase.setUpClass
             base_setup.__func__(cls)
 
@@ -245,7 +245,7 @@ class GeneralManagerTransactionTestCase(
         """
         super().setUp()
         caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
-        self.__resetCacheCounter()
+        self.__reset_cache_counter()
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -311,7 +311,7 @@ class GeneralManagerTransactionTestCase(
         super().tearDownClass()
 
     #
-    def assertCacheMiss(self) -> None:
+    def assert_cache_miss(self) -> None:
         """
         Assert that a cache retrieval missed and was followed by a write.
 
@@ -328,9 +328,9 @@ class GeneralManagerTransactionTestCase(
             "Cache.get should have been called and found nothing",
         )
         self.assertIn(("set", ANY), ops, "Cache.set should have stored the value")
-        self.__resetCacheCounter()
+        self.__reset_cache_counter()
 
-    def assertCacheHit(self) -> None:
+    def assert_cache_hit(self) -> None:
         """
         Assert that a cache lookup succeeded without triggering a write.
 
@@ -352,9 +352,9 @@ class GeneralManagerTransactionTestCase(
             ops,
             "Cache.set should not have stored anything",
         )
-        self.__resetCacheCounter()
+        self.__reset_cache_counter()
 
-    def __resetCacheCounter(self) -> None:
+    def __reset_cache_counter(self) -> None:
         """
         Clear the log of cache operations recorded by the LoggingCache instance.
 

@@ -4,7 +4,7 @@ The GraphQL layer reuses bucket semantics to expose flexible filtering and pagin
 
 ## Permission-aware filtering
 
-Before executing a query, the resolver calls `getReadPermissionFilter()`. Permission classes translate their rules into Django-style filter/exclude dictionaries. The GraphQL layer applies these constraints to ensure clients only see authorised records.
+Before executing a query, the resolver calls `get_read_permission_filter()`. Permission classes translate their rules into Django-style filter/exclude dictionaries. The GraphQL layer applies these constraints to ensure clients only see authorised records.
 
 ## Query arguments
 

@@ -17,7 +17,7 @@ _AVG_DELTA_DAYS_ERROR = "avg_delta_days must be >= 0"
 _EMPTY_OPTIONS_ERROR = "options must be a non-empty list"
 
 
-def LazyMeasurement(
+def lazy_measurement(
     min_value: int | float, max_value: int | float, unit: str
 ) -> LazyFunction:
     """
@@ -36,7 +36,7 @@ def LazyMeasurement(
     )
 
 
-def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
+def lazy_delta_date(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
     """
     Compute a date by offsetting an instance's base date attribute by a randomized number of days.
 
@@ -60,7 +60,7 @@ def LazyDeltaDate(avg_delta_days: int, base_attribute: str) -> LazyAttribute:
     )
 
 
-def LazyProjectName() -> LazyFunction:
+def lazy_project_name() -> LazyFunction:
     """Return a lazy factory producing a pseudo-random project-style name."""
     return LazyFunction(
         lambda: (
@@ -72,12 +72,12 @@ def LazyProjectName() -> LazyFunction:
     )
 
 
-def LazyDateToday() -> LazyFunction:
+def lazy_date_today() -> LazyFunction:
     """Return a lazy factory that yields today's date."""
     return LazyFunction(lambda: date.today())
 
 
-def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
+def lazy_date_between(start_date: date, end_date: date) -> LazyAttribute:
     """
     Produce a lazy attribute that yields a date between two given dates (inclusive).
 
@@ -95,7 +95,7 @@ def LazyDateBetween(start_date: date, end_date: date) -> LazyAttribute:
     return LazyAttribute(lambda _: start_date + timedelta(days=_RNG.randint(0, delta)))
 
 
-def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
+def lazy_date_time_between(start: datetime, end: datetime) -> LazyAttribute:
     """
     Produce a lazy attribute that yields a datetime within the inclusive range defined by `start` and `end`.
 
@@ -117,7 +117,7 @@ def LazyDateTimeBetween(start: datetime, end: datetime) -> LazyAttribute:
     )
 
 
-def LazyInteger(min_value: int, max_value: int) -> LazyFunction:
+def lazy_integer(min_value: int, max_value: int) -> LazyFunction:
     """
     Return a lazy factory that produces an integer within the provided bounds.
 
@@ -131,7 +131,9 @@ def LazyInteger(min_value: int, max_value: int) -> LazyFunction:
     return LazyFunction(lambda: _RNG.randint(min_value, max_value))
 
 
-def LazyDecimal(min_value: float, max_value: float, precision: int = 2) -> LazyFunction:
+def lazy_decimal(
+    min_value: float, max_value: float, precision: int = 2
+) -> LazyFunction:
     """
     Create a lazy factory that produces Decimal values between min_value and max_value, rounded to the specified precision.
 
@@ -147,7 +149,7 @@ def LazyDecimal(min_value: float, max_value: float, precision: int = 2) -> LazyF
     return LazyFunction(lambda: Decimal(fmt.format(_RNG.uniform(min_value, max_value))))
 
 
-def LazyChoice(options: list[Any]) -> LazyFunction:
+def lazy_choice(options: list[Any]) -> LazyFunction:
     """
     Create a lazy factory that selects a random element from the provided options.
 
@@ -162,7 +164,7 @@ def LazyChoice(options: list[Any]) -> LazyFunction:
     return LazyFunction(lambda: _RNG.choice(options))
 
 
-def LazySequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
+def lazy_sequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
     """
     Produce a sequence attribute that yields successive integer values.
 
@@ -178,7 +180,7 @@ def LazySequence(start: int = 0, step: int = 1) -> LazyAttributeSequence:
     return LazyAttributeSequence(lambda _instance, index: start + index * step)
 
 
-def LazyBoolean(trues_ratio: float = 0.5) -> LazyFunction:
+def lazy_boolean(trues_ratio: float = 0.5) -> LazyFunction:
     """
     Return booleans where each value is True with the specified probability.
 
@@ -191,7 +193,7 @@ def LazyBoolean(trues_ratio: float = 0.5) -> LazyFunction:
     return LazyFunction(lambda: _RNG.random() < trues_ratio)
 
 
-def LazyUUID() -> LazyFunction:
+def lazy_uuid() -> LazyFunction:
     """
     Create a lazy factory that yields RFC 4122 version 4 UUID strings.
 
@@ -201,12 +203,12 @@ def LazyUUID() -> LazyFunction:
     return LazyFunction(lambda: str(uuid.uuid4()))
 
 
-def LazyFakerName() -> LazyFunction:
+def lazy_faker_name() -> LazyFunction:
     """Return a lazy factory producing names using Faker."""
     return LazyFunction(lambda: fake.name())
 
 
-def LazyFakerEmail(
+def lazy_faker_email(
     name: Optional[str] = None, domain: Optional[str] = None
 ) -> LazyFunction:
     """Return a lazy factory producing email addresses with optional overrides."""
@@ -219,16 +221,16 @@ def LazyFakerEmail(
     return LazyFunction(lambda: name.replace(" ", "_") + "@" + domain)
 
 
-def LazyFakerSentence(number_of_words: int = 6) -> LazyFunction:
+def lazy_faker_sentence(number_of_words: int = 6) -> LazyFunction:
     """Return a lazy factory producing fake sentences."""
     return LazyFunction(lambda: fake.sentence(nb_words=number_of_words))
 
 
-def LazyFakerAddress() -> LazyFunction:
+def lazy_faker_address() -> LazyFunction:
     """Return a lazy factory producing fake postal addresses."""
     return LazyFunction(lambda: fake.address())
 
 
-def LazyFakerUrl() -> LazyFunction:
+def lazy_faker_url() -> LazyFunction:
     """Return a lazy factory producing fake URLs."""
     return LazyFunction(lambda: fake.url())

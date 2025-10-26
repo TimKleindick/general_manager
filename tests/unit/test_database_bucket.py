@@ -7,7 +7,7 @@ from django.db.models import functions
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.api.property import graphQlProperty
+from general_manager.api.property import graph_ql_property
 
 
 # Dummy interface class to satisfy GeneralManager requirements
@@ -38,21 +38,21 @@ class DummyInterface(InterfaceBase):
         """
         raise NotImplementedError
 
-    def getData(self, search_date=None):
+    def get_data(self, search_date=None):
         """
         Raises NotImplementedError to indicate data retrieval is not implemented for this interface.
         """
         raise NotImplementedError
 
     @classmethod
-    def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+    def get_attribute_types(cls) -> dict[str, dict]:  # type: ignore
         """
         Returns an empty dictionary representing attribute types for the class.
         """
         return {}
 
     @classmethod
-    def getAttributes(cls) -> dict[str, dict]:
+    def get_attributes(cls) -> dict[str, dict]:
         """
         Returns an empty dictionary representing the attributes for the class.
 
@@ -83,7 +83,7 @@ class DummyInterface(InterfaceBase):
         return []
 
     @classmethod
-    def getFieldType(cls, _field_name: str) -> type:
+    def get_field_type(cls, _field_name: str) -> type:
         """
         Returns the type associated with the specified field name.
 
@@ -92,17 +92,17 @@ class DummyInterface(InterfaceBase):
         return str
 
     @classmethod
-    def handleInterface(cls):
+    def handle_interface(cls):
         """
         Provides pre- and post-creation hooks for class customization.
 
         Returns:
             A tuple of two functions:
-                - preCreation: Modifies class attributes before class creation by adding a 'marker'.
-                - postCreation: Sets a 'post_mark' flag on the newly created class.
+                - pre_creation: Modifies class attributes before class creation by adding a 'marker'.
+                - post_creation: Sets a 'post_mark' flag on the newly created class.
         """
 
-        def preCreation(_name, attrs, _interface):
+        def pre_creation(_name, attrs, _interface):
             """
             Adds a marker attribute to the class attributes before creation.
 
@@ -117,7 +117,7 @@ class DummyInterface(InterfaceBase):
             attrs["marker"] = "initialized_by_dummy"
             return attrs, cls, None
 
-        def postCreation(new_cls, _interface_cls, _model):
+        def post_creation(new_cls, _interface_cls, _model):
             """
             Sets a flag on the newly created class after its creation.
 
@@ -128,7 +128,7 @@ class DummyInterface(InterfaceBase):
             """
             new_cls.post_mark = True
 
-        return preCreation, postCreation
+        return pre_creation, post_creation
 
 
 class UserManager(GeneralManager):
@@ -142,13 +142,13 @@ class UserManager(GeneralManager):
         """
         super().__init__(pk)
 
-    @graphQlProperty(
+    @graph_ql_property(
         filterable=True, sortable=True, query_annotation=functions.Length("username")
     )
     def username_length(self) -> int:
         return len(User.objects.get(pk=self.identification["id"]).username)
 
-    @graphQlProperty(filterable=True, sortable=True)
+    @graph_ql_property(filterable=True, sortable=True)
     def negative_length(self) -> int:
         return -len(User.objects.get(pk=self.identification["id"]).username)
 
@@ -461,7 +461,7 @@ class DatabaseBucketTestCase(TestCase):
 
     def test_property_filter_multiple_operators(self):
         """
-        Validate property-based filtering with multiple operators against graphQlProperty fields.
+        Validate property-based filtering with multiple operators against graph_ql_property fields.
         """
         # username_length values: alice=5, bob=3, carol=5
         gte_five = self.bucket.filter(username_length__gte=5)

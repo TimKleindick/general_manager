@@ -91,7 +91,7 @@ class DuplicateMutationOutputNameError(ValueError):
         )
 
 
-def graphQlMutation(
+def graph_ql_mutation(
     _func: FuncT | type[MutationPermission] | None = None,
     permission: Optional[Type[MutationPermission]] = None,
 ) -> FuncT | Callable[[FuncT], FuncT]:
@@ -162,14 +162,14 @@ def graphQlMutation(
             if get_origin(ann) is list or get_origin(ann) is List:
                 inner = get_args(ann)[0]
                 field = graphene.List(
-                    GraphQL._mapFieldToGrapheneBaseType(inner),
+                    GraphQL._map_field_to_graphene_base_type(inner),
                     **kwargs,
                 )
             else:
                 if inspect.isclass(ann) and issubclass(ann, GeneralManager):
                     field = graphene.ID(**kwargs)
                 else:
-                    field = GraphQL._mapFieldToGrapheneBaseType(ann)(**kwargs)
+                    field = GraphQL._map_field_to_graphene_base_type(ann)(**kwargs)
 
             arg_fields[name] = field
 
@@ -201,7 +201,7 @@ def graphQlMutation(
 
             basis_type = out.__value__ if is_named_type else out
 
-            outputs[field_name] = GraphQL._mapFieldToGrapheneRead(
+            outputs[field_name] = GraphQL._map_field_to_graphene_read(
                 basis_type, field_name
             )
 
@@ -220,7 +220,7 @@ def graphQlMutation(
                 **kwargs: Mutation arguments provided by the client.
 
             Returns:
-                mutation_class: Instance of the mutation with output fields populated; `success` is `True` on successful execution and `False` if a handled manager error occurred (after being forwarded to GraphQL._handleGraphQLError).
+                mutation_class: Instance of the mutation with output fields populated; `success` is `True` on successful execution and `False` if a handled manager error occurred (after being forwarded to GraphQL._handle_graph_ql_error).
             """
             if permission:
                 permission.check(kwargs, info.context.user)
@@ -244,7 +244,7 @@ def graphQlMutation(
                 data["success"] = True
                 return mutation_class(**data)
             except HANDLED_MANAGER_ERRORS as error:
-                raise GraphQL._handleGraphQLError(error) from error
+                raise GraphQL._handle_graph_ql_error(error) from error
 
         # Assemble class dict
         class_dict: dict[str, Any] = {

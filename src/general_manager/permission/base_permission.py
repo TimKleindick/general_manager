@@ -8,7 +8,7 @@ from general_manager.permission.permission_checks import permission_functions
 from django.contrib.auth.models import AnonymousUser, AbstractBaseUser, AbstractUser
 from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.utils import (
-    validatePermissionString,
+    validate_permission_string,
     PermissionNotFoundError,
 )
 import logging
@@ -63,7 +63,7 @@ class BasePermission(ABC):
         return self._request_user
 
     @classmethod
-    def checkCreatePermission(
+    def check_create_permission(
         cls,
         data: dict[str, Any],
         manager: type[GeneralManager],
@@ -82,12 +82,12 @@ class BasePermission(ABC):
         Raises:
             PermissionCheckError: If one or more attributes in `data` are denied for the resolved `request_user`.
         """
-        request_user = cls.getUserWithId(request_user)
+        request_user = cls.get_user_with_id(request_user)
         errors = []
         permission_data = PermissionDataManager(permission_data=data, manager=manager)
         Permission = cls(permission_data, request_user)
         for key in data.keys():
-            is_allowed = Permission.checkPermission("create", key)
+            is_allowed = Permission.check_permission("create", key)
             if not is_allowed:
                 logger.debug(
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
@@ -97,7 +97,7 @@ class BasePermission(ABC):
             raise PermissionCheckError(request_user, errors)
 
     @classmethod
-    def checkUpdatePermission(
+    def check_update_permission(
         cls,
         data: dict[str, Any],
         old_manager_instance: GeneralManager,
@@ -109,20 +109,20 @@ class BasePermission(ABC):
         Parameters:
             data (dict[str, Any]): Mapping of attribute names to new values to be applied.
             old_manager_instance (GeneralManager): Existing manager instance whose current state is used to evaluate update permissions.
-            request_user (UserLike | Any): User instance or user id; non-user values will be resolved to a User or AnonymousUser via getUserWithId.
+            request_user (UserLike | Any): User instance or user id; non-user values will be resolved to a User or AnonymousUser via get_user_with_id.
 
         Raises:
             PermissionCheckError: Raised with a list of error messages when one or more fields are not permitted to be updated.
         """
-        request_user = cls.getUserWithId(request_user)
+        request_user = cls.get_user_with_id(request_user)
 
         errors = []
-        permission_data = PermissionDataManager.forUpdate(
+        permission_data = PermissionDataManager.for_update(
             base_data=old_manager_instance, update_data=data
         )
         Permission = cls(permission_data, request_user)
         for key in data.keys():
-            is_allowed = Permission.checkPermission("update", key)
+            is_allowed = Permission.check_permission("update", key)
             if not is_allowed:
                 logger.debug(
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
@@ -132,7 +132,7 @@ class BasePermission(ABC):
             raise PermissionCheckError(request_user, errors)
 
     @classmethod
-    def checkDeletePermission(
+    def check_delete_permission(
         cls,
         manager_instance: GeneralManager,
         request_user: UserLike | Any,
@@ -149,13 +149,13 @@ class BasePermission(ABC):
         Raises:
             PermissionCheckError: If one or more attributes are not permitted for deletion by request_user. The exception carries the user and the list of denial messages.
         """
-        request_user = cls.getUserWithId(request_user)
+        request_user = cls.get_user_with_id(request_user)
 
         errors = []
         permission_data = PermissionDataManager(manager_instance)
         Permission = cls(permission_data, request_user)
         for key in manager_instance.__dict__.keys():
-            is_allowed = Permission.checkPermission("delete", key)
+            is_allowed = Permission.check_permission("delete", key)
             if not is_allowed:
                 logger.debug(
                     f"Permission denied for {key} with value {getattr(manager_instance, key)} for user {request_user}"
@@ -165,7 +165,7 @@ class BasePermission(ABC):
             raise PermissionCheckError(request_user, errors)
 
     @staticmethod
-    def getUserWithId(
+    def get_user_with_id(
         user: Any | UserLike,
     ) -> UserLike:
         """
@@ -190,7 +190,7 @@ class BasePermission(ABC):
             return AnonymousUser()
 
     @abstractmethod
-    def checkPermission(
+    def check_permission(
         self,
         action: Literal["create", "read", "update", "delete"],
         attribute: str,
@@ -207,13 +207,13 @@ class BasePermission(ABC):
         """
         raise NotImplementedError
 
-    def getPermissionFilter(
+    def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         """Return the filter/exclude constraints associated with this permission."""
         raise NotImplementedError
 
-    def _getPermissionFilter(
+    def _get_permission_filter(
         self, permission: str
     ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
         """
@@ -241,7 +241,7 @@ class BasePermission(ABC):
             return {"filter": {}, "exclude": {}}
         return permission_filter
 
-    def validatePermissionString(
+    def validate_permission_string(
         self,
         permission: str,
     ) -> bool:
@@ -254,7 +254,7 @@ class BasePermission(ABC):
         Returns:
             bool: True when every sub-permission evaluates to True for the current user.
         """
-        return validatePermissionString(
+        return validate_permission_string(
             permission,
             self.instance,
             cast(AbstractUser | AnonymousUser, self.request_user),

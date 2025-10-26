@@ -137,7 +137,7 @@ class Rule(Generic[GeneralManagerType]):
         return self._func
 
     @property
-    def customErrorMessage(self) -> Optional[str]:
+    def custom_error_message(self) -> Optional[str]:
         return self._custom_error_message
 
     @property
@@ -145,15 +145,15 @@ class Rule(Generic[GeneralManagerType]):
         return self._variables
 
     @property
-    def lastEvaluationResult(self) -> Optional[bool]:
+    def last_evaluation_result(self) -> Optional[bool]:
         return self._last_result
 
     @property
-    def lastEvaluationInput(self) -> Optional[GeneralManagerType]:
+    def last_evaluation_input(self) -> Optional[GeneralManagerType]:
         return self._last_input
 
     @property
-    def ignoreIfNone(self) -> bool:
+    def ignore_if_none(self) -> bool:
         return self._ignore_if_none
 
     def evaluate(self, x: GeneralManagerType) -> Optional[bool]:
@@ -181,7 +181,7 @@ class Rule(Generic[GeneralManagerType]):
         self._last_result = self._func(x)
         return self._last_result
 
-    def validateCustomErrorMessage(self) -> None:
+    def validate_custom_error_message(self) -> None:
         """
         Validate that a provided custom error message template includes placeholders for every variable referenced by the rule.
 
@@ -196,7 +196,7 @@ class Rule(Generic[GeneralManagerType]):
         if missing:
             raise MissingErrorTemplateVariableError(missing)
 
-    def getErrorMessage(self) -> Optional[Dict[str, str]]:
+    def get_error_message(self) -> Optional[Dict[str, str]]:
         """
         Constructs error messages for the last failed evaluation and returns them keyed by variable name.
 
@@ -212,7 +212,7 @@ class Rule(Generic[GeneralManagerType]):
             raise ErrorMessageGenerationError()
 
         # Validate and substitute template placeholders
-        self.validateCustomErrorMessage()
+        self.validate_custom_error_message()
         vals = self._extract_variable_values(self._last_input)
 
         if self._custom_error_message:
@@ -250,7 +250,7 @@ class Rule(Generic[GeneralManagerType]):
                 self.vars: set[str] = set()
                 self.params = params
 
-            def visit_Attribute(self, node: ast.Attribute) -> None:
+            def visit_attribute(self, node: ast.Attribute) -> None:
                 """
                 Record dotted attribute accesses that originate from allowed parameter names.
 
@@ -267,6 +267,8 @@ class Rule(Generic[GeneralManagerType]):
                 if isinstance(curr, ast.Name) and curr.id in self.params:
                     self.vars.add(".".join(reversed(parts)))
                 self.generic_visit(node)
+
+            visit_Attribute = visit_attribute
 
         visitor = VarVisitor(param_names)
         visitor.visit(self._tree)
@@ -301,9 +303,11 @@ class Rule(Generic[GeneralManagerType]):
             def __init__(self) -> None:
                 self.comps: list[ast.Compare] = []
 
-            def visit_Compare(self, node: ast.Compare) -> None:
+            def visit_compare(self, node: ast.Compare) -> None:
                 self.comps.append(node)
                 self.generic_visit(node)
+
+            visit_Compare = visit_compare
 
         visitor = CompVisitor()
         visitor.visit(self._tree)
@@ -313,10 +317,12 @@ class Rule(Generic[GeneralManagerType]):
         class LogicVisitor(ast.NodeVisitor):
             found: bool = False
 
-            def visit_BoolOp(self, node: ast.BoolOp) -> None:
+            def visit_bool_op(self, node: ast.BoolOp) -> None:
                 if isinstance(node.op, (ast.And, ast.Or)):
                     self.found = True
                 self.generic_visit(node)
+
+            visit_BoolOp = visit_bool_op
 
         visitor = LogicVisitor()
         visitor.visit(self._tree)

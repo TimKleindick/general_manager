@@ -86,11 +86,11 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             ValidationError: If model validation fails during save.
         """
         model_cls = cast(type[GeneralManagerModel], cls._model)
-        cls._checkForInvalidKwargs(model_cls, kwargs=kwargs)
-        kwargs, many_to_many_kwargs = cls._sortKwargs(model_cls, kwargs)
-        instance = cls.__setAttrForWrite(model_cls(), kwargs)
+        cls._check_for_invalid_kwargs(model_cls, kwargs=kwargs)
+        kwargs, many_to_many_kwargs = cls._sort_kwargs(model_cls, kwargs)
+        instance = cls.__set_attr_for_write(model_cls(), kwargs)
         pk = cls._save_with_history(instance, creator_id, history_comment)
-        cls.__setManyToManyAttributes(instance, many_to_many_kwargs)
+        cls.__set_many_to_many_attributes(instance, many_to_many_kwargs)
         return pk
 
     def update(
@@ -112,11 +112,11 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             ValidationError: If model validation fails during save.
         """
         model_cls = cast(type[GeneralManagerModel], self._model)
-        self._checkForInvalidKwargs(model_cls, kwargs=kwargs)
-        kwargs, many_to_many_kwargs = self._sortKwargs(model_cls, kwargs)
-        instance = self.__setAttrForWrite(model_cls.objects.get(pk=self.pk), kwargs)
+        self._check_for_invalid_kwargs(model_cls, kwargs=kwargs)
+        kwargs, many_to_many_kwargs = self._sort_kwargs(model_cls, kwargs)
+        instance = self.__set_attr_for_write(model_cls.objects.get(pk=self.pk), kwargs)
         pk = self._save_with_history(instance, creator_id, history_comment)
-        self.__setManyToManyAttributes(instance, many_to_many_kwargs)
+        self.__set_many_to_many_attributes(instance, many_to_many_kwargs)
         return pk
 
     def deactivate(
@@ -142,7 +142,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         return self._save_with_history(instance, creator_id, history_comment)
 
     @staticmethod
-    def __setManyToManyAttributes(
+    def __set_many_to_many_attributes(
         instance: GeneralManagerModel, many_to_many_kwargs: dict[str, list[Any]]
     ) -> GeneralManagerModel:
         """
@@ -173,7 +173,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         return instance
 
     @staticmethod
-    def __setAttrForWrite(
+    def __set_attr_for_write(
         instance: GeneralManagerModel,
         kwargs: dict[str, Any],
     ) -> GeneralManagerModel:
@@ -210,7 +210,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         return instance
 
     @staticmethod
-    def _checkForInvalidKwargs(
+    def _check_for_invalid_kwargs(
         model: Type[models.Model], kwargs: dict[str, Any]
     ) -> None:
         """
@@ -231,7 +231,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
                 raise UnknownFieldError(key, model.__name__)
 
     @staticmethod
-    def _sortKwargs(
+    def _sort_kwargs(
         model: Type[models.Model], kwargs: dict[Any, Any]
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
         """

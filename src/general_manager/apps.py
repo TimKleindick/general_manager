@@ -11,7 +11,7 @@ import sys
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
-from general_manager.api.property import graphQlProperty
+from general_manager.api.property import graph_ql_property
 from general_manager.api.graphql import GraphQL
 from typing import TYPE_CHECKING, Any, Callable, Type, cast
 from django.core.checks import register
@@ -58,16 +58,16 @@ class GeneralmanagerConfig(AppConfig):
 
         Sets up synchronization and schema validation for read-only interfaces, initializes attributes and property accessors for general manager classes, and configures the GraphQL schema and endpoint if enabled in settings.
         """
-        self.handleReadOnlyInterface(GeneralManagerMeta.read_only_classes)
-        self.initializeGeneralManagerClasses(
+        self.handle_read_only_interface(GeneralManagerMeta.read_only_classes)
+        self.initialize_general_manager_classes(
             GeneralManagerMeta.pending_attribute_initialization,
             GeneralManagerMeta.all_classes,
         )
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
-            self.handleGraphQL(GeneralManagerMeta.pending_graphql_interfaces)
+            self.handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
 
     @staticmethod
-    def handleReadOnlyInterface(
+    def handle_read_only_interface(
         read_only_classes: list[Type[GeneralManager]],
     ) -> None:
         """
@@ -76,7 +76,7 @@ class GeneralmanagerConfig(AppConfig):
         Parameters:
             read_only_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose Interface implements a ReadOnlyInterface; each class will have its read-only data synchronized before management commands and a Django system check registered to verify the Interface schema is up to date.
         """
-        GeneralmanagerConfig.patchReadOnlyInterfaceSync(read_only_classes)
+        GeneralmanagerConfig.patch_read_only_interface_sync(read_only_classes)
         from general_manager.interface.read_only_interface import ReadOnlyInterface
 
         logger.debug("starting to register ReadOnlyInterface schema warnings...")
@@ -96,7 +96,7 @@ class GeneralmanagerConfig(AppConfig):
             """
 
             def schema_check(*_: Any, **__: Any) -> list[Any]:
-                return ReadOnlyInterface.ensureSchemaIsUpToDate(manager_cls, model)
+                return ReadOnlyInterface.ensure_schema_is_up_to_date(manager_cls, model)
 
             return schema_check
 
@@ -113,18 +113,18 @@ class GeneralmanagerConfig(AppConfig):
             )
 
     @staticmethod
-    def patchReadOnlyInterfaceSync(
+    def patch_read_only_interface_sync(
         general_manager_classes: list[Type[GeneralManager]],
     ) -> None:
         """
         Ensure the provided GeneralManager classes' ReadOnlyInterfaces synchronize their data before any Django management command is executed.
 
-        For each class in `general_manager_classes`, calls the class's `Interface.syncData()` to keep read-only data consistent. Skips synchronization when running the autoreload subprocess of `runserver`.
+        For each class in `general_manager_classes`, calls the class's `Interface.sync_data()` to keep read-only data consistent. Skips synchronization when running the autoreload subprocess of `runserver`.
         Parameters:
-            general_manager_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose `Interface` implements `syncData`.
+            general_manager_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose `Interface` implements `sync_data`.
         """
         """
-        Wrap BaseCommand.run_from_argv to call `syncData()` on registered ReadOnlyInterfaces before executing the original command.
+        Wrap BaseCommand.run_from_argv to call `sync_data()` on registered ReadOnlyInterfaces before executing the original command.
 
         Skips synchronization when the command is `runserver` and the process is the autoreload subprocess.
         Parameters:
@@ -141,7 +141,7 @@ class GeneralmanagerConfig(AppConfig):
             self: BaseCommand,
             argv: list[str],
         ) -> None:
-            # Ensure syncData is only called at real run of runserver
+            # Ensure sync_data is only called at real run of runserver
             """
             Synchronizes all registered ReadOnlyInterface data before running a Django management command, except when running the autoreload subprocess of `runserver`.
 
@@ -159,7 +159,7 @@ class GeneralmanagerConfig(AppConfig):
                     read_only_interface = cast(
                         Type[ReadOnlyInterface], general_manager_class.Interface
                     )
-                    read_only_interface.syncData()
+                    read_only_interface.sync_data()
 
                 logger.debug("finished syncing ReadOnlyInterface data.")
 
@@ -169,14 +169,14 @@ class GeneralmanagerConfig(AppConfig):
         BaseCommand.run_from_argv = run_from_argv_with_sync  # type: ignore[assignment]
 
     @staticmethod
-    def initializeGeneralManagerClasses(
+    def initialize_general_manager_classes(
         pending_attribute_initialization: list[Type[GeneralManager]],
         all_classes: list[Type[GeneralManager]],
     ) -> None:
         """
         Initialize GeneralManager classes' interface attributes, create attribute-based accessors, wire GraphQL connection properties between related managers, and validate each class's permission configuration.
 
-        For each class in `pending_attribute_initialization` this assigns the class's Interface attributes to its internal `_attributes` and creates property accessors for those attributes. For each class in `all_classes` this scans its Interface `input_fields` for inputs whose type is another GeneralManager subclass and adds a GraphQL property on the connected manager that resolves related objects filtered by the input attribute. Finally, validate and normalize the Permission attribute on every class via GeneralmanagerConfig.checkPermissionClass.
+        For each class in `pending_attribute_initialization` this assigns the class's Interface attributes to its internal `_attributes` and creates property accessors for those attributes. For each class in `all_classes` this scans its Interface `input_fields` for inputs whose type is another GeneralManager subclass and adds a GraphQL property on the connected manager that resolves related objects filtered by the input attribute. Finally, validate and normalize the Permission attribute on every class via GeneralmanagerConfig.check_permission_class.
 
         Parameters:
             pending_attribute_initialization (list[type[GeneralManager]]): GeneralManager classes whose Interface attributes need to be initialized and whose attribute properties should be created.
@@ -206,9 +206,9 @@ class GeneralmanagerConfig(AppConfig):
 
         logger.debug("starting to create attributes for GeneralManager classes...")
         for general_manager_class in pending_attribute_initialization:
-            attributes = general_manager_class.Interface.getAttributes()
+            attributes = general_manager_class.Interface.get_attributes()
             general_manager_class._attributes = attributes
-            GeneralManagerMeta.createAtPropertiesForAttributes(
+            GeneralManagerMeta.create_at_properties_for_attributes(
                 attributes.keys(), general_manager_class
             )
 
@@ -226,13 +226,13 @@ class GeneralmanagerConfig(AppConfig):
                     setattr(
                         connected_manager,
                         f"{general_manager_class.__name__.lower()}_list",
-                        graphQlProperty(resolver),
+                        graph_ql_property(resolver),
                     )
         for general_manager_class in all_classes:
-            GeneralmanagerConfig.checkPermissionClass(general_manager_class)
+            GeneralmanagerConfig.check_permission_class(general_manager_class)
 
     @staticmethod
-    def handleGraphQL(
+    def handle_graph_ql(
         pending_graphql_interfaces: list[Type[GeneralManager]],
     ) -> None:
         """
@@ -243,8 +243,8 @@ class GeneralmanagerConfig(AppConfig):
         """
         logger.debug("Starting to create GraphQL interfaces and mutations...")
         for general_manager_class in pending_graphql_interfaces:
-            GraphQL.createGraphqlInterface(general_manager_class)
-            GraphQL.createGraphqlMutation(general_manager_class)
+            GraphQL.create_graphql_interface(general_manager_class)
+            GraphQL.create_graphql_mutation(general_manager_class)
 
         query_class = type("Query", (graphene.ObjectType,), GraphQL._query_fields)
         GraphQL._query_class = query_class
@@ -279,10 +279,10 @@ class GeneralmanagerConfig(AppConfig):
             schema_kwargs["subscription"] = GraphQL._subscription_class
         schema = graphene.Schema(**schema_kwargs)
         GraphQL._schema = schema
-        GeneralmanagerConfig.addGraphqlUrl(schema)
+        GeneralmanagerConfig.add_graphql_url(schema)
 
     @staticmethod
-    def addGraphqlUrl(schema: graphene.Schema) -> None:
+    def add_graphql_url(schema: graphene.Schema) -> None:
         """
         Add a GraphQL endpoint to the project's URL configuration and ensure the ASGI subscription route is configured.
 
@@ -498,7 +498,7 @@ class GeneralmanagerConfig(AppConfig):
             setattr(asgi_module, attr_name, wrapped_application)
 
     @staticmethod
-    def checkPermissionClass(general_manager_class: Type[GeneralManager]) -> None:
+    def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
         """
         Validate and normalize a GeneralManager class's Permission attribute.
 

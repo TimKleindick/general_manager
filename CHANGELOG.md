@@ -29,7 +29,7 @@
 - Enhance boolean handling in generic_cache_invalidation function
   ([`ab70592`](https://github.com/TimKleindick/general_manager/commit/ab70592c969955ed5f02bdb224c4a2c23b4be5c2))
 
-- Enhance getFieldValue to handle field choices and update tests accordingly
+- Enhance get_field_value to handle field choices and update tests accordingly
   ([`99746d2`](https://github.com/TimKleindick/general_manager/commit/99746d233a83f0237be868c383e14b9a541d19ce))
 
 - Enhance model creation logic to check for history model existence before creation
@@ -124,7 +124,7 @@
 - Enhance DummyPermission class with permission handling and filtering logic
   ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
 
-- Enhance getFieldValue and getManyToManyFieldValue with improved type handling and validation
+- Enhance get_field_value and get_many_to_many_field_value with improved type handling and validation
   ([`8166c1e`](https://github.com/TimKleindick/general_manager/commit/8166c1ed486cfe0a1498ecd873f0872679ece290))
 
 - Fix test errors
@@ -307,8 +307,8 @@
 - Enforce JSON data type validation in ReadOnlyInterface
   ([`3432f56`](https://github.com/TimKleindick/general_manager/commit/3432f567e4358313f6bd72938fea58eca2d51279))
 
-- Improve random value generation in LazyMeasurement and handle date range in LazyDateBetween and
-  LazyDateTimeBetween
+- Improve random value generation in lazy_measurement and handle date range in lazy_date_between and
+  lazy_date_time_between
   ([`4c20389`](https://github.com/TimKleindick/general_manager/commit/4c20389adb308c2b2eee227676dcf7c00c0598e9))
 
 - Lazy-loading public API utilities and update module exports
@@ -498,7 +498,7 @@
 
 ### Bug Fixes
 
-- Add __parseKwargs method for keyword argument parsing in DBBasedInterface
+- Add __parse_kwargs method for keyword argument parsing in DBBasedInterface
   ([`0fa60ce`](https://github.com/TimKleindick/general_manager/commit/0fa60ce283fe64e01929c30df9b5aa9bd158b24e))
 
 - Correct conditional structure in related model handling
@@ -513,7 +513,7 @@
 - Enhance related field handling in DBBasedInterface
   ([`df92257`](https://github.com/TimKleindick/general_manager/commit/df92257365fe7190d0494d13b13d608f8e5ff6f2))
 
-- Ensure rules attribute defaults to an empty list in getFullCleanMethode
+- Ensure rules attribute defaults to an empty list in get_full_clean_methode
   ([`afd46ec`](https://github.com/TimKleindick/general_manager/commit/afd46ecacdf06c3f68a5dea9f275be7c999a0a1f))
 
 - Update is_required logic to consider default value in DBBasedInterface
@@ -657,7 +657,7 @@
 
 ### Bug Fixes
 
-- Correct attribute access in __getAttributePermissions and checkPermission methods
+- Correct attribute access in __get_attribute_permissions and check_permission methods
   ([`36b5796`](https://github.com/TimKleindick/general_manager/commit/36b5796e65f677fbe0d2b1a36554bba81ec659e5))
 
 - Remove unused type imports in mutation_permission.py
@@ -674,7 +674,7 @@
 - Implement MutationPermission class for mutation permission handling
   ([`c39ddf5`](https://github.com/TimKleindick/general_manager/commit/c39ddf51c5b41591b7fea2216e2f9dd0076191d5))
 
-- Update graphQlMutation to use permission parameter and improve authentication handling
+- Update graph_ql_mutation to use permission parameter and improve authentication handling
   ([`c7064c7`](https://github.com/TimKleindick/general_manager/commit/c7064c7789ba9691585900783bec504067656b35))
 
 ### Refactoring
@@ -725,7 +725,7 @@
 - Add "is_derived" attribute to input field types and improve docstrings for clarity
   ([`6252f37`](https://github.com/TimKleindick/general_manager/commit/6252f370432c9e90380e4c0fce5b90be9eff1652))
 
-- Remove unnecessary blank lines and improve variable naming in `getFieldType`
+- Remove unnecessary blank lines and improve variable naming in `get_field_type`
   ([`3eeb841`](https://github.com/TimKleindick/general_manager/commit/3eeb8410d90c54bfe7f400c66d799b84808e9199))
 
 
@@ -746,7 +746,7 @@
 - Enhance type hints and improve related model retrieval in factories.py
   ([`739dbd0`](https://github.com/TimKleindick/general_manager/commit/739dbd047597a737ebdd0f31bb26e2b8b3ca06ef))
 
-- Improve type hinting and simplify function call logic in dataChange decorator
+- Improve type hinting and simplify function call logic in data_change decorator
   ([`43efe90`](https://github.com/TimKleindick/general_manager/commit/43efe90ddfafe030d1c96c26765f26c82f747eb9))
 
 - Improve type hinting for value_field and unit_field in MeasurementField for clarity
@@ -792,7 +792,7 @@
 
 ### Documentation
 
-- Add guide for graphQlMutation
+- Add guide for graph_ql_mutation
   ([`70d2da4`](https://github.com/TimKleindick/general_manager/commit/70d2da4ff96a9c4d02a09bbafd12bae491adf4d0))
 
 ### Testing
@@ -810,7 +810,7 @@
 
 ### Refactoring
 
-- Simplify basis type assignment in graphQlMutation
+- Simplify basis type assignment in graph_ql_mutation
   ([`771f3db`](https://github.com/TimKleindick/general_manager/commit/771f3db2530963f72321f84bf83ba3f148704928))
 
 ### Testing
@@ -943,7 +943,7 @@
 - Improve exception chaining
   ([`bc647f0`](https://github.com/TimKleindick/general_manager/commit/bc647f0b9017321e48e7fc9527f0d40658065daa))
 
-- Pass parameters to handleReadOnlyInterface, initializeGeneralManagerClasses, and handleGraphQL
+- Pass parameters to handle_read_only_interface, initialize_general_manager_classes, and handle_graph_ql
   methods for improved clarity and functionality
   ([`9b4c8d4`](https://github.com/TimKleindick/general_manager/commit/9b4c8d46fef81e363e8f97cac0febd8af6f7d642))
 
@@ -1019,7 +1019,7 @@
 
 ### Testing
 
-- Remove type ignores and add test for getReadPermissionFilter
+- Remove type ignores and add test for get_read_permission_filter
   ([`c8896a7`](https://github.com/TimKleindick/general_manager/commit/c8896a716b07fcc816484a848f6b8484ade25f85))
 
 - Test GraphQL default mutations
@@ -1033,7 +1033,7 @@
 - Add type ignore comment to test_read_only_interface.py
   ([`089a3b8`](https://github.com/TimKleindick/general_manager/commit/089a3b860361f8d220defa8c81266bc5146e0212))
 
-- Allow customizable base model class in _preCreate method of DBBasedInterface
+- Allow customizable base model class in _pre_create method of DBBasedInterface
   ([`5b58af9`](https://github.com/TimKleindick/general_manager/commit/5b58af95d136f62081cb88a36fa5e26138c97b9b))
 
 - Correct type annotation for read_only_classes in GeneralManagerMeta
@@ -1054,7 +1054,7 @@
 - Sync and warn ReadOnlyInterfaces &, refactor apps.py
   ([`8f0a2e5`](https://github.com/TimKleindick/general_manager/commit/8f0a2e5b5fb46244110a5d7a7252b9856cd596da))
 
-- Update ReadOnlyInterface import and usage in handleReadOnlyInterface method
+- Update ReadOnlyInterface import and usage in handle_read_only_interface method
   ([`f76a935`](https://github.com/TimKleindick/general_manager/commit/f76a93563b24e750522d767898d40d268a988b63))
 
 ### Features
@@ -1080,7 +1080,7 @@
 - Enhance create and update methods to handle many-to-many attributes
   ([`08b07d2`](https://github.com/TimKleindick/general_manager/commit/08b07d2202cc705979135d4176b57afd6e7b0c22))
 
-- Improve handling of many-to-many attributes in _sortKwargs method
+- Improve handling of many-to-many attributes in _sort_kwargs method
   ([`ef94175`](https://github.com/TimKleindick/general_manager/commit/ef94175d8017abfd7a72550716445d8d65403717))
 
 - Update __checkForInvalidKwargs to handle '_id_list' suffix in keys
@@ -1110,10 +1110,10 @@
 - Refine filtering logic in CalculationBucket to enhance clarity and functionality
   ([`fa9f573`](https://github.com/TimKleindick/general_manager/commit/fa9f573e455cd9fbb9792fa8bdb5389aa804ed43))
 
-- Update error handling in getFieldType and clean up comments in _preCreate
+- Update error handling in get_field_type and clean up comments in _pre_create
   ([`3083626`](https://github.com/TimKleindick/general_manager/commit/3083626e754d8da40164881e1e71b3b764fa51a0))
 
-- Update exception type in getFieldType method to KeyError for non-existent fields
+- Update exception type in get_field_type method to KeyError for non-existent fields
   ([`9bec05e`](https://github.com/TimKleindick/general_manager/commit/9bec05ef869d29e590462fff496595a9e9ddce93))
 
 ### Testing
@@ -1192,7 +1192,7 @@
 - Update identification access in DatabaseBucket methods
   ([`f3bc0cd`](https://github.com/TimKleindick/general_manager/commit/f3bc0cd64b2ad3428eb471565a435c72da0ae2d6))
 
-- Update user type check to use AbstractUser in getUserWithId method
+- Update user type check to use AbstractUser in get_user_with_id method
   ([`3e259e5`](https://github.com/TimKleindick/general_manager/commit/3e259e5f9fe3aa25fb1c6aeb10c3f2f9a2666151))
 
 ### Chores

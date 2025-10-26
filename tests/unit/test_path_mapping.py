@@ -62,30 +62,30 @@ class PathMappingUnitTests(SimpleTestCase):
         tracer = pm.to(self.EndManager)
         self.assertEqual(tracer.path, ["end"])  # type: ignore
         start_instance = self.StartManager()
-        result = PathMap(start_instance).goTo(self.EndManager)
+        result = PathMap(start_instance).go_to(self.EndManager)
         self.assertIsInstance(result, self.EndManager)
 
     def test_get_all_connected(self):
         """
         Test that PathMap correctly identifies all manager classes connected to StartManager.
 
-        Asserts that getAllConnected() returns a set containing the name of EndManager.
+        Asserts that get_all_connected() returns a set containing the name of EndManager.
         """
         pm = PathMap(self.StartManager)
-        self.assertEqual(pm.getAllConnected(), {self.EndManager.__name__})
+        self.assertEqual(pm.get_all_connected(), {self.EndManager.__name__})
 
     def test_nonexistent_path(self):
         """
         Test that attempting to trace or navigate a non-existent path between managers returns appropriate null results.
 
-        Verifies that `PathMap.to` returns a tracer with no path when no connection exists, and that `PathMap.goTo` returns `None` when navigation is not possible.
+        Verifies that `PathMap.to` returns a tracer with no path when no connection exists, and that `PathMap.go_to` returns `None` when navigation is not possible.
         """
         pm = PathMap(self.EndManager)
         tracer = pm.to(self.StartManager)
         self.assertIsNotNone(tracer)
         self.assertIsNone(tracer.path)  # type: ignore
         end_instance = self.EndManager()
-        result = PathMap(end_instance).goTo(self.StartManager)
+        result = PathMap(end_instance).go_to(self.StartManager)
         self.assertIsNone(result)
 
     def test_pathmap_singleton_behavior(self):
@@ -122,8 +122,8 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertEqual(tracer_class.path, tracer_instance.path)
         self.assertEqual(tracer_class.path, ["end"])
 
-        # Both should have same getAllConnected results
-        self.assertEqual(pm_class.getAllConnected(), pm_instance.getAllConnected())
+        # Both should have same get_all_connected results
+        self.assertEqual(pm_class.get_all_connected(), pm_instance.get_all_connected())
 
     def test_multiple_connection_managers(self):
         """
@@ -153,7 +153,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return AlternateManager()
 
         pm = PathMap(MultiConnectionManager)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should find both connections
         self.assertIn(self.EndManager.__name__, connected)
@@ -189,7 +189,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return Level2Manager()
 
         pm = PathMap(Level1Manager)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should find both intermediate and final managers
         self.assertIn("Level2Manager", connected)
@@ -220,15 +220,15 @@ class PathMappingUnitTests(SimpleTestCase):
         pm = PathMap(IsolatedManager)
 
         # Should return empty set for connections
-        self.assertEqual(pm.getAllConnected(), set())
+        self.assertEqual(pm.get_all_connected(), set())
 
         # Should return None when trying to find path to unreachable target
         tracer = pm.to(self.StartManager)
         self.assertIsNone(tracer.path)  # type: ignore
 
-        # goTo should return None for unreachable target
+        # go_to should return None for unreachable target
         isolated_instance = IsolatedManager()
-        result = PathMap(isolated_instance).goTo(self.StartManager)
+        result = PathMap(isolated_instance).go_to(self.StartManager)
         self.assertIsNone(result)
 
     def test_pathmap_caching_behavior(self):
@@ -242,7 +242,7 @@ class PathMappingUnitTests(SimpleTestCase):
         initial_mapping = dict(pm.mapping)  # Create copy to avoid reference issues
 
         # Verify mapping is populated after first access
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
         self.assertGreater(len(connected), 0)
         self.assertGreater(len(initial_mapping), 0)
 
@@ -253,7 +253,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
         # Create new PathMap instance - should rebuild mapping
         pm_new = PathMap(self.StartManager)
-        new_connected = pm_new.getAllConnected()
+        new_connected = pm_new.get_all_connected()
 
         # Results should be the same even after cache rebuild
         self.assertEqual(connected, new_connected)
@@ -286,7 +286,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return self.EndManager()
 
         pm = PathMap(TestManager)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should only detect the GraphQL property connection
         self.assertIn(self.EndManager.__name__, connected)
@@ -303,14 +303,14 @@ class PathMappingUnitTests(SimpleTestCase):
 
         Verifies that PathMap handles edge cases gracefully without crashing.
         """
-        # Test goTo with None start instance should raise ValueError
+        # Test go_to with None start instance should raise ValueError
         pm = PathMap(self.StartManager)
         with self.assertRaises(ValueError):
-            pm.goTo(self.EndManager)
+            pm.go_to(self.EndManager)
 
-        # Test goTo with invalid target should return None gracefully
+        # Test go_to with invalid target should return None gracefully
         start_instance = self.StartManager()
-        result = PathMap(start_instance).goTo("NonExistentManager")
+        result = PathMap(start_instance).go_to("NonExistentManager")
         self.assertIsNone(result)
 
     def test_circular_reference_handling(self):
@@ -346,7 +346,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
         # This should not cause infinite recursion
         pm = PathMap(CircularAManager)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should successfully identify connected managers
         self.assertIsInstance(connected, set)
@@ -370,7 +370,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
     def test_pathtracer_traversal_functionality(self):
         """
-        Test PathTracer's traversePath method with various scenarios.
+        Test PathTracer's traverse_path method with various scenarios.
 
         Verifies that PathTracer can successfully traverse paths and handle
         edge cases during navigation.
@@ -381,12 +381,12 @@ class PathMappingUnitTests(SimpleTestCase):
         start_instance = self.StartManager()
 
         # Test successful traversal
-        result = tracer.traversePath(start_instance)
+        result = tracer.traverse_path(start_instance)
         self.assertIsInstance(result, self.EndManager)
 
         # Test traversal with empty path returns None
         empty_tracer = PathTracer(self.StartManager, self.StartManager)
-        result_empty = empty_tracer.traversePath(start_instance)
+        result_empty = empty_tracer.traverse_path(start_instance)
         self.assertIsNone(result_empty)
 
     def test_pathmap_with_string_identifiers(self):
@@ -403,9 +403,9 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertIsNotNone(tracer)
         self.assertEqual(tracer.path, ["end"])
 
-        # Test goTo() method with string
+        # Test go_to() method with string
         start_instance = self.StartManager()
-        result = PathMap(start_instance).goTo(self.EndManager.__name__)
+        result = PathMap(start_instance).go_to(self.EndManager.__name__)
         self.assertIsInstance(result, self.EndManager)
 
     def test_pathmap_edge_cases(self):
@@ -432,7 +432,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return self.EndManager()
 
         pm = PathMap(SelfReferencingManager)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should handle self-reference and external reference
         self.assertNotIn(
@@ -475,7 +475,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return self.EndManager()
 
         pm = PathMap(DerivedManager)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should include connections from both base and derived classes
         self.assertIn(self.EndManager.__name__, connected)
@@ -557,7 +557,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
         def pathmap_worker():
             pm = PathMap(self.StartManager)
-            connected = pm.getAllConnected()
+            connected = pm.get_all_connected()
             tracer = pm.to(self.EndManager)
             results.append((connected, tracer.path if tracer else None))
 
@@ -600,7 +600,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
     def test_pathtracer_with_bucket_traversal(self):
         """
-        Test PathTracer's traversePath method with Bucket instances.
+        Test PathTracer's traverse_path method with Bucket instances.
 
         Verifies that PathTracer can handle traversal when the start instance
         is a Bucket containing multiple manager instances.
@@ -615,14 +615,14 @@ class PathMappingUnitTests(SimpleTestCase):
         bucket = SimpleBucket(self.StartManager, start_instances)
 
         # Test traversal with bucket
-        result = tracer.traversePath(bucket)
+        result = tracer.traverse_path(bucket)
 
         # Should return a bucket or manager instance, not None
         self.assertIsNotNone(result)
 
     def test_pathmap_interface_attribute_types_integration(self):
         """
-        Test PathMap integration with Interface.getAttributeTypes().
+        Test PathMap integration with Interface.get_attribute_types().
 
         Verifies that PathMap correctly considers attribute types defined
         in the Interface class when building path mappings.
@@ -630,14 +630,14 @@ class PathMappingUnitTests(SimpleTestCase):
 
         class InterfaceWithTypes(BaseTestInterface):
             @classmethod
-            def getAttributeTypes(cls):
+            def get_attribute_types(cls):
                 return {"interface_end": {"type": self.EndManager}}
 
         class ManagerWithInterfaceTypes(GeneralManager):
             Interface = InterfaceWithTypes
 
         pm = PathMap(ManagerWithInterfaceTypes)
-        connected = pm.getAllConnected()
+        connected = pm.get_all_connected()
 
         # Should find connection defined in interface attribute types
         self.assertIn(self.EndManager.__name__, connected)
@@ -666,14 +666,14 @@ class PathMappingUnitTests(SimpleTestCase):
         tracer = pm.to(self.EndManager)
         self.assertIsNone(tracer.path)  # type: ignore
 
-        # Should return None for goTo with non-existent paths
+        # Should return None for go_to with non-existent paths
         disconnected_instance = DisconnectedManager()
-        result = PathMap(disconnected_instance).goTo(self.EndManager)
+        result = PathMap(disconnected_instance).go_to(self.EndManager)
         self.assertIsNone(result)
 
     def test_pathmap_create_path_mapping_behavior(self):
         """
-        Test PathMap.createPathMapping class method behavior.
+        Test PathMap.create_path_mapping class method behavior.
 
         Verifies that the mapping creation process works correctly and
         handles various manager class configurations.
@@ -688,7 +688,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
         # Manually trigger mapping creation
         PathMap.instance = PathMap.__new__(PathMap)
-        PathMap.createPathMapping()
+        PathMap.create_path_mapping()
 
         # Verify mappings were created
         start_to_end_key = (self.StartManager.__name__, self.EndManager.__name__)
@@ -706,7 +706,7 @@ class PathMappingUnitTests(SimpleTestCase):
 
     def test_pathtracer_recursive_path_creation(self):
         """
-        Test PathTracer's createPath method with complex recursive scenarios.
+        Test PathTracer's create_path method with complex recursive scenarios.
 
         Verifies that the recursive path finding algorithm handles
         deep and complex manager hierarchies correctly.
@@ -754,28 +754,29 @@ class PathMappingUnitTests(SimpleTestCase):
             self.assertEqual(tracer.path, ["chain_b", "chain_c", "final_end"])
 
     def test_missing_start_instance_error(self):
-        """Test that MissingStartInstanceError is raised when calling goTo without start instance."""
+        """Test that MissingStartInstanceError is raised when calling go_to without start instance."""
         from general_manager.utils.path_mapping import MissingStartInstanceError
 
         path_map = PathMap(self.StartManager)
         # Don't set start_instance
 
         with self.assertRaises(MissingStartInstanceError) as ctx:
-            path_map.goTo(self.EndManager)
+            path_map.go_to(self.EndManager)
 
         self.assertIn(
-            "Cannot call goTo on a PathMap without a start instance", str(ctx.exception)
+            "Cannot call go_to on a PathMap without a start instance",
+            str(ctx.exception),
         )
 
     def test_path_map_go_to_with_none_start_instance(self):
-        """Test goTo when start_instance is explicitly set to None."""
+        """Test go_to when start_instance is explicitly set to None."""
         from general_manager.utils.path_mapping import MissingStartInstanceError
 
         path_map = PathMap(self.StartManager)
         path_map.start_instance = None
 
         with self.assertRaises(MissingStartInstanceError):
-            path_map.goTo(self.EndManager)
+            path_map.go_to(self.EndManager)
 
     def test_path_map_caching_mechanism(self):
         """Test that path mappings are cached correctly."""
@@ -791,7 +792,7 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertIs(tracer1, tracer2)
 
     def test_path_map_get_all_connected_empty(self):
-        """Test getAllConnected when no connections exist."""
+        """Test get_all_connected when no connections exist."""
 
         class IsolatedInterface(BaseTestInterface):
             pass
@@ -800,12 +801,12 @@ class PathMappingUnitTests(SimpleTestCase):
             Interface = IsolatedInterface
 
         path_map = PathMap(IsolatedManager)
-        connected = path_map.getAllConnected()
+        connected = path_map.get_all_connected()
 
         self.assertEqual(len(connected), 0)
 
     def test_path_map_get_all_connected_multiple_levels(self):
-        """Test getAllConnected with multi-level connections."""
+        """Test get_all_connected with multi-level connections."""
 
         class Level1Interface(BaseTestInterface):
             pass
@@ -834,7 +835,7 @@ class PathMappingUnitTests(SimpleTestCase):
                 return Level2Manager()
 
         path_map = PathMap(Level1Manager)
-        connected = path_map.getAllConnected()
+        connected = path_map.get_all_connected()
 
         # Should include all levels
         self.assertIn(Level2Manager.__name__, connected)
@@ -855,7 +856,7 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertIsNone(tracer.path)
 
     def test_path_tracer_traverse_path_no_path(self):
-        """Test traversePath when no path exists."""
+        """Test traverse_path when no path exists."""
 
         class UnconnectedInterface(BaseTestInterface):
             pass
@@ -867,5 +868,5 @@ class PathMappingUnitTests(SimpleTestCase):
 
         start_instance = self.StartManager()
 
-        result = tracer.traversePath(start_instance)
+        result = tracer.traverse_path(start_instance)
         self.assertIsNone(result)

@@ -9,7 +9,7 @@ from general_manager.interface.calculation_interface import CalculationInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.manager.input import Input
-from general_manager.api.property import graphQlProperty
+from general_manager.api.property import graph_ql_property
 
 
 class CustomMutationTest(GeneralManagerTransactionTestCase):
@@ -20,7 +20,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
         Defines two inner manager classes on the test class:
         - Employee: a database-backed manager with `name` and `salary` fields (salary measured in EUR).
-        - TaxCalculation: a manager that references an Employee and exposes a sortable GraphQL property `calculatedTax` that computes 20% of the referenced employee's salary.
+        - TaxCalculation: a manager that references an Employee and exposes a sortable GraphQL property `calculated_tax` that computes 20% of the referenced employee's salary.
 
         After definition, assigns `Employee`, `TaxCalculation`, and `general_manager_classes` to the test class for use in test methods.
         """
@@ -40,8 +40,8 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             class Interface(CalculationInterface):
                 employee = Input(Employee, possible_values=lambda: Employee.all())
 
-            @graphQlProperty(sortable=True)
-            def calculatedTax(self) -> Measurement:
+            @graph_ql_property(sortable=True)
+            def calculated_tax(self) -> Measurement:
                 """
                 calculatedTaxs 20% of the associated employee's salary as tax.
 
@@ -78,7 +78,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         }
         """
 
-    def test_calculatedTax_tax(self):
+    def test_calculated_tax_tax(self):
         """
         Tests the tax calculation GraphQL mutation for an employee.
 
@@ -96,10 +96,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def test_sort_by_calculation_property(self):
         """
-        Verify TaxCalculation entries can be ordered by the `calculatedTax` property.
+        Verify TaxCalculation entries can be ordered by the `calculated_tax` property.
 
         Asserts the initial retrieval order is by employee name, then checks that sorting by
-        `calculatedTax` yields employees ordered by their salary-derived tax (ascending),
+        `calculated_tax` yields employees ordered by their salary-derived tax (ascending),
         and that sorting with `reverse=True` yields the reverse order.
         """
         self.Employee.create(
@@ -118,13 +118,13 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(tax_calculation_bucket[1].employee.name, "Bob")
         self.assertEqual(tax_calculation_bucket[2].employee.name, "Tim")
 
-        tax_calculation_bucket_sorted = tax_calculation_bucket.sort("calculatedTax")
+        tax_calculation_bucket_sorted = tax_calculation_bucket.sort("calculated_tax")
         self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Tim")
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
         self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Bob")
 
         tax_calculation_bucket_sorted = tax_calculation_bucket.sort(
-            "calculatedTax", reverse=True
+            "calculated_tax", reverse=True
         )
         self.assertEqual(tax_calculation_bucket_sorted[2].employee.name, "Tim")
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
@@ -132,9 +132,9 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def test_sort_by_calculation_property_and_name(self):
         """
-        Verifies that TaxCalculation entries are ordered by `calculatedTax` and then by `employee.name`, both in ascending order.
+        Verifies that TaxCalculation entries are ordered by `calculated_tax` and then by `employee.name`, both in ascending order.
 
-        Creates employees with different salaries, sorts the TaxCalculation bucket by the tuple ("calculatedTax", "employee.name") ascending, and asserts the resulting employee name order is: "Tim", "Alice", "Tina", "Bob".
+        Creates employees with different salaries, sorts the TaxCalculation bucket by the tuple ("calculated_tax", "employee.name") ascending, and asserts the resulting employee name order is: "Tim", "Alice", "Tina", "Bob".
         """
         self.Employee.create(
             name="Alice", salary=Measurement(3000, "EUR"), creator_id=self.user.id
@@ -150,7 +150,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         )
 
         tax_calculation_bucket_sorted = self.TaxCalculation.all().sort(
-            ("calculatedTax", "employee.name"), reverse=False
+            ("calculated_tax", "employee.name"), reverse=False
         )
         self.assertEqual(tax_calculation_bucket_sorted[0].employee.name, "Tim")
         self.assertEqual(tax_calculation_bucket_sorted[1].employee.name, "Alice")
@@ -159,13 +159,13 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
     def test_filter_by_calculation_property(self):
         """
-        Verifies that TaxCalculation entries can be filtered by employee name prefix and by calculatedTax, and that combined filters produce the expected subsets and ordering.
+        Verifies that TaxCalculation entries can be filtered by employee name prefix and by calculated_tax, and that combined filters produce the expected subsets and ordering.
 
         Checks:
         - Filtering by employee name prefix "T" yields two entries ordered by employee name: Tim, Tina.
-        - Further filtering that subset by calculatedTax == 3000 EUR * 0.2 yields a single entry (Tina).
-        - Filtering all TaxCalculation entries by calculatedTax == 3000 EUR * 0.2 yields two entries ordered: Alice, Tina.
-        - Applying the calculatedTax filter to the name-prefixed subset produces the same result as filtering the subset directly.
+        - Further filtering that subset by calculated_tax == 3000 EUR * 0.2 yields a single entry (Tina).
+        - Filtering all TaxCalculation entries by calculated_tax == 3000 EUR * 0.2 yields two entries ordered: Alice, Tina.
+        - Applying the calculated_tax filter to the name-prefixed subset produces the same result as filtering the subset directly.
         - The filtered-by-both bucket is not equal to the original name-prefixed bucket.
         """
         self.Employee.create(
@@ -189,20 +189,20 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(tax_calculation_bucket_filtered1[1].employee.name, "Tina")
 
         tax_calculation_bucket_filtered2 = tax_calculation_bucket_filtered1.filter(
-            calculatedTax=Measurement(3000, "EUR") * 0.2
+            calculated_tax=Measurement(3000, "EUR") * 0.2
         )
         self.assertEqual(len(tax_calculation_bucket_filtered2), 1)
         self.assertEqual(tax_calculation_bucket_filtered2[0].employee.name, "Tina")
 
         tax_calculation_bucket_filtered3 = self.TaxCalculation.filter(
-            calculatedTax=Measurement(3000, "EUR") * 0.2
+            calculated_tax=Measurement(3000, "EUR") * 0.2
         )
         self.assertEqual(len(tax_calculation_bucket_filtered3), 2)
         self.assertEqual(tax_calculation_bucket_filtered3[0].employee.name, "Alice")
         self.assertEqual(tax_calculation_bucket_filtered3[1].employee.name, "Tina")
 
         tax_calculation_bucket_filtered4 = tax_calculation_bucket_filtered1.filter(
-            calculatedTax=Measurement(3000, "EUR") * 0.2
+            calculated_tax=Measurement(3000, "EUR") * 0.2
         )
 
         self.assertEqual(

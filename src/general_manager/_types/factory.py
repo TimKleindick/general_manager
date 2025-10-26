@@ -4,40 +4,40 @@ from __future__ import annotations
 
 __all__ = [
     "AutoFactory",
-    "LazyBoolean",
-    "LazyChoice",
-    "LazyDateBetween",
-    "LazyDateTimeBetween",
-    "LazyDateToday",
-    "LazyDecimal",
-    "LazyDeltaDate",
-    "LazyFakerAddress",
-    "LazyFakerEmail",
-    "LazyFakerName",
-    "LazyFakerSentence",
-    "LazyFakerUrl",
-    "LazyInteger",
-    "LazyMeasurement",
-    "LazyProjectName",
-    "LazySequence",
-    "LazyUUID",
+    "lazy_boolean",
+    "lazy_choice",
+    "lazy_date_between",
+    "lazy_date_time_between",
+    "lazy_date_today",
+    "lazy_decimal",
+    "lazy_delta_date",
+    "lazy_faker_address",
+    "lazy_faker_email",
+    "lazy_faker_name",
+    "lazy_faker_sentence",
+    "lazy_faker_url",
+    "lazy_integer",
+    "lazy_measurement",
+    "lazy_project_name",
+    "lazy_sequence",
+    "lazy_uuid",
 ]
 
 from general_manager.factory.auto_factory import AutoFactory
-from general_manager.factory.factory_methods import LazyBoolean
-from general_manager.factory.factory_methods import LazyChoice
-from general_manager.factory.factory_methods import LazyDateBetween
-from general_manager.factory.factory_methods import LazyDateTimeBetween
-from general_manager.factory.factory_methods import LazyDateToday
-from general_manager.factory.factory_methods import LazyDecimal
-from general_manager.factory.factory_methods import LazyDeltaDate
-from general_manager.factory.factory_methods import LazyFakerAddress
-from general_manager.factory.factory_methods import LazyFakerEmail
-from general_manager.factory.factory_methods import LazyFakerName
-from general_manager.factory.factory_methods import LazyFakerSentence
-from general_manager.factory.factory_methods import LazyFakerUrl
-from general_manager.factory.factory_methods import LazyInteger
-from general_manager.factory.factory_methods import LazyMeasurement
-from general_manager.factory.factory_methods import LazyProjectName
-from general_manager.factory.factory_methods import LazySequence
-from general_manager.factory.factory_methods import LazyUUID
+from general_manager.factory.factory_methods import lazy_boolean
+from general_manager.factory.factory_methods import lazy_choice
+from general_manager.factory.factory_methods import lazy_date_between
+from general_manager.factory.factory_methods import lazy_date_time_between
+from general_manager.factory.factory_methods import lazy_date_today
+from general_manager.factory.factory_methods import lazy_decimal
+from general_manager.factory.factory_methods import lazy_delta_date
+from general_manager.factory.factory_methods import lazy_faker_address
+from general_manager.factory.factory_methods import lazy_faker_email
+from general_manager.factory.factory_methods import lazy_faker_name
+from general_manager.factory.factory_methods import lazy_faker_sentence
+from general_manager.factory.factory_methods import lazy_faker_url
+from general_manager.factory.factory_methods import lazy_integer
+from general_manager.factory.factory_methods import lazy_measurement
+from general_manager.factory.factory_methods import lazy_project_name
+from general_manager.factory.factory_methods import lazy_sequence
+from general_manager.factory.factory_methods import lazy_uuid

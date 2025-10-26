@@ -3,7 +3,7 @@ from django.db.models import CharField, BooleanField
 from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.database_interface import DatabaseInterface
-from general_manager.api.mutation import graphQlMutation
+from general_manager.api.mutation import graph_ql_mutation
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.permission.mutation_permission import MutationPermission
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
@@ -32,7 +32,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         class IsAuthenticated(MutationPermission):
             __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
 
-        @graphQlMutation(IsAuthenticated)
+        @graph_ql_mutation(IsAuthenticated)
         def create_material(info, name: str) -> TestMaterial:
             """
             Create a TestMaterial with the given name and assign the calling user as creator.
@@ -102,7 +102,7 @@ class CustomProjectMutationTest(GeneralManagerTransactionTestCase):
         class IsAuthenticated(MutationPermission):
             __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
 
-        @graphQlMutation(IsAuthenticated)
+        @graph_ql_mutation(IsAuthenticated)
         def create_project(info, title: str) -> TestProject:
             """
             Create a TestProject with the given title and set its creator to the current user from the GraphQL resolver info context.
@@ -177,7 +177,7 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
         class ResetToDoPermission(MutationPermission):
             __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
 
-        @graphQlMutation
+        @graph_ql_mutation
         def mark_todo_as_finished(info, id: int) -> ToDo:
             """
             Mark a ToDo item as finished and return the updated instance.
@@ -192,7 +192,7 @@ class CustomMutationWithoutLogin(GeneralManagerTransactionTestCase):
             creator_id = info.context.user.id if info.context.user else None
             return todo.update(finished=True, creator_id=creator_id)
 
-        @graphQlMutation(permission=ResetToDoPermission)
+        @graph_ql_mutation(permission=ResetToDoPermission)
         def reset_todo(info, id: int) -> ToDo:
             todo = ToDo(id)
             creator_id = info.context.user.id if info.context.user else None

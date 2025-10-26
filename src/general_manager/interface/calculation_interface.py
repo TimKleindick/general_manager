@@ -25,7 +25,7 @@ class CalculationInterface(InterfaceBase):
     _interface_type: ClassVar[str] = "calculation"
     input_fields: ClassVar[dict[str, Input]]
 
-    def getData(self, search_date: datetime | None = None) -> Any:
+    def get_data(self, search_date: datetime | None = None) -> Any:
         """
         Indicates that calculation interfaces do not provide stored data.
 
@@ -38,7 +38,7 @@ class CalculationInterface(InterfaceBase):
         raise NotImplementedError("Calculations do not store data.")
 
     @classmethod
-    def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         """
         Return a dictionary describing the type and metadata for each input field in the calculation interface.
 
@@ -56,7 +56,7 @@ class CalculationInterface(InterfaceBase):
         }
 
     @classmethod
-    def getAttributes(cls) -> dict[str, Any]:
+    def get_attributes(cls) -> dict[str, Any]:
         """Return attribute accessors that cast values using the configured inputs."""
         return {
             name: lambda self, name=name: cls.input_fields[name].cast(
@@ -81,7 +81,7 @@ class CalculationInterface(InterfaceBase):
         return CalculationBucket(cls._parent_class).all()
 
     @staticmethod
-    def _preCreate(
+    def _pre_create(
         _name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
@@ -111,7 +111,7 @@ class CalculationInterface(InterfaceBase):
         return attrs, interface_cls, None
 
     @staticmethod
-    def _postCreate(
+    def _post_create(
         new_class: newlyCreatedGeneralManagerClass,
         interface_class: newlyCreatedInterfaceClass,
         _model: relatedClass,
@@ -130,17 +130,17 @@ class CalculationInterface(InterfaceBase):
         interface_class._parent_class = new_class
 
     @classmethod
-    def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
+    def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         Return the pre- and post-creation hooks used by ``GeneralManagerMeta``.
 
         Returns:
             tuple[classPreCreationMethod, classPostCreationMethod]: Hook functions invoked around manager creation.
         """
-        return cls._preCreate, cls._postCreate
+        return cls._pre_create, cls._post_create
 
     @classmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def get_field_type(cls, field_name: str) -> type:
         """
         Get the Python type for an input field.
 

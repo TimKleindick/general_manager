@@ -17,7 +17,7 @@ class Project(GeneralManager):
         __delete__ = ["isAdmin"]
 ```
 
-Each list contains permission expressions evaluated by `validatePermissionString`. Expressions can reference:
+Each list contains permission expressions evaluated by `validate_permission_string`. Expressions can reference:
 
 - Built-in keywords such as `public`, `isAuthenticated`, or `isAdmin`.
 - Custom methods on the manager (e.g., `isProjectManager`).
@@ -39,8 +39,8 @@ Bucket operations respect attribute-level restrictions when populating results.
 
 ## Permission filters
 
-`ManagerBasedPermission.getPermissionFilter()` converts expressions into Django queryset filters. Buckets apply these filters automatically so unauthorised records do not show up in listings.
+`ManagerBasedPermission.get_permission_filter()` converts expressions into Django queryset filters. Buckets apply these filters automatically so unauthorised records do not show up in listings.
 
 ## Extending behaviour
 
-Subclass `ManagerBasedPermission` when you need custom evaluation logic. Override `validatePermissionString` to support new keywords (e.g., location-based permissions) or integrate with external policy engines.
+Subclass `ManagerBasedPermission` when you need custom evaluation logic. Override `validate_permission_string` to support new keywords (e.g., location-based permissions) or integrate with external policy engines.

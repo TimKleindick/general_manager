@@ -23,14 +23,14 @@ if TYPE_CHECKING:
 class DummyPermission(BasePermission):
     """Test permission class for testing purposes."""
 
-    def checkPermission(
+    def check_permission(
         self,
         action: Literal["create", "read", "update", "delete"],
         attribute: str,
     ) -> bool:
         return True
 
-    def getPermissionFilter(
+    def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         return [{"filter": {"test": "value"}, "exclude": {}}]
@@ -72,7 +72,7 @@ class ManagerBasedPermissionTests(TestCase):
         """
         Prepare fixtures for ManagerBasedPermission tests.
 
-        Sets up test users (regular and staff admin), an AnonymousUser, a Mock instance, and a DummyPermission used as a potential based-on permission. Stores a copy of the current permission_functions and starts a patch for ManagerBasedPermission.__getBasedOnPermission, configuring that patched method to return None by default.
+        Sets up test users (regular and staff admin), an AnonymousUser, a Mock instance, and a DummyPermission used as a potential based-on permission. Stores a copy of the current permission_functions and starts a patch for ManagerBasedPermission.__get_based_on_permission, configuring that patched method to return None by default.
 
         Attributes set on self:
             user: regular test User
@@ -80,7 +80,7 @@ class ManagerBasedPermissionTests(TestCase):
             anonymous_user: AnonymousUser instance
             mock_instance: Mock used as the manager/instance under test
             original_permission_functions: copy of permission_functions prior to test modifications
-            check_patcher: patcher for ManagerBasedPermission.__getBasedOnPermission
+            check_patcher: patcher for ManagerBasedPermission.__get_based_on_permission
             mock_check: started patch object for the patched method
             mock_permission: DummyPermission instance
         """
@@ -107,9 +107,9 @@ class ManagerBasedPermissionTests(TestCase):
         self.original_permission_functions = permission_functions.copy()
 
         # Set up patches for GeneralManager
-        # We'll patch the entire check in __getBasedOnPermission to avoid issubclass issues
+        # We'll patch the entire check in __get_based_on_permission to avoid issubclass issues
         self.check_patcher = patch(
-            "general_manager.permission.manager_based_permission.ManagerBasedPermission._ManagerBasedPermission__getBasedOnPermission"
+            "general_manager.permission.manager_based_permission.ManagerBasedPermission._ManagerBasedPermission__get_based_on_permission"
         )
         self.mock_check = self.check_patcher.start()
 
@@ -137,7 +137,7 @@ class ManagerBasedPermissionTests(TestCase):
     def test_get_attribute_permissions(self):
         """Test getting attribute permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        method = permission._ManagerBasedPermission__getAttributePermissions
+        method = permission._ManagerBasedPermission__get_attribute_permissions
         attribute_permissions = method()
 
         self.assertIn("specific_attribute", attribute_permissions)
@@ -160,14 +160,14 @@ class ManagerBasedPermissionTests(TestCase):
             self.mock_instance, cast("AbstractUser", self.anonymous_user)
         )
 
-        result = permission.checkPermission("read", "any_attribute")
+        result = permission.check_permission("read", "any_attribute")
         self.assertTrue(result)
 
     def test_check_permission_create_with_authenticated_user(self):
         """Test checking create permission with an authenticated user."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
 
-        result = permission.checkPermission("create", "any_attribute")
+        result = permission.check_permission("create", "any_attribute")
         self.assertTrue(result)
 
     def test_check_permission_create_with_anonymous_user(self):
@@ -176,45 +176,45 @@ class ManagerBasedPermissionTests(TestCase):
             self.mock_instance, cast("AbstractUser", self.anonymous_user)
         )
 
-        result = permission.checkPermission("create", "any_attribute")
+        result = permission.check_permission("create", "any_attribute")
         self.assertFalse(result)
 
     def test_check_permission_update_with_admin_user(self):
         """Test checking update permission with an admin user."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
 
-        result = permission.checkPermission("update", "any_attribute")
+        result = permission.check_permission("update", "any_attribute")
         self.assertTrue(result)
 
     def test_check_permission_update_with_regular_user(self):
         """Test checking update permission with a regular user."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
 
-        result = permission.checkPermission("update", "any_attribute")
+        result = permission.check_permission("update", "any_attribute")
         self.assertFalse(result)
 
     def test_check_permission_delete_with_admin_user(self):
         """Test checking delete permission with an admin user."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
 
-        result = permission.checkPermission("delete", "any_attribute")
+        result = permission.check_permission("delete", "any_attribute")
         self.assertTrue(result)
 
     def test_check_permission_delete_with_regular_user(self):
         """Test checking delete permission with a regular user."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
 
-        result = permission.checkPermission("delete", "any_attribute")
+        result = permission.check_permission("delete", "any_attribute")
         self.assertFalse(result)
 
     def test_check_permission_with_based_on_denied(self):
         """Test checking permission when based_on permission denies it."""
         # Configure the mock to return a permission that denies access
-        self.mock_check.return_value = Mock(checkPermission=Mock(return_value=False))
+        self.mock_check.return_value = Mock(check_permission=Mock(return_value=False))
 
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
 
-        result = permission.checkPermission("update", "any_attribute")
+        result = permission.check_permission("update", "any_attribute")
         self.assertFalse(result)
 
     def test_check_permission_with_specific_attribute(self):
@@ -222,12 +222,12 @@ class ManagerBasedPermissionTests(TestCase):
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
 
         # Regular user should not have permission to create on specific_attribute
-        result = permission.checkPermission("create", "specific_attribute")
+        result = permission.check_permission("create", "specific_attribute")
         self.assertFalse(result)
 
         # Admin user should have permission
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
-        result = permission.checkPermission("create", "specific_attribute")
+        result = permission.check_permission("create", "specific_attribute")
         self.assertTrue(result)
 
     def test_check_permission_with_invalid_action(self):
@@ -236,23 +236,27 @@ class ManagerBasedPermissionTests(TestCase):
 
         with self.assertRaises(ValueError):
             # Using an invalid action for testing
-            permission.checkPermission("invalid", "any_attribute")  # type: ignore
+            permission.check_permission("invalid", "any_attribute")  # type: ignore
 
     def test_check_specific_permission(self):
         """Test checking specific permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        method = permission._ManagerBasedPermission__checkSpecificPermission
+        method = permission._ManagerBasedPermission__check_specific_permission
 
         # Test with a valid permission that returns True
         with patch.object(
-            CustomManagerBasedPermission, "validatePermissionString", return_value=True
+            CustomManagerBasedPermission,
+            "validate_permission_string",
+            return_value=True,
         ):
             result = method(["some_permission"])
             self.assertTrue(result)
 
         # Test with permissions that all return False
         with patch.object(
-            CustomManagerBasedPermission, "validatePermissionString", return_value=False
+            CustomManagerBasedPermission,
+            "validate_permission_string",
+            return_value=False,
         ):
             result = method(["perm1", "perm2"])
             self.assertFalse(result)
@@ -264,11 +268,11 @@ class ManagerBasedPermissionTests(TestCase):
             {"filter": {"user": "test"}, "exclude": {"status": "deleted"}}
         ]
         self.mock_check.return_value = Mock(
-            getPermissionFilter=Mock(return_value=based_on_filters)
+            get_permission_filter=Mock(return_value=based_on_filters)
         )
 
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        filters = permission.getPermissionFilter()
+        filters = permission.get_permission_filter()
 
         # Should have at least the based_on filters (prefixed with manager__) and one for __read__
         self.assertGreaterEqual(len(filters), 2)
@@ -283,7 +287,7 @@ class ManagerBasedPermissionTests(TestCase):
         self.mock_check.return_value = None
 
         permission = CustomManagerBasedPermissionNoBasis(self.mock_instance, self.user)
-        filters = permission.getPermissionFilter()
+        filters = permission.get_permission_filter()
 
         # Should have just the filters from __read__
         self.assertEqual(len(filters), 1)
@@ -292,18 +296,18 @@ class ManagerBasedPermissionTests(TestCase):
         """Test that permission results are cached."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
 
-        # Mock the validatePermissionString method to track calls
+        # Mock the validate_permission_string method to track calls
         with patch.object(
             CustomManagerBasedPermission,
-            "validatePermissionString",
+            "validate_permission_string",
             side_effect=lambda x: x == "isAdmin",
         ) as mock_validate:
-            # First call should call validatePermissionString
-            result1 = permission.checkPermission("update", "any_attribute")
+            # First call should call validate_permission_string
+            result1 = permission.check_permission("update", "any_attribute")
             self.assertTrue(result1)
 
             # Second call to the same action should use cached result
-            result2 = permission.checkPermission("update", "different_attribute")
+            result2 = permission.check_permission("update", "different_attribute")
             self.assertTrue(result2)
 
             # The validate method should be called exactly once for the action

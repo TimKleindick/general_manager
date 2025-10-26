@@ -42,7 +42,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         Raises:
             InvalidPermissionDataError: If `permission_data` is neither a dict nor an instance of GeneralManager.
         """
-        self.getData: Callable[[str], object]
+        self.get_data: Callable[[str], object]
         self._permission_data = permission_data
         self._manager: type[GeneralManagerData] | None
         if isinstance(permission_data, GeneralManager):
@@ -51,7 +51,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
             def manager_getter(name: str) -> object:
                 return getattr(gm_instance, name)
 
-            self.getData = manager_getter
+            self.get_data = manager_getter
             self._manager = cast(type[GeneralManagerData], permission_data.__class__)
         elif isinstance(permission_data, dict):
             data_mapping = permission_data
@@ -59,13 +59,13 @@ class PermissionDataManager(Generic[GeneralManagerData]):
             def dict_getter(name: str) -> object:
                 return data_mapping.get(name)
 
-            self.getData = dict_getter
+            self.get_data = dict_getter
             self._manager = manager
         else:
             raise InvalidPermissionDataError()
 
     @classmethod
-    def forUpdate(
+    def for_update(
         cls,
         base_data: GeneralManagerData,
         update_data: dict[str, object],
@@ -95,4 +95,4 @@ class PermissionDataManager(Generic[GeneralManagerData]):
 
     def __getattr__(self, name: str) -> object:
         """Proxy attribute access to the wrapped permission data."""
-        return self.getData(name)
+        return self.get_data(name)

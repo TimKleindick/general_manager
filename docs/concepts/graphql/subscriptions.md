@@ -31,7 +31,7 @@ Each event has two fields:
 ### Signals and channels
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
-- Managers are automatically decorated with `@dataChange` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant channel group (`gm_subscriptions.<Manager>.<digest>`).
+- Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant channel group (`gm_subscriptions.<Manager>.<digest>`).
 
 ### Identification helpers
 
@@ -55,7 +55,7 @@ The field selection inspection understands:
 - Aliases applied to GraphQL properties.
 - Subscriptions that omit the `item` field entirely (only the `action` is streamed).
 
-No additional configuration is necessary. Continue to annotate computed fields with `@graphQlProperty`; the dependency tracker automatically inspects what each subscriber actually needs.
+No additional configuration is necessary. Continue to annotate computed fields with `@graph_ql_property`; the dependency tracker automatically inspects what each subscriber actually needs.
 
 ## Error handling
 

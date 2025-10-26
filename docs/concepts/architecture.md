@@ -8,7 +8,7 @@ A manager is a lightweight wrapper around an interface. It exposes attributes de
 
 Key properties:
 
-- Lazy attribute resolution: attributes are evaluated when accessed, allowing caching and property descriptors such as `@graphQlProperty`.
+- Lazy attribute resolution: attributes are evaluated when accessed, allowing caching and property descriptors such as `@graph_ql_property`.
 - Uniform API: `create`, `update`, `deactivate`, `filter`, and `all` methods behave consistently across interfaces.
 - Permission hook: operations delegate to the nested `Permission` class before touching the database.
 
@@ -32,7 +32,7 @@ Every data-changing operation emits signals captured by the dependency tracker (
 
 To take advantage of the tracker:
 
-- Wrap expensive resolvers with the `@cached` decorator or the `@graphQlProperty` decorator if you want to expose them in GraphQL.
+- Wrap expensive resolvers with the `@cached` decorator or the `@graph_ql_property` decorator if you want to expose them in GraphQL.
 - Mark inputs and outputs clearly so dependencies can be resolved.
 - Configure a shared cache backend when you run multiple worker processes.
 

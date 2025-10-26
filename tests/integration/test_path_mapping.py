@@ -24,14 +24,14 @@ def build_bucket_managers():
 
     class MiddleInterface(BaseTestInterface):
         @classmethod
-        def getAttributeTypes(cls):
+        def get_attribute_types(cls):
             """
             Return an empty dictionary representing the attribute types for the class.
             """
             return {}
 
         @classmethod
-        def getAttributes(cls):
+        def get_attributes(cls):
             """
             Return an empty dictionary representing the class's attributes.
 
@@ -51,14 +51,14 @@ def build_bucket_managers():
 
     class StartInterface(BaseTestInterface):
         @classmethod
-        def getAttributeTypes(cls):
+        def get_attribute_types(cls):
             """
             Return a dictionary describing the attribute types for the class, specifying that 'middles' is of type MiddleManager.
             """
             return {"middles": {"type": MiddleManager}}
 
         @classmethod
-        def getAttributes(cls):
+        def get_attributes(cls):
             """
             Return a dictionary describing the attributes of the class, with 'middles' as an attribute.
 
@@ -107,7 +107,7 @@ class PathMappingIntegrationTests(SimpleTestCase):
         tracer = pm.to(self.EndManager)
         self.assertEqual(tracer.path, ["middles", "end"])  # type: ignore
         start_instance = self.StartManager()
-        result = PathMap(start_instance).goTo(self.EndManager)
+        result = PathMap(start_instance).go_to(self.EndManager)
         self.assertIsInstance(result, SimpleBucket)
         self.assertEqual(result.count(), 2)  # type: ignore
 
@@ -119,6 +119,6 @@ class PathMappingIntegrationTests(SimpleTestCase):
         """
         pm = PathMap(self.StartManager)
         self.assertSetEqual(
-            pm.getAllConnected(),
+            pm.get_all_connected(),
             {self.MiddleManager.__name__, self.EndManager.__name__},
         )

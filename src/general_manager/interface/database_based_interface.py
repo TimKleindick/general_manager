@@ -27,7 +27,7 @@ from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface.models import (
     GeneralManagerBasisModel,
     GeneralManagerModel,
-    getFullCleanMethode,
+    get_full_clean_methode,
 )
 from django.contrib.contenttypes.fields import GenericForeignKey
 
@@ -76,9 +76,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
-        self._instance: MODEL_TYPE = self.getData(search_date)
+        self._instance: MODEL_TYPE = self.get_data(search_date)
 
-    def getData(self, search_date: datetime | None = None) -> MODEL_TYPE:
+    def get_data(self, search_date: datetime | None = None) -> MODEL_TYPE:
         """
         Fetch the underlying model instance, optionally as of a historical date.
 
@@ -95,13 +95,13 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             if timezone.is_naive(search_date):
                 search_date = timezone.make_aware(search_date)
             if search_date <= timezone.now() - timedelta(seconds=5):
-                historical = self.getHistoricalRecord(instance, search_date)
+                historical = self.get_historical_record(instance, search_date)
                 if historical is not None:
                     instance = historical
         return instance
 
     @staticmethod
-    def __parseKwargs(**kwargs: Any) -> dict[str, Any]:
+    def __parse_kwargs(**kwargs: Any) -> dict[str, Any]:
         """
         Convert keyword arguments into ORM-friendly values.
 
@@ -135,12 +135,12 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             DatabaseBucket: Bucket wrapping the filtered queryset.
         """
 
-        kwargs = cls.__parseKwargs(**kwargs)
+        kwargs = cls.__parse_kwargs(**kwargs)
 
         return DatabaseBucket(
             cls._model.objects.filter(**kwargs),
             cls._parent_class,
-            cls.__createFilterDefinitions(**kwargs),
+            cls.__create_filter_definitions(**kwargs),
         )
 
     @classmethod
@@ -154,16 +154,16 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns:
             DatabaseBucket: Bucket wrapping the excluded queryset.
         """
-        kwargs = cls.__parseKwargs(**kwargs)
+        kwargs = cls.__parse_kwargs(**kwargs)
 
         return DatabaseBucket(
             cls._model.objects.exclude(**kwargs),
             cls._parent_class,
-            cls.__createFilterDefinitions(**kwargs),
+            cls.__create_filter_definitions(**kwargs),
         )
 
     @staticmethod
-    def __createFilterDefinitions(**kwargs: Any) -> dict[str, Any]:
+    def __create_filter_definitions(**kwargs: Any) -> dict[str, Any]:
         """
         Build a filter-definition mapping from Django-style kwargs.
 
@@ -179,7 +179,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         return filter_definitions
 
     @classmethod
-    def getHistoricalRecord(
+    def get_historical_record(
         cls, instance: MODEL_TYPE, search_date: datetime | None = None
     ) -> MODEL_TYPE | None:
         """
@@ -196,7 +196,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         return cast(MODEL_TYPE | None, historical)
 
     @classmethod
-    def getAttributeTypes(cls) -> dict[str, AttributeTypedDict]:
+    def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         """
         Builds a mapping of model attribute names to their type metadata for the interface.
 
@@ -232,7 +232,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             models.TimeField: datetime,
         }
         fields: dict[str, AttributeTypedDict] = {}
-        field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
+        field_name_list, to_ignore_list = cls.handle_custom_fields(cls._model)
         for field_name in field_name_list:
             field = cast(models.Field, getattr(cls._model, field_name))
             fields[field_name] = {
@@ -243,7 +243,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 "default": field.default,
             }
 
-        for field_name in cls.__getModelFields():
+        for field_name in cls.__get_model_fields():
             if field_name not in to_ignore_list:
                 field = cast(models.Field, getattr(cls._model, field_name).field)
                 fields[field_name] = {
@@ -255,7 +255,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                     "default": field.default,
                 }
 
-        for field_name in cls.__getForeignKeyFields():
+        for field_name in cls.__get_foreign_key_fields():
             field = cls._model._meta.get_field(field_name)
             if isinstance(field, GenericForeignKey):
                 continue
@@ -281,8 +281,8 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 }
 
         for field_name, field_call in [
-            *cls.__getManyToManyFields(),
-            *cls.__getReverseRelations(),
+            *cls.__get_many_to_many_fields(),
+            *cls.__get_reverse_relations(),
         ]:
             if field_name in fields:
                 if field_call not in fields:
@@ -317,7 +317,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         }
 
     @classmethod
-    def getAttributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
+    def get_attributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
         Builds a mapping of attribute names to accessor callables for a DBBasedInterface instance.
 
@@ -333,19 +333,19 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
         field_values: dict[str, Any] = {}
 
-        field_name_list, to_ignore_list = cls.handleCustomFields(cls._model)
+        field_name_list, to_ignore_list = cls.handle_custom_fields(cls._model)
         for field_name in field_name_list:
             field_values[field_name] = lambda self, field_name=field_name: getattr(
                 self._instance, field_name
             )
 
-        for field_name in cls.__getModelFields():
+        for field_name in cls.__get_model_fields():
             if field_name not in to_ignore_list:
                 field_values[field_name] = lambda self, field_name=field_name: getattr(
                     self._instance, field_name
                 )
 
-        for field_name in cls.__getForeignKeyFields():
+        for field_name in cls.__get_foreign_key_fields():
             related_model = cls._model._meta.get_field(field_name).related_model
             if related_model and hasattr(
                 related_model,
@@ -371,8 +371,8 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
                 )
 
         for field_name, field_call in [
-            *cls.__getManyToManyFields(),
-            *cls.__getReverseRelations(),
+            *cls.__get_many_to_many_fields(),
+            *cls.__get_reverse_relations(),
         ]:
             if field_name in field_values:
                 if field_call not in field_values:
@@ -415,7 +415,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         return field_values
 
     @staticmethod
-    def handleCustomFields(
+    def handle_custom_fields(
         model: Type[models.Model] | models.Model,
     ) -> tuple[list[str], list[str]]:
         """
@@ -429,7 +429,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         """
         field_name_list: list[str] = []
         to_ignore_list: list[str] = []
-        for field_name in DBBasedInterface._getCustomFields(model):
+        for field_name in DBBasedInterface._get_custom_fields(model):
             to_ignore_list.append(f"{field_name}_value")
             to_ignore_list.append(f"{field_name}_unit")
             field_name_list.append(field_name)
@@ -437,7 +437,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         return field_name_list, to_ignore_list
 
     @staticmethod
-    def _getCustomFields(model: Type[models.Model] | models.Model) -> list[str]:
+    def _get_custom_fields(model: Type[models.Model] | models.Model) -> list[str]:
         """
         Return names of fields declared directly on the model class.
 
@@ -454,7 +454,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getModelFields(cls) -> list[str]:
+    def __get_model_fields(cls) -> list[str]:
         """Return names of non-relational fields defined on the model."""
         return [
             field.name
@@ -463,7 +463,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getForeignKeyFields(cls) -> list[str]:
+    def __get_foreign_key_fields(cls) -> list[str]:
         """Return names of foreign-key and one-to-one relations on the model."""
         return [
             field.name
@@ -472,7 +472,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getManyToManyFields(cls) -> list[tuple[str, str]]:
+    def __get_many_to_many_fields(cls) -> list[tuple[str, str]]:
         """Return (field_name, accessor_name) tuples for many-to-many fields."""
         return [
             (field.name, field.name)
@@ -481,7 +481,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @classmethod
-    def __getReverseRelations(cls) -> list[tuple[str, str]]:
+    def __get_reverse_relations(cls) -> list[tuple[str, str]]:
         """Return (field_name, accessor_name) tuples for reverse one-to-many relations."""
         return [
             (field.name, f"{field.name}_set")
@@ -490,7 +490,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ]
 
     @staticmethod
-    def _preCreate(
+    def _pre_create(
         name: generalManagerClassName,
         attrs: attributes,
         interface: interfaceBaseClass,
@@ -539,7 +539,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         if meta_class and rules:
             model._meta.rules = rules  # type: ignore[attr-defined]
             # add full_clean method
-            model.full_clean = getFullCleanMethode(model)  # type: ignore[assignment]
+            model.full_clean = get_full_clean_methode(model)  # type: ignore[assignment]
         # Determine interface type
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(interface.__name__, (interface,), {})
@@ -562,7 +562,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         return attrs, interface_cls, model
 
     @staticmethod
-    def _postCreate(
+    def _post_create(
         new_class: newlyCreatedGeneralManagerClass,
         interface_class: newlyCreatedInterfaceClass,
         model: relatedClass,
@@ -581,7 +581,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         model._general_manager_class = new_class  # type: ignore
 
     @classmethod
-    def handleInterface(
+    def handle_interface(
         cls,
     ) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
@@ -590,10 +590,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns:
             tuple[classPreCreationMethod, classPostCreationMethod]: A pair (pre_create, post_create) where `pre_create` is invoked before the manager class is created to allow customization, and `post_create` is invoked after creation to finalize setup.
         """
-        return cls._preCreate, cls._postCreate
+        return cls._pre_create, cls._post_create
 
     @classmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def get_field_type(cls, field_name: str) -> type:
         """
         Return the type associated with a given model field name.
 

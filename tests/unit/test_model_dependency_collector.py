@@ -83,10 +83,10 @@ class TestModelDependencyCollector(SimpleTestCase):
         }
         self.assertEqual(deps, expected)
 
-    def test_addArgs_collects_args_and_nested_attributes(self):
+    def test_add_args_collects_args_and_nested_attributes(self):
         # GM with nested attribute child (another GM)
         """
-        Verify that ModelDependencyCollector.addArgs collects identification dependencies from a FakeGM positional argument and its nested child attribute.
+        Verify that ModelDependencyCollector.add_args collects identification dependencies from a FakeGM positional argument and its nested child attribute.
 
         Asserts that the resulting deps_set contains identification tuples for both the root and child FakeGM instances.
         """
@@ -96,23 +96,23 @@ class TestModelDependencyCollector(SimpleTestCase):
 
         deps_set = set()
         # first arg is gm, second is ignored, no kwargs
-        ModelDependencyCollector.addArgs(deps_set, (gm, 42), {})
+        ModelDependencyCollector.add_args(deps_set, (gm, 42), {})
         expected = {
             ("FakeGM", "identification", "child"),
             ("FakeGM", "identification", "root"),
         }
         self.assertEqual(deps_set, expected)
 
-    def test_addArgs_includes_kwargs(self):
+    def test_add_args_includes_kwargs(self):
         """
-        Tests that addArgs collects dependencies from keyword arguments containing dependency objects.
+        Tests that add_args collects dependencies from keyword arguments containing dependency objects.
 
         Verifies that when a dependency object is passed in kwargs, its identifying information is added to the dependencies set.
         """
         gm = FakeGM("root")
         other = "no-dep"
         deps_set = set()
-        ModelDependencyCollector.addArgs(deps_set, (), {"gm": gm, "val": other})
+        ModelDependencyCollector.add_args(deps_set, (), {"gm": gm, "val": other})
         # kwargs contain gm -> should include its identification
         expected = {("FakeGM", "identification", "root")}
         self.assertEqual(deps_set, expected)

@@ -86,7 +86,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     _parent_class: ClassVar[Type["GeneralManager"]]
 
     @staticmethod
-    def getUniqueFields(model: Type[models.Model]) -> set[str]:
+    def get_unique_fields(model: Type[models.Model]) -> set[str]:
         """
         Determine which fields on the given Django model uniquely identify its instances.
 
@@ -117,7 +117,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         return unique_fields
 
     @classmethod
-    def syncData(cls) -> None:
+    def sync_data(cls) -> None:
         """
         Synchronize the Django model with the parent manager's class-level `_data` JSON.
 
@@ -129,7 +129,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             InvalidReadOnlyDataTypeError: If `_data` is neither a string nor a list.
             MissingUniqueFieldError: If the model exposes no unique fields to identify records.
         """
-        if cls.ensureSchemaIsUpToDate(cls._parent_class, cls._model):
+        if cls.ensure_schema_is_up_to_date(cls._parent_class, cls._model):
             logger.warning(
                 f"Schema for ReadOnlyInterface '{cls._parent_class.__name__}' is not up to date."
             )
@@ -153,7 +153,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
 
         data_list = cast(list[dict[str, Any]], parsed_data)
 
-        unique_fields = cls.getUniqueFields(model)
+        unique_fields = cls.get_unique_fields(model)
         if not unique_fields:
             raise MissingUniqueFieldError(parent_class.__name__)
 
@@ -215,7 +215,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             )
 
     @staticmethod
-    def ensureSchemaIsUpToDate(
+    def ensure_schema_is_up_to_date(
         new_manager_class: Type[GeneralManager], model: Type[models.Model]
     ) -> list[Warning]:
         """
@@ -286,7 +286,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         return []
 
     @staticmethod
-    def readOnlyPostCreate(func: Callable[..., Any]) -> Callable[..., Any]:
+    def read_only_post_create(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for post-creation hooks that registers a new manager class as read-only.
 
@@ -311,7 +311,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         return wrapper
 
     @staticmethod
-    def readOnlyPreCreate(func: Callable[..., Any]) -> Callable[..., Any]:
+    def read_only_pre_create(func: Callable[..., Any]) -> Callable[..., Any]:
         """
         Decorator for pre-creation hook functions that ensures the base model class is set to `GeneralManagerBasisModel`.
 
@@ -344,7 +344,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         return wrapper
 
     @classmethod
-    def handleInterface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
+    def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         Return the pre- and post-creation hook methods for integrating the interface with a manager meta-class system.
 
@@ -355,6 +355,6 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         Returns:
             tuple: The pre-creation and post-creation hook methods for manager class lifecycle integration.
         """
-        return cls.readOnlyPreCreate(cls._preCreate), cls.readOnlyPostCreate(
-            cls._postCreate
+        return cls.read_only_pre_create(cls._pre_create), cls.read_only_post_create(
+            cls._post_create
         )

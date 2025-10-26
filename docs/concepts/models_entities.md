@@ -4,7 +4,7 @@ Managers model business entities. Buckets represent collections of managers that
 
 ## Declaring attributes
 
-Attributes declared as type hints become part of the public interface. They can point to primitive types, measurements, nested managers, or buckets. Methods decorated with `@graphQlProperty` expose computed values that automatically become GraphQL fields.
+Attributes declared as type hints become part of the public interface. They can point to primitive types, measurements, nested managers, or buckets. Methods decorated with `@graph_ql_property` expose computed values that automatically become GraphQL fields.
 
 ```python
 class Project(GeneralManager):
@@ -13,7 +13,7 @@ class Project(GeneralManager):
     end_date: date | None
     derivative_list: Bucket[Derivative]
 
-    @graphQlProperty
+    @graph_ql_property
     def duration(self) -> int | None:
         if not self.start_date or not self.end_date:
             return None

@@ -54,7 +54,7 @@ from general_manager.cache.cache_tracker import DependencyTracker
 
 ## Step 4: Wire up permissions
 
-Attach a permission class like any other manager. Custom interfaces participate fully in permission checks and GraphQL type generation as long as they expose attribute metadata via `getAttributeTypes()`.
+Attach a permission class like any other manager. Custom interfaces participate fully in permission checks and GraphQL type generation as long as they expose attribute metadata via `get_attribute_types()`.
 
 ## Step 5: Document limitations
 

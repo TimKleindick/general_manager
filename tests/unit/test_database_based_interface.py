@@ -14,7 +14,7 @@ from django.core.exceptions import ValidationError, FieldDoesNotExist
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.database_based_interface import (
     DBBasedInterface,
-    getFullCleanMethode,
+    get_full_clean_methode,
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.database_bucket import DatabaseBucket
@@ -41,7 +41,7 @@ class PersonInterface(DBBasedInterface):
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
     @classmethod
-    def handleInterface(cls):
+    def handle_interface(cls):
         """
         Provide pre- and post-processing callables used when creating a dynamic interface-backed class.
 
@@ -127,10 +127,10 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that initializing the manager with a past search date retrieves the historical record.
 
-        Verifies that the interface instance is set to the value returned by the patched `getHistoricalRecord` method and that this method is called exactly once.
+        Verifies that the interface instance is set to the value returned by the patched `get_historical_record` method and that this method is called exactly once.
         """
         with patch.object(
-            PersonInterface, "getHistoricalRecord", return_value="old"
+            PersonInterface, "get_historical_record", return_value="old"
         ) as mock_hist:
             mgr = DummyManager(
                 self.person.pk, search_date=datetime.now() - timedelta(minutes=1)
@@ -152,7 +152,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_get_historical_record(self):
         """
-        Tests that getHistoricalRecord retrieves the correct historical record for a given date.
+        Tests that get_historical_record retrieves the correct historical record for a given date.
 
         Verifies that the method filters the history manager by date and returns the last matching record.
         """
@@ -160,7 +160,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         mock.filter.return_value.last.return_value = "hist"
         dummy = SimpleNamespace(history=mock)
         dt = datetime(2020, 1, 1)
-        res = PersonInterface.getHistoricalRecord(dummy, dt)
+        res = PersonInterface.get_historical_record(dummy, dt)
         mock.filter.assert_called_once_with(history_date__lte=dt)
         self.assertEqual(res, "hist")
 
@@ -168,22 +168,22 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that attribute type information and field types are correctly reported by the interface.
 
-        Verifies that `getAttributeTypes` returns accurate type, required, and editable flags for model fields, and that `getFieldType` returns the correct Django field class.
+        Verifies that `get_attribute_types` returns accurate type, required, and editable flags for model fields, and that `get_field_type` returns the correct Django field class.
         """
-        types = PersonInterface.getAttributeTypes()
+        types = PersonInterface.get_attribute_types()
         self.assertEqual(types["name"]["type"], str)
         self.assertTrue(types["name"]["is_required"])
         self.assertEqual(types["tags_list"]["type"], User)
         self.assertTrue(types["tags_list"]["is_editable"])
         self.assertFalse(types["tags_list"]["is_required"])
-        self.assertIs(PersonInterface.getFieldType("name"), models.CharField)
+        self.assertIs(PersonInterface.get_field_type("name"), models.CharField)
 
     def test_get_attributes_values(self):
         """
         Tests that attribute getter functions from the interface return correct values for a model instance.
         """
         mgr = DummyManager(self.person.pk)
-        attrs = PersonInterface.getAttributes()
+        attrs = PersonInterface.get_attributes()
         self.assertEqual(attrs["name"](mgr._interface), "Alice")
         self.assertEqual(attrs["age"](mgr._interface), 30)
         self.assertEqual(attrs["is_active"](mgr._interface), True)
@@ -198,7 +198,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Verifies that the interface and manager classes are correctly linked, the model and its history table are created, and the manager's factory is properly associated with the model.
         """
         attrs = {"__module__": "general_manager"}
-        new_attrs, interface_cls, model = PersonInterface._preCreate(
+        new_attrs, interface_cls, model = PersonInterface._pre_create(
             "TempManager", attrs, PersonInterface
         )
         with connection.schema_editor() as schema:
@@ -206,7 +206,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
             schema.create_model(model.history.model)
 
         TempManager = type("TempManager", (GeneralManager,), new_attrs)
-        PersonInterface._postCreate(TempManager, interface_cls, model)
+        PersonInterface._post_create(TempManager, interface_cls, model)
         self.assertIs(interface_cls._parent_class, TempManager)
         self.assertIs(model._general_manager_class, TempManager)
         self.assertIs(TempManager.Interface, interface_cls)
@@ -228,11 +228,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
                 self.called = True
                 return False
 
-            def getErrorMessage(self):
+            def get_error_message(self):
                 return {"name": "bad"}
 
         PersonModel._meta.rules = [DummyRule()]
-        cleaner = getFullCleanMethode(PersonModel)
+        cleaner = get_full_clean_methode(PersonModel)
         invalid = PersonModel(age=1, owner=self.user, changed_by=self.user)
         with self.assertRaises(ValidationError):
             cleaner(invalid)
@@ -256,11 +256,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
                 self.called = True
                 return True
 
-            def getErrorMessage(self):
+            def get_error_message(self):
                 return {"name": "bad"}
 
         PersonModel._meta.rules = [DummyRule()]
-        cleaner = getFullCleanMethode(PersonModel)
+        cleaner = get_full_clean_methode(PersonModel)
         invalid = PersonModel(age=1, owner=self.user, changed_by=self.user)
         with self.assertRaises(ValidationError):
             cleaner(invalid)
@@ -270,13 +270,13 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields(self):
         """
-        Tests that custom fields and ignore lists are correctly identified by handleCustomFields for a DBBasedInterface subclass.
+        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a DBBasedInterface subclass.
         """
 
         class CustomInterface(DBBasedInterface):
             sample = models.CharField(max_length=5)
 
-        fields, ignore = DBBasedInterface.handleCustomFields(CustomInterface)
+        fields, ignore = DBBasedInterface.handle_custom_fields(CustomInterface)
         self.assertIn(None, fields)
         self.assertIn("None_value", ignore)
         self.assertIn("None_unit", ignore)
@@ -389,34 +389,34 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_get_historical_record_with_none_date(self):
         """
-        Tests that getHistoricalRecord handles None date appropriately.
+        Tests that get_historical_record handles None date appropriately.
         """
         mock = MagicMock()
         mock.filter.return_value.last.return_value = None
         dummy = SimpleNamespace(history=mock)
 
-        res = PersonInterface.getHistoricalRecord(dummy, None)
+        res = PersonInterface.get_historical_record(dummy, None)
         mock.filter.assert_called_once_with(history_date__lte=None)
         self.assertIsNone(res)
 
     def test_get_historical_record_with_future_date(self):
         """
-        Tests that getHistoricalRecord works with future dates.
+        Tests that get_historical_record works with future dates.
         """
         mock = MagicMock()
         mock.filter.return_value.last.return_value = "future_hist"
         dummy = SimpleNamespace(history=mock)
         future_date = datetime.now() + timedelta(days=1)
 
-        res = PersonInterface.getHistoricalRecord(dummy, future_date)
+        res = PersonInterface.get_historical_record(dummy, future_date)
         mock.filter.assert_called_once_with(history_date__lte=future_date)
         self.assertEqual(res, "future_hist")
 
     def test_get_attribute_types_completeness(self):
         """
-        Tests that getAttributeTypes returns information for all expected model fields.
+        Tests that get_attribute_types returns information for all expected model fields.
         """
-        types = PersonInterface.getAttributeTypes()
+        types = PersonInterface.get_attribute_types()
         expected_fields = [
             "id",
             "name",
@@ -435,9 +435,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_get_attribute_types_field_properties(self):
         """
-        Tests that getAttributeTypes returns correct properties for different field types.
+        Tests that get_attribute_types returns correct properties for different field types.
         """
-        types = PersonInterface.getAttributeTypes()
+        types = PersonInterface.get_attribute_types()
 
         # CharField should be required and editable
         self.assertEqual(types["name"]["type"], str)
@@ -456,25 +456,25 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_get_field_type_for_all_fields(self):
         """
-        Tests that getFieldType returns correct Django field classes for all model fields.
+        Tests that get_field_type returns correct Django field classes for all model fields.
         """
-        self.assertIs(PersonInterface.getFieldType("name"), models.CharField)
-        self.assertIs(PersonInterface.getFieldType("age"), models.IntegerField)
-        self.assertIs(PersonInterface.getFieldType("owner"), models.ForeignKey)
-        self.assertIs(PersonInterface.getFieldType("tags"), models.ManyToManyField)
-        self.assertIs(PersonInterface.getFieldType("is_active"), models.BooleanField)
-        self.assertIs(PersonInterface.getFieldType("changed_by"), models.ForeignKey)
+        self.assertIs(PersonInterface.get_field_type("name"), models.CharField)
+        self.assertIs(PersonInterface.get_field_type("age"), models.IntegerField)
+        self.assertIs(PersonInterface.get_field_type("owner"), models.ForeignKey)
+        self.assertIs(PersonInterface.get_field_type("tags"), models.ManyToManyField)
+        self.assertIs(PersonInterface.get_field_type("is_active"), models.BooleanField)
+        self.assertIs(PersonInterface.get_field_type("changed_by"), models.ForeignKey)
 
     def test_get_field_type_with_invalid_field(self):
         """
-        Tests that getFieldType handles invalid field names gracefully.
+        Tests that get_field_type handles invalid field names gracefully.
         """
         with self.assertRaises(FieldDoesNotExist):
-            PersonInterface.getFieldType("nonexistent_field")
+            PersonInterface.get_field_type("nonexistent_field")
 
     def test_get_attributes_with_empty_instance(self):
         """
-        Tests that getAttributes works correctly with newly created instances.
+        Tests that get_attributes works correctly with newly created instances.
         """
         new_person = PersonModel(
             name="Charlie",
@@ -485,7 +485,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         new_person.save()
 
         mgr = DummyManager(new_person.pk)
-        attrs = PersonInterface.getAttributes()
+        attrs = PersonInterface.get_attributes()
 
         self.assertEqual(attrs["name"](mgr._interface), "Charlie")
         self.assertEqual(attrs["age"](mgr._interface), 40)
@@ -495,9 +495,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_interface_pre_function(self):
         """
-        Tests that the pre function from handleInterface returns expected values.
+        Tests that the pre function from handle_interface returns expected values.
         """
-        pre, _post = PersonInterface.handleInterface()
+        pre, _post = PersonInterface.handle_interface()
         attrs = {"test": "value"}
         result_attrs, result_cls, result_model = pre(
             "TestClass", attrs, PersonInterface
@@ -509,9 +509,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_interface_post_function(self):
         """
-        Tests that the post function from handleInterface correctly links classes.
+        Tests that the post function from handle_interface correctly links classes.
         """
-        _pre, post = PersonInterface.handleInterface()
+        _pre, post = PersonInterface.handle_interface()
 
         # Create a mock new class
         mock_new_cls = MagicMock()
@@ -539,7 +539,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
                 self.call_order = 1
                 return True
 
-            def getErrorMessage(self):
+            def get_error_message(self):
                 return {"name": "rule1 error"}
 
         class Rule2:
@@ -552,14 +552,14 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
                 self.call_order = 2
                 return True
 
-            def getErrorMessage(self):
+            def get_error_message(self):
                 return {"name": "rule2 error"}
 
         rule1 = Rule1()
         rule2 = Rule2()
         PersonModel._meta.rules = [rule1, rule2]
 
-        cleaner = getFullCleanMethode(PersonModel)
+        cleaner = get_full_clean_methode(PersonModel)
         _ = cleaner(self.person)
 
         self.assertTrue(rule1.called)
@@ -575,18 +575,18 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
             def evaluate(self, obj):
                 return True
 
-            def getErrorMessage(self):
+            def get_error_message(self):
                 return {"name": "passing error"}
 
         class FailingRule:
             def evaluate(self, obj):
                 return False
 
-            def getErrorMessage(self):
+            def get_error_message(self):
                 return {"age": "failing error"}
 
         PersonModel._meta.rules = [PassingRule(), FailingRule()]
-        cleaner = getFullCleanMethode(PersonModel)
+        cleaner = get_full_clean_methode(PersonModel)
 
         with self.assertRaises(ValidationError) as context:
             cleaner(self.person)
@@ -603,7 +603,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         if hasattr(PersonModel._meta, "rules"):
             delattr(PersonModel._meta, "rules")
 
-        cleaner = getFullCleanMethode(PersonModel)
+        cleaner = get_full_clean_methode(PersonModel)
 
         # Should pass validation without custom rules
         _ = cleaner(self.person)
@@ -615,7 +615,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields_with_multiple_custom_fields(self):
         """
-        Tests handleCustomFields with multiple custom fields defined.
+        Tests handle_custom_fields with multiple custom fields defined.
         """
 
         class MultiCustomInterface(DBBasedInterface):
@@ -623,7 +623,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
             field2 = models.IntegerField()
             field3 = models.BooleanField()
 
-        fields, ignore = DBBasedInterface.handleCustomFields(MultiCustomInterface)
+        fields, ignore = DBBasedInterface.handle_custom_fields(MultiCustomInterface)
 
         # Should have None for each custom field
         expected_none_count = 3  # field1, field2, field3
@@ -638,13 +638,13 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields_with_no_custom_fields(self):
         """
-        Tests handleCustomFields with no custom fields defined.
+        Tests handle_custom_fields with no custom fields defined.
         """
 
         class NoCustomInterface(DBBasedInterface):
             pass
 
-        fields, ignore = DBBasedInterface.handleCustomFields(NoCustomInterface)
+        fields, ignore = DBBasedInterface.handle_custom_fields(NoCustomInterface)
 
         # Should have empty or minimal results
         self.assertIsInstance(fields, (list, tuple))
@@ -671,7 +671,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         # Test with exact current time
         current_time = datetime.now()
         with patch.object(
-            PersonInterface, "getHistoricalRecord", return_value=self.person
+            PersonInterface, "get_historical_record", return_value=self.person
         ) as mock_hist:
             DummyManager(self.person.pk, search_date=current_time)
             mock_hist.assert_not_called()
@@ -679,7 +679,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         # Test with very old date
         old_date = datetime(1900, 1, 1, tzinfo=UTC)
         with patch.object(
-            PersonInterface, "getHistoricalRecord", return_value=None
+            PersonInterface, "get_historical_record", return_value=None
         ) as mock_hist:
             DummyManager(self.person.pk, search_date=old_date)
             mock_hist.assert_called_once_with(self.person, old_date)
@@ -723,7 +723,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         )
 
         mgr = DummyManager(minimal_person.pk)
-        attrs = PersonInterface.getAttributes()
+        attrs = PersonInterface.get_attributes()
 
         # Should handle edge values gracefully
         self.assertEqual(attrs["name"](mgr._interface), "Minimal")
@@ -738,7 +738,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         mgr1 = DummyManager(self.person.pk)
         mgr2 = DummyManager(self.person.pk)
 
-        attrs = PersonInterface.getAttributes()
+        attrs = PersonInterface.get_attributes()
 
         # Both managers should return the same data
         self.assertEqual(attrs["name"](mgr1._interface), attrs["name"](mgr2._interface))

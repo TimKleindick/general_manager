@@ -99,7 +99,7 @@ class GroupManager(Generic[GeneralManagerType]):
         Yields:
             tuple[str, Any]: Attribute name and aggregated value pairs.
         """
-        for attribute in self._manager_class.Interface.getAttributes().keys():
+        for attribute in self._manager_class.Interface.get_attributes().keys():
             yield attribute, getattr(self, attribute)
         for attribute, attr_value in self._manager_class.__dict__.items():
             if isinstance(attr_value, GraphQLProperty):
@@ -121,10 +121,10 @@ class GroupManager(Generic[GeneralManagerType]):
         if item in self._group_by_value:
             return self._group_by_value[item]
         if item not in self._grouped_data.keys():
-            self._grouped_data[item] = self.combineValue(item)
+            self._grouped_data[item] = self.combine_value(item)
         return self._grouped_data[item]
 
-    def combineValue(self, item: str) -> Any:
+    def combine_value(self, item: str) -> Any:
         """
         Aggregate the values of a named attribute across all records in the group.
 
@@ -140,7 +140,7 @@ class GroupManager(Generic[GeneralManagerType]):
         if item == "id":
             return None
 
-        attribute_types = self._manager_class.Interface.getAttributeTypes()
+        attribute_types = self._manager_class.Interface.get_attribute_types()
         attr_info = attribute_types.get(item)
         data_type = attr_info["type"] if attr_info else None
         if data_type is None and item in self._manager_class.__dict__:

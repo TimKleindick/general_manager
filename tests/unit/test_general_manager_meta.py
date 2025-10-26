@@ -8,7 +8,7 @@ from general_manager.interface.base_interface import InterfaceBase
 
 class dummyInterface:
     @staticmethod
-    def getAttributes():
+    def get_attributes():
         return {
             "test_int": 42,
             "test_field": "value",
@@ -23,7 +23,7 @@ class DummyGeneralManager:
 
     class Interface:
         @staticmethod
-        def getFieldType(field_name: str) -> type:
+        def get_field_type(field_name: str) -> type:
             if field_name == "test_int":
                 return int
             elif field_name == "dummy_manager2":
@@ -60,7 +60,7 @@ class TestPropertyInitialization(SimpleTestCase):
             "test_field": "value",
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["test_field"],
             DummyManager1,  # type: ignore
         )
@@ -77,7 +77,7 @@ class TestPropertyInitialization(SimpleTestCase):
             "dummy_manager2": self.dummy_manager2,
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["dummy_manager2"],
             DummyManager1,  # type: ignore
         )
@@ -105,12 +105,12 @@ class TestPropertyInitialization(SimpleTestCase):
             "dummy_manager1": self.dummy_manager1,
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["dummy_manager2"],
             DummyManager1,  # type: ignore
         )
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["dummy_manager1"],
             DummyManager2,  # type: ignore
         )
@@ -138,7 +138,7 @@ class TestPropertyInitialization(SimpleTestCase):
             "test_field": "value",
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["test_int", "test_field"],
             DummyManager1,  # type: ignore
         )
@@ -163,7 +163,7 @@ class TestPropertyInitialization(SimpleTestCase):
             "test_field": test_callable,
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["test_field"],
             DummyManager1,  # type: ignore
         )
@@ -176,17 +176,17 @@ class TestPropertyInitialization(SimpleTestCase):
 
     def test_property_with_complex_callable(self):
         def test_complex_callable1(interface):
-            return interface.getAttributes().get("test_field")
+            return interface.get_attributes().get("test_field")
 
         def test_complex_callable2(interface):
-            return interface.getAttributes().get("test_int")
+            return interface.get_attributes().get("test_int")
 
         self.dummy_manager1._attributes = {
             "test_field": test_complex_callable1,
             "test_int": test_complex_callable2,
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["test_field", "test_int"],
             DummyManager1,  # type: ignore
         )
@@ -211,7 +211,7 @@ class TestPropertyInitialization(SimpleTestCase):
         """
         self.dummy_manager1._attributes = {}
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["non_existent_field"],
             DummyManager1,  # type: ignore
         )
@@ -237,7 +237,7 @@ class TestPropertyInitialization(SimpleTestCase):
             "test_field": test_callable_error,
         }
 
-        GeneralManagerMeta.createAtPropertiesForAttributes(
+        GeneralManagerMeta.create_at_properties_for_attributes(
             ["test_field"],
             DummyManager1,  # type: ignore
         )
@@ -272,9 +272,9 @@ class Bucket(list):
 class DummyInterface(InterfaceBase):
     """
     Minimal subclass of InterfaceBase that:
-    - Defines input_fields as an empty dict so parseInputFieldsToIdentification won't fail.
+    - Defines input_fields as an empty dict so parse_input_fields_to_identification won't fail.
     - Stubs all abstract methods.
-    - Implements handleInterface() to return custom pre/post creation hooks.
+    - Implements handle_interface() to return custom pre/post creation hooks.
     """
 
     input_fields: ClassVar[dict[str, Input]] = {}  # no required fields # type: ignore
@@ -302,15 +302,15 @@ class DummyInterface(InterfaceBase):
     def deactivate(self, *args, **kwargs):
         raise NotImplementedError
 
-    def getData(self, search_date=None):
+    def get_data(self, search_date=None):
         raise NotImplementedError
 
     @classmethod
-    def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+    def get_attribute_types(cls) -> dict[str, dict]:  # type: ignore
         return {}
 
     @classmethod
-    def getAttributes(cls) -> dict[str, dict]:
+    def get_attributes(cls) -> dict[str, dict]:
         return {}
 
     @classmethod
@@ -322,25 +322,25 @@ class DummyInterface(InterfaceBase):
         return Bucket()
 
     @classmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def get_field_type(cls, field_name: str) -> type:
         return str
 
     @classmethod
-    def handleInterface(cls):
+    def handle_interface(cls):
         """
         Returns two functions:
-        - preCreation: modifies attrs before the class is created (adds 'marker').
-        - postCreation: sets a flag on the newly created class.
+        - pre_creation: modifies attrs before the class is created (adds 'marker').
+        - post_creation: sets a flag on the newly created class.
         """
 
-        def preCreation(name, attrs, interface):
+        def pre_creation(name, attrs, interface):
             attrs["marker"] = "initialized_by_dummy"
             return attrs, cls, None
 
-        def postCreation(new_cls, interface_cls, model):
+        def post_creation(new_cls, interface_cls, model):
             new_cls.post_mark = True
 
-        return preCreation, postCreation
+        return pre_creation, post_creation
 
 
 # -----------------------------------------------------------------------------
@@ -357,7 +357,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
         """
         1. Define a class that sets Interface = DummyInterface.
         2. After definition, it should appear in all_classes and pending_attribute_initialization.
-        3. preCreation hook adds 'marker'; postCreation hook sets 'post_mark'.
+        3. pre_creation hook adds 'marker'; post_creation hook sets 'post_mark'.
         """
 
         class MyManager(metaclass=GeneralManagerMeta):
@@ -377,16 +377,16 @@ class GeneralManagerMetaTests(SimpleTestCase):
             msg="MyManager should be registered in pending_attribute_initialization.",
         )
 
-        # c) preCreation hook added the 'marker' attribute
+        # c) pre_creation hook added the 'marker' attribute
         self.assertTrue(
             hasattr(MyManager, "marker") and MyManager.marker == "initialized_by_dummy",  # type: ignore
-            msg="MyManager.marker should be set by the DummyInterface preCreation hook.",
+            msg="MyManager.marker should be set by the DummyInterface pre_creation hook.",
         )
 
-        # d) postCreation hook set the 'post_mark' attribute to True
+        # d) post_creation hook set the 'post_mark' attribute to True
         self.assertTrue(
             hasattr(MyManager, "post_mark") and MyManager.post_mark is True,  # type: ignore
-            msg="MyManager.post_mark should be True set by the DummyInterface postCreation hook.",
+            msg="MyManager.post_mark should be True set by the DummyInterface post_creation hook.",
         )
 
     def test_invalid_interface_raises_type_error(self):
@@ -483,7 +483,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
         Verifies that GeneralManagerMeta.all_classes and GeneralManagerMeta.pending_attribute_initialization
         list ManagerA then ManagerB, and that ManagerA and ManagerB have the attributes set by their
-        interfaces' preCreation and postCreation hooks (`fromA` / `a_post` and `fromB` / `b_post` respectively).
+        interfaces' pre_creation and post_creation hooks (`fromA` / `a_post` and `fromB` / `b_post` respectively).
         """
 
         # DummyInterfaceA: adds 'fromA' and 'a_post'
@@ -511,15 +511,15 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def deactivate(self, *args, **kwargs):
                 raise NotImplementedError
 
-            def getData(self, search_date=None):
+            def get_data(self, search_date=None):
                 raise NotImplementedError
 
             @classmethod
-            def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+            def get_attribute_types(cls) -> dict[str, dict]:  # type: ignore
                 return {}
 
             @classmethod
-            def getAttributes(cls) -> dict[str, dict]:
+            def get_attributes(cls) -> dict[str, dict]:
                 return {}
 
             @classmethod
@@ -531,19 +531,19 @@ class GeneralManagerMetaTests(SimpleTestCase):
                 return Bucket()
 
             @classmethod
-            def getFieldType(cls, field_name: str) -> type:
+            def get_field_type(cls, field_name: str) -> type:
                 return str
 
             @classmethod
-            def handleInterface(cls):
-                def preCreation(name, attrs, interface):
+            def handle_interface(cls):
+                def pre_creation(name, attrs, interface):
                     attrs["fromA"] = True
                     return attrs, cls, None
 
-                def postCreation(new_cls, interface_cls, model):
+                def post_creation(new_cls, interface_cls, model):
                     new_cls.a_post = True
 
-                return preCreation, postCreation
+                return pre_creation, post_creation
 
         # DummyInterfaceB: adds 'fromB' and 'b_post'
         class DummyInterfaceB(InterfaceBase):
@@ -570,15 +570,15 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def deactivate(self, *args, **kwargs):
                 raise NotImplementedError
 
-            def getData(self, search_date=None):
+            def get_data(self, search_date=None):
                 raise NotImplementedError
 
             @classmethod
-            def getAttributeTypes(cls) -> dict[str, dict]:  # type: ignore
+            def get_attribute_types(cls) -> dict[str, dict]:  # type: ignore
                 return {}
 
             @classmethod
-            def getAttributes(cls) -> dict[str, dict]:
+            def get_attributes(cls) -> dict[str, dict]:
                 return {}
 
             @classmethod
@@ -590,19 +590,19 @@ class GeneralManagerMetaTests(SimpleTestCase):
                 return Bucket()
 
             @classmethod
-            def getFieldType(cls, field_name: str) -> type:
+            def get_field_type(cls, field_name: str) -> type:
                 return str
 
             @classmethod
-            def handleInterface(cls):
-                def preCreation(name, attrs, interface):
+            def handle_interface(cls):
+                def pre_creation(name, attrs, interface):
                     attrs["fromB"] = True
                     return attrs, cls, None
 
-                def postCreation(new_cls, interface_cls, model):
+                def post_creation(new_cls, interface_cls, model):
                     new_cls.b_post = True
 
-                return preCreation, postCreation
+                return pre_creation, post_creation
 
         # 1. Define ManagerA with DummyInterfaceA
         class ManagerA(metaclass=GeneralManagerMeta):

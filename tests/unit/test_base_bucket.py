@@ -9,7 +9,7 @@ from general_manager.bucket.group_bucket import GroupBucket
 class DummyManager:
     class Interface:
         @staticmethod
-        def getAttributes():
+        def get_attributes():
             """
             Provide a fixed mapping of attribute names to None.
 
