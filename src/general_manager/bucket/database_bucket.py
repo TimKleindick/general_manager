@@ -7,14 +7,11 @@ from django.core.exceptions import FieldError
 from django.db import models
 
 from general_manager.bucket.base_bucket import Bucket
-from general_manager.interface.base_interface import GeneralManagerType
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
-
-if TYPE_CHECKING:
-    from general_manager.interface.database_interface import DatabaseInterface
+GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
