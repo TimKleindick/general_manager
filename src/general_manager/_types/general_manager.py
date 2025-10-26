@@ -11,8 +11,8 @@ __all__ = [
     "ManagerBasedPermission",
     "ReadOnlyInterface",
     "Rule",
-    "graphQlMutation",
-    "graphQlProperty",
+    "graph_ql_mutation",
+    "graph_ql_property",
 ]
 
 from general_manager.interface.calculation_interface import CalculationInterface
@@ -23,5 +23,5 @@ from general_manager.manager.input import Input
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.interface.read_only_interface import ReadOnlyInterface
 from general_manager.rule.rule import Rule
-from general_manager.api.mutation import graphQlMutation
-from general_manager.api.property import graphQlProperty
+from general_manager.api.mutation import graph_ql_mutation
+from general_manager.api.property import graph_ql_property

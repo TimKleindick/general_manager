@@ -35,7 +35,7 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         super().setUp()
-        self.TestCountry.Interface.syncData()  # type: ignore
+        self.TestCountry.Interface.sync_data()  # type: ignore
 
     def test_sync_populates_database(self):
         countries = self.TestCountry.all()

@@ -78,7 +78,7 @@ def cached(
 
             with DependencyTracker() as dependencies:
                 result = func(*args, **kwargs)
-                ModelDependencyCollector.addArgs(dependencies, args, kwargs)
+                ModelDependencyCollector.add_args(dependencies, args, kwargs)
 
                 cache_backend.set(key, result, timeout)
                 cache_backend.set(deps_key, dependencies, timeout)

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 
-def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
+def get_full_clean_methode(model: Type[models.Model]) -> Callable[..., None]:
     """
     Return a custom `full_clean` method for a Django model that performs both standard validation and additional rule-based checks.
 
@@ -44,7 +44,7 @@ def getFullCleanMethode(model: Type[models.Model]) -> Callable[..., None]:
         rules: list[Rule] = getattr(self._meta, "rules", [])
         for rule in rules:
             if rule.evaluate(self) is False:
-                error_message = rule.getErrorMessage()
+                error_message = rule.get_error_message()
                 if error_message:
                     errors.update(error_message)
 

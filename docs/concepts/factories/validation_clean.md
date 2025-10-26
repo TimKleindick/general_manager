@@ -4,11 +4,11 @@ Factories respect the same validation pipeline as your application code. Underst
 
 ## Interface validation
 
-`InterfaceBase` calls `parseInputFieldsToIdentification()` to convert raw inputs into validated types. During `create` and `update`, interfaces execute `full_clean()` on the underlying Django model, invoke rules declared in `Meta.rules`, and run custom `clean()` methods.
+`InterfaceBase` calls `parse_input_fields_to_identification()` to convert raw inputs into validated types. During `create` and `update`, interfaces execute `full_clean()` on the underlying Django model, invoke rules declared in `Meta.rules`, and run custom `clean()` methods.
 
 ## Factory interaction
 
-- `AutoFactory._modelCreation()` assigns field values, runs `full_clean()`, and saves the model. Validation errors bubble up, making faulty fixtures obvious.
+- `AutoFactory._model_creation()` assigns field values, runs `full_clean()`, and saves the model. Validation errors bubble up, making faulty fixtures obvious.
 - Override `AutoFactory._adjustmentMethod` to perform additional preprocessing (for example, generating related objects) before the model is saved.
 
 ## Best practices

@@ -75,7 +75,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         Synchronizes country data, creates two human instances (one linked to a country), and a family instance associating both humans.
         """
         super().setUp()
-        self.TestCountry.Interface.syncData()  # type: ignore
+        self.TestCountry.Interface.sync_data()  # type: ignore
 
         self.test_human1 = self.TestHuman.create(
             creator_id=None,
@@ -330,13 +330,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_readonly_interface_sync(self):
         """
-        Test ReadOnlyInterface syncData functionality.
+        Test ReadOnlyInterface sync_data functionality.
         """
-        # Test that syncData creates the expected country records
+        # Test that sync_data creates the expected country records
 
         # Clear existing data and resync
         self.TestCountry.Interface._model._meta.model.objects.all().delete()
-        self.TestCountry.Interface.syncData()
+        self.TestCountry.Interface.sync_data()
 
         countries_after_sync = self.TestCountry.all()
         self.assertEqual(len(countries_after_sync), 2)

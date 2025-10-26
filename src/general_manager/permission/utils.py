@@ -23,7 +23,7 @@ class PermissionNotFoundError(ValueError):
         super().__init__(f"Permission {permission} not found.")
 
 
-def validatePermissionString(
+def validate_permission_string(
     permission: str,
     data: PermissionDataManager | GeneralManager | GeneralManagerMeta,
     request_user: AbstractUser | AnonymousUser,
@@ -43,7 +43,7 @@ def validatePermissionString(
         PermissionNotFoundError: If a referenced permission function is not registered.
     """
 
-    def _validateSinglePermission(
+    def _validate_single_permission(
         permission: str,
     ) -> bool:
         """
@@ -68,7 +68,7 @@ def validatePermissionString(
 
     return all(
         [
-            _validateSinglePermission(sub_permission)
+            _validate_single_permission(sub_permission)
             for sub_permission in permission.split("&")
         ]
     )

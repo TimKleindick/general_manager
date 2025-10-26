@@ -6,4 +6,4 @@
 
 ::: general_manager.permission.permission_data_manager.PermissionDataManager
 
-::: general_manager.permission.utils.validatePermissionString
+::: general_manager.permission.utils.validate_permission_string

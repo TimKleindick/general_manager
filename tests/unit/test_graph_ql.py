@@ -12,7 +12,7 @@ from typing import ClassVar
 from general_manager.api.graphql import (
     MeasurementType,
     GraphQL,
-    getReadPermissionFilter,
+    get_read_permission_filter,
 )
 from general_manager.measurement.measurement import Measurement, ureg
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
@@ -56,42 +56,44 @@ class GraphQLTests(TestCase):
     @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_no_interface(self, _mock_interface):
         self.general_manager_class.Interface = None
-        result = GraphQL.createGraphqlInterface(self.general_manager_class)
+        result = GraphQL.create_graphql_interface(self.general_manager_class)
         self.assertIsNone(result)
 
     @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_with_interface(self, mock_interface):
-        mock_interface.getAttributeTypes.return_value = {"test_field": {"type": str}}
+        mock_interface.get_attribute_types.return_value = {"test_field": {"type": str}}
         self.general_manager_class.Interface = mock_interface
         with patch("general_manager.api.graphql.issubclass", return_value=True):
-            GraphQL.createGraphqlInterface(self.general_manager_class)
+            GraphQL.create_graphql_interface(self.general_manager_class)
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_map_field_to_graphene(self):
         # Base types
         self.assertIsInstance(
-            GraphQL._mapFieldToGrapheneRead(str, "name"), graphene.String
-        )
-        self.assertIsInstance(GraphQL._mapFieldToGrapheneRead(int, "age"), graphene.Int)
-        self.assertIsInstance(
-            GraphQL._mapFieldToGrapheneRead(float, "value"), graphene.Float
+            GraphQL._map_field_to_graphene_read(str, "name"), graphene.String
         )
         self.assertIsInstance(
-            GraphQL._mapFieldToGrapheneRead(Decimal, "decimal"), graphene.Float
+            GraphQL._map_field_to_graphene_read(int, "age"), graphene.Int
         )
         self.assertIsInstance(
-            GraphQL._mapFieldToGrapheneRead(bool, "active"), graphene.Boolean
+            GraphQL._map_field_to_graphene_read(float, "value"), graphene.Float
         )
         self.assertIsInstance(
-            GraphQL._mapFieldToGrapheneRead(date, "birth_date"), graphene.Date
+            GraphQL._map_field_to_graphene_read(Decimal, "decimal"), graphene.Float
         )
-        field = GraphQL._mapFieldToGrapheneRead(Measurement, "measurement")
+        self.assertIsInstance(
+            GraphQL._map_field_to_graphene_read(bool, "active"), graphene.Boolean
+        )
+        self.assertIsInstance(
+            GraphQL._map_field_to_graphene_read(date, "birth_date"), graphene.Date
+        )
+        field = GraphQL._map_field_to_graphene_read(Measurement, "measurement")
         self.assertIsInstance(field, graphene.Field)
 
     def test_create_resolver_normal_case(self):
         mock_instance = MagicMock()
         mock_instance.some_field = "expected_value"
-        resolver = GraphQL._createResolver("some_field", str)
+        resolver = GraphQL._create_resolver("some_field", str)
         self.assertEqual(resolver(mock_instance, self.info), "expected_value")
 
     def test_create_resolver_measurement_case(self):
@@ -99,7 +101,7 @@ class GraphQLTests(TestCase):
         mock_measurement = Measurement(100, "cm")
         mock_instance.measurement_field = mock_measurement
 
-        resolver = GraphQL._createResolver("measurement_field", Measurement)
+        resolver = GraphQL._create_resolver("measurement_field", Measurement)
         result = resolver(mock_instance, self.info, target_unit="cm")
         self.assertEqual(result, {"value": Decimal(100), "unit": "centimeter"})
 
@@ -112,7 +114,7 @@ class GraphQLTests(TestCase):
         # Assign the queryset directly
         mock_instance.abc_list = mock_queryset
 
-        resolver = GraphQL._createResolver("abc_list", GeneralManager)
+        resolver = GraphQL._create_resolver("abc_list", GeneralManager)
         with patch("json.loads", side_effect=json.loads):
             resolver(
                 mock_instance,
@@ -134,7 +136,7 @@ class GraphQLTests(TestCase):
                 input_fields: ClassVar[dict] = {}
 
                 @staticmethod
-                def getAttributeTypes():
+                def get_attribute_types():
                     return {"test_field": {"type": str}}
 
             @classmethod
@@ -144,10 +146,10 @@ class GraphQLTests(TestCase):
         def prop_func() -> int:
             return 42
 
-        mock_interface.getAttributeTypes.return_value = {"test_field": {"type": str}}
+        mock_interface.get_attribute_types.return_value = {"test_field": {"type": str}}
         with patch("general_manager.api.graphql.issubclass", return_value=True):
             TestManager.test_prop = GraphQLProperty(prop_func)
-            GraphQL.createGraphqlInterface(TestManager)
+            GraphQL.create_graphql_interface(TestManager)
             self.assertIn("TestManager", GraphQL.graphql_type_registry)
 
     def test_list_resolver_with_invalid_filter_exclude(self):
@@ -159,7 +161,7 @@ class GraphQLTests(TestCase):
         mock_instance = MagicMock()
         mock_qs = MagicMock()
         mock_instance.abc_list = mock_qs
-        resolver = GraphQL._createResolver("abc_list", GeneralManager)
+        resolver = GraphQL._create_resolver("abc_list", GeneralManager)
         with patch("json.loads", side_effect=ValueError):
             result = resolver(mock_instance, self.info, filter="bad", exclude="bad")
             self.assertEqual(result["items"], mock_qs)
@@ -176,7 +178,7 @@ class GraphQLTests(TestCase):
                 input_fields: ClassVar[dict] = {}
 
                 @staticmethod
-                def getAttributeTypes():
+                def get_attribute_types():
                     return {
                         "num_field": {"type": int},
                         "str_field": {"type": str},
@@ -185,7 +187,7 @@ class GraphQLTests(TestCase):
                     }
 
         GraphQL.graphql_filter_type_registry.clear()
-        filter_cls = GraphQL._createFilterOptions(DummyManager)
+        filter_cls = GraphQL._create_filter_options(DummyManager)
         fields = filter_cls._meta.fields
         self.assertNotIn("gm_field", fields)
         for key in [
@@ -211,7 +213,7 @@ class GraphQLTests(TestCase):
 
     def test_create_filter_options_registry_cache(self):
         """
-        Test that repeated calls to `_createFilterOptions` with the same manager class and name return the same cached filter input type instance.
+        Test that repeated calls to `_create_filter_options` with the same manager class and name return the same cached filter input type instance.
 
         Ensures the filter options registry caches and reuses filter input types for identical manager class and name combinations.
         """
@@ -223,19 +225,19 @@ class GraphQLTests(TestCase):
                 input_fields: ClassVar[dict] = {}
 
                 @staticmethod
-                def getAttributeTypes():
+                def get_attribute_types():
                     return {"num_field": {"type": int}}
 
         GraphQL.graphql_filter_type_registry.clear()
-        first = GraphQL._createFilterOptions(DummyManager2)
-        second = GraphQL._createFilterOptions(DummyManager2)
+        first = GraphQL._create_filter_options(DummyManager2)
+        second = GraphQL._create_filter_options(DummyManager2)
         self.assertIs(first, second)
 
 
 class TestGetReadPermissionFilter(TestCase):
     def test_get_read_permission_filter(self):
         """
-        Verify that getReadPermissionFilter extracts and returns filter and exclude tuples from a manager's permission class.
+        Verify that get_read_permission_filter extracts and returns filter and exclude tuples from a manager's permission class.
         """
 
         class DummyManager:
@@ -245,12 +247,12 @@ class TestGetReadPermissionFilter(TestCase):
                 def __init__(self, *args, **_kwargs):
                     self.args = args
 
-                def getPermissionFilter(self):
+                def get_permission_filter(self):
                     return [{"filter": {"num_field__exact": 42}, "exclude": {}}]
 
         info = MagicMock()
         info.context.user = AnonymousUser()
-        result = getReadPermissionFilter(DummyManager, info)
+        result = get_read_permission_filter(DummyManager, info)
         expected = [({"num_field__exact": 42}, {})]
         self.assertEqual(result, expected)
 
@@ -279,7 +281,7 @@ class TestGrapQlMutation(TestCase):
 
         class DummyManager2:
             class Interface(InterfaceBase):
-                def getData(self, search_date: datetime | None = None):
+                def get_data(self, search_date: datetime | None = None):
                     """
                     Raises NotImplementedError to indicate that data retrieval is not implemented.
 
@@ -289,16 +291,16 @@ class TestGrapQlMutation(TestCase):
                     raise NotImplementedError
 
                 @classmethod
-                def getAttributeTypes(cls):
+                def get_attribute_types(cls):
                     """
                     Raises a NotImplementedError to indicate that subclasses must implement this method to return attribute type information.
                     """
                     raise NotImplementedError
 
                 @classmethod
-                def getAttributes(cls):
+                def get_attributes(cls):
                     """
-                    Raises a NotImplementedError to indicate that subclasses must implement the getAttributes method.
+                    Raises a NotImplementedError to indicate that subclasses must implement the get_attributes method.
                     """
                     raise NotImplementedError
 
@@ -317,7 +319,7 @@ class TestGrapQlMutation(TestCase):
                     raise NotImplementedError
 
                 @classmethod
-                def handleInterface(
+                def handle_interface(
                     cls,
                 ) -> None:
                     """
@@ -328,7 +330,7 @@ class TestGrapQlMutation(TestCase):
                     pass
 
                 @classmethod
-                def getFieldType(cls, field_name: str) -> None:
+                def get_field_type(cls, field_name: str) -> None:
                     """
                     Return the type of the specified field on the class.
 
@@ -344,16 +346,16 @@ class TestGrapQlMutation(TestCase):
         self.manager2 = DummyManager2
         GraphQL._mutations = {}
 
-    @patch("general_manager.api.graphql.GraphQL.generateCreateMutationClass")
-    @patch("general_manager.api.graphql.GraphQL.generateUpdateMutationClass")
-    @patch("general_manager.api.graphql.GraphQL.generateDeleteMutationClass")
-    def test_createGraphqlMutation(
+    @patch("general_manager.api.graphql.GraphQL.generate_create_mutation_class")
+    @patch("general_manager.api.graphql.GraphQL.generate_update_mutation_class")
+    @patch("general_manager.api.graphql.GraphQL.generate_delete_mutation_class")
+    def test_create_graphql_mutation(
         self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
     ):
         """
-        Tests that GraphQL.createGraphqlMutation generates and registers create, update, and delete mutation classes for a manager with the corresponding methods, and that the mutation generation methods are called exactly once.
+        Tests that GraphQL.create_graphql_mutation generates and registers create, update, and delete mutation classes for a manager with the corresponding methods, and that the mutation generation methods are called exactly once.
         """
-        GraphQL.createGraphqlMutation(self.manager)
+        GraphQL.create_graphql_mutation(self.manager)
         mock_create.assert_called_once()
         mock_update.assert_called_once()
         mock_delete.assert_called_once()
@@ -362,10 +364,10 @@ class TestGrapQlMutation(TestCase):
             ["createDummyManager", "updateDummyManager", "deleteDummyManager"],
         )
 
-    @patch("general_manager.api.graphql.GraphQL.generateCreateMutationClass")
-    @patch("general_manager.api.graphql.GraphQL.generateUpdateMutationClass")
-    @patch("general_manager.api.graphql.GraphQL.generateDeleteMutationClass")
-    def test_createGraphqlMutation_with_undefined_create_update_delete(
+    @patch("general_manager.api.graphql.GraphQL.generate_create_mutation_class")
+    @patch("general_manager.api.graphql.GraphQL.generate_update_mutation_class")
+    @patch("general_manager.api.graphql.GraphQL.generate_delete_mutation_class")
+    def test_create_graphql_mutation_with_undefined_create_update_delete(
         self, mock_delete: MagicMock, mock_update: MagicMock, mock_create: MagicMock
     ):
         """
@@ -373,19 +375,19 @@ class TestGrapQlMutation(TestCase):
 
         Ensures that the mutation generation functions for create, update, and delete are not called when the manager does not define these methods.
         """
-        GraphQL.createGraphqlMutation(self.manager2)
+        GraphQL.create_graphql_mutation(self.manager2)
         mock_create.assert_not_called()
         mock_update.assert_not_called()
         mock_delete.assert_not_called()
 
-    def test_createWriteFields(self):
+    def test_create_write_fields(self):
         """
-        Tests that `GraphQL.createWriteFields` returns input fields only for editable, non-derived attributes, mapping their types correctly and excluding derived fields.
+        Tests that `GraphQL.create_write_fields` returns input fields only for editable, non-derived attributes, mapping their types correctly and excluding derived fields.
         """
 
         class DummyInterface:
             @staticmethod
-            def getAttributeTypes():
+            def get_attribute_types():
                 """
                 Return metadata for each attribute, including type, requirement, derivation, default value, and editability.
 
@@ -423,7 +425,7 @@ class TestGrapQlMutation(TestCase):
                     },
                 }
 
-        fields = GraphQL.createWriteFields(DummyInterface)
+        fields = GraphQL.create_write_fields(DummyInterface)
         self.assertIn("field1", fields)
         self.assertIn("field2", fields)
         self.assertIsInstance(fields["field1"], graphene.String)
@@ -431,14 +433,14 @@ class TestGrapQlMutation(TestCase):
         self.assertNotIn("created_at", fields)
         self.assertNotIn("derived_field", fields)
 
-    def test_createWriteFields_with_manager(self):
+    def test_create_write_fields_with_manager(self):
         """
-        Test that `GraphQL.createWriteFields` generates correct input fields for attributes of type `GeneralManager`, mapping single instances to `graphene.ID` and lists to `graphene.List`.
+        Test that `GraphQL.create_write_fields` generates correct input fields for attributes of type `GeneralManager`, mapping single instances to `graphene.ID` and lists to `graphene.List`.
         """
 
         class DummyInterface:
             @staticmethod
-            def getAttributeTypes():
+            def get_attribute_types():
                 """
                 Return a dictionary describing attribute metadata for 'manager' and 'manager_list', including type, requirement, derivation, default value, and editability.
                 """
@@ -459,13 +461,13 @@ class TestGrapQlMutation(TestCase):
                     },
                 }
 
-        fields = GraphQL.createWriteFields(DummyInterface)
+        fields = GraphQL.create_write_fields(DummyInterface)
         self.assertIn("manager", fields)
         self.assertIn("manager_list", fields)
         self.assertIsInstance(fields["manager"], graphene.ID)
         self.assertIsInstance(fields["manager_list"], graphene.List)
 
-    def test_generateCreateMutationClass(self):
+    def test_generate_create_mutation_class(self):
         """
         Test that the generated create mutation class defines correct arguments, applies default values, and enforces mutation behavior.
 
@@ -487,7 +489,7 @@ class TestGrapQlMutation(TestCase):
                 input_fields: ClassVar[dict] = {}
 
                 @classmethod
-                def getAttributeTypes(cls):
+                def get_attribute_types(cls):
                     return {
                         "field1": {
                             "type": str,
@@ -506,7 +508,7 @@ class TestGrapQlMutation(TestCase):
             "success": graphene.Boolean(),
             "instance": graphene.Field(DummyManager),
         }
-        mutation_class = GraphQL.generateCreateMutationClass(
+        mutation_class = GraphQL.generate_create_mutation_class(
             DummyManager, default_return_values
         )
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
@@ -531,11 +533,11 @@ class TestGrapQlMutation(TestCase):
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
 
-    def test_generateUpdateMutationClass(self):
+    def test_generate_update_mutation_class(self):
         """
         Test that the generated update mutation class defines correct arguments, applies default values, and enforces mutation behavior.
 
-        This test verifies that the update mutation class produced by `GraphQL.generateUpdateMutationClass`:
+        This test verifies that the update mutation class produced by `GraphQL.generate_update_mutation_class`:
         - Inherits from `graphene.Mutation`.
         - Defines arguments and fields with appropriate types and default values.
         - Returns a success flag and updated instance when invoked with valid input and context.
@@ -553,7 +555,7 @@ class TestGrapQlMutation(TestCase):
                 input_fields: ClassVar[dict] = {}
 
                 @classmethod
-                def getAttributeTypes(cls):
+                def get_attribute_types(cls):
                     return {
                         "field1": {
                             "type": str,
@@ -572,7 +574,7 @@ class TestGrapQlMutation(TestCase):
             "success": graphene.Boolean(),
             "instance": graphene.Field(DummyManager),
         }
-        mutation_class = GraphQL.generateUpdateMutationClass(
+        mutation_class = GraphQL.generate_update_mutation_class(
             DummyManager, default_return_values
         )
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
@@ -599,7 +601,7 @@ class TestGrapQlMutation(TestCase):
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
 
-    def test_generateDeleteMutationClass(self):
+    def test_generate_delete_mutation_class(self):
         """
         Test that the delete mutation class generated by GraphQL has the correct fields and behavior.
 
@@ -621,7 +623,7 @@ class TestGrapQlMutation(TestCase):
                 input_fields: ClassVar[dict] = {"id": None}
 
                 @classmethod
-                def getAttributeTypes(cls):
+                def get_attribute_types(cls):
                     return {
                         "id": {
                             "type": int,
@@ -639,7 +641,7 @@ class TestGrapQlMutation(TestCase):
         default_return_values = {
             "success": graphene.Boolean(),
         }
-        mutation_class = GraphQL.generateDeleteMutationClass(
+        mutation_class = GraphQL.generate_delete_mutation_class(
             DummyManager, default_return_values
         )
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))

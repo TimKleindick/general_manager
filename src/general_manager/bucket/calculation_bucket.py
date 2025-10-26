@@ -181,8 +181,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             {} if exclude_definitions is None else exclude_definitions
         )
 
-        properties = self._manager_class.Interface.getGraphQLProperties()
-        possible_values = self.transformPropertiesToInputFields(
+        properties = self._manager_class.Interface.get_graph_ql_properties()
+        possible_values = self.transform_properties_to_input_fields(
             properties, self.input_fields
         )
 
@@ -322,7 +322,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return f"{self.__class__.__name__}({self._manager_class.__name__}, {self.filter_definitions}, {self.exclude_definitions}, {self.sort_key}, {self.reverse})"
 
     @staticmethod
-    def transformPropertiesToInputFields(
+    def transform_properties_to_input_fields(
         properties: dict[str, GraphQLProperty], input_fields: dict[str, Input]
     ) -> dict[str, Input]:
         """
@@ -420,7 +420,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         for combo in combinations:
             yield self._manager_class(**combo)
 
-    def _sortFilters(self, sorted_inputs: List[str]) -> SortedFilters:
+    def _sort_filters(self, sorted_inputs: List[str]) -> SortedFilters:
         """
         Partition filters into input- and property-based buckets.
 
@@ -467,7 +467,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         if self._data is None:
             sorted_inputs = self.topological_sort_inputs()
-            sorted_filters = self._sortFilters(sorted_inputs)
+            sorted_filters = self._sort_filters(sorted_inputs)
             current_combinations = self._generate_input_combinations(
                 sorted_inputs,
                 sorted_filters["input_filters"],

@@ -1,22 +1,22 @@
 from django.test import SimpleTestCase
 from general_manager.factory.factory_methods import (
-    LazyMeasurement,
-    LazyDeltaDate,
-    LazyProjectName,
-    LazyDateToday,
-    LazyDateBetween,
-    LazyDateTimeBetween,
-    LazyInteger,
-    LazyDecimal,
-    LazyUUID,
-    LazyBoolean,
-    LazyFakerName,
-    LazyFakerEmail,
-    LazyFakerSentence,
-    LazyFakerAddress,
-    LazyFakerUrl,
-    LazyChoice,
-    LazySequence,
+    lazy_measurement,
+    lazy_delta_date,
+    lazy_project_name,
+    lazy_date_today,
+    lazy_date_between,
+    lazy_date_time_between,
+    lazy_integer,
+    lazy_decimal,
+    lazy_uuid,
+    lazy_boolean,
+    lazy_faker_name,
+    lazy_faker_email,
+    lazy_faker_sentence,
+    lazy_faker_address,
+    lazy_faker_url,
+    lazy_choice,
+    lazy_sequence,
 )
 from general_manager.measurement.measurement import Measurement
 from datetime import date, datetime
@@ -25,27 +25,27 @@ from types import SimpleNamespace
 
 
 class TestFactoryMethods(SimpleTestCase):
-    def test_LazyMeasurement(self):
+    def test__lazy_measurement(self):
         min_value = 10.0
         max_value = 30.5
         unit = "kilogram"
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                measurement = LazyMeasurement(min_value, max_value, unit).evaluate(
+                measurement = lazy_measurement(min_value, max_value, unit).evaluate(
                     obj, 1, None
                 )
                 self.assertIsInstance(measurement, Measurement)
                 self.assertTrue(min_value <= float(measurement.magnitude) <= max_value)
                 self.assertEqual(measurement.unit, unit)
 
-    def test_LazyDeltaDate(self):
+    def test__lazy_delta_date(self):
         avg_delta_days = 5  # -> 2.5 to 7.5 days
         base_attribute = "start_date"
         obj = type("TestObject", (object,), {base_attribute: date(2023, 1, 1)})()
         for i in range(100):
             with self.subTest(run=i):
-                delta_date = LazyDeltaDate(avg_delta_days, base_attribute).evaluate(
+                delta_date = lazy_delta_date(avg_delta_days, base_attribute).evaluate(
                     obj, 1, None
                 )
                 self.assertIsInstance(delta_date, date)
@@ -54,28 +54,28 @@ class TestFactoryMethods(SimpleTestCase):
                     f"Run {i}: {delta_date} is not in the expected range.",
                 )
 
-    def test_LazyProjectName(self):
+    def test__lazy_project_name(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                project_name = LazyProjectName().evaluate(obj, 1, None)
+                project_name = lazy_project_name().evaluate(obj, 1, None)
                 self.assertIsInstance(project_name, str)
 
-    def test_LazyDateToday(self):
+    def test__lazy_date_today(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                date_today = LazyDateToday().evaluate(obj, 1, None)
+                date_today = lazy_date_today().evaluate(obj, 1, None)
                 self.assertIsInstance(date_today, date)
                 self.assertEqual(date_today, date.today())
 
-    def test_LazyDateBetween(self):
+    def test__lazy_date_between(self):
         start_date = date(2023, 1, 1)
         end_date = date(2023, 12, 31)
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                date_between = LazyDateBetween(start_date, end_date).evaluate(
+                date_between = lazy_date_between(start_date, end_date).evaluate(
                     obj, 1, None
                 )
                 self.assertIsInstance(date_between, date)
@@ -84,13 +84,13 @@ class TestFactoryMethods(SimpleTestCase):
                     f"Run {i}: {date_between} is not in the expected range.",
                 )
 
-    def test_LazyDateTimeBetween(self):
+    def test__lazy_date_time_between(self):
         start = datetime(2023, 1, 1)
         end = datetime(2023, 12, 31)
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                datetime_between = LazyDateTimeBetween(start, end).evaluate(
+                datetime_between = lazy_date_time_between(start, end).evaluate(
                     obj, 1, None
                 )
                 self.assertIsInstance(datetime_between, datetime)
@@ -99,24 +99,26 @@ class TestFactoryMethods(SimpleTestCase):
                     f"Run {i}: {datetime_between} is not in the expected range.",
                 )
 
-    def test_LazyInteger(self):
+    def test__lazy_integer(self):
         min_value = 1
         max_value = 100
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                integer_value = LazyInteger(min_value, max_value).evaluate(obj, 1, None)
+                integer_value = lazy_integer(min_value, max_value).evaluate(
+                    obj, 1, None
+                )
                 self.assertIsInstance(integer_value, int)
                 self.assertTrue(min_value <= integer_value <= max_value)
 
-    def test_LazyDecimal(self):
+    def test__lazy_decimal(self):
         min_value = 1.0
         max_value = 100.0
         precision = 4
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                decimal_value = LazyDecimal(min_value, max_value, precision).evaluate(
+                decimal_value = lazy_decimal(min_value, max_value, precision).evaluate(
                     obj, 1, None
                 )
                 self.assertIsInstance(decimal_value, Decimal)
@@ -127,41 +129,41 @@ class TestFactoryMethods(SimpleTestCase):
                 if "." in decimal_str:
                     self.assertEqual(len(decimal_str.split(".")[1]), precision)
 
-    def test_LazyUUID(self):
+    def test__lazy_uuid(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                uuid_value = LazyUUID().evaluate(obj, 1, None)
+                uuid_value = lazy_uuid().evaluate(obj, 1, None)
                 self.assertIsInstance(uuid_value, str)
                 self.assertRegex(
                     uuid_value,
                     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
                 )
 
-    def test_LazyBoolean(self):
+    def test__lazy_boolean(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                boolean_value = LazyBoolean().evaluate(obj, 1, None)
+                boolean_value = lazy_boolean().evaluate(obj, 1, None)
                 self.assertIsInstance(boolean_value, bool)
 
-    def test_LazyFakerName(self):
+    def test__lazy_faker_name(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                name_value = LazyFakerName().evaluate(obj, 1, None)
+                name_value = lazy_faker_name().evaluate(obj, 1, None)
                 self.assertIsInstance(name_value, str)
                 self.assertTrue(len(name_value) > 0)
 
-    def test_LazyFakerEmail(self):
+    def test__lazy_faker_email(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                email_value = LazyFakerEmail().evaluate(obj, 1, None)
+                email_value = lazy_faker_email().evaluate(obj, 1, None)
                 self.assertIsInstance(email_value, str)
                 self.assertRegex(email_value, r"^[\w\.-]+@[\w\.-]+\.\w+$")
 
-    def test_LazyFakerEmail_with_presets(self):
+    def test__lazy_faker_email_with_presets(self):
         obj = type("TestObject", (object,), {})()
         names = [
             "John Doe",
@@ -176,46 +178,46 @@ class TestFactoryMethods(SimpleTestCase):
         for i, name in enumerate(names):
             domain = domains[i % len(domains)]
             with self.subTest(run=i):
-                email_value = LazyFakerEmail(name, domain).evaluate(obj, 1, None)
+                email_value = lazy_faker_email(name, domain).evaluate(obj, 1, None)
                 self.assertIsInstance(email_value, str)
                 self.assertRegex(email_value, r"^[\w\.-]+@[\w\.-]+\.\w+$")
 
-    def test_LazyFakerSentence(self):
+    def test__lazy_faker_sentence(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                sentence_value = LazyFakerSentence().evaluate(obj, 1, None)
+                sentence_value = lazy_faker_sentence().evaluate(obj, 1, None)
                 self.assertIsInstance(sentence_value, str)
                 self.assertTrue(len(sentence_value) > 0)
 
-    def test_LazyFakerAddress(self):
+    def test__lazy_faker_address(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                address_value = LazyFakerAddress().evaluate(obj, 1, None)
+                address_value = lazy_faker_address().evaluate(obj, 1, None)
                 self.assertIsInstance(address_value, str)
                 self.assertTrue(len(address_value) > 0)
 
-    def test_LazyFakerUrl(self):
+    def test__lazy_faker_url(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                url_value = LazyFakerUrl().evaluate(obj, 1, None)
+                url_value = lazy_faker_url().evaluate(obj, 1, None)
                 self.assertIsInstance(url_value, str)
                 self.assertRegex(url_value, r"^https?://[^\s/$.?#].[^\s]*$")
                 self.assertTrue(len(url_value) > 0)
 
-    def test_LazyChoice(self):
+    def test__lazy_choice(self):
         options = ["option1", "option2", "option3"]
         obj = type("TestObject", (object,), {})()
         for i in range(100):
             with self.subTest(run=i):
-                choice_value = LazyChoice(options).evaluate(obj, 1, None)
+                choice_value = lazy_choice(options).evaluate(obj, 1, None)
                 self.assertIn(choice_value, options)
                 self.assertIsInstance(choice_value, str)
                 self.assertTrue(len(choice_value) > 0)
 
-    def test_LazySequence(self):
+    def test__lazy_sequence(self):
         start = 0
         step = 2
         obj = type("TestObject", (object,), {})()
@@ -223,6 +225,6 @@ class TestFactoryMethods(SimpleTestCase):
         for i in range(100):
             with self.subTest(run=i):
                 context = SimpleNamespace(sequence=i)
-                sequence_value = LazySequence(start, step).evaluate(obj, context, None)
+                sequence_value = lazy_sequence(start, step).evaluate(obj, context, None)
                 self.assertEqual(sequence_value, start + i * step)
                 self.assertIsInstance(sequence_value, int)

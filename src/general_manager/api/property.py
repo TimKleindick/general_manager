@@ -109,9 +109,9 @@ class GraphQLProperty(property):
 
 
 @overload
-def graphQlProperty(func: T) -> GraphQLProperty: ...
+def graph_ql_property(func: T) -> GraphQLProperty: ...
 @overload
-def graphQlProperty(
+def graph_ql_property(
     *,
     sortable: bool = False,
     filterable: bool = False,
@@ -119,7 +119,7 @@ def graphQlProperty(
 ) -> Callable[[T], GraphQLProperty]: ...
 
 
-def graphQlProperty(
+def graph_ql_property(
     func: Callable[..., Any] | None = None,
     *,
     sortable: bool = False,

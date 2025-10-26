@@ -18,7 +18,7 @@ class RuleTests(TestCase):
     def test_rule_with_floats(self):
         """
         Verifies that a Rule comparing a float field produces a failing evaluation and the correct error message.
-        Creates a DummyObject with price 150.75, constructs a Rule checking price < 100.0, expects evaluate() to return False and getErrorMessage() to return {"price": "[price] (150.75) must be < 100.0!"}.
+        Creates a DummyObject with price 150.75, constructs a Rule checking price < 100.0, expects evaluate() to return False and get_error_message() to return {"price": "[price] (150.75) must be < 100.0!"}.
         """
 
         def func(item: DummyObject) -> bool:
@@ -37,7 +37,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {"price": "[price] (150.75) must be < 100.0!"}
         self.assertEqual(error_message, expected_error)
 
@@ -60,7 +60,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {"is_active": "[is_active] (False) must be is True!"}
         self.assertEqual(error_message, expected_error)
 
@@ -86,7 +86,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {
             "start_date": "[start_date] (2022-01-20) must be < [end_date] (2022-01-15)!",
             "end_date": "[start_date] (2022-01-20) must be < [end_date] (2022-01-15)!",
@@ -112,7 +112,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {"age": "[age] (16) must be >= 18!"}
         self.assertEqual(error_message, expected_error)
 
@@ -135,7 +135,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {"age": "18 must be <= [age] (16)!"}
         self.assertEqual(error_message, expected_error)
 
@@ -158,7 +158,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {"username": "[username] (abc) is too short (min length 5)!"}
         self.assertEqual(error_message, expected_error)
 
@@ -184,7 +184,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {"items": "[items] ([]) is too short (min length 1)!"}
         self.assertEqual(error_message, expected_error)
 
@@ -211,10 +211,10 @@ class RuleTests(TestCase):
         )
         x = DummyObject(quantity=10, stock=5)
         rule = Rule(func, custom_error_message=custom_message)
-        rule.validateCustomErrorMessage()
+        rule.validate_custom_error_message()
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error = {
             "quantity": "Ordered quantity (10) exceeds available stock (5).",
             "stock": "Ordered quantity (10) exceeds available stock (5).",
@@ -223,7 +223,7 @@ class RuleTests(TestCase):
 
     def test_rule_with_missing_custom_error_variables(self):
         """
-        Checks that validateCustomErrorMessage raises a ValueError when a custom error message lacks required template variables.
+        Checks that validate_custom_error_message raises a ValueError when a custom error message lacks required template variables.
         """
 
         def func(item: DummyObject) -> bool:
@@ -241,7 +241,7 @@ class RuleTests(TestCase):
         custom_message = "Height must be at least 150 cm."
         rule = Rule(func, custom_error_message=custom_message)
         with self.assertRaises(ValueError):
-            rule.validateCustomErrorMessage()
+            rule.validate_custom_error_message()
 
     def test_rule_with_complex_condition(self):
         """
@@ -264,7 +264,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         expected_error_a = {
             "age": "[age] (20) must be >= 18!",
             "has_permission": "[age], [has_permission] combination is not valid",
@@ -294,7 +294,7 @@ class RuleTests(TestCase):
         rule = Rule(func)
         result = rule.evaluate(x)
         self.assertTrue(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         self.assertIsNone(error_message)
 
     def test_rule_with_exception_in_function(self):
@@ -325,14 +325,14 @@ class RuleTests(TestCase):
 
         rule = Rule(func)
         self.assertEqual(rule.func, func)
-        self.assertIsNone(rule.customErrorMessage)
+        self.assertIsNone(rule.custom_error_message)
         self.assertEqual(rule.variables, ["value"])
-        self.assertIsNone(rule.lastEvaluationResult)
-        self.assertIsNone(rule.lastEvaluationInput)
+        self.assertIsNone(rule.last_evaluation_result)
+        self.assertIsNone(rule.last_evaluation_input)
         x = DummyObject(value=10)
         rule.evaluate(x)
-        self.assertEqual(rule.lastEvaluationResult, False)
-        self.assertEqual(rule.lastEvaluationInput, x)
+        self.assertEqual(rule.last_evaluation_result, False)
+        self.assertEqual(rule.last_evaluation_input, x)
 
     def test_rule_with_type_hint(self):
         """
@@ -356,7 +356,7 @@ class RuleTests(TestCase):
         rule = Rule[DummyObject](func)  # type: ignore
         result = rule.evaluate(x)
         self.assertFalse(result)
-        error_message = rule.getErrorMessage()
+        error_message = rule.get_error_message()
         self.assertIsNone(error_message)
 
     def test_rule_with_none_value(self):
@@ -378,13 +378,13 @@ class RuleTests(TestCase):
         rule = Rule(func, ignore_if_none=True)
         result = rule.evaluate(x)
         self.assertIsNone(result)
-        self.assertIsNone(rule.getErrorMessage())
+        self.assertIsNone(rule.get_error_message())
 
         y = DummyObject(optional_value=3)
         rule = Rule(func, ignore_if_none=True)
         result = rule.evaluate(y)
         self.assertTrue(result)
-        self.assertIsNone(rule.getErrorMessage())
+        self.assertIsNone(rule.get_error_message())
 
     def test_missing_error_template_variable_error(self):
         """Test that MissingErrorTemplateVariableError is raised when custom error template is incomplete."""
@@ -401,7 +401,7 @@ class RuleTests(TestCase):
 
         # Should raise error because 'quantity' is missing from custom template
         with self.assertRaises(MissingErrorTemplateVariableError) as ctx:
-            rule.getErrorMessage()
+            rule.get_error_message()
         self.assertIn("quantity", str(ctx.exception))
         self.assertIn("does not contain all used variables", str(ctx.exception))
 
@@ -419,7 +419,7 @@ class RuleTests(TestCase):
 
         # Attempt to get error message without evaluating first
         with self.assertRaises(ErrorMessageGenerationError) as ctx:
-            rule.getErrorMessage()
+            rule.get_error_message()
         self.assertIn("No input provided", str(ctx.exception))
 
     def test_rule_with_multiple_parameters(self):
@@ -510,7 +510,7 @@ class RuleTests(TestCase):
 
         result = rule.evaluate(x)
         self.assertIsNone(result)
-        self.assertIsNone(rule.getErrorMessage())
+        self.assertIsNone(rule.get_error_message())
 
         y = DummyObject(a=6, b=None)
         result = rule.evaluate(y)
@@ -535,7 +535,7 @@ class RuleTests(TestCase):
         result = rule.evaluate(x)
         self.assertFalse(result)
 
-        error = rule.getErrorMessage()
+        error = rule.get_error_message()
         self.assertIsNotNone(error)
         self.assertIn("price", error)
         self.assertIn("150.0", error["price"])

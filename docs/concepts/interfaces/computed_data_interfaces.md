@@ -10,7 +10,7 @@ Inputs use the `Input` descriptor to specify the expected type and optional valu
 from datetime import date
 
 from general_manager.interface.calculation_interface import CalculationInterface
-from general_manager.manager import GeneralManager, Input, graphQlProperty
+from general_manager.manager import GeneralManager, Input, graph_ql_property
 
 class ProjectSummary(GeneralManager):
     project: Project
@@ -23,10 +23,10 @@ class ProjectSummary(GeneralManager):
 
 ## Computing values
 
-Expose computed attributes with `@graphQlProperty`. The decorator registers the method as a GraphQL field and caches results per manager instance.
+Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results per manager instance.
 
 ```python
-    @graphQlProperty
+    @graph_ql_property
     def total_volume(self) -> int:
         return sum(
             derivative.volume

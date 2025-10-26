@@ -52,7 +52,7 @@ class DummyPermission(BasePermission):
     delete_permissions: ClassVar[dict[str, str]] = {}
     read_permissions: ClassVar[dict[str, str]] = {}
 
-    def checkPermission(
+    def check_permission(
         self,
         action: Literal["create", "read", "update", "delete"],
         attribute: str,
@@ -66,18 +66,18 @@ class DummyPermission(BasePermission):
         configured_permission = permission_map.get(action, {}).get(attribute)
         if configured_permission is None:
             return True
-        return self.validatePermissionString(configured_permission)
+        return self.validate_permission_string(configured_permission)
 
-    def getPermissionFilter(
+    def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
         for permission in self.__class__.read_permissions.values():
             if isinstance(permission, str):
-                filters.append(self._getPermissionFilter(permission))
+                filters.append(self._get_permission_filter(permission))
             else:
                 for permission_string in permission:
-                    filters.append(self._getPermissionFilter(permission_string))
+                    filters.append(self._get_permission_filter(permission_string))
         return filters
 
 
@@ -122,68 +122,70 @@ class BasePermissionTests(TestCase):
             "delete"
         ].copy()
 
-    def test_getPermissionFilter_valid(self):
+    def test_get_permission_filter_valid(self):
         """
-        Testet _getPermissionFilter mit einem gültigen
+        Testet _get_permission_filter mit einem gültigen
         permission-String, der einen nicht-leeren Filter zurückgibt.
         """
-        result = self.permission_obj._getPermissionFilter("dummy:allow")
+        result = self.permission_obj._get_permission_filter("dummy:allow")
         expected = {"filter": {"dummy": "allowed"}, "exclude": {}}
         self.assertEqual(result, expected)
 
-    def test_getPermissionFilter_default(self):
+    def test_get_permission_filter_default(self):
         """
-        Testet _getPermissionFilter, wenn der Dummy-Filter None zurückgibt,
+        Testet _get_permission_filter, wenn der Dummy-Filter None zurückgibt,
         sodass der Default-Wert zurückgegeben wird.
         """
-        result = self.permission_obj._getPermissionFilter("dummy:deny")
+        result = self.permission_obj._get_permission_filter("dummy:deny")
         expected = {"filter": {}, "exclude": {}}
         self.assertEqual(result, expected)
 
-    def test_getPermissionFilter_invalid_permission(self):
+    def test_get_permission_filter_invalid_permission(self):
         """
-        Testet _getPermissionFilter mit einem ungültigen permission-String.
+        Testet _get_permission_filter mit einem ungültigen permission-String.
         Es sollte ein ValueError ausgelöst werden.
         """
         with self.assertRaises(PermissionNotFoundError):
-            self.permission_obj._getPermissionFilter("nonexistent:whatever")
+            self.permission_obj._get_permission_filter("nonexistent:whatever")
 
-    def test_validatePermissionString_all_true(self):
+    def test_validate_permission_string_all_true(self):
         """
-        Testet validatePermissionString, wenn alle Sub-Permissions true ergeben.
+        Testet validate_permission_string, wenn alle Sub-Permissions true ergeben.
         """
-        result = self.permission_obj.validatePermissionString("dummy:pass")
+        result = self.permission_obj.validate_permission_string("dummy:pass")
         self.assertTrue(result)
-        result2 = self.permission_obj.validatePermissionString("dummy:pass&dummy:pass")
+        result2 = self.permission_obj.validate_permission_string(
+            "dummy:pass&dummy:pass"
+        )
         self.assertTrue(result2)
 
-    def test_validatePermissionString_one_false(self):
+    def test_validate_permission_string_one_false(self):
         """
-        Testet validatePermissionString, wenn eine der Sub-Permissions false ist.
+        Testet validate_permission_string, wenn eine der Sub-Permissions false ist.
         """
-        result = self.permission_obj.validatePermissionString("dummy:pass&dummy:fail")
+        result = self.permission_obj.validate_permission_string("dummy:pass&dummy:fail")
         self.assertFalse(result)
 
-    def test_validatePermissionString_invalid_permission(self):
+    def test_validate_permission_string_invalid_permission(self):
         """
-        Testet validatePermissionString mit einem ungültigen permission-String.
+        Testet validate_permission_string mit einem ungültigen permission-String.
         Es sollte ein ValueError ausgelöst werden.
         """
         with self.assertRaises(ValueError):
-            self.permission_obj.validatePermissionString("nonexistent:whatever")
+            self.permission_obj.validate_permission_string("nonexistent:whatever")
 
-    def test_checkPermission(self):
+    def test_check_permission(self):
         """
-        Testet die concrete Implementierung der checkPermission-Methode.
+        Testet die concrete Implementierung der check_permission-Methode.
         """
-        self.assertTrue(self.permission_obj.checkPermission("create", "attribute"))
+        self.assertTrue(self.permission_obj.check_permission("create", "attribute"))
 
-    def test_getPermissionFilter_public(self):
+    def test_get_permission_filter_public(self):
         """
-        Testet die public getPermissionFilter-Methode der DummyPermission.
+        Testet die public get_permission_filter-Methode der DummyPermission.
         """
         DummyPermission.read_permissions = {"field": "dummy:allow"}
-        result = self.permission_obj.getPermissionFilter()
+        result = self.permission_obj.get_permission_filter()
         expected = [{"filter": {"dummy": "allowed"}, "exclude": {}}]
         self.assertEqual(result, expected)
 
@@ -219,41 +221,41 @@ class BasePermissionTests(TestCase):
         self.assertIn("Test error", str(ctx.exception))
 
     def test_check_create_permission_raises_permission_check_error(self):
-        """Test that checkCreatePermission raises PermissionCheckError on failure."""
+        """Test that check_create_permission raises PermissionCheckError on failure."""
         from general_manager.permission.base_permission import PermissionCheckError
 
         # Set up permission to fail
         DummyPermission.create_permissions = {"attribute": "dummy:deny"}
 
         with self.assertRaises(PermissionCheckError) as ctx:
-            DummyPermission.checkCreatePermission(
+            DummyPermission.check_create_permission(
                 {"attribute": "test_value"}, None, self.dummy_user
             )
 
         self.assertIn("Permission denied", str(ctx.exception))
 
     def test_check_update_permission_raises_permission_check_error(self):
-        """Test that checkUpdatePermission raises PermissionCheckError on failure."""
+        """Test that check_update_permission raises PermissionCheckError on failure."""
         from general_manager.permission.base_permission import PermissionCheckError
 
         # Set up permission to fail
         DummyPermission.update_permissions = {"attribute": "dummy:deny"}
 
         with patch(
-            "general_manager.permission.base_permission.PermissionDataManager.forUpdate"
+            "general_manager.permission.base_permission.PermissionDataManager.for_update"
         ) as mock_for_update:
             mock_for_update.return_value = PermissionDataManager(
                 {"attribute": "new_value"}, None
             )
             with self.assertRaises(PermissionCheckError) as ctx:
-                DummyPermission.checkUpdatePermission(
+                DummyPermission.check_update_permission(
                     {"attribute": "new_value"}, Mock(), self.dummy_user
                 )
 
         self.assertIn("Permission denied", str(ctx.exception))
 
     def test_check_delete_permission_raises_permission_check_error(self):
-        """Test that checkDeletePermission raises PermissionCheckError on failure."""
+        """Test that check_delete_permission raises PermissionCheckError on failure."""
         from general_manager.permission.base_permission import PermissionCheckError
 
         # Create a mock manager instance
@@ -268,24 +270,26 @@ class BasePermissionTests(TestCase):
         ) as mock_permission_manager:
             mock_permission_manager.return_value = Mock(spec=PermissionDataManager)
             with self.assertRaises(PermissionCheckError) as ctx:
-                DummyPermission.checkDeletePermission(manager_instance, self.dummy_user)
+                DummyPermission.check_delete_permission(
+                    manager_instance, self.dummy_user
+                )
 
         self.assertIn("Permission denied", str(ctx.exception))
 
     def test_permission_not_found_error(self):
         """Test that PermissionNotFoundError is raised for unknown permissions."""
         with self.assertRaises(PermissionNotFoundError) as ctx:
-            self.permission_obj.validatePermissionString("nonexistent:config")
+            self.permission_obj.validate_permission_string("nonexistent:config")
 
         self.assertIn("Permission", str(ctx.exception))
         self.assertIn("not found", str(ctx.exception))
 
     def test_get_permission_filter_with_invalid_permission_string(self):
-        """Test getPermissionFilter with invalid permission string."""
+        """Test get_permission_filter with invalid permission string."""
         DummyPermission.read_permissions = {"field": "invalid:permission"}
 
         with self.assertRaises(PermissionNotFoundError):
-            self.permission_obj.getPermissionFilter()
+            self.permission_obj.get_permission_filter()
 
     def test_permission_multiple_errors_aggregation(self):
         """Test that multiple permission errors are aggregated properly."""
@@ -299,7 +303,7 @@ class BasePermissionTests(TestCase):
         }
 
         with self.assertRaises(PermissionCheckError) as ctx:
-            DummyPermission.checkCreatePermission(
+            DummyPermission.check_create_permission(
                 {"field1": "val1", "field2": "val2", "field3": "val3"},
                 None,
                 self.dummy_user,
@@ -314,27 +318,27 @@ class BasePermissionTests(TestCase):
     def test_permission_with_empty_data(self):
         """Test permission checks with empty data dictionaries."""
         # Should not raise any errors
-        DummyPermission.checkCreatePermission({}, None, self.dummy_user)
+        DummyPermission.check_create_permission({}, None, self.dummy_user)
         with patch(
-            "general_manager.permission.base_permission.PermissionDataManager.forUpdate"
+            "general_manager.permission.base_permission.PermissionDataManager.for_update"
         ) as mock_for_update:
             mock_for_update.return_value = PermissionDataManager({}, None)
-            DummyPermission.checkUpdatePermission({}, Mock(), self.dummy_user)
+            DummyPermission.check_update_permission({}, Mock(), self.dummy_user)
 
     def test_get_user_with_id_authenticated(self):
-        """Test getUserWithId with authenticated user."""
+        """Test get_user_with_id with authenticated user."""
         User = get_user_model()
         user = User.objects.create_user(
             username="test_user",
         )
 
-        result = BasePermission.getUserWithId(user)
+        result = BasePermission.get_user_with_id(user)
         self.assertEqual(result, user)
 
     def test_get_user_with_id_anonymous(self):
-        """Test getUserWithId with anonymous user."""
+        """Test get_user_with_id with anonymous user."""
         user = AnonymousUser()
 
-        result = BasePermission.getUserWithId(user)
+        result = BasePermission.get_user_with_id(user)
 
         self.assertIs(result, user)

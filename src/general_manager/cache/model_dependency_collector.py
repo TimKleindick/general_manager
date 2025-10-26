@@ -43,7 +43,7 @@ class ModelDependencyCollector:
                 yield from ModelDependencyCollector.collect(item)
 
     @staticmethod
-    def addArgs(dependencies: set[Dependency], args: tuple, kwargs: dict) -> None:
+    def add_args(dependencies: set[Dependency], args: tuple, kwargs: dict) -> None:
         """
         Enrich the dependency set with values discovered in positional and keyword arguments.
 

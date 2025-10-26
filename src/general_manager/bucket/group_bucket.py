@@ -132,10 +132,10 @@ class GroupBucket(Bucket[GeneralManagerType]):
             ValueError: If a group-by key is not a valid manager attribute.
         """
         super().__init__(manager_class)
-        self.__checkGroupByArguments(group_by_keys)
+        self.__check_group_by_arguments(group_by_keys)
         self._group_by_keys = group_by_keys
-        self._data: list[GroupManager[GeneralManagerType]] = self.__buildGroupedManager(
-            data
+        self._data: list[GroupManager[GeneralManagerType]] = (
+            self.__build_grouped_manager(data)
         )
         self._basis_data: Bucket[GeneralManagerType] = data
 
@@ -157,7 +157,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             and self._group_by_keys == other._group_by_keys
         )
 
-    def __checkGroupByArguments(self, group_by_keys: tuple[str, ...]) -> None:
+    def __check_group_by_arguments(self, group_by_keys: tuple[str, ...]) -> None:
         """
         Validate that each provided group-by key is a string and is exposed by the manager interface.
 
@@ -171,12 +171,12 @@ class GroupBucket(Bucket[GeneralManagerType]):
         if not all(isinstance(arg, str) for arg in group_by_keys):
             raise InvalidGroupByKeyTypeError()
         if not all(
-            arg in self._manager_class.Interface.getAttributes()
+            arg in self._manager_class.Interface.get_attributes()
             for arg in group_by_keys
         ):
             raise UnknownGroupByKeyError(self._manager_class.__name__)
 
-    def __buildGroupedManager(
+    def __build_grouped_manager(
         self,
         data: Bucket[GeneralManagerType],
     ) -> list[GroupManager[GeneralManagerType]]:

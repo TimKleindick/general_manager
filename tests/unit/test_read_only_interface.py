@@ -99,7 +99,7 @@ class DummyModel:
 
     class _meta:
         db_table = "dummy_table"
-        # für getUniqueFields irrelevant, wir patchen direkt
+        # für get_unique_fields irrelevant, wir patchen direkt
 
 
 class DummyManager:
@@ -113,13 +113,13 @@ class DummyInterface(ReadOnlyInterface):
 
 
 # ------------------------------------------------------------
-# Tests für getUniqueFields
+# Tests für get_unique_fields
 # ------------------------------------------------------------
 class GetUniqueFieldsTests(SimpleTestCase):
     def test_field_unique_true_and_together_and_constraint(self):
         # Erzeuge eine Fake-Meta mit lokalen Feldern, unique_together und UniqueConstraint
         """
-        Tests that getUniqueFields correctly identifies unique fields from unique attributes, unique_together, and UniqueConstraint in a model's _meta.
+        Tests that get_unique_fields correctly identifies unique fields from unique attributes, unique_together, and UniqueConstraint in a model's _meta.
         """
         Field = SimpleNamespace  # mit .name, .unique, .column
 
@@ -162,14 +162,14 @@ class GetUniqueFieldsTests(SimpleTestCase):
         class M:
             _meta = fake_meta
 
-        result = ReadOnlyInterface.getUniqueFields(M)
+        result = ReadOnlyInterface.get_unique_fields(M)
         # id wird ignoriert, email (unique), username (über unique_together),
         # other (unique_together), other_field (constraint), extra (UniqueConstraint)
         self.assertSetEqual(result, {"email", "username", "other", "extra"})
 
 
 # ------------------------------------------------------------
-# Tests für ensureSchemaIsUpToDate
+# Tests für ensure_schema_is_up_to_date
 # ------------------------------------------------------------
 class EnsureSchemaTests(TestCase):
     def setUp(self):
@@ -206,7 +206,9 @@ class EnsureSchemaTests(TestCase):
             return []
 
         connection.introspection.table_names = table_names  # type: ignore[assignment]
-        warnings = ReadOnlyInterface.ensureSchemaIsUpToDate(DummyManager, DummyModel)
+        warnings = ReadOnlyInterface.ensure_schema_is_up_to_date(
+            DummyManager, DummyModel
+        )
         self.assertEqual(len(warnings), 1)
         self.assertIsInstance(warnings[0], Warning)
         self.assertIn("does not exist", warnings[0].hint)
@@ -214,7 +216,7 @@ class EnsureSchemaTests(TestCase):
     def test_schema_up_to_date(self):
         # table_names enthält unseren Tabellennamen
         """
-        Tests that ensureSchemaIsUpToDate returns no warnings when the database schema matches the model's fields.
+        Tests that ensure_schema_is_up_to_date returns no warnings when the database schema matches the model's fields.
         """
 
         def table_names(_: object) -> list[str]:
@@ -259,12 +261,12 @@ class EnsureSchemaTests(TestCase):
                     SimpleNamespace(column="col2"),
                 ]
 
-        warnings = ReadOnlyInterface.ensureSchemaIsUpToDate(DummyManager, M)
+        warnings = ReadOnlyInterface.ensure_schema_is_up_to_date(DummyManager, M)
         self.assertEqual(warnings, [])
 
 
 # ------------------------------------------------------------
-# Tests für syncData
+# Tests für sync_data
 # ------------------------------------------------------------
 class SyncDataTests(SimpleTestCase):
     def setUp(self):
@@ -272,7 +274,7 @@ class SyncDataTests(SimpleTestCase):
         """
         Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and interface methods, and capturing logs.
 
-        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyInterface.getUniqueFields to return {'name'} and ReadOnlyInterface.ensureSchemaIsUpToDate to return an empty list, and starts a logger patch that captures log calls.
+        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyInterface.get_unique_fields to return {'name'} and ReadOnlyInterface.ensure_schema_is_up_to_date to return an empty list, and starts a logger patch that captures log calls.
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
@@ -308,14 +310,14 @@ class SyncDataTests(SimpleTestCase):
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
-        # stub getUniqueFields auf {'name'}
+        # stub get_unique_fields auf {'name'}
         self.gu_patch = mock.patch.object(
-            ReadOnlyInterface, "getUniqueFields", return_value={"name"}
+            ReadOnlyInterface, "get_unique_fields", return_value={"name"}
         )
         self.gu_patch.start()
-        # stub ensureSchemaIsUpToDate immer leer
+        # stub ensure_schema_is_up_to_date immer leer
         self.es_patch = mock.patch.object(
-            ReadOnlyInterface, "ensureSchemaIsUpToDate", return_value=[]
+            ReadOnlyInterface, "ensure_schema_is_up_to_date", return_value=[]
         )
         self.es_patch.start()
         # log-capture
@@ -339,56 +341,56 @@ class SyncDataTests(SimpleTestCase):
 
     def test_missing_data_raises(self):
         """
-        Tests that syncData raises a ValueError when the required '_data' attribute is not set.
+        Tests that sync_data raises a ValueError when the required '_data' attribute is not set.
         """
         DummyManager._data = None
         with self.assertRaises(ValueError) as cm:
-            DummyInterface.syncData()
+            DummyInterface.sync_data()
         self.assertIn("must define a '_data'", str(cm.exception))
 
     def test_invalid_data_type_raises(self):
         """
-        Test that syncData raises a ValueError when _data is neither a string nor a list.
+        Test that sync_data raises a ValueError when _data is neither a string nor a list.
         """
         DummyManager._data = 123  # weder str noch list
         with self.assertRaises(TypeError) as cm:
-            DummyInterface.syncData()
+            DummyInterface.sync_data()
         self.assertIn("_data must be a JSON string or a list", str(cm.exception))
 
     def test_no_unique_fields_raises(self):
-        # stop getUniqueFields und liefere leere Menge
+        # stop get_unique_fields und liefere leere Menge
         """
-        Test that syncData raises a ValueError when no unique fields are defined on the model.
+        Test that sync_data raises a ValueError when no unique fields are defined on the model.
         """
         self.gu_patch.stop()
         with mock.patch.object(
-            ReadOnlyInterface, "getUniqueFields", return_value=set()
+            ReadOnlyInterface, "get_unique_fields", return_value=set()
         ):
             DummyManager._data = []
             with self.assertRaises(ValueError) as cm:
-                DummyInterface.syncData()
+                DummyInterface.sync_data()
             self.assertIn("must declare at least one unique field", str(cm.exception))
 
     def test_ensure_schema_not_up_to_date_logs_and_exits(self):
-        # ersetze ensureSchemaIsUpToDate durch Warnung
+        # ersetze ensure_schema_is_up_to_date durch Warnung
         """
-        Test that syncData logs a warning and exits without saving if schema validation returns warnings.
+        Test that sync_data logs a warning and exits without saving if schema validation returns warnings.
         """
         self.es_patch.stop()
         with mock.patch.object(
             ReadOnlyInterface,
-            "ensureSchemaIsUpToDate",
+            "ensure_schema_is_up_to_date",
             return_value=[Warning("x", "y", obj=None)],
         ):
             DummyManager._data = "[]"
-            DummyInterface.syncData()
+            DummyInterface.sync_data()
             self.logger.warning.assert_called_once()
             # keine weiteren Aufrufe an save()
             self.assertEqual(DummyModel.objects._instances, [])
 
     def test_sync_creates_updates_and_deactivates(self):
         """
-        Tests that syncData creates new instances, updates existing ones, and does not deactivate any when all input data matches active instances.
+        Tests that sync_data creates new instances, updates existing ones, and does not deactivate any when all input data matches active instances.
 
         Verifies that:
         - Existing instances are updated with new data.
@@ -399,8 +401,8 @@ class SyncDataTests(SimpleTestCase):
         DummyModel.objects._instances = [FakeInstance(name="a", other=1)]
         # neue JSON-Daten: a verändert, b neu
         DummyManager._data = [{"name": "a", "other": 2}, {"name": "b", "other": 3}]
-        # führe syncData aus
-        DummyInterface.syncData()
+        # führe sync_data aus
+        DummyInterface.sync_data()
         # prüfe a wurde updated
         inst_a = next(i for i in DummyModel.objects._instances if i.name == "a")
         self.assertEqual(inst_a.other, 2)
@@ -418,20 +420,20 @@ class SyncDataTests(SimpleTestCase):
 
 
 # ------------------------------------------------------------
-# Tests für Decorators und handleInterface
+# Tests für Decorators und handle_interface
 # ------------------------------------------------------------
 class DecoratorTests(SimpleTestCase):
-    def test_readOnlyPostCreate_appends_class(self):
+    def test_read_only_post_create_appends_class(self):
         # reset Liste
         """
-        Tests that the readOnlyPostCreate decorator appends the class to the read_only_classes list and calls the decorated hook.
+        Tests that the read_only_post_create decorator appends the class to the read_only_classes list and calls the decorated hook.
         """
         from general_manager.manager.meta import GeneralManagerMeta
 
         GeneralManagerMeta.read_only_classes = []
 
         # Dummy-Funktion
-        @ReadOnlyInterface.readOnlyPostCreate
+        @ReadOnlyInterface.read_only_post_create
         def post_hook(new_cls, interface_cls, model):
             # setze eine Marke
             """
@@ -451,25 +453,25 @@ class DecoratorTests(SimpleTestCase):
         self.assertTrue(hasattr(C, "_hook_called"))
         self.assertIn(C, GeneralManagerMeta.read_only_classes)
 
-    def test_readOnlyPreCreate_delegates_and_sets_base_model(self):
+    def test_read_only_pre_create_delegates_and_sets_base_model(self):
         """
-        Tests that the readOnlyPreCreate decorator delegates to the original function and sets the base model class to ReadOnlyModel.
+        Tests that the read_only_pre_create decorator delegates to the original function and sets the base model class to ReadOnlyModel.
         """
 
         def pre_hook(name, attrs, interface, base_model_class=None):
             return (name, attrs, interface, base_model_class)
 
-        wrapper = ReadOnlyInterface.readOnlyPreCreate(pre_hook)
+        wrapper = ReadOnlyInterface.read_only_pre_create(pre_hook)
         result = wrapper("MyName", {"a": 1}, "iface")
         # der letzte Parameter muss GeneralManagerBasisModel sein
         self.assertEqual(
             result, ("MyName", {"a": 1}, "iface", GeneralManagerBasisModel)
         )
 
-    def test_handleInterface_returns_two_callables(self):
+    def test_handle_interface_returns_two_callables(self):
         """
-        Test that handleInterface returns two callable objects for pre- and post-processing hooks.
+        Test that handle_interface returns two callable objects for pre- and post-processing hooks.
         """
-        pre, post = ReadOnlyInterface.handleInterface()
+        pre, post = ReadOnlyInterface.handle_interface()
         self.assertTrue(callable(pre))
         self.assertTrue(callable(post))

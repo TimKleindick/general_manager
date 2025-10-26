@@ -4,7 +4,7 @@ Interfaces emit dependency information whenever they access or modify data. The 
 
 ## Change signals
 
-CRUD operations on `GeneralManager` instances emit the `dataChange` signal defined in `general_manager.cache.signals`. Subscribers receive the manager name, the type of operation, and the identification of the affected record. Use this to invalidate downstream caches or trigger asynchronous jobs.
+CRUD operations on `GeneralManager` instances emit the `data_change` signal defined in `general_manager.cache.signals`. Subscribers receive the manager name, the type of operation, and the identification of the affected record. Use this to invalidate downstream caches or trigger asynchronous jobs.
 
 ## Recording dependencies
 

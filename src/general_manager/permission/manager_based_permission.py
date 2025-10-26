@@ -86,10 +86,10 @@ class ManagerBasedPermission(BasePermission):
             request_user (AbstractUser): User whose permissions are being checked.
         """
         super().__init__(instance, request_user)
-        self.__setPermissions()
+        self.__set_permissions()
 
-        self.__attribute_permissions = self.__getAttributePermissions()
-        self.__based_on_permission = self.__getBasedOnPermission()
+        self.__attribute_permissions = self.__get_attribute_permissions()
+        self.__based_on_permission = self.__get_based_on_permission()
         self.__overall_results: Dict[permission_type, Optional[bool]] = {
             "create": None,
             "read": None,
@@ -97,7 +97,7 @@ class ManagerBasedPermission(BasePermission):
             "delete": None,
         }
 
-    def __setPermissions(self, skip_based_on: bool = False) -> None:
+    def __set_permissions(self, skip_based_on: bool = False) -> None:
         """Populate CRUD permissions using class-level defaults and overrides."""
         default_read = ["public"]
         default_write = ["isAuthenticated"]
@@ -111,7 +111,7 @@ class ManagerBasedPermission(BasePermission):
         self.__update__ = getattr(self.__class__, "__update__", default_write)
         self.__delete__ = getattr(self.__class__, "__delete__", default_write)
 
-    def __getBasedOnPermission(self) -> Optional[BasePermission]:
+    def __get_based_on_permission(self) -> Optional[BasePermission]:
         """
         Resolve and return a BasePermission instance from the manager attribute named by the class-level `__based_on__` configuration.
 
@@ -134,7 +134,7 @@ class ManagerBasedPermission(BasePermission):
         if basis_object is notExistent:
             raise InvalidBasedOnConfigurationError(__based_on__)
         if basis_object is None:
-            self.__setPermissions(skip_based_on=True)
+            self.__set_permissions(skip_based_on=True)
             return None
         if not isinstance(basis_object, GeneralManager) and not (
             isinstance(basis_object, type) and issubclass(basis_object, GeneralManager)
@@ -154,7 +154,7 @@ class ManagerBasedPermission(BasePermission):
             request_user=self.request_user,
         )
 
-    def __getAttributePermissions(
+    def __get_attribute_permissions(
         self,
     ) -> dict[str, dict[permission_type, list[str]]]:
         """Collect attribute-level permission overrides defined on the class."""
@@ -164,7 +164,7 @@ class ManagerBasedPermission(BasePermission):
                 attribute_permissions[attribute] = getattr(self, attribute)
         return attribute_permissions
 
-    def checkPermission(
+    def check_permission(
         self,
         action: permission_type,
         attribute: str,
@@ -184,7 +184,7 @@ class ManagerBasedPermission(BasePermission):
         """
         if (
             self.__based_on_permission
-            and not self.__based_on_permission.checkPermission(action, attribute)
+            and not self.__based_on_permission.check_permission(action, attribute)
         ):
             return False
 
@@ -210,15 +210,15 @@ class ManagerBasedPermission(BasePermission):
                 return last_result
             attribute_permission = True
         else:
-            attribute_permission = self.__checkSpecificPermission(
+            attribute_permission = self.__check_specific_permission(
                 self.__attribute_permissions[attribute][action]
             )
 
-        permission = self.__checkSpecificPermission(permissions)
+        permission = self.__check_specific_permission(permissions)
         self.__overall_results[action] = permission
         return permission and attribute_permission
 
-    def __checkSpecificPermission(
+    def __check_specific_permission(
         self,
         permissions: list[str],
     ) -> bool:
@@ -226,17 +226,17 @@ class ManagerBasedPermission(BasePermission):
         if not permissions:
             return True
         for permission in permissions:
-            if self.validatePermissionString(permission):
+            if self.validate_permission_string(permission):
                 return True
         return False
 
-    def getPermissionFilter(
+    def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
         """
         Builds queryset filter and exclude mappings derived from this permission configuration.
 
-        If a based-on permission exists, its filters and excludes are included with each key prefixed by the name in __based_on__. Then appends filters produced from this class's read permissions via _getPermissionFilter.
+        If a based-on permission exists, its filters and excludes are included with each key prefixed by the name in __based_on__. Then appends filters produced from this class's read permissions via _get_permission_filter.
 
         Returns:
             list[dict[Literal["filter", "exclude"], dict[str, str]]]: A list of dictionaries each containing "filter" and "exclude" mappings where keys are queryset lookups and values are lookup values.
@@ -245,7 +245,7 @@ class ManagerBasedPermission(BasePermission):
         filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
 
         if self.__based_on_permission is not None:
-            base_permissions = self.__based_on_permission.getPermissionFilter()
+            base_permissions = self.__based_on_permission.get_permission_filter()
             for base_permission in base_permissions:
                 filter = base_permission.get("filter", {})
                 exclude = base_permission.get("exclude", {})
@@ -263,6 +263,6 @@ class ManagerBasedPermission(BasePermission):
                 )
 
         for permission in self.__read__:
-            filters.append(self._getPermissionFilter(permission))
+            filters.append(self._get_permission_filter(permission))
 
         return filters

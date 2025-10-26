@@ -4,7 +4,7 @@ from general_manager.manager.meta import GeneralManagerMeta
 
 from general_manager.api.property import GraphQLProperty
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.signals import dataChange
+from general_manager.cache.signals import data_change
 from general_manager.bucket.base_bucket import Bucket
 
 
@@ -117,7 +117,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 yield name, getattr(self, name)
 
     @classmethod
-    @dataChange
+    @data_change
     def create(
         cls,
         creator_id: int | None = None,
@@ -141,13 +141,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
-            cls.Permission.checkCreatePermission(kwargs, cls, creator_id)
+            cls.Permission.check_create_permission(kwargs, cls, creator_id)
         identification = cls.Interface.create(
             creator_id=creator_id, history_comment=history_comment, **kwargs
         )
         return cls(identification)
 
-    @dataChange
+    @data_change
     def update(
         self,
         creator_id: int | None = None,
@@ -171,7 +171,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
-            self.Permission.checkUpdatePermission(kwargs, self, creator_id)
+            self.Permission.check_update_permission(kwargs, self, creator_id)
         self._interface.update(
             creator_id=creator_id,
             history_comment=history_comment,
@@ -179,7 +179,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         )
         return self.__class__(**self.identification)
 
-    @dataChange
+    @data_change
     def deactivate(
         self,
         creator_id: int | None = None,
@@ -201,7 +201,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
-            self.Permission.checkDeletePermission(self, creator_id)
+            self.Permission.check_delete_permission(self, creator_id)
         self._interface.deactivate(
             creator_id=creator_id, history_comment=history_comment
         )

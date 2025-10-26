@@ -65,7 +65,7 @@ class InvalidRelatedModelTypeError(TypeError):
         )
 
 
-def getFieldValue(
+def get_field_value(
     field: models.Field[Any, Any] | models.ForeignObjectRel,
 ) -> Any:
     """
@@ -173,7 +173,7 @@ def getFieldValue(
         else:
             return cast(str, Faker("text", max_nb_chars=max_length))
     elif isinstance(field, models.OneToOneField):
-        related_model = getRelatedModel(field)
+        related_model = get_related_model(field)
         if hasattr(related_model, "_general_manager_class"):
             related_factory = related_model._general_manager_class.Factory  # type: ignore
             return related_factory()
@@ -185,7 +185,7 @@ def getFieldValue(
             else:
                 raise MissingFactoryOrInstancesError(related_model)
     elif isinstance(field, models.ForeignKey):
-        related_model = getRelatedModel(field)
+        related_model = get_related_model(field)
         # Create or get an instance of the related model
         if hasattr(related_model, "_general_manager_class"):
             create_a_new_instance = _RNG.choice([True, True, False])
@@ -209,7 +209,7 @@ def getFieldValue(
         return None
 
 
-def getRelatedModel(
+def get_related_model(
     field: models.ForeignObjectRel | models.Field[Any, Any],
 ) -> type[models.Model]:
     """
@@ -239,7 +239,7 @@ def getRelatedModel(
     return cast(type[models.Model], related_model)
 
 
-def getManyToManyFieldValue(
+def get_many_to_many_field_value(
     field: models.ManyToManyField,
 ) -> list[models.Model]:
     """
@@ -257,7 +257,7 @@ def getManyToManyFieldValue(
         MissingFactoryOrInstancesError: If the related model provides neither a factory nor any existing instances.
     """
     related_factory = None
-    related_model = getRelatedModel(field)
+    related_model = get_related_model(field)
     related_instances = list(related_model.objects.all())
     if hasattr(related_model, "_general_manager_class"):
         related_factory = related_model._general_manager_class.Factory  # type: ignore

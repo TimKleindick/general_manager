@@ -179,7 +179,7 @@ class BaseTestInterface(InterfaceBase):
         """
         raise NotImplementedError
 
-    def getData(self, search_date=None):
+    def get_data(self, search_date=None):
         """
         Raises NotImplementedError to indicate that data retrieval must be implemented by subclasses.
 
@@ -189,7 +189,7 @@ class BaseTestInterface(InterfaceBase):
         raise NotImplementedError
 
     @classmethod
-    def getAttributeTypes(cls):
+    def get_attribute_types(cls):
         """
         Return a dictionary mapping attribute names to their types for the class.
 
@@ -199,7 +199,7 @@ class BaseTestInterface(InterfaceBase):
         return {}
 
     @classmethod
-    def getAttributes(cls):
+    def get_attributes(cls):
         """
         Return a dictionary of attribute definitions for the class.
 
@@ -230,7 +230,7 @@ class BaseTestInterface(InterfaceBase):
         return SimpleBucket(cls._parent_class, [])
 
     @classmethod
-    def getFieldType(cls, field_name: str) -> type:
+    def get_field_type(cls, field_name: str) -> type:
         """
         Return the type of the specified field, always as `str`.
 
@@ -243,7 +243,7 @@ class BaseTestInterface(InterfaceBase):
         return str
 
     @classmethod
-    def handleInterface(cls):
+    def handle_interface(cls):
         """
         Return pre- and post-processing hooks for interface class construction.
 

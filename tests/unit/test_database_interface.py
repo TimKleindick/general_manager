@@ -31,7 +31,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
             @classmethod
-            def handleInterface(cls):
+            def handle_interface(cls):
                 """
                 Provide pre/post handler callables used when attaching an interface to a class.
 
@@ -77,7 +77,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
 
             @classmethod
-            def handleInterface(cls):
+            def handle_interface(cls):
                 """
                 Provide pre/post handler callables used when attaching an interface to a class.
 
@@ -127,15 +127,15 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         self.user_manager = self.UserManager(self.user.pk)
 
     def test_check_for_invalid_kwargs(self):
-        self.BookInterface._checkForInvalidKwargs(
+        self.BookInterface._check_for_invalid_kwargs(
             self.BookModel, {"title": "a", "readers_id_list": []}
         )
         with self.assertRaises(ValueError):
-            self.BookInterface._checkForInvalidKwargs(self.BookModel, {"wrong": 1})
+            self.BookInterface._check_for_invalid_kwargs(self.BookModel, {"wrong": 1})
 
     def test_sort_kwargs(self):
         kwargs = SafeDict({"title": "b", "readers_id_list": [1]})
-        normal, m2m = self.BookInterface._sortKwargs(self.BookModel, kwargs)
+        normal, m2m = self.BookInterface._sort_kwargs(self.BookModel, kwargs)
         self.assertEqual(normal, {"title": "b"})
         self.assertEqual(m2m, {"readers_id_list": [1]})
 

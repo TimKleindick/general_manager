@@ -25,17 +25,17 @@ from tests.utils.simple_manager_interface import BaseTestInterface
 
 class _DummyInterface(BaseTestInterface):
     @classmethod
-    def getGraphQLProperties(cls) -> dict[str, object]:
+    def get_graph_ql_properties(cls) -> dict[str, object]:
         """
         Provide a mapping of GraphQL property names to placeholder descriptor objects used in tests.
 
         Returns:
-            dict[str, object]: Mapping with keys "propA", "propB", and "propC" whose values are placeholder descriptor objects.
+            dict[str, object]: Mapping with keys "prop_a", "prop_b", and "prop_c" whose values are placeholder descriptor objects.
         """
         return {
-            "propA": object(),
-            "propB": object(),
-            "propC": object(),
+            "prop_a": object(),
+            "prop_b": object(),
+            "prop_c": object(),
         }
 
 
@@ -189,7 +189,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
         """
         Verify that _subscription_property_names extracts a directly selected field name from a subscription selection.
 
-        Builds GraphQL selection info for a subscription selecting item.propA and asserts the extracted property names equal {"propA"}.
+        Builds GraphQL selection info for a subscription selecting item.propA and asserts the extracted property names equal {"prop_a"}.
         """
         info = self._build_info(
             """
@@ -203,7 +203,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             """
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)
-        self.assertEqual(property_names, {"propA"})
+        self.assertEqual(property_names, {"prop_a"})
 
     def test_property_selection_via_inline_fragment_and_alias(self) -> None:
         info = self._build_info(
@@ -220,7 +220,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             """
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)
-        self.assertEqual(property_names, {"propB"})
+        self.assertEqual(property_names, {"prop_b"})
 
     def test_property_selection_via_named_fragment(self) -> None:
         info = self._build_info(
@@ -239,7 +239,7 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
             """
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)
-        self.assertEqual(property_names, {"propC"})
+        self.assertEqual(property_names, {"prop_c"})
 
     def test_manager_without_interface_returns_empty_set(self) -> None:
         class NoInterfaceManager:
@@ -261,12 +261,12 @@ class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
         """
         Verifies that _subscription_property_names yields an empty set when a manager's Interface exposes no GraphQL properties.
 
-        Constructs a subscription selection that requests a field from the item, provides a manager whose Interface.getGraphQLProperties returns an empty dict, and asserts the extracted property name set is empty.
+        Constructs a subscription selection that requests a field from the item, provides a manager whose Interface.get_graph_ql_properties returns an empty dict, and asserts the extracted property name set is empty.
         """
 
         class EmptyInterface(BaseTestInterface):
             @classmethod
-            def getGraphQLProperties(cls) -> dict[str, object]:
+            def get_graph_ql_properties(cls) -> dict[str, object]:
                 """
                 Provide GraphQL-exposed property descriptors for this Interface.
 
@@ -300,7 +300,7 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
         """
         Prepare test fixtures by creating a PrimeTestManager class with a GraphQL-facing Interface and an access log for property access tracking.
 
-        Defines a PrimeInterface whose `getGraphQLProperties` exposes "alpha" and "beta", and a PrimeTestManager that:
+        Defines a PrimeInterface whose `get_graph_ql_properties` exposes "alpha" and "beta", and a PrimeTestManager that:
         - provides an `Interface` subclassing PrimeInterface,
         - maintains `access_log` (list of property names accessed),
         - exposes `alpha` and `beta` properties that record their access and return 1 and 2 respectively.
@@ -310,7 +310,7 @@ class GraphQLPrimeHelpersTests(unittest.TestCase):
 
         class PrimeInterface(BaseTestInterface):
             @classmethod
-            def getGraphQLProperties(cls) -> dict[str, object]:
+            def get_graph_ql_properties(cls) -> dict[str, object]:
                 """
                 Return the mapping of GraphQL-exposed property names to their corresponding manager property descriptors.
 
@@ -385,7 +385,7 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
         class DepManager:
             class Interface(BaseTestInterface):
                 @classmethod
-                def getGraphQLProperties(cls) -> dict[str, object]:
+                def get_graph_ql_properties(cls) -> dict[str, object]:
                     """
                     Return a mapping of GraphQL-exposed property names to their descriptor objects for this interface class.
 
@@ -517,7 +517,7 @@ class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
 
         class ExceptionInterface(BaseTestInterface):
             @classmethod
-            def getGraphQLProperties(cls) -> dict[str, object]:
+            def get_graph_ql_properties(cls) -> dict[str, object]:
                 """
                 Return a mapping of GraphQL-exposed property names to their property descriptors for the interface class.
 
@@ -546,7 +546,7 @@ class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
 
         class TestInterface(BaseTestInterface):
             @classmethod
-            def getGraphQLProperties(cls) -> dict[str, object]:
+            def get_graph_ql_properties(cls) -> dict[str, object]:
                 return {"prop": TestManager.prop}
 
         class TestManager:
@@ -575,7 +575,7 @@ class GraphQLDependencyTrackerEdgeCaseTests(unittest.TestCase):
         class TestManager(GeneralManager):
             class Interface(BaseTestInterface):
                 @classmethod
-                def getGraphQLProperties(cls) -> dict[str, object]:
+                def get_graph_ql_properties(cls) -> dict[str, object]:
                     return {}
 
         GraphQL.manager_registry = {"TestManager": TestManager}
@@ -676,7 +676,7 @@ class GraphQLSubscriptionPropertyNamesEdgeCaseTests(unittest.TestCase):
             """
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)  # type: ignore[arg-type]
-        self.assertEqual(property_names, {"propA", "propB", "propC"})
+        self.assertEqual(property_names, {"prop_a", "prop_b", "prop_c"})
 
     def test_nested_fragments(self) -> None:
         """Verify _subscription_property_names handles fragments referencing other fragments."""
@@ -699,7 +699,7 @@ class GraphQLSubscriptionPropertyNamesEdgeCaseTests(unittest.TestCase):
             """
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)  # type: ignore[arg-type]
-        self.assertEqual(property_names, {"propA", "propB"})
+        self.assertEqual(property_names, {"prop_a", "prop_b"})
 
     def test_action_only_selection(self) -> None:
         """Verify _subscription_property_names returns empty set when only action is selected."""
@@ -732,7 +732,7 @@ class GraphQLSubscriptionPropertyNamesEdgeCaseTests(unittest.TestCase):
             """
         )
         property_names = GraphQL._subscription_property_names(info, _DummyManager)  # type: ignore[arg-type]
-        self.assertEqual(property_names, {"propA"})
+        self.assertEqual(property_names, {"prop_a"})
 
 
 def allow_simple_interface_only(cls):
@@ -760,7 +760,7 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
     """Test identification argument building for subscriptions."""
 
     def test_simple_id_field(self) -> None:
-        """Verify _buildIdentificationArguments creates ID argument for 'id' input field."""
+        """Verify _build_identification_arguments creates ID argument for 'id' input field."""
 
         class SimpleInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, object]] = {
@@ -770,12 +770,12 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
         class SimpleManager(GeneralManager):
             Interface = SimpleInterface
 
-        args = GraphQL._buildIdentificationArguments(SimpleManager)
+        args = GraphQL._build_identification_arguments(SimpleManager)
         self.assertIn("id", args)
         self.assertIsInstance(args["id"], graphene.Argument)
 
     def test_manager_reference_field(self) -> None:
-        """Verify _buildIdentificationArguments creates <name>_id field for manager references."""
+        """Verify _build_identification_arguments creates <name>_id field for manager references."""
 
         class RelatedManager(GeneralManager):
             pass
@@ -788,12 +788,12 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
         class TestManager(GeneralManager):
             Interface = TestInterface
 
-        args = GraphQL._buildIdentificationArguments(TestManager)
+        args = GraphQL._build_identification_arguments(TestManager)
         self.assertIn("parent_id", args)
         self.assertIsInstance(args["parent_id"], graphene.Argument)
 
     def test_multiple_input_fields(self) -> None:
-        """Verify _buildIdentificationArguments handles multiple input fields correctly."""
+        """Verify _build_identification_arguments handles multiple input fields correctly."""
 
         class RelatedManager(GeneralManager):
             pass
@@ -808,7 +808,7 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
         class TestManager(GeneralManager):
             Interface = TestInterface
 
-        args = GraphQL._buildIdentificationArguments(TestManager)
+        args = GraphQL._build_identification_arguments(TestManager)
         self.assertIn("id", args)
         self.assertIn("name", args)
         self.assertIn("parent_id", args)
@@ -851,6 +851,7 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
 
         class UnregisteredManager(GeneralManager):
             identification: ClassVar[dict[str, int]] = {"id": 1}
+            Interface = BaseTestInterface
 
         instance = UnregisteredManager()
         with patch(
@@ -866,6 +867,7 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
 
         class RegisteredManager(GeneralManager):
             identification: ClassVar[dict[str, int]] = {"id": 1}
+            Interface = BaseTestInterface
 
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
         instance = RegisteredManager()
@@ -883,6 +885,7 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
 
         class RegisteredManager(GeneralManager):
             identification: ClassVar[dict[str, int]] = {"id": 1}
+            Interface = BaseTestInterface
 
         GraphQL.manager_registry = {"RegisteredManager": RegisteredManager}
         instance = RegisteredManager()
@@ -966,7 +969,7 @@ class GraphQLInstantiateManagerTests(GeneralManagerTransactionTestCase):
 
         class TrackedInterface(BaseTestInterface):
             @classmethod
-            def getGraphQLProperties(cls) -> dict[str, object]:
+            def get_graph_ql_properties(cls) -> dict[str, object]:
                 return {
                     "prop_a": TrackedManager.prop_a,
                     "prop_b": TrackedManager.prop_b,

@@ -78,7 +78,7 @@ class GeneralManagerMeta(type):
         """
         Create a GeneralManager subclass, integrate any declared Interface hooks, and register the class for pending initialization and GraphQL processing.
 
-        If the class body defines an `Interface`, validates it is a subclass of `InterfaceBase`, invokes the interface's `handleInterface()` pre-creation hook to allow modification of the class namespace, creates the class, then invokes the post-creation hook and registers the class for attribute initialization and global tracking. If `Interface` is not defined, creates the class directly. If `settings.AUTOCREATE_GRAPHQL` is true, registers the created class for GraphQL interface processing.
+        If the class body defines an `Interface`, validates it is a subclass of `InterfaceBase`, invokes the interface's `handle_interface()` pre-creation hook to allow modification of the class namespace, creates the class, then invokes the post-creation hook and registers the class for attribute initialization and global tracking. If `Interface` is not defined, creates the class directly. If `settings.AUTOCREATE_GRAPHQL` is true, registers the created class for GraphQL interface processing.
 
         Parameters:
             mcs (type): The metaclass creating the class.
@@ -90,7 +90,7 @@ class GeneralManagerMeta(type):
             type: The newly created subclass, possibly modified by Interface hooks.
         """
 
-        def createNewGeneralManagerClass(
+        def create_new_general_manager_class(
             mcs: type["GeneralManagerMeta"],
             name: str,
             bases: tuple[type, ...],
@@ -103,15 +103,15 @@ class GeneralManagerMeta(type):
             interface = attrs.pop("Interface")
             if not issubclass(interface, InterfaceBase):
                 raise InvalidInterfaceTypeError(interface.__name__)
-            preCreation, postCreation = interface.handleInterface()
-            attrs, interface_cls, model = preCreation(name, attrs, interface)
-            new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
-            postCreation(new_class, interface_cls, model)
+            pre_creation, post_creation = interface.handle_interface()
+            attrs, interface_cls, model = pre_creation(name, attrs, interface)
+            new_class = create_new_general_manager_class(mcs, name, bases, attrs)
+            post_creation(new_class, interface_cls, model)
             mcs.pending_attribute_initialization.append(new_class)
             mcs.all_classes.append(new_class)
 
         else:
-            new_class = createNewGeneralManagerClass(mcs, name, bases, attrs)
+            new_class = create_new_general_manager_class(mcs, name, bases, attrs)
 
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             mcs.pending_graphql_interfaces.append(new_class)
@@ -119,7 +119,7 @@ class GeneralManagerMeta(type):
         return new_class
 
     @staticmethod
-    def createAtPropertiesForAttributes(
+    def create_at_properties_for_attributes(
         attributes: Iterable[str], new_class: Type[GeneralManager]
     ) -> None:
         """
@@ -132,14 +132,14 @@ class GeneralManagerMeta(type):
             new_class (Type[GeneralManager]): Class that will receive the generated descriptor attributes.
         """
 
-        def descriptorMethod(
+        def descriptor_method(
             attr_name: str,
             new_class: type,
         ) -> object:
             """
             Create a descriptor that provides attribute access backed by an instance's interface attributes.
 
-            When accessed on the class, the descriptor returns the field type by delegating to the class's `Interface.getFieldType` for the configured attribute name. When accessed on an instance, it returns the value stored in `instance._attributes[attr_name]`. If the stored value is callable, it is invoked with `instance._interface` and the resulting value is returned. If the attribute is not present on the instance, a `MissingAttributeError` is raised. If invoking a callable attribute raises an exception, that error is wrapped in `AttributeEvaluationError`.
+            When accessed on the class, the descriptor returns the field type by delegating to the class's `Interface.get_field_type` for the configured attribute name. When accessed on an instance, it returns the value stored in `instance._attributes[attr_name]`. If the stored value is callable, it is invoked with `instance._interface` and the resulting value is returned. If the attribute is not present on the instance, a `MissingAttributeError` is raised. If invoking a callable attribute raises an exception, that error is wrapped in `AttributeEvaluationError`.
 
             Parameters:
                 attr_name (str): The name of the attribute the descriptor resolves.
@@ -164,7 +164,7 @@ class GeneralManagerMeta(type):
                     """
                     Provide the class field type when accessed on the class, or resolve and return the stored attribute value for an instance.
 
-                    When accessed on a class, returns the field type from the class's Interface via Interface.getFieldType.
+                    When accessed on a class, returns the field type from the class's Interface via Interface.get_field_type.
                     When accessed on an instance, retrieves the value stored in instance._attributes for this descriptor's attribute name;
                     if the stored value is callable, it is invoked with instance._interface and the result is returned.
 
@@ -176,7 +176,7 @@ class GeneralManagerMeta(type):
                         AttributeEvaluationError: If calling a callable attribute raises an exception; the original exception is wrapped.
                     """
                     if instance is None:
-                        return self._class.Interface.getFieldType(self._attr_name)
+                        return self._class.Interface.get_field_type(self._attr_name)
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
                         raise MissingAttributeError(
@@ -192,4 +192,4 @@ class GeneralManagerMeta(type):
             return Descriptor(attr_name, cast(Type[Any], new_class))
 
         for attr_name in attributes:
-            setattr(new_class, attr_name, descriptorMethod(attr_name, new_class))
+            setattr(new_class, attr_name, descriptor_method(attr_name, new_class))

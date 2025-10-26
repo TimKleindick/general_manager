@@ -11,7 +11,7 @@ from django.utils.crypto import get_random_string
 from typing import ClassVar
 
 from general_manager.api.graphql import GraphQL
-from general_manager.api.property import graphQlProperty
+from general_manager.api.property import graph_ql_property
 from general_manager.interface.calculation_interface import CalculationInterface
 from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -40,9 +40,9 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         - Employee: DatabaseInterface with `name` and `salary` (EUR) fields.
         - TaxRule: DatabaseInterface with `name` and `multiplier` fields.
         - TaxCalculation: CalculationInterface with an `employee` input, class-level configuration `default_rule_id` (int | None) and `access_log` (list[str]), and three GraphQL properties used by tests:
-          - `calculatedTax`: records access and returns employee.salary * 0.2.
-          - `configuredTax`: records access and returns employee.salary * rule.multiplier using the rule identified by `default_rule_id`; raises MissingTaxRuleConfigurationError if no rule is configured.
-          - `unusedTax`: records access and returns employee.salary * 0.5.
+          - `calculated_tax`: records access and returns employee.salary * 0.2.
+          - `configured_tax`: records access and returns employee.salary * rule.multiplier using the rule identified by `default_rule_id`; raises MissingTaxRuleConfigurationError if no rule is configured.
+          - `unused_tax`: records access and returns employee.salary * 0.5.
 
         Side effects:
         - Attaches `TaxRule`, `Employee`, `TaxCalculation`, and `general_manager_classes` to the test class (`cls`) for use by test methods.
@@ -65,12 +65,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
             class Interface(CalculationInterface):
                 employee = Input(Employee, possible_values=lambda: Employee.all())
 
-            @graphQlProperty()
-            def calculatedTax(self) -> Measurement:
+            @graph_ql_property()
+            def calculated_tax(self) -> Measurement:
                 """
                 Compute the calculated tax for this calculation based on the associated employee's salary.
 
-                Appends "calculatedTax" to the class-level `access_log`.
+                Appends "calculated_tax" to the class-level `access_log`.
 
                 Returns:
                     Measurement: Tax amount equal to `employee.salary * 0.2`.
@@ -78,8 +78,8 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
                 self.__class__.access_log.append("calculatedTax")
                 return self.employee.salary * 0.2
 
-            @graphQlProperty()
-            def configuredTax(self) -> Measurement:
+            @graph_ql_property()
+            def configured_tax(self) -> Measurement:
                 """
                 Compute the tax for this calculation using the currently configured TaxRule.
 
@@ -96,12 +96,12 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
                 rule = TaxRule(id=rule_id)
                 return self.employee.salary * rule.multiplier
 
-            @graphQlProperty()
-            def unusedTax(self) -> Measurement:
+            @graph_ql_property()
+            def unused_tax(self) -> Measurement:
                 """
                 Compute an unused tax equal to half of the employee's salary and record that the property was accessed.
 
-                Appends "unusedTax" to the class-level `access_log`.
+                Appends "unused_tax" to the class-level `access_log`.
 
                 Returns:
                     Measurement: A measurement equal to 50% of the employee's salary (same unit as the salary).

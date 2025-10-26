@@ -11,7 +11,7 @@ class DummyInterface:
     """
 
     @classmethod
-    def handleCustomFields(cls, model):
+    def handle_custom_fields(cls, model):
         """
         Placeholder hook for processing a model's custom fields.
 

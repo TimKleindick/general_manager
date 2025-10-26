@@ -9,7 +9,7 @@ from general_manager.permission.base_permission import (
 )
 
 from general_manager.permission.permission_data_manager import PermissionDataManager
-from general_manager.permission.utils import validatePermissionString
+from general_manager.permission.utils import validate_permission_string
 
 
 class MutationPermission:
@@ -29,7 +29,7 @@ class MutationPermission:
         """
         self._data: PermissionDataManager = PermissionDataManager(data)
         self._request_user = request_user
-        self.__attribute_permissions = self.__getAttributePermissions()
+        self.__attribute_permissions = self.__get_attribute_permissions()
 
         self.__overall_result: bool | None = None
 
@@ -43,7 +43,7 @@ class MutationPermission:
         """Return the user whose permissions are being evaluated."""
         return self._request_user
 
-    def __getAttributePermissions(
+    def __get_attribute_permissions(
         self,
     ) -> dict[str, list[str]]:
         """Collect attribute-specific permission expressions declared on the class."""
@@ -71,17 +71,17 @@ class MutationPermission:
         """
         errors = []
         if not isinstance(request_user, (AbstractUser, AnonymousUser)):
-            request_user = BasePermission.getUserWithId(request_user)
+            request_user = BasePermission.get_user_with_id(request_user)
         Permission = cls(data, request_user)
         for key in data:
-            if not Permission.checkPermission(key):
+            if not Permission.check_permission(key):
                 errors.append(
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
                 )
         if errors:
             raise PermissionCheckError(request_user, errors)
 
-    def checkPermission(
+    def check_permission(
         self,
         attribute: str,
     ) -> bool:
@@ -105,20 +105,20 @@ class MutationPermission:
                 return last_result
             attribute_permission = True
         else:
-            attribute_permission = self.__checkSpecificPermission(
+            attribute_permission = self.__check_specific_permission(
                 self.__attribute_permissions[attribute]
             )
 
-        permission = self.__checkSpecificPermission(self.__mutate__)
+        permission = self.__check_specific_permission(self.__mutate__)
         self.__overall_result = permission
         return permission and attribute_permission
 
-    def __checkSpecificPermission(
+    def __check_specific_permission(
         self,
         permissions: list[str],
     ) -> bool:
         """Return True when any permission expression evaluates to True."""
         for permission in permissions:
-            if validatePermissionString(permission, self.data, self.request_user):
+            if validate_permission_string(permission, self.data, self.request_user):
                 return True
         return False

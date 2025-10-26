@@ -20,9 +20,9 @@ class MissingStartInstanceError(ValueError):
         """
         Create the MissingStartInstanceError with its default message.
 
-        This initializer constructs the exception with the message: "Cannot call goTo on a PathMap without a start instance."
+        This initializer constructs the exception with the message: "Cannot call go_to on a PathMap without a start instance."
         """
-        super().__init__("Cannot call goTo on a PathMap without a start instance.")
+        super().__init__("Cannot call go_to on a PathMap without a start instance.")
 
 
 class PathMap:
@@ -40,11 +40,11 @@ class PathMap:
         """
         if not hasattr(cls, "instance"):
             cls.instance = super().__new__(cls)
-            cls.createPathMapping()
+            cls.create_path_mapping()
         return cls.instance
 
     @classmethod
-    def createPathMapping(cls) -> None:
+    def create_path_mapping(cls) -> None:
         """
         Populate the path mapping with tracers for every distinct pair of managed classes.
 
@@ -110,7 +110,7 @@ class PathMap:
             return None
         return tracer
 
-    def goTo(
+    def go_to(
         self, path_destination: PathDestination | type[GeneralManager] | str
     ) -> GeneralManager | Bucket | None:
         """
@@ -133,9 +133,9 @@ class PathMap:
             return None
         if self.start_instance is None:
             raise MissingStartInstanceError()
-        return tracer.traversePath(self.start_instance)
+        return tracer.traverse_path(self.start_instance)
 
-    def getAllConnected(self) -> set[str]:
+    def get_all_connected(self) -> set[str]:
         """
         Return the set of destination class names that are reachable from the configured start.
 
@@ -173,9 +173,9 @@ class PathTracer:
         if self.start_class == self.destination_class:
             self.path: list[str] | None = []
         else:
-            self.path = self.createPath(start_class, [])
+            self.path = self.create_path(start_class, [])
 
-    def createPath(
+    def create_path(
         self, current_manager: type[GeneralManager], path: list[str]
     ) -> list[str] | None:
         """
@@ -190,7 +190,7 @@ class PathTracer:
         """
         current_connections = {
             attr_name: attr_value["type"]
-            for attr_name, attr_value in current_manager.Interface.getAttributeTypes().items()
+            for attr_name, attr_value in current_manager.Interface.get_attribute_types().items()
         }
         for attr_name, attr_value in current_manager.__dict__.items():
             if not isinstance(attr_value, GraphQLProperty):
@@ -211,13 +211,13 @@ class PathTracer:
                 continue
             if attr_type == self.destination_class:
                 return [*path, attr]
-            result = self.createPath(attr_type, [*path, attr])
+            result = self.create_path(attr_type, [*path, attr])
             if result:
                 return result
 
         return None
 
-    def traversePath(
+    def traverse_path(
         self, start_instance: GeneralManager | Bucket
     ) -> GeneralManager | Bucket | None:
         """

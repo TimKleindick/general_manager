@@ -33,7 +33,7 @@ class DummyInput:
         return value
 
 
-# Dummy GeneralManager subclass for testing formatIdentification
+# Dummy GeneralManager subclass for testing format_identification
 class DummyGM(GeneralManager):  # type: ignore[misc]
     def __init__(self, identification):
         """
@@ -62,7 +62,7 @@ test_input_fields = {
 class DummyInterface(InterfaceBase):
     input_fields = test_input_fields
 
-    def getData(self, _search_date=None):
+    def get_data(self, _search_date=None):
         """
         Returns the identification value for this interface instance.
 
@@ -75,14 +75,14 @@ class DummyInterface(InterfaceBase):
         return self.identification
 
     @classmethod
-    def getAttributeTypes(cls):
+    def get_attribute_types(cls):
         """
         Returns an empty dictionary representing attribute types for the class.
         """
         return {}
 
     @classmethod
-    def getAttributes(cls):
+    def get_attributes(cls):
         """
         Returns an empty dictionary of attributes for the class.
 
@@ -111,7 +111,7 @@ class DummyInterface(InterfaceBase):
         return None
 
     @classmethod
-    def handleInterface(cls):
+    def handle_interface(cls):
         """
         Returns stub handler functions for interface processing.
 
@@ -120,7 +120,7 @@ class DummyInterface(InterfaceBase):
         return (lambda *args: (args, {}, None), lambda *_: None)
 
     @classmethod
-    def getFieldType(cls, field_name):
+    def get_field_type(cls, field_name):
         """
         Returns the expected type for a given input field name.
 
@@ -231,15 +231,15 @@ class InterfaceBaseTests(SimpleTestCase):
                 "b": DummyInput(int, depends_on=["a"]),
             }
 
-            def getData(self, _search_date=None):
+            def get_data(self, _search_date=None):
                 return {}
 
             @classmethod
-            def getAttributeTypes(cls):
+            def get_attribute_types(cls):
                 return {}
 
             @classmethod
-            def getAttributes(cls):
+            def get_attributes(cls):
                 return {}
 
             @classmethod
@@ -251,34 +251,34 @@ class InterfaceBaseTests(SimpleTestCase):
                 return None
 
             @classmethod
-            def handleInterface(cls):
+            def handle_interface(cls):
                 return (lambda *args: (args, {}, None), lambda *_: None)
 
             @classmethod
-            def getFieldType(cls, _field_name):
+            def get_field_type(cls, _field_name):
                 return int
 
         with self.assertRaises(ValueError):
             Circ(a=1, b=2)
 
     def test_format_identification_list_and_gm(self):
-        # formatIdentification converts nested GeneralManager and lists correctly
+        # format_identification converts nested GeneralManager and lists correctly
         """
-        Tests that formatIdentification recursively converts GeneralManager instances and lists containing them into dictionaries within the identification attribute.
+        Tests that format_identification recursively converts GeneralManager instances and lists containing them into dictionaries within the identification attribute.
         """
         gm = DummyGM({"id": 11})
         inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)
         # inject a mixed list
         inst.identification["mixed"] = [DummyGM({"id": 12}), 42]
-        formatted = InterfaceBase.formatIdentification(inst.identification)
+        formatted = InterfaceBase.format_identification(inst.identification)
         self.assertEqual(formatted["mixed"], [{"id": 12}, 42])
 
     def test_get_field_type_returns_expected_types(self):
-        self.assertIs(DummyInterface.getFieldType("a"), int)
-        self.assertIs(DummyInterface.getFieldType("gm"), DummyGM)
+        self.assertIs(DummyInterface.get_field_type("a"), int)
+        self.assertIs(DummyInterface.get_field_type("gm"), DummyGM)
 
     def test_handle_interface_returns_valid_callables(self):
-        process, finalize = DummyInterface.handleInterface()
+        process, finalize = DummyInterface.handle_interface()
         args = ("alpha", 123, None)
         out_args, meta, err = process(*args)
         self.assertEqual(out_args, args)
@@ -323,7 +323,7 @@ class InterfaceBaseTests(SimpleTestCase):
         inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 11}), vals=2, c=1)
         # deep/nested structure containing GeneralManager instances
         inst.identification["deep"] = {"list": [gm13, {"inner": [gm14, 7]}]}
-        formatted = InterfaceBase.formatIdentification(inst.identification)
+        formatted = InterfaceBase.format_identification(inst.identification)
         self.assertEqual(
             formatted["deep"],
             {"list": [{"id": 13}, {"inner": [{"id": 14}, 7]}]},
@@ -333,10 +333,10 @@ class InterfaceBaseTests(SimpleTestCase):
         self.assertIsNone(DummyInterface.filter(name="x"))
         self.assertIsNone(DummyInterface.exclude(name="x"))
 
-    def test_getData_returns_identification(self):
+    def test_get_data_returns_identification(self):
         gm = DummyGM({"id": 9})
         inst = DummyInterface(a=1, b="foo", gm=gm, vals=2, c=1)
-        self.assertEqual(inst.getData(), inst.identification)
+        self.assertEqual(inst.get_data(), inst.identification)
 
     def test_vals_allowed_lower_and_upper_bounds(self):
         # Lower bound

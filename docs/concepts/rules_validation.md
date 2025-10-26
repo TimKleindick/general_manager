@@ -60,7 +60,7 @@ You can evaluate a rule in isolation, which is useful for unit tests:
 ```python
 result = positive_price.evaluate(product)
 if not result:
-    print(positive_price.getErrorMessage())
+    print(positive_price.get_error_message())
 ```
 
 For advanced scenarios, register additional rule handlers via the `RULE_HANDLERS` Django setting. Each handler customises error message extraction for custom or built-in functions such as `len()`, `sum()`, `max()`, or `min()`.

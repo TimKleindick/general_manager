@@ -22,11 +22,11 @@ class DummyInterface:
     }
 
     @staticmethod
-    def getAttributes():
+    def get_attributes():
         return {attr: {} for attr in DummyInterface.attr_types}
 
     @staticmethod
-    def getAttributeTypes():
+    def get_attribute_types():
         return DummyInterface.attr_types
 
 
@@ -39,7 +39,7 @@ class DummyManager:
             setattr(self, name, value)
 
     @GraphQLProperty
-    def extraMethod(self) -> str:
+    def extra_method(self) -> str:
         return "extra method result"
 
 
@@ -252,7 +252,7 @@ class GroupManagerCombineValueTests(TestCase):
     def tearDown(self) -> None:
         DummyInterface.attr_types = self.original_attr_types
 
-    # Parametrized tests for combineValue on various data types
+    # Parametrized tests for combine_value on various data types
     def helper_make_group_manager(self, values, value_type):
         # Create dummy entries with attribute 'field' set to each value
         entries = [DummyManager(field=v) for v in values]
@@ -263,46 +263,46 @@ class GroupManagerCombineValueTests(TestCase):
 
     def test_combine_integers_sum(self):
         gm = self.helper_make_group_manager([1, 2, 3], int)
-        self.assertEqual(gm.combineValue("field"), 6)
+        self.assertEqual(gm.combine_value("field"), 6)
 
     def test_combine_strings_concat(self):
         gm = self.helper_make_group_manager(["a", "b"], str)
-        self.assertEqual(gm.combineValue("field"), "a, b")
+        self.assertEqual(gm.combine_value("field"), "a, b")
 
     def test_combine_unique_strings_concat(self):
         gm = self.helper_make_group_manager(["a", "b", "b", "a"], str)
-        self.assertEqual(gm.combineValue("field"), "a, b")
+        self.assertEqual(gm.combine_value("field"), "a, b")
 
     def test_combine_lists_extend(self):
         gm = self.helper_make_group_manager([[1], [2, 3]], list)
-        self.assertEqual(gm.combineValue("field"), [1, 2, 3])
+        self.assertEqual(gm.combine_value("field"), [1, 2, 3])
 
     def test_combine_only_none(self):
         gm = self.helper_make_group_manager([None, None], type(None))
-        self.assertIsNone(gm.combineValue("field"))
+        self.assertIsNone(gm.combine_value("field"))
 
     def test_combine_none_and_value(self):
         gm = self.helper_make_group_manager([None, 1], int)
-        self.assertEqual(gm.combineValue("field"), 1)
+        self.assertEqual(gm.combine_value("field"), 1)
 
     def test_combine_dicts_merge(self):
         gm = self.helper_make_group_manager([{"x": 1}, {"y": 2}], dict)
-        self.assertEqual(gm.combineValue("field"), {"x": 1, "y": 2})
+        self.assertEqual(gm.combine_value("field"), {"x": 1, "y": 2})
 
     def test_combine_bools_any(self):
         gm = self.helper_make_group_manager([True, False], bool)
-        self.assertTrue(gm.combineValue("field"))
+        self.assertTrue(gm.combine_value("field"))
 
     def test_combine_dates_max(self):
         dates = [date(2020, 1, 1), date(2021, 1, 1)]
         gm = self.helper_make_group_manager(dates, date)
-        self.assertEqual(gm.combineValue("field"), date(2021, 1, 1))
+        self.assertEqual(gm.combine_value("field"), date(2021, 1, 1))
 
     def test_combine_measurement_sum(self):
         gm = self.helper_make_group_manager(
             [Measurement(1, "m"), Measurement(2, "m")], Measurement
         )
-        result = gm.combineValue("field")
+        result = gm.combine_value("field")
         self.assertEqual(result, Measurement(3, "m"))
 
     def test_iterate_group_manager(self):
@@ -318,5 +318,5 @@ class GroupManagerCombineValueTests(TestCase):
         for i, item in enumerate(gm):
             self.assertEqual(
                 dict(item),
-                {"a": i, "b": str(i**2), "extraMethod": "extra method result"},
+                {"a": i, "b": str(i**2), "extra_method": "extra method result"},
             )

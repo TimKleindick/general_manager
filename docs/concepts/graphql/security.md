@@ -4,8 +4,8 @@ Security in the GraphQL layer relies on permission checks and robust error handl
 
 ## Permission enforcement
 
-- Every query obtains read filters from the manager's `Permission` class via `getReadPermissionFilter()`.
-- Mutations invoke `checkCreatePermission`, `checkUpdatePermission`, or `checkDeletePermission` before executing. Permission errors translate into `success: false` responses with descriptive messages.
+- Every query obtains read filters from the manager's `Permission` class via `get_read_permission_filter()`.
+- Mutations invoke `check_create_permission`, `check_update_permission`, or `check_delete_permission` before executing. Permission errors translate into `success: false` responses with descriptive messages.
 - Attribute-level restrictions hide protected fields even when the user can access the object.
 
 Always execute GraphQL resolvers through managers; do not reach directly for Django models, or you will bypass permission rules.
