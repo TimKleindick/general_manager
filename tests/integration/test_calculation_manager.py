@@ -43,10 +43,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             @graph_ql_property(sortable=True)
             def calculated_tax(self) -> Measurement:
                 """
-                calculatedTaxs 20% of the associated employee's salary as tax.
+                Calculates 20% of the associated employee's salary as tax.
 
                 Returns:
-                    Measurement: The calculatedTaxd tax amount based on the employee's salary.
+                    Measurement: The calculated tax amount based on the employee's salary.
                 """
                 return self.employee.salary * 0.2
 

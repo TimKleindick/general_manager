@@ -32,7 +32,7 @@ def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | No
         fallback_app (str): App label used when the default lookup cannot resolve the object.
 
     Returns:
-        Callable[[str], Any]: Function returning either the resolved configuration or the fallback app configuration when available.
+        Callable[[str], AppConfig | None]: Function returning either the resolved configuration or the fallback app configuration when available.
     """
 
     def _fallback_get_app(object_name: str) -> AppConfig | None:
