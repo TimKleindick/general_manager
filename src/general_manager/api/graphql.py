@@ -38,12 +38,12 @@ from graphql.language.ast import (
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer, get_channel_layer
 
-from general_manager.cache.cacheTracker import DependencyTracker
-from general_manager.cache.dependencyIndex import Dependency
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import Dependency
 from general_manager.cache.signals import post_data_change
-from general_manager.bucket.baseBucket import Bucket
-from general_manager.interface.baseInterface import InterfaceBase
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.bucket.base_bucket import Bucket
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 
 from django.core.exceptions import ValidationError
@@ -52,7 +52,7 @@ from graphql import GraphQLError
 
 
 if TYPE_CHECKING:
-    from general_manager.permission.basePermission import BasePermission
+    from general_manager.permission.base_permission import BasePermission
     from graphene import ResolveInfo as GraphQLResolveInfo
 
 

@@ -12,7 +12,7 @@ When an interface resolves related data (for example, fetching a bucket of child
 
 ## Graph traversal
 
-`general_manager.cache.dependencyIndex` maintains a mapping of cache keys to dependency tuples. In a multi-process deployment, store this index in a shared backend (Redis or PostgreSQL) so that background workers and web servers stay in sync. When a change occurs, the index reveals which cached keys require eviction.
+`general_manager.cache.dependency_index` maintains a mapping of cache keys to dependency tuples. In a multi-process deployment, store this index in a shared backend (Redis or PostgreSQL) so that background workers and web servers stay in sync. When a change occurs, the index reveals which cached keys require eviction.
 
 ## Extending the graph
 

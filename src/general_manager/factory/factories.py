@@ -12,10 +12,10 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from random import SystemRandom
 from general_manager.measurement.measurement import Measurement
-from general_manager.measurement.measurementField import MeasurementField
+from general_manager.measurement.measurement_field import MeasurementField
 
 if TYPE_CHECKING:
-    from general_manager.factory.autoFactory import AutoFactory
+    from general_manager.factory.auto_factory import AutoFactory
 
 
 _RNG = SystemRandom()

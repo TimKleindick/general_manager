@@ -1,11 +1,11 @@
 # Interface API
 
-::: general_manager.interface.baseInterface.InterfaceBase
+::: general_manager.interface.base_interface.InterfaceBase
 
-::: general_manager.interface.databaseBasedInterface.DBBasedInterface
+::: general_manager.interface.database_based_interface.DBBasedInterface
 
-::: general_manager.interface.databaseInterface.DatabaseInterface
+::: general_manager.interface.database_interface.DatabaseInterface
 
-::: general_manager.interface.readOnlyInterface.ReadOnlyInterface
+::: general_manager.interface.read_only_interface.ReadOnlyInterface
 
-::: general_manager.interface.calculationInterface.CalculationInterface
+::: general_manager.interface.calculation_interface.CalculationInterface

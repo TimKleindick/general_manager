@@ -3,10 +3,10 @@ from django.db import models
 from django.core.exceptions import ValidationError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.bucket.baseBucket import Bucket
-from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.bucket.base_bucket import Bucket
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from typing import ClassVar
 
 from general_manager.utils.testing import GeneralManagerTransactionTestCase

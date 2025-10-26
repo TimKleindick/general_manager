@@ -16,10 +16,10 @@ from graphql.language.ast import FragmentDefinitionNode, OperationDefinitionNode
 import unittest
 
 from general_manager.api.graphql import GraphQL
-from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
-from general_manager.interface.baseInterface import InterfaceBase
+from general_manager.interface.base_interface import InterfaceBase
 from tests.utils.simple_manager_interface import BaseTestInterface
 
 

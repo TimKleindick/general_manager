@@ -1,12 +1,12 @@
 """Utility helpers for evaluating permission expressions."""
 
-from general_manager.permission.permissionChecks import (
+from general_manager.permission.permission_checks import (
     permission_functions,
 )
-from general_manager.permission.permissionDataManager import PermissionDataManager
+from general_manager.permission.permission_data_manager import PermissionDataManager
 from django.contrib.auth.models import AbstractUser, AnonymousUser
 
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 
 

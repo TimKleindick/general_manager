@@ -8,7 +8,7 @@ from general_manager.measurement.measurement import (
     ureg,
     currency_units,
 )
-from general_manager.measurement.measurementField import MeasurementField
+from general_manager.measurement.measurement_field import MeasurementField
 import pint
 from django.db import models
 

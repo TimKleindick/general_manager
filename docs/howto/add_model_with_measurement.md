@@ -8,7 +8,7 @@ Learn how to add a manager that stores measurement values with automatic unit co
 # core/managers.py
 from django.db.models import CharField
 
-from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement, MeasurementField
 

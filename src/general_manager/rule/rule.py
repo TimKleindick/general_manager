@@ -18,7 +18,7 @@ from general_manager.rule.handler import (
     MinHandler,
     SumHandler,
 )
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 

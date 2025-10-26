@@ -9,7 +9,7 @@ Declare Django model fields inside the interface. GeneralManager converts type h
 ```python
 from django.db.models import CharField, ForeignKey
 
-from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 
 class Book(GeneralManager):
@@ -54,7 +54,7 @@ Project.create(
 
 ## Read-only data
 
-Use `general_manager.interface.readOnlyInterface.ReadOnlyInterface` to mirror static datasets in the database:
+Use `general_manager.interface.read_only_interface.ReadOnlyInterface` to mirror static datasets in the database:
 
 ```python
 class Country(GeneralManager):

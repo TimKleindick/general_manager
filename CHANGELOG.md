@@ -159,7 +159,7 @@
 - Tighten literal eval handling in dependency index
   ([`d2b82d1`](https://github.com/TimKleindick/general_manager/commit/d2b82d1354f203b43dff5ee4067907540f066b55))
 
-- Update import path for GraphQLProperty in groupManager and test files
+- Update import path for GraphQLProperty in group_manager and test files
   ([`f97cc4f`](https://github.com/TimKleindick/general_manager/commit/f97cc4f342c3e987e23c131700f63c1e926113e2))
 
 - Update setuptools version and enhance project metadata
@@ -435,7 +435,7 @@
 - Clean up whitespace and improve readability in PathMapping unit tests
   ([`e796941`](https://github.com/TimKleindick/general_manager/commit/e7969414007459eaa956e879df0ee369d2e58263))
 
-- Reorganize imports and simplify test setup in pathMapping tests
+- Reorganize imports and simplify test setup in path_mapping tests
   ([`c5656e6`](https://github.com/TimKleindick/general_manager/commit/c5656e685e7d990b74ec3d1d44004764ef38fa1b))
 
 ### Testing
@@ -457,7 +457,7 @@
 - Refactor permission attributes initialization and handle based_on condition
   ([`2e21b3b`](https://github.com/TimKleindick/general_manager/commit/2e21b3b64619942de5a011868f2600107f7245c3))
 
-- Remove unnecessary blank lines in test_calculationBucket.py
+- Remove unnecessary blank lines in test_calculation_bucket.py
   ([`3117b2a`](https://github.com/TimKleindick/general_manager/commit/3117b2afcf7b789a7a8cdd1d3e24f691710bdddc))
 
 - Remove unused import statement and clean up
@@ -660,7 +660,7 @@
 - Correct attribute access in __getAttributePermissions and checkPermission methods
   ([`36b5796`](https://github.com/TimKleindick/general_manager/commit/36b5796e65f677fbe0d2b1a36554bba81ec659e5))
 
-- Remove unused type imports in mutationPermission.py
+- Remove unused type imports in mutation_permission.py
   ([`920d5f7`](https://github.com/TimKleindick/general_manager/commit/920d5f782353ec87fbc6664b53e4e73cae3b3ce9))
 
 - Stop enforcing manager requirement for dict permission_data
@@ -884,7 +884,7 @@
 
 ### Testing
 
-- Fix generalManager tests for default permissions
+- Fix general_manager tests for default permissions
   ([`0179a89`](https://github.com/TimKleindick/general_manager/commit/0179a8922232052448e14c741174ab2c279f7dcc))
 
 - Implement delete mutation for TestProject with validation checks
@@ -1030,7 +1030,7 @@
 
 ### Bug Fixes
 
-- Add type ignore comment to test_readOnlyInterface.py
+- Add type ignore comment to test_read_only_interface.py
   ([`089a3b8`](https://github.com/TimKleindick/general_manager/commit/089a3b860361f8d220defa8c81266bc5146e0212))
 
 - Allow customizable base model class in _preCreate method of DBBasedInterface
@@ -1059,12 +1059,12 @@
 
 ### Features
 
-- Implement readOnlyInterface
+- Implement read_only_interface
   ([`be4fe48`](https://github.com/TimKleindick/general_manager/commit/be4fe48e9cd1811099e3ff9c1788ff5d759afe98))
 
 ### Refactoring
 
-- Replace GeneralManagerModel with GeneralManagerBasisModel in readOnlyInterface and related files
+- Replace GeneralManagerModel with GeneralManagerBasisModel in read_only_interface and related files
   ([`85ac212`](https://github.com/TimKleindick/general_manager/commit/85ac2121a34422c4869e69eb64c78d64ae8dc289))
 
 ### Testing
@@ -1133,7 +1133,7 @@
 - Remove print statement from test_first_last_empty_and_nonempty for cleaner output
   ([`3f421ce`](https://github.com/TimKleindick/general_manager/commit/3f421ce8fbdc264c501f39b65368a90c7213261d))
 
-- Rename test file to databaseBasedInterface
+- Rename test file to database_based_interface
   ([`3e61fb1`](https://github.com/TimKleindick/general_manager/commit/3e61fb1e835e75c7f586ecc4fc62e6fa823d524c))
 
 - Update variable name in loops for consistency and clarity
@@ -1144,7 +1144,7 @@
 
 ### Bug Fixes
 
-- __eq__ for groupBucket
+- __eq__ for group_bucket
   ([`0c33798`](https://github.com/TimKleindick/general_manager/commit/0c33798031815dccb3ae373501cf1d0bf7adcd37))
 
 - Add __setstate__ method to restore current combinations in CalculationBucket
@@ -1183,7 +1183,7 @@
 - Simplify state retrieval in __setstate__ and iterate over input_fields directly
   ([`8e56b29`](https://github.com/TimKleindick/general_manager/commit/8e56b2938640d10a828fbb7302490c3cfcb36ae1))
 
-- Slicing in calculationBucket
+- Slicing in calculation_bucket
   ([`c68739a`](https://github.com/TimKleindick/general_manager/commit/c68739a14e3d45f60b97fce4f60740e1400b00dd))
 
 - Sort group_by_values using string representation for consistent ordering
@@ -1221,7 +1221,7 @@
 - Lambda to named function for combination generation
   ([`73bb1a0`](https://github.com/TimKleindick/general_manager/commit/73bb1a01f7545ddb91a749f5e204d1f57e29e8b2))
 
-- Move calculationBucket to own file
+- Move calculation_bucket to own file
   ([`6e4d441`](https://github.com/TimKleindick/general_manager/commit/6e4d441117b7d019e567849e4840195c76a087da))
 
 - Remove TYPE_CHECKING import and streamline GeneralManager import
@@ -1230,7 +1230,7 @@
 - Remove unnecessary blank lines and improve code readability in ReadOnlyInterface
   ([`618e674`](https://github.com/TimKleindick/general_manager/commit/618e674aa93fe7db15113c52f6ea2b78435b1be3))
 
-- Remove unnecessary blank lines and improve code readability in test_generalManager
+- Remove unnecessary blank lines and improve code readability in test_general_manager
   ([`ae982da`](https://github.com/TimKleindick/general_manager/commit/ae982da52c4e3798d18c721f31ac46730315bd29))
 
 - Remove unnecessary blank lines and improve docstring clarity in DummyInterface and
@@ -1375,7 +1375,7 @@
 
 ### Refactoring
 
-- Remove unused import from test_generalManagerMeta.py
+- Remove unused import from test_general_manager_meta.py
   ([`0a61bed`](https://github.com/TimKleindick/general_manager/commit/0a61bedd56a15f5fb1037cee08c641bebe8a5658))
 
 ### Testing

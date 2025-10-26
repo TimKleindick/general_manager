@@ -9,7 +9,7 @@ from django.core.validators import RegexValidator
 from factory.declarations import LazyFunction, LazyAttribute
 from factory.faker import Faker
 from general_manager.factory.factories import getFieldValue, getManyToManyFieldValue
-from general_manager.measurement.measurementField import MeasurementField
+from general_manager.measurement.measurement_field import MeasurementField
 from general_manager.measurement.measurement import Measurement
 from unittest.mock import patch, Mock
 
@@ -462,7 +462,7 @@ class TestGetManyToManyFieldValue(TestCase):
     def test_measurement_field_value_generation(self):
         """Test that MeasurementField generates valid Measurement values."""
         from general_manager.factory.factories import getFieldValue
-        from general_manager.measurement.measurementField import MeasurementField
+        from general_manager.measurement.measurement_field import MeasurementField
         from decimal import Decimal
 
         field = MeasurementField(base_unit="meter")

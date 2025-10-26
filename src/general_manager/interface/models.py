@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 
 
 if TYPE_CHECKING:
-    from general_manager.manager.generalManager import GeneralManager
+    from general_manager.manager.general_manager import GeneralManager
     from general_manager.rule.rule import Rule
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)

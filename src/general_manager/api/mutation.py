@@ -20,10 +20,10 @@ import graphene  # type: ignore[import]
 from graphql import GraphQLResolveInfo
 
 from general_manager.api.graphql import GraphQL, HANDLED_MANAGER_ERRORS
-from general_manager.manager.generalManager import GeneralManager
+from general_manager.manager.general_manager import GeneralManager
 
-from general_manager.utils.formatString import snake_to_camel
-from general_manager.permission.mutationPermission import MutationPermission
+from general_manager.utils.format_string import snake_to_camel
+from general_manager.permission.mutation_permission import MutationPermission
 from types import UnionType
 
 

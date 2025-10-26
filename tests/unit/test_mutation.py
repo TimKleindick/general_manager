@@ -6,9 +6,9 @@ from django.contrib.auth.models import User
 
 from general_manager.api.mutation import graphQlMutation
 from general_manager.api.graphql import GraphQL
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.interface.baseInterface import InterfaceBase
-from general_manager.permission.mutationPermission import MutationPermission
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.permission.mutation_permission import MutationPermission
 from graphql import GraphQLError
 
 
@@ -438,7 +438,7 @@ class MutationDecoratorTests(TestCase):
 
     def test_mutation_with_permission_class(self):
         """Test mutations with custom permission classes."""
-        from general_manager.permission.mutationPermission import MutationPermission
+        from general_manager.permission.mutation_permission import MutationPermission
 
         class CustomPermission(MutationPermission):
             @classmethod

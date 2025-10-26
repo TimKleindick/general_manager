@@ -6,10 +6,10 @@ from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
 from typing import ClassVar
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.interface.databaseInterface import DatabaseInterface
-from general_manager.interface.readOnlyInterface import ReadOnlyInterface
-from general_manager.bucket.baseBucket import Bucket
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface.read_only_interface import ReadOnlyInterface
+from general_manager.bucket.base_bucket import Bucket
 
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 

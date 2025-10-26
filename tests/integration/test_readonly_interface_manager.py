@@ -1,7 +1,7 @@
 from django.db.models import CharField
 from typing import ClassVar
-from general_manager.manager.generalManager import GeneralManager
-from general_manager.interface.readOnlyInterface import ReadOnlyInterface
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.interface.read_only_interface import ReadOnlyInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 

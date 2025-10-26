@@ -7,7 +7,7 @@ Allow users to edit their own profile while administrators can edit any profile.
 ```python
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement
-from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 
 class Profile(GeneralManager):
     user: User

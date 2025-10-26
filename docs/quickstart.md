@@ -18,7 +18,7 @@ Create a manager that describes the fields you want to expose. Each manager defi
 # apps/materials/managers.py
 from django.db.models import CharField, TextField
 
-from general_manager.interface.databaseInterface import DatabaseInterface
+from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 
 class Material(GeneralManager):
@@ -44,7 +44,7 @@ python manage.py migrate
 Managers enforce access checks through the nested `Permission` class. Grant access based on attributes, user groups, or custom callables.
 
 ```python
-from general_manager.permission.managerBasedPermission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import ManagerBasedPermission
 
 class Material(GeneralManager):
     ...
