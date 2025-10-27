@@ -6,7 +6,7 @@ import json
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 
 from django.core.checks import Warning
-from django.db import connection, models, transaction
+from django.db import connection, models, transaction, IntegrityError
 
 from general_manager.interface.database_based_interface import (
     DBBasedInterface,
@@ -159,6 +159,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         data_list = cast(list[dict[str, Any]], parsed_data)
 
         unique_fields = cls.get_unique_fields(model)
+        unique_field_order = tuple(sorted(unique_fields))
         if not unique_fields:
             raise MissingUniqueFieldError(parent_class.__name__)
 
@@ -175,24 +176,35 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         } - {"is_active"}
 
         with transaction.atomic():
-            json_unique_values: set[Any] = set()
+            json_unique_values: set[tuple[Any, ...]] = set()
 
             # data synchronization
             for idx, data in enumerate(data_list):
                 try:
-                    lookup = {field: data[field] for field in unique_fields}
+                    lookup = {field: data[field] for field in unique_field_order}
                 except KeyError as e:
                     missing = e.args[0]
                     raise InvalidReadOnlyDataFormatError() from KeyError(
                         f"Item {idx} missing unique field '{missing}'."
                     )
-                unique_identifier = tuple(lookup[field] for field in unique_fields)
+                unique_identifier = tuple(lookup[field] for field in unique_field_order)
                 json_unique_values.add(unique_identifier)
                 instance = model.objects.filter(**lookup).first()
                 is_created = False
                 if instance is None:
-                    instance = model.objects.create(**data)
-                    is_created = True
+                    # sanitize input and create with race-safety
+                    allowed_fields = {f.name for f in model._meta.local_fields}
+                    create_kwargs = {
+                        k: v for k, v in data.items() if k in allowed_fields
+                    }
+                    try:
+                        instance = model.objects.create(**create_kwargs)
+                        is_created = True
+                    except IntegrityError:
+                        # created concurrently — fetch it
+                        instance = model.objects.filter(**lookup).first()
+                        if instance is None:
+                            raise
                 updated = False
                 for field_name in editable_fields.intersection(data.keys()):
                     value = data[field_name]
@@ -207,8 +219,10 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             # deactivate instances not in JSON data
             existing_instances = model.objects.filter(is_active=True)
             for instance in existing_instances:
-                lookup = {field: getattr(instance, field) for field in unique_fields}
-                unique_identifier = tuple(lookup[field] for field in unique_fields)
+                lookup = {
+                    field: getattr(instance, field) for field in unique_field_order
+                }
+                unique_identifier = tuple(lookup[field] for field in unique_field_order)
                 if unique_identifier not in json_unique_values:
                     instance.is_active = False
                     instance.save()
