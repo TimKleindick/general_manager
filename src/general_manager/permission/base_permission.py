@@ -1,23 +1,25 @@
 """Base permission contract used by GeneralManager instances."""
 
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
-from general_manager.permission.permission_checks import permission_functions
 
-from django.contrib.auth.models import AnonymousUser, AbstractBaseUser, AbstractUser
+from django.contrib.auth.models import AbstractBaseUser, AbstractUser, AnonymousUser
+
+from general_manager.logging import get_logger
+from general_manager.permission.permission_checks import permission_functions
 from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.utils import (
-    validate_permission_string,
     PermissionNotFoundError,
+    validate_permission_string,
 )
-import logging
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.manager.meta import GeneralManagerMeta
 
-logger = logging.getLogger(__name__)
+logger = get_logger("permission.base")
 
 UserLike: TypeAlias = AbstractBaseUser | AnonymousUser
 
@@ -86,11 +88,18 @@ class BasePermission(ABC):
         errors = []
         permission_data = PermissionDataManager(permission_data=data, manager=manager)
         Permission = cls(permission_data, request_user)
+        user_identifier = getattr(request_user, "id", None)
         for key in data.keys():
             is_allowed = Permission.check_permission("create", key)
             if not is_allowed:
-                logger.debug(
-                    f"Permission denied for {key} with value {data[key]} for user {request_user}"
+                logger.info(
+                    "permission denied",
+                    context={
+                        "manager": manager.__name__,
+                        "action": "create",
+                        "attribute": key,
+                        "user_id": user_identifier,
+                    },
                 )
                 errors.append(f"Create permission denied for attribute '{key}'")
         if errors:
@@ -121,11 +130,18 @@ class BasePermission(ABC):
             base_data=old_manager_instance, update_data=data
         )
         Permission = cls(permission_data, request_user)
+        user_identifier = getattr(request_user, "id", None)
         for key in data.keys():
             is_allowed = Permission.check_permission("update", key)
             if not is_allowed:
-                logger.debug(
-                    f"Permission denied for {key} with value {data[key]} for user {request_user}"
+                logger.info(
+                    "permission denied",
+                    context={
+                        "manager": old_manager_instance.__class__.__name__,
+                        "action": "update",
+                        "attribute": key,
+                        "user_id": user_identifier,
+                    },
                 )
                 errors.append(f"Update permission denied for attribute '{key}'")
         if errors:
@@ -154,11 +170,18 @@ class BasePermission(ABC):
         errors = []
         permission_data = PermissionDataManager(manager_instance)
         Permission = cls(permission_data, request_user)
+        user_identifier = getattr(request_user, "id", None)
         for key in manager_instance.__dict__.keys():
             is_allowed = Permission.check_permission("delete", key)
             if not is_allowed:
-                logger.debug(
-                    f"Permission denied for {key} with value {getattr(manager_instance, key)} for user {request_user}"
+                logger.info(
+                    "permission denied",
+                    context={
+                        "manager": manager_instance.__class__.__name__,
+                        "action": "delete",
+                        "attribute": key,
+                        "user_id": user_identifier,
+                    },
                 )
                 errors.append(f"Delete permission denied for attribute '{key}'")
         if errors:

@@ -19,10 +19,12 @@ from general_manager.rule.handler import (
     SumHandler,
 )
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.logging import get_logger
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
 NOTEXISTENT = object()
+logger = get_logger("rule.engine")
 
 
 class NonexistentAttributeError(AttributeError):
@@ -131,6 +133,13 @@ class Rule(Generic[GeneralManagerType]):
             handler_cls: type[BaseRuleHandler] = import_string(path)
             inst = handler_cls()
             self._handlers[inst.function_name] = inst
+        logger.debug(
+            "initialised rule",
+            context={
+                "rule": self._func.__qualname__,
+                "variables": self._variables,
+            },
+        )
 
     @property
     def func(self) -> Callable[[GeneralManagerType], bool]:
@@ -173,12 +182,47 @@ class Rule(Generic[GeneralManagerType]):
         if self._primary_param is not None:
             self._last_args[self._primary_param] = x
 
+        logger.debug(
+            "evaluating rule",
+            context={
+                "rule": self._func.__qualname__,
+                "manager": type(x).__name__,
+            },
+        )
+
         vals = self._extract_variable_values(x)
         if self._ignore_if_none and any(v is None for v in vals.values()):
             self._last_result = None
+            logger.debug(
+                "skipped rule evaluation due to missing values",
+                context={
+                    "rule": self._func.__qualname__,
+                    "manager": type(x).__name__,
+                    "null_variables": [
+                        name for name, value in vals.items() if value is None
+                    ],
+                },
+            )
             return None
 
         self._last_result = self._func(x)
+        if self._last_result:
+            logger.debug(
+                "rule evaluation passed",
+                context={
+                    "rule": self._func.__qualname__,
+                    "manager": type(x).__name__,
+                },
+            )
+        else:
+            logger.info(
+                "rule evaluation failed",
+                context={
+                    "rule": self._func.__qualname__,
+                    "manager": type(x).__name__,
+                    "variables": self._variables,
+                },
+            )
         return self._last_result
 
     def validate_custom_error_message(self) -> None:
@@ -214,6 +258,14 @@ class Rule(Generic[GeneralManagerType]):
         # Validate and substitute template placeholders
         self.validate_custom_error_message()
         vals = self._extract_variable_values(self._last_input)
+        manager_class = type(self._last_input).__name__
+        logger.debug(
+            "generating rule error messages",
+            context={
+                "rule": self._func.__qualname__,
+                "manager": manager_class,
+            },
+        )
 
         if self._custom_error_message:
             formatted = re.sub(
@@ -221,9 +273,34 @@ class Rule(Generic[GeneralManagerType]):
                 lambda m: str(vals.get(m.group(1), m.group(0))),
                 self._custom_error_message,
             )
+            logger.info(
+                "rule produced custom error message",
+                context={
+                    "rule": self._func.__qualname__,
+                    "manager": manager_class,
+                    "variables": self._variables,
+                },
+            )
             return {v: formatted for v in self._variables}
 
         errors = self._generate_error_messages(vals)
+        if errors:
+            logger.info(
+                "rule produced error messages",
+                context={
+                    "rule": self._func.__qualname__,
+                    "manager": manager_class,
+                    "variables": list(errors.keys()),
+                },
+            )
+        else:
+            logger.debug(
+                "rule generated no error messages",
+                context={
+                    "rule": self._func.__qualname__,
+                    "manager": manager_class,
+                },
+            )
         return errors or None
 
     def _extract_variables(self) -> List[str]:
@@ -355,6 +432,14 @@ class Rule(Generic[GeneralManagerType]):
                         fn = self._get_node_name(left.func)
                         handler = self._handlers.get(fn)
                         if handler:
+                            logger.debug(
+                                "rule handler invoked",
+                                context={
+                                    "rule": self._func.__qualname__,
+                                    "handler": handler.__class__.__name__,
+                                    "function": fn,
+                                },
+                            )
                             errors.update(
                                 handler.handle(cmp, left, right, op, var_values, self)
                             )

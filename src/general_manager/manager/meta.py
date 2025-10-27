@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from django.conf import settings
-from typing import Any, Type, TYPE_CHECKING, ClassVar, TypeVar, Iterable, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Type, TypeVar, cast
+
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
+
+logger = get_logger("manager.meta")
 
 
 class InvalidInterfaceTypeError(TypeError):
@@ -89,6 +93,14 @@ class GeneralManagerMeta(type):
         Returns:
             type: The newly created subclass, possibly modified by Interface hooks.
         """
+        logger.debug(
+            "creating manager class",
+            context={
+                "class_name": name,
+                "module": attrs.get("__module__"),
+                "has_interface": "Interface" in attrs,
+            },
+        )
 
         def create_new_general_manager_class(
             mcs: type["GeneralManagerMeta"],
@@ -109,12 +121,31 @@ class GeneralManagerMeta(type):
             post_creation(new_class, interface_cls, model)
             mcs.pending_attribute_initialization.append(new_class)
             mcs.all_classes.append(new_class)
+            logger.debug(
+                "registered manager class with interface",
+                context={
+                    "class_name": new_class.__name__,
+                    "interface": interface_cls.__name__,
+                },
+            )
 
         else:
             new_class = create_new_general_manager_class(mcs, name, bases, attrs)
+            logger.debug(
+                "registered manager class without interface",
+                context={
+                    "class_name": new_class.__name__,
+                },
+            )
 
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             mcs.pending_graphql_interfaces.append(new_class)
+            logger.debug(
+                "queued manager for graphql generation",
+                context={
+                    "class_name": new_class.__name__,
+                },
+            )
 
         return new_class
 
@@ -179,6 +210,13 @@ class GeneralManagerMeta(type):
                         return self._class.Interface.get_field_type(self._attr_name)
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
+                        logger.warning(
+                            "missing attribute on manager instance",
+                            context={
+                                "attribute": self._attr_name,
+                                "manager": instance.__class__.__name__,
+                            },
+                        )
                         raise MissingAttributeError(
                             self._attr_name, instance.__class__.__name__
                         )
@@ -186,6 +224,14 @@ class GeneralManagerMeta(type):
                         try:
                             attribute = attribute(instance._interface)
                         except Exception as e:
+                            logger.exception(
+                                "attribute evaluation failed",
+                                context={
+                                    "attribute": self._attr_name,
+                                    "manager": instance.__class__.__name__,
+                                    "error": type(e).__name__,
+                                },
+                            )
                             raise AttributeEvaluationError(self._attr_name, e) from e
                     return attribute
 

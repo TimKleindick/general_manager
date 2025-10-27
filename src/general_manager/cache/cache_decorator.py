@@ -1,11 +1,14 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
-from typing import Any, Callable, Optional, Protocol, Set, TypeVar, cast
 from functools import wraps
+from typing import Any, Callable, Optional, Protocol, Set, TypeVar, cast
+
 from django.core.cache import cache as django_cache
+
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.dependency_index import record_dependencies, Dependency
+from general_manager.cache.dependency_index import Dependency, record_dependencies
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
+from general_manager.logging import get_logger
 from general_manager.utils.make_cache_key import make_cache_key
 
 
@@ -42,6 +45,7 @@ RecordFn = Callable[[str, Set[Dependency]], None]
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
 
 _SENTINEL = object()
+logger = get_logger("cache.decorator")
 
 
 def cached(
@@ -74,6 +78,14 @@ def cached(
                 if cached_deps:
                     for class_name, operation, identifier in cached_deps:
                         DependencyTracker.track(class_name, operation, identifier)
+                logger.debug(
+                    "cache hit",
+                    context={
+                        "function": func.__qualname__,
+                        "key": key,
+                        "dependency_count": len(cached_deps) if cached_deps else 0,
+                    },
+                )
                 return cached_result
 
             with DependencyTracker() as dependencies:
@@ -86,6 +98,15 @@ def cached(
                 if dependencies and timeout is None:
                     record_fn(key, dependencies)
 
+            logger.debug(
+                "cache miss recorded",
+                context={
+                    "function": func.__qualname__,
+                    "key": key,
+                    "dependency_count": len(dependencies),
+                    "timeout": timeout,
+                },
+            )
             return result
 
         # fix for python 3.14:

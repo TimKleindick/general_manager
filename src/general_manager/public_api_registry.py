@@ -18,6 +18,7 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
     "Input": ("general_manager.manager.input", "Input"),
+    "get_logger": ("general_manager.logging", "get_logger"),
     "CalculationInterface": (
         "general_manager.interface.calculation_interface",
         "CalculationInterface",
