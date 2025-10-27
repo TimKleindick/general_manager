@@ -168,6 +168,12 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             "deactivated": [],
         }
 
+        editable_fields = {
+            f.name
+            for f in model._meta.local_fields
+            if getattr(f, "editable", True) and not getattr(f, "primary_key", False)
+        } - {"is_active"}
+
         with transaction.atomic():
             json_unique_values: set[Any] = set()
 
@@ -182,15 +188,12 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                     )
                 unique_identifier = tuple(lookup[field] for field in unique_fields)
                 json_unique_values.add(unique_identifier)
-
-                instance, is_created = model.objects.get_or_create(**lookup)
+                instance = model.objects.filter(**lookup).first()
+                is_created = False
+                if instance is None:
+                    instance = model.objects.create(**data)
+                    is_created = True
                 updated = False
-                editable_fields = {
-                    f.name
-                    for f in model._meta.local_fields
-                    if getattr(f, "editable", True)
-                    and not getattr(f, "primary_key", False)
-                } - {"is_active"}
                 for field_name in editable_fields.intersection(data.keys()):
                     value = data[field_name]
                     if getattr(instance, field_name, None) != value:
