@@ -302,7 +302,7 @@ class InterfaceBase(ABC):
                     raise InvalidInputValueError(name, value, allowed_values)
 
     @classmethod
-    def create(cls, *args: Any, **kwargs: Any) -> Any:
+    def create(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """
         Create a new managed record in the underlying data store using the interface's inputs.
 

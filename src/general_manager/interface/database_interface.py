@@ -69,7 +69,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
     @classmethod
     def create(
         cls, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
-    ) -> int:
+    ) -> dict[str, Any]:
         """
         Create a new model instance using the provided field values.
 
@@ -91,11 +91,11 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance = cls.__set_attr_for_write(model_cls(), kwargs)
         pk = cls._save_with_history(instance, creator_id, history_comment)
         cls.__set_many_to_many_attributes(instance, many_to_many_kwargs)
-        return pk
+        return {"id": pk}
 
     def update(
         self, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
-    ) -> int:
+    ) -> dict[str, Any]:
         """
         Update this instance with the provided field values.
 
@@ -117,11 +117,11 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         instance = self.__set_attr_for_write(model_cls.objects.get(pk=self.pk), kwargs)
         pk = self._save_with_history(instance, creator_id, history_comment)
         self.__set_many_to_many_attributes(instance, many_to_many_kwargs)
-        return pk
+        return {"id": pk}
 
     def deactivate(
         self, creator_id: int | None, history_comment: str | None = None
-    ) -> int:
+    ) -> dict[str, Any]:
         """
         Mark the current model instance as inactive and record the change.
 
@@ -139,7 +139,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             history_comment = f"{history_comment} (deactivated)"
         else:
             history_comment = "Deactivated"
-        return self._save_with_history(instance, creator_id, history_comment)
+        return {"id": self._save_with_history(instance, creator_id, history_comment)}
 
     @staticmethod
     def __set_many_to_many_attributes(

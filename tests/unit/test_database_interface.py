@@ -182,7 +182,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
                 history_comment="new",
                 title="Created",
                 author=self.user_manager,
-            )
+            )["id"]
             self.assertEqual(pk, 99)
             self.assertEqual(captured["instance"].title, "Created")
             self.assertEqual(captured["comment"], "new")
@@ -192,7 +192,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
                 creator_id=self.user.pk,
                 history_comment="up",
                 title="Updated",
-            )
+            )["id"]
 
             self.assertEqual(pk2, self.book.pk)
             self.assertEqual(captured["instance"].title, "Updated")
@@ -201,10 +201,10 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             pk2 = mgr._interface.update(
                 creator_id=self.user.pk,
                 readers_id_list=[self.user.pk],
-            )
+            )["id"]
             pk3 = mgr._interface.deactivate(
                 creator_id=self.user.pk, history_comment="reason"
-            )
+            )["id"]
             self.assertEqual(pk3, self.book.pk)
             self.assertFalse(captured["instance"].is_active)
             self.assertEqual(captured["comment"], "reason (deactivated)")
