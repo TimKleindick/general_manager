@@ -37,6 +37,31 @@ class FakeInstance:
         self.saved = True
 
 
+class FakeQuerySet:
+    """
+    Lightweight queryset-like object that supports the subset of Django's queryset
+    API needed by the tests (iteration and ``first``).
+    """
+
+    def __init__(self, items: list[FakeInstance]) -> None:
+        self._items = items
+
+    def first(self):
+        """
+        Return the first item in the queryset or None if it is empty.
+        """
+        return self._items[0] if self._items else None
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __bool__(self):
+        return bool(self._items)
+
+
 class FakeManager:
     def __init__(self):
         """
@@ -63,15 +88,27 @@ class FakeManager:
         self._instances.append(inst)
         return inst, True
 
-    def filter(self, **kwargs):
-        # Return only active instances
+    def create(self, **kwargs):
         """
-        Return a list of active instances managed by this manager.
+        Mimic Django's Manager.create by creating, saving, and tracking a new instance.
+        """
+        inst = FakeInstance(**kwargs)
+        inst.is_active = False
+        inst.save()
+        self._instances.append(inst)
+        return inst
 
-        Returns:
-            List of instances where `is_active` is True.
+    def filter(self, **kwargs):
+        # Return queryset-like wrapper for matching instances
         """
-        return [inst for inst in self._instances if inst.is_active]
+        Return a queryset-like wrapper limited to instances matching the provided lookup kwargs.
+        """
+
+        def matches(inst: FakeInstance) -> bool:
+            return all(getattr(inst, key) == value for key, value in kwargs.items())
+
+        filtered = [inst for inst in self._instances if matches(inst)]
+        return FakeQuerySet(filtered)
 
 
 class FakeField:

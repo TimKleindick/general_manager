@@ -1,5 +1,5 @@
-from django.db.models import CharField
-from typing import ClassVar
+from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
+from typing import ClassVar, Any
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.read_only_interface import ReadOnlyInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -57,3 +57,49 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
         country = self.TestCountry.filter(code="DE").first()
         self.assertIsNotNone(country)
         self.assertEqual(country.name, "Germany")  # type: ignore
+
+
+class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class Milestone(GeneralManager):
+            customer_name: str
+            name: str
+            description: str
+            step: int
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {
+                    "customer_name": "XYZ",
+                    "name": "Requested",
+                    "description": "",
+                    "step": 1,
+                },
+                {
+                    "customer_name": "XYZ",
+                    "name": "Nominated",
+                    "description": "nominated by customer",
+                    "step": 2,
+                },
+            ]
+
+            class Interface(ReadOnlyInterface):
+                customer_name = CharField(max_length=255)
+                name = CharField(max_length=255, unique=True)
+                description = TextField(max_length=512)
+                step = IntegerField()
+                is_active = SmallIntegerField(default=1)
+
+        cls.Milestone = Milestone
+        cls.general_manager_classes = [Milestone]
+        cls.read_only_classes = [Milestone]
+
+    def setUp(self):
+        super().setUp()
+
+    def test_sync_populates_database(self):
+        self.Milestone.Interface.sync_data()  # type: ignore
+        milestones = self.Milestone.all()
+        self.assertEqual(milestones.count(), 2)
+        names = {m.name for m in milestones}
+        self.assertEqual(names, {"Requested", "Nominated"})
