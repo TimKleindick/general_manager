@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.20.0 (2025-10-27)
+
+### Bug Fixes
+
+- Create() returned cls(identification) instead of cls(**identification)
+  ([`0243548`](https://github.com/TimKleindick/general_manager/commit/0243548e6c8d0cad63ce0faa39fcdec3b797e425))
+
+- Ensure dependency tracker gets a dict identifier, not "None"
+  ([`5523ffb`](https://github.com/TimKleindick/general_manager/commit/5523ffb5f0b6df566425532770822fcf6a176411))
+
+- Update user retrieval to use primary key and handle additional exceptions
+  ([`6b074d0`](https://github.com/TimKleindick/general_manager/commit/6b074d0a66f3988217446f32e3b4aa00b9f214b4))
+
+### Features
+
+- Add structured logging across GeneralManager components
+  ([`ca44186`](https://github.com/TimKleindick/general_manager/commit/ca44186145742c9a36810d42adc36dd785c9badd))
+
+### Testing
+
+- Update logging tests
+  ([`041f1ee`](https://github.com/TimKleindick/general_manager/commit/041f1ee4679fe9fea5fe11b6cde1e7b3c18f2a20))
+
+
 ## v0.19.2 (2025-10-26)
 
 ### Bug Fixes
