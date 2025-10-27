@@ -5,6 +5,8 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any, Iterable, Mapping, MutableMapping, overload
 
+from general_manager.logging import get_logger
+
 
 class MissingExportError(AttributeError):
     """Raised when a requested export is not defined in the public API."""
@@ -24,6 +26,7 @@ class MissingExportError(AttributeError):
 
 ModuleTarget = tuple[str, str]
 ModuleMap = Mapping[str, str | ModuleTarget]
+logger = get_logger("utils.public_api")
 
 
 @overload
@@ -63,11 +66,27 @@ def resolve_export(
         MissingExportError: If `name` is not present in `module_all`.
     """
     if name not in module_all:
+        logger.warning(
+            "missing public api export",
+            context={
+                "module": module_globals["__name__"],
+                "export": name,
+            },
+        )
         raise MissingExportError(module_globals["__name__"], name)
     module_path, attr_name = _normalize_target(name, module_map[name])
     module = import_module(module_path)
     value = getattr(module, attr_name)
     module_globals[name] = value
+    logger.debug(
+        "resolved public api export",
+        context={
+            "module": module_globals["__name__"],
+            "export": name,
+            "target_module": module_path,
+            "target_attribute": attr_name,
+        },
+    )
     return value
 
 

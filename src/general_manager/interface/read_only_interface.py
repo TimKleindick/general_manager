@@ -1,28 +1,29 @@
 """Read-only interface that mirrors JSON datasets into Django models."""
 
 from __future__ import annotations
-import json
 
-from typing import Type, Any, Callable, TYPE_CHECKING, cast, ClassVar
-from django.db import models, transaction
+import json
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
+
+from django.core.checks import Warning
+from django.db import connection, models, transaction
+
 from general_manager.interface.database_based_interface import (
     DBBasedInterface,
     GeneralManagerBasisModel,
-    classPreCreationMethod,
-    classPostCreationMethod,
-    generalManagerClassName,
     attributes,
+    classPostCreationMethod,
+    classPreCreationMethod,
+    generalManagerClassName,
     interfaceBaseClass,
 )
-from django.db import connection
-from django.core.checks import Warning
-import logging
+from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger("interface.read_only")
 
 
 class MissingReadOnlyDataError(ValueError):
@@ -131,7 +132,11 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
         """
         if cls.ensure_schema_is_up_to_date(cls._parent_class, cls._model):
             logger.warning(
-                f"Schema for ReadOnlyInterface '{cls._parent_class.__name__}' is not up to date."
+                "readonly schema out of date",
+                context={
+                    "manager": cls._parent_class.__name__,
+                    "model": cls._model.__name__,
+                },
             )
             return
 
@@ -208,10 +213,14 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
 
         if changes["created"] or changes["updated"] or changes["deactivated"]:
             logger.info(
-                f"Data changes for ReadOnlyInterface '{parent_class.__name__}': "
-                f"Created: {len(changes['created'])}, "
-                f"Updated: {len(changes['updated'])}, "
-                f"Deactivated: {len(changes['deactivated'])}"
+                "readonly data synchronized",
+                context={
+                    "manager": parent_class.__name__,
+                    "model": model.__name__,
+                    "created": len(changes["created"]),
+                    "updated": len(changes["updated"]),
+                    "deactivated": len(changes["deactivated"]),
+                },
             )
 
     @staticmethod

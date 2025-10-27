@@ -39,11 +39,12 @@ from graphql.language.ast import (
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer, get_channel_layer
 
+from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import Dependency
 from general_manager.cache.signals import post_data_change
-from general_manager.bucket.base_bucket import Bucket
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 
@@ -55,6 +56,9 @@ from graphql import GraphQLError
 if TYPE_CHECKING:
     from general_manager.permission.base_permission import BasePermission
     from graphene import ResolveInfo as GraphQLResolveInfo
+
+
+logger = get_logger("api.graphql")
 
 
 @dataclass(slots=True)
@@ -345,17 +349,38 @@ class GraphQL:
             cls._mutations[create_name] = cls.generate_create_mutation_class(
                 generalManagerClass, default_return_values
             )
+            logger.debug(
+                "registered graphql mutation",
+                context={
+                    "manager": generalManagerClass.__name__,
+                    "mutation": create_name,
+                },
+            )
 
         if InterfaceBase.update.__code__ != interface_cls.update.__code__:
             update_name = f"update{generalManagerClass.__name__}"
             cls._mutations[update_name] = cls.generate_update_mutation_class(
                 generalManagerClass, default_return_values
             )
+            logger.debug(
+                "registered graphql mutation",
+                context={
+                    "manager": generalManagerClass.__name__,
+                    "mutation": update_name,
+                },
+            )
 
         if InterfaceBase.deactivate.__code__ != interface_cls.deactivate.__code__:
             delete_name = f"delete{generalManagerClass.__name__}"
             cls._mutations[delete_name] = cls.generate_delete_mutation_class(
                 generalManagerClass, default_return_values
+            )
+            logger.debug(
+                "registered graphql mutation",
+                context={
+                    "manager": generalManagerClass.__name__,
+                    "mutation": delete_name,
+                },
             )
 
     @classmethod
@@ -375,6 +400,11 @@ class GraphQL:
         )
         if not interface_cls:
             return None
+
+        logger.info(
+            "building graphql interface",
+            context={"manager": generalManagerClass.__name__},
+        )
 
         graphene_type_name = f"{generalManagerClass.__name__}Type"
         fields: dict[str, Any] = {}
@@ -434,6 +464,16 @@ class GraphQL:
         cls.manager_registry[generalManagerClass.__name__] = generalManagerClass
         cls._add_queries_to_schema(graphene_type, generalManagerClass)
         cls._add_subscription_field(graphene_type, generalManagerClass)
+        exposed_fields = sorted(
+            name for name in fields.keys() if not name.startswith("resolve_")
+        )
+        logger.debug(
+            "registered graphql interface",
+            context={
+                "manager": generalManagerClass.__name__,
+                "fields": exposed_fields,
+            },
+        )
 
     @staticmethod
     def _sort_by_options(
@@ -1811,23 +1851,47 @@ class GraphQL:
         Returns:
             GraphQLError: GraphQL error containing the original message and an `extensions['code']` indicating the error category.
         """
+        message = str(error)
+        error_name = type(error).__name__
         if isinstance(error, PermissionError):
+            logger.info(
+                "graphql permission error",
+                context={
+                    "error": error_name,
+                    "message": message,
+                },
+            )
             return GraphQLError(
-                str(error),
+                message,
                 extensions={
                     "code": "PERMISSION_DENIED",
                 },
             )
         elif isinstance(error, (ValueError, ValidationError, TypeError)):
+            logger.warning(
+                "graphql user error",
+                context={
+                    "error": error_name,
+                    "message": message,
+                },
+            )
             return GraphQLError(
-                str(error),
+                message,
                 extensions={
                     "code": "BAD_USER_INPUT",
                 },
             )
         else:
+            logger.error(
+                "graphql internal error",
+                context={
+                    "error": error_name,
+                    "message": message,
+                },
+                exc_info=error,
+            )
             return GraphQLError(
-                str(error),
+                message,
                 extensions={
                     "code": "INTERNAL_SERVER_ERROR",
                 },
@@ -1860,10 +1924,24 @@ class GraphQL:
             manager_class = instance.__class__
 
         if manager_class.__name__ not in cls.manager_registry:
+            logger.debug(
+                "skipping subscription event for unregistered manager",
+                context={
+                    "manager": manager_class.__name__,
+                    "action": action,
+                },
+            )
             return
 
         channel_layer = cls._get_channel_layer()
         if channel_layer is None:
+            logger.warning(
+                "channel layer unavailable for subscription event",
+                context={
+                    "manager": manager_class.__name__,
+                    "action": action,
+                },
+            )
             return
 
         group_name = cls._group_name(manager_class, instance.identification)
@@ -1872,6 +1950,14 @@ class GraphQL:
             {
                 "type": "gm.subscription.event",
                 "action": action,
+            },
+        )
+        logger.debug(
+            "dispatched subscription event",
+            context={
+                "manager": manager_class.__name__,
+                "action": action,
+                "group": group_name,
             },
         )
 

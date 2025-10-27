@@ -1,16 +1,18 @@
 """Dependency index management for cached GeneralManager query results."""
 
 from __future__ import annotations
-import time
+
 import ast
 import re
-import logging
+import time
 from datetime import date, datetime
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Tuple, Type, cast
 
 from django.core.cache import cache
-from general_manager.cache.signals import post_data_change, pre_data_change
 from django.dispatch import receiver
-from typing import Literal, Any, Iterable, TYPE_CHECKING, Type, Tuple, cast
+
+from general_manager.cache.signals import post_data_change, pre_data_change
+from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
@@ -31,7 +33,7 @@ type dependency_index = dict[
 type filter_type = Literal["filter", "exclude", "identification"]
 type Dependency = Tuple[general_manager_name, filter_type, str]
 
-logger = logging.getLogger(__name__)
+logger = get_logger("cache.dependency_index")
 
 
 class DependencyLockTimeoutError(TimeoutError):
@@ -616,7 +618,14 @@ def generic_cache_invalidation(
                         )
                         if should_invalidate:
                             logger.info(
-                                f"Invalidate cache key {ck} for filter {lookup} with value {val_key}"
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": val_key,
+                                },
                             )
                             invalidate_cache_key(ck)
                             remove_cache_key_from_index(ck)
@@ -634,7 +643,14 @@ def generic_cache_invalidation(
                         )
                         if should_invalidate:
                             logger.info(
-                                f"Invalidate cache key {ck} for exclude {lookup} with value {val_key}"
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": val_key,
+                                },
                             )
                             invalidate_cache_key(ck)
                             remove_cache_key_from_index(ck)

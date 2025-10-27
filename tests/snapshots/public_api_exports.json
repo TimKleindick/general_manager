@@ -32,6 +32,10 @@
       "general_manager.rule.rule",
       "Rule"
     ],
+    "get_logger": [
+      "general_manager.logging",
+      "get_logger"
+    ],
     "graph_ql_mutation": [
       "general_manager.api.mutation",
       "graph_ql_mutation"

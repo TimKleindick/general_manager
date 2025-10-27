@@ -1,11 +1,12 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Iterator, Self, Type
-from general_manager.manager.meta import GeneralManagerMeta
 
 from general_manager.api.property import GraphQLProperty
+from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.signals import data_change
-from general_manager.bucket.base_bucket import Bucket
+from general_manager.logging import get_logger
+from general_manager.manager.meta import GeneralManagerMeta
 
 
 class UnsupportedUnionOperandError(TypeError):
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
     from general_manager.interface.base_interface import InterfaceBase
 
 
+logger = get_logger("manager.general")
+
+
 class GeneralManager(metaclass=GeneralManagerMeta):
     Permission: Type[BasePermission]
     _attributes: dict[str, Any]
@@ -44,6 +48,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         self.__id: dict[str, Any] = self._interface.identification
         DependencyTracker.track(
             self.__class__.__name__, "identification", f"{self.__id}"
+        )
+        logger.debug(
+            "instantiated manager",
+            context={
+                "manager": self.__class__.__name__,
+                "identification": self.__id,
+            },
         )
 
     def __str__(self) -> str:
@@ -145,6 +156,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         identification = cls.Interface.create(
             creator_id=creator_id, history_comment=history_comment, **kwargs
         )
+        logger.info(
+            "manager created",
+            context={
+                "manager": cls.__name__,
+                "creator_id": creator_id,
+                "ignore_permission": ignore_permission,
+                "fields": sorted(kwargs.keys()),
+                "identification": identification,
+            },
+        )
         return cls(identification)
 
     @data_change
@@ -177,6 +198,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             history_comment=history_comment,
             **kwargs,
         )
+        logger.info(
+            "manager updated",
+            context={
+                "manager": self.__class__.__name__,
+                "creator_id": creator_id,
+                "ignore_permission": ignore_permission,
+                "fields": sorted(kwargs.keys()),
+                "identification": self.identification,
+            },
+        )
         return self.__class__(**self.identification)
 
     @data_change
@@ -205,6 +236,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         self._interface.deactivate(
             creator_id=creator_id, history_comment=history_comment
         )
+        logger.info(
+            "manager deactivated",
+            context={
+                "manager": self.__class__.__name__,
+                "creator_id": creator_id,
+                "ignore_permission": ignore_permission,
+                "identification": self.identification,
+            },
+        )
         return self.__class__(**self.identification)
 
     @classmethod
@@ -220,6 +260,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """
         DependencyTracker.track(
             cls.__name__, "filter", f"{cls.__parse_identification(kwargs)}"
+        )
+        logger.debug(
+            "manager filter",
+            context={
+                "manager": cls.__name__,
+                "filters": cls.__parse_identification(kwargs) or kwargs,
+            },
         )
         return cls.Interface.filter(**kwargs)
 
@@ -237,11 +284,24 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         DependencyTracker.track(
             cls.__name__, "exclude", f"{cls.__parse_identification(kwargs)}"
         )
+        logger.debug(
+            "manager exclude",
+            context={
+                "manager": cls.__name__,
+                "filters": cls.__parse_identification(kwargs) or kwargs,
+            },
+        )
         return cls.Interface.exclude(**kwargs)
 
     @classmethod
     def all(cls) -> Bucket[Self]:
         """Return a bucket containing every managed object of this class."""
+        logger.debug(
+            "manager all",
+            context={
+                "manager": cls.__name__,
+            },
+        )
         return cls.Interface.filter()
 
     @staticmethod

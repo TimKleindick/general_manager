@@ -1,22 +1,25 @@
 from __future__ import annotations
-from django.apps import AppConfig
-import graphene  # type: ignore[import]
+
+import importlib.abc
 import os
+import sys
+from importlib import import_module, util
+from typing import TYPE_CHECKING, Any, Callable, Type, cast
+
+import graphene  # type: ignore[import]
+from django.apps import AppConfig
 from django.conf import settings
+from django.core.checks import register
+from django.core.management.base import BaseCommand
 from django.urls import path, re_path
 from graphene_django.views import GraphQLView  # type: ignore[import]
-from importlib import import_module, util
-import importlib.abc
-import sys
-from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.manager.input import Input
-from general_manager.api.property import graph_ql_property
+
 from general_manager.api.graphql import GraphQL
-from typing import TYPE_CHECKING, Any, Callable, Type, cast
-from django.core.checks import register
-import logging
-from django.core.management.base import BaseCommand
+from general_manager.api.property import graph_ql_property
+from general_manager.logging import get_logger
+from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.input import Input
+from general_manager.manager.meta import GeneralManagerMeta
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -45,7 +48,7 @@ class InvalidPermissionClassError(TypeError):
 if TYPE_CHECKING:
     from general_manager.interface.read_only_interface import ReadOnlyInterface
 
-logger = logging.getLogger(__name__)
+logger = get_logger("apps")
 
 
 class GeneralmanagerConfig(AppConfig):
@@ -79,7 +82,10 @@ class GeneralmanagerConfig(AppConfig):
         GeneralmanagerConfig.patch_read_only_interface_sync(read_only_classes)
         from general_manager.interface.read_only_interface import ReadOnlyInterface
 
-        logger.debug("starting to register ReadOnlyInterface schema warnings...")
+        logger.debug(
+            "registering read-only schema checks",
+            context={"count": len(read_only_classes)},
+        )
 
         def _build_schema_check(
             manager_cls: Type[GeneralManager], model: Any
@@ -154,14 +160,27 @@ class GeneralmanagerConfig(AppConfig):
             run_main = os.environ.get("RUN_MAIN") == "true"
             command = argv[1] if len(argv) > 1 else None
             if command != "runserver" or run_main:
-                logger.debug("start syncing ReadOnlyInterface data...")
+                logger.debug(
+                    "syncing read-only interfaces",
+                    context={
+                        "command": command,
+                        "autoreload": not run_main if command == "runserver" else False,
+                        "count": len(general_manager_classes),
+                    },
+                )
                 for general_manager_class in general_manager_classes:
                     read_only_interface = cast(
                         Type[ReadOnlyInterface], general_manager_class.Interface
                     )
                     read_only_interface.sync_data()
 
-                logger.debug("finished syncing ReadOnlyInterface data.")
+                logger.debug(
+                    "finished syncing read-only interfaces",
+                    context={
+                        "command": command,
+                        "count": len(general_manager_classes),
+                    },
+                )
 
             result = original_run_from_argv(self, argv)
             return result
@@ -182,7 +201,13 @@ class GeneralmanagerConfig(AppConfig):
             pending_attribute_initialization (list[type[GeneralManager]]): GeneralManager classes whose Interface attributes need to be initialized and whose attribute properties should be created.
             all_classes (list[type[GeneralManager]]): All registered GeneralManager classes to inspect for input-field connections and to validate permissions.
         """
-        logger.debug("Initializing GeneralManager classes...")
+        logger.debug(
+            "initializing general manager classes",
+            context={
+                "pending_attributes": len(pending_attribute_initialization),
+                "total": len(all_classes),
+            },
+        )
 
         def _build_connection_resolver(
             attribute_key: str, manager_cls: Type[GeneralManager]
@@ -204,7 +229,10 @@ class GeneralmanagerConfig(AppConfig):
             resolver.__annotations__ = {"return": manager_cls}
             return resolver
 
-        logger.debug("starting to create attributes for GeneralManager classes...")
+        logger.debug(
+            "creating manager attributes",
+            context={"pending_attributes": len(pending_attribute_initialization)},
+        )
         for general_manager_class in pending_attribute_initialization:
             attributes = general_manager_class.Interface.get_attributes()
             general_manager_class._attributes = attributes
@@ -212,7 +240,10 @@ class GeneralmanagerConfig(AppConfig):
                 attributes.keys(), general_manager_class
             )
 
-        logger.debug("starting to connect inputs to other general manager classes...")
+        logger.debug(
+            "linking manager inputs",
+            context={"total_classes": len(all_classes)},
+        )
         for general_manager_class in all_classes:
             attributes = getattr(general_manager_class.Interface, "input_fields", {})
             for attribute_name, attribute in attributes.items():
@@ -241,7 +272,10 @@ class GeneralmanagerConfig(AppConfig):
         Parameters:
             pending_graphql_interfaces (list[Type[GeneralManager]]): GeneralManager classes for which GraphQL interfaces, mutations, and optional subscriptions should be created and included in the assembled schema.
         """
-        logger.debug("Starting to create GraphQL interfaces and mutations...")
+        logger.debug(
+            "creating graphql interfaces and mutations",
+            context={"pending": len(GeneralManagerMeta.pending_graphql_interfaces)},
+        )
         for general_manager_class in pending_graphql_interfaces:
             GraphQL.create_graphql_interface(general_manager_class)
             GraphQL.create_graphql_mutation(general_manager_class)
@@ -292,7 +326,13 @@ class GeneralmanagerConfig(AppConfig):
         Raises:
             MissingRootUrlconfError: If ROOT_URLCONF is not defined in Django settings.
         """
-        logging.debug("Adding GraphQL URL to Django settings...")
+        logger.debug(
+            "configuring graphql http endpoint",
+            context={
+                "root_urlconf": getattr(settings, "ROOT_URLCONF", None),
+                "graphql_url": getattr(settings, "GRAPHQL_URL", "graphql"),
+            },
+        )
         root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
         graph_ql_url = getattr(settings, "GRAPHQL_URL", "graphql")
         if not root_url_conf_path:
@@ -317,15 +357,18 @@ class GeneralmanagerConfig(AppConfig):
         """
         asgi_path = getattr(settings, "ASGI_APPLICATION", None)
         if not asgi_path:
-            logger.debug("ASGI_APPLICATION not configured; skipping websocket setup.")
+            logger.debug(
+                "asgi application missing",
+                context={"graphql_url": graphql_url},
+            )
             return
 
         try:
             module_path, attr_name = asgi_path.rsplit(".", 1)
         except ValueError:
             logger.warning(
-                "ASGI_APPLICATION '%s' is not a valid module path; skipping websocket setup.",
-                asgi_path,
+                "invalid asgi application path",
+                context={"asgi_application": asgi_path},
             )
             return
 
@@ -334,9 +377,12 @@ class GeneralmanagerConfig(AppConfig):
         except RuntimeError as exc:
             if "populate() isn't reentrant" not in str(exc):
                 logger.warning(
-                    "Unable to import ASGI module '%s': %s",
-                    module_path,
-                    exc,
+                    "unable to import asgi module",
+                    context={
+                        "module": module_path,
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                    },
                     exc_info=True,
                 )
                 return
@@ -344,8 +390,8 @@ class GeneralmanagerConfig(AppConfig):
             spec = util.find_spec(module_path)
             if spec is None or spec.loader is None:
                 logger.warning(
-                    "Could not locate loader for ASGI module '%s'; skipping websocket setup.",
-                    module_path,
+                    "missing loader for asgi module",
+                    context={"module": module_path},
                 )
                 return
 
@@ -416,7 +462,13 @@ class GeneralmanagerConfig(AppConfig):
             return
         except ImportError as exc:  # pragma: no cover - defensive
             logger.warning(
-                "Unable to import ASGI module '%s': %s", module_path, exc, exc_info=True
+                "unable to import asgi module",
+                context={
+                    "module": module_path,
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                },
+                exc_info=True,
             )
             return
 
@@ -447,8 +499,11 @@ class GeneralmanagerConfig(AppConfig):
             RuntimeError,
         ) as exc:  # pragma: no cover - optional dependency
             logger.debug(
-                "Channels or GraphQL subscription consumer unavailable (%s); skipping websocket setup.",
-                exc,
+                "channels dependencies unavailable",
+                context={
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                },
             )
             return
 
@@ -459,8 +514,8 @@ class GeneralmanagerConfig(AppConfig):
 
         if not hasattr(websocket_patterns, "append"):
             logger.warning(
-                "websocket_urlpatterns in '%s' does not support appending; skipping websocket setup.",
-                asgi_module.__name__,
+                "websocket_urlpatterns not appendable",
+                context={"module": asgi_module.__name__},
             )
             return
 
