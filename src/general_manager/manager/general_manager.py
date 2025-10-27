@@ -166,7 +166,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 "identification": identification,
             },
         )
-        return cls(identification)
+        return cls(**identification)
 
     @data_change
     def update(
