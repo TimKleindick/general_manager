@@ -208,8 +208,8 @@ class BasePermission(ABC):
         if isinstance(user, (AbstractBaseUser, AnonymousUser)):
             return user
         try:
-            return User.objects.get(id=user)
-        except User.DoesNotExist:
+            return User.objects.get(pk=user)
+        except (User.DoesNotExist, ValueError, TypeError):
             return AnonymousUser()
 
     @abstractmethod
