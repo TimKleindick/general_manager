@@ -212,9 +212,11 @@ class BasePermissionTests(TestCase):
         # Set up permission to fail
         DummyPermission.create_permissions = {"attribute": "dummy:deny"}
 
+        dummy_manager = type("DummyManager", (), {"attribute": "test_value"})
+
         with self.assertRaises(PermissionCheckError) as ctx:
             DummyPermission.check_create_permission(
-                {"attribute": "test_value"}, None, self.dummy_user
+                {"attribute": "test_value"}, dummy_manager, self.dummy_user
             )
 
         self.assertIn("Permission denied", str(ctx.exception))
@@ -287,10 +289,12 @@ class BasePermissionTests(TestCase):
             "field3": "dummy:deny",
         }
 
+        dummy_manager = type("DummyManager", (), {"attribute": "test_value"})
+
         with self.assertRaises(PermissionCheckError) as ctx:
             DummyPermission.check_create_permission(
                 {"field1": "val1", "field2": "val2", "field3": "val3"},
-                None,
+                dummy_manager,
                 self.dummy_user,
             )
 

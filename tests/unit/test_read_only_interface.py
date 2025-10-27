@@ -413,10 +413,10 @@ class SyncDataTests(SimpleTestCase):
         self.assertTrue(inst_b.saved)
         # Verify the log message reports 1 created, 1 updated, 0 deactivated
         self.logger.info.assert_called_once()
-        msg = self.logger.info.call_args[0][0]
-        self.assertIn("Created: 1", msg)
-        self.assertIn("Updated: 1", msg)
-        self.assertIn("Deactivated: 0", msg)
+        msg = self.logger.info.call_args[1]["context"]
+        self.assertEqual(msg["created"], 1)
+        self.assertEqual(msg["updated"], 1)
+        self.assertEqual(msg["deactivated"], 0)
 
 
 # ------------------------------------------------------------
