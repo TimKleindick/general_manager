@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.20.1 (2025-10-27)
+
+### Bug Fixes
+
+- Improve unique field handling and race condition safety in ReadOnlyInterface
+  ([`06a9e42`](https://github.com/TimKleindick/general_manager/commit/06a9e428b794234fb1e7cfbfea77457c6c3027f7))
+
+- Read only data sync error with not nullable fields
+  ([`a28d706`](https://github.com/TimKleindick/general_manager/commit/a28d7062d38f4b801548d17e629e1bb436ed2f94))
+
+
 ## v0.20.0 (2025-10-27)
 
 ### Bug Fixes
