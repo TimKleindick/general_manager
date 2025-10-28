@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 from django.contrib.auth.models import AbstractBaseUser, AbstractUser, AnonymousUser
 
 from general_manager.logging import get_logger
+from general_manager.permission.audit import (
+    PermissionAuditEvent,
+    audit_logging_enabled,
+    emit_permission_audit_event,
+)
 from general_manager.permission.permission_checks import permission_functions
 from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.utils import (
@@ -64,6 +69,14 @@ class BasePermission(ABC):
         """Return the user being evaluated for permission checks."""
         return self._request_user
 
+    def describe_permissions(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+        attribute: str,
+    ) -> tuple[str, ...]:
+        """Return permission expressions associated with an action/attribute pair."""
+        return ()
+
     def _is_superuser(self) -> bool:
         """Return True when the current request user bypasses permission checks."""
         return bool(getattr(self.request_user, "is_superuser", False))
@@ -89,19 +102,45 @@ class BasePermission(ABC):
             PermissionCheckError: If one or more attributes in `data` are denied for the resolved `request_user`.
         """
         request_user = cls.get_user_with_id(request_user)
-        if getattr(request_user, "is_superuser", False):
-            return
-        errors = []
         permission_data = PermissionDataManager(permission_data=data, manager=manager)
         Permission = cls(permission_data, request_user)
+        manager_name = manager.__name__ if manager is not None else None
+        if Permission._is_superuser():
+            if audit_logging_enabled():
+                for key in data.keys():
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="create",
+                            attributes=(key,),
+                            granted=True,
+                            user=request_user,
+                            manager=manager_name,
+                            permissions=Permission.describe_permissions("create", key),
+                            bypassed=True,
+                        )
+                    )
+            return
+
+        errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
         for key in data.keys():
             is_allowed = Permission.check_permission("create", key)
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="create",
+                        attributes=(key,),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=manager_name,
+                        permissions=Permission.describe_permissions("create", key),
+                    )
+                )
             if not is_allowed:
                 logger.info(
                     "permission denied",
                     context={
-                        "manager": manager.__name__,
+                        "manager": manager_name,
                         "action": "create",
                         "attribute": key,
                         "user_id": user_identifier,
@@ -130,22 +169,47 @@ class BasePermission(ABC):
             PermissionCheckError: Raised with a list of error messages when one or more fields are not permitted to be updated.
         """
         request_user = cls.get_user_with_id(request_user)
-        if getattr(request_user, "is_superuser", False):
-            return
-
-        errors = []
         permission_data = PermissionDataManager.for_update(
             base_data=old_manager_instance, update_data=data
         )
         Permission = cls(permission_data, request_user)
+        manager_name = old_manager_instance.__class__.__name__
+        if Permission._is_superuser():
+            if audit_logging_enabled():
+                for key in data.keys():
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="update",
+                            attributes=(key,),
+                            granted=True,
+                            user=request_user,
+                            manager=manager_name,
+                            permissions=Permission.describe_permissions("update", key),
+                            bypassed=True,
+                        )
+                    )
+            return
+
+        errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
         for key in data.keys():
             is_allowed = Permission.check_permission("update", key)
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="update",
+                        attributes=(key,),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=manager_name,
+                        permissions=Permission.describe_permissions("update", key),
+                    )
+                )
             if not is_allowed:
                 logger.info(
                     "permission denied",
                     context={
-                        "manager": old_manager_instance.__class__.__name__,
+                        "manager": manager_name,
                         "action": "update",
                         "attribute": key,
                         "user_id": user_identifier,
@@ -174,20 +238,45 @@ class BasePermission(ABC):
             PermissionCheckError: If one or more attributes are not permitted for deletion by request_user. The exception carries the user and the list of denial messages.
         """
         request_user = cls.get_user_with_id(request_user)
-        if getattr(request_user, "is_superuser", False):
-            return
-
-        errors = []
         permission_data = PermissionDataManager(manager_instance)
         Permission = cls(permission_data, request_user)
+        manager_name = manager_instance.__class__.__name__
+        if Permission._is_superuser():
+            if audit_logging_enabled():
+                for key in manager_instance.__dict__.keys():
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="delete",
+                            attributes=(key,),
+                            granted=True,
+                            user=request_user,
+                            manager=manager_name,
+                            permissions=Permission.describe_permissions("delete", key),
+                            bypassed=True,
+                        )
+                    )
+            return
+
+        errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
         for key in manager_instance.__dict__.keys():
             is_allowed = Permission.check_permission("delete", key)
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="delete",
+                        attributes=(key,),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=manager_name,
+                        permissions=Permission.describe_permissions("delete", key),
+                    )
+                )
             if not is_allowed:
                 logger.info(
                     "permission denied",
                     context={
-                        "manager": manager_instance.__class__.__name__,
+                        "manager": manager_name,
                         "action": "delete",
                         "attribute": key,
                         "user_id": user_identifier,

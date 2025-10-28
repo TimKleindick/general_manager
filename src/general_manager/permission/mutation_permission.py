@@ -1,13 +1,20 @@
 """Permission helper for GraphQL mutations."""
 
 from __future__ import annotations
-from django.contrib.auth.models import AbstractUser, AnonymousUser
+
 from typing import Any
+
+from django.contrib.auth.models import AbstractUser, AnonymousUser
+
+from general_manager.permission.audit import (
+    PermissionAuditEvent,
+    audit_logging_enabled,
+    emit_permission_audit_event,
+)
 from general_manager.permission.base_permission import (
     BasePermission,
     PermissionCheckError,
 )
-
 from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.utils import validate_permission_string
 
@@ -30,6 +37,7 @@ class MutationPermission:
         self._data: PermissionDataManager = PermissionDataManager(data)
         self._request_user = request_user
         self.__attribute_permissions = self.__get_attribute_permissions()
+        self._mutate_permissions: list[str] = getattr(self.__class__, "__mutate__", [])
 
         self.__overall_result: bool | None = None
 
@@ -53,6 +61,12 @@ class MutationPermission:
                 attribute_permissions[attribute] = getattr(self.__class__, attribute)
         return attribute_permissions
 
+    def describe_permissions(self, attribute: str) -> tuple[str, ...]:
+        """Return mutate-level and attribute-specific permissions for the field."""
+        base_permissions = tuple(self._mutate_permissions)
+        attribute_permissions = tuple(self.__attribute_permissions.get(attribute, []))
+        return base_permissions + attribute_permissions
+
     @classmethod
     def check(
         cls,
@@ -69,12 +83,40 @@ class MutationPermission:
         Raises:
             PermissionCheckError: Raised with the `request_user` and a list of field-level error messages when one or more fields fail their permission checks.
         """
-        errors = []
+        errors: list[str] = []
         if not isinstance(request_user, (AbstractUser, AnonymousUser)):
             request_user = BasePermission.get_user_with_id(request_user)
         Permission = cls(data, request_user)
+        class_name = cls.__name__
+        if getattr(request_user, "is_superuser", False):
+            if audit_logging_enabled():
+                for key in data:
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="mutation",
+                            attributes=(key,),
+                            granted=True,
+                            user=request_user,
+                            manager=class_name,
+                            permissions=Permission.describe_permissions(key),
+                            bypassed=True,
+                        )
+                    )
+            return
         for key in data:
-            if not Permission.check_permission(key):
+            is_allowed = Permission.check_permission(key)
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="mutation",
+                        attributes=(key,),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=class_name,
+                        permissions=Permission.describe_permissions(key),
+                    )
+                )
+            if not is_allowed:
                 errors.append(
                     f"Permission denied for {key} with value {data[key]} for user {request_user}"
                 )
@@ -109,7 +151,7 @@ class MutationPermission:
                 self.__attribute_permissions[attribute]
             )
 
-        permission = self.__check_specific_permission(self.__mutate__)
+        permission = self.__check_specific_permission(self._mutate_permissions)
         self.__overall_result = permission
         return permission and attribute_permission
 
