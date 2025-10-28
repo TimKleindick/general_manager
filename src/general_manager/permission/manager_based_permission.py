@@ -182,6 +182,9 @@ class ManagerBasedPermission(BasePermission):
         Raises:
             UnknownPermissionActionError: If `action` is not one of "create", "read", "update", or "delete".
         """
+        if self._is_superuser():
+            self.__overall_results[action] = True
+            return True
         if (
             self.__based_on_permission
             and not self.__based_on_permission.check_permission(action, attribute)
@@ -241,6 +244,8 @@ class ManagerBasedPermission(BasePermission):
         Returns:
             list[dict[Literal["filter", "exclude"], dict[str, str]]]: A list of dictionaries each containing "filter" and "exclude" mappings where keys are queryset lookups and values are lookup values.
         """
+        if self._is_superuser():
+            return [{"filter": {}, "exclude": {}}]
         __based_on__ = self.__based_on__
         filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
 

@@ -97,6 +97,14 @@ class ManagerBasedPermissionTests(TestCase):
         self.admin_user.is_staff = True
         self.admin_user.save()
 
+        # Create a superuser
+        superuser_password = get_random_string(12)
+        self.superuser = User.objects.create_superuser(
+            username="superuser",
+            email="super@example.com",
+            password=superuser_password,
+        )
+
         # Anonymous user
         self.anonymous_user = AnonymousUser()
 
@@ -192,6 +200,13 @@ class ManagerBasedPermissionTests(TestCase):
 
         result = permission.check_permission("update", "any_attribute")
         self.assertFalse(result)
+
+    def test_check_permission_with_superuser(self):
+        """Superusers should bypass ManagerBasedPermission checks."""
+        permission = CustomManagerBasedPermission(self.mock_instance, self.superuser)
+
+        self.assertTrue(permission.check_permission("update", "any_attribute"))
+        self.assertTrue(permission.check_permission("delete", "any_attribute"))
 
     def test_check_permission_delete_with_admin_user(self):
         """Test checking delete permission with an admin user."""
@@ -291,6 +306,14 @@ class ManagerBasedPermissionTests(TestCase):
 
         # Should have just the filters from __read__
         self.assertEqual(len(filters), 1)
+
+    def test_get_permission_filter_superuser(self):
+        """Superusers should receive an unfiltered queryset mapping."""
+        permission = CustomManagerBasedPermission(self.mock_instance, self.superuser)
+
+        filters = permission.get_permission_filter()
+
+        self.assertEqual(filters, [{"filter": {}, "exclude": {}}])
 
     def test_permission_caching(self):
         """Test that permission results are cached."""

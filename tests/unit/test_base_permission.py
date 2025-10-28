@@ -13,6 +13,7 @@ from general_manager.permission.permission_data_manager import (
     PermissionDataManager,
 )
 from django.contrib.auth import get_user_model
+from django.utils.crypto import get_random_string
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import AbstractUser
@@ -103,6 +104,12 @@ class BasePermissionTests(TestCase):
             "update": DummyPermission.update_permissions.copy(),
             "delete": DummyPermission.delete_permissions.copy(),
         }
+        UserModel = get_user_model()
+        self.superuser = UserModel.objects.create_superuser(
+            username="superuser",
+            email="super@example.com",
+            password=get_random_string(12),
+        )
 
     def tearDown(self):
         # Restore the original permission_functions
@@ -173,6 +180,22 @@ class BasePermissionTests(TestCase):
         result = self.permission_obj.get_permission_filter()
         expected = [{"filter": {"dummy": "allowed"}, "exclude": {}}]
         self.assertEqual(result, expected)
+
+    def test_superuser_short_circuits_checks(self):
+        """Superusers should bypass validation errors and filters."""
+        DummyPermission.read_permissions = {"field": "nonexistent:whatever"}
+        DummyPermission.create_permissions = {"attribute": "nonexistent:whatever"}
+        superuser_permission = DummyPermission(self.dummy_instance, self.superuser)
+
+        self.assertTrue(
+            superuser_permission.validate_permission_string("nonexistent:whatever")
+        )
+        # Should not raise PermissionNotFoundError despite invalid permission
+        self.assertEqual(
+            superuser_permission.get_permission_filter(),
+            [{"filter": {}, "exclude": {}}],
+        )
+        self.assertTrue(superuser_permission.check_permission("create", "attribute"))
 
     def test_permission_check_error_with_errors(self):
         """Test that PermissionCheckError is raised with proper error details."""

@@ -64,6 +64,10 @@ class BasePermission(ABC):
         """Return the user being evaluated for permission checks."""
         return self._request_user
 
+    def _is_superuser(self) -> bool:
+        """Return True when the current request user bypasses permission checks."""
+        return bool(getattr(self.request_user, "is_superuser", False))
+
     @classmethod
     def check_create_permission(
         cls,
@@ -85,6 +89,8 @@ class BasePermission(ABC):
             PermissionCheckError: If one or more attributes in `data` are denied for the resolved `request_user`.
         """
         request_user = cls.get_user_with_id(request_user)
+        if getattr(request_user, "is_superuser", False):
+            return
         errors = []
         permission_data = PermissionDataManager(permission_data=data, manager=manager)
         Permission = cls(permission_data, request_user)
@@ -124,6 +130,8 @@ class BasePermission(ABC):
             PermissionCheckError: Raised with a list of error messages when one or more fields are not permitted to be updated.
         """
         request_user = cls.get_user_with_id(request_user)
+        if getattr(request_user, "is_superuser", False):
+            return
 
         errors = []
         permission_data = PermissionDataManager.for_update(
@@ -166,6 +174,8 @@ class BasePermission(ABC):
             PermissionCheckError: If one or more attributes are not permitted for deletion by request_user. The exception carries the user and the list of denial messages.
         """
         request_user = cls.get_user_with_id(request_user)
+        if getattr(request_user, "is_superuser", False):
+            return
 
         errors = []
         permission_data = PermissionDataManager(manager_instance)
@@ -251,6 +261,8 @@ class BasePermission(ABC):
         Raises:
             PermissionNotFoundError: If no permission function matches the leading name in `permission`.
         """
+        if self._is_superuser():
+            return {"filter": {}, "exclude": {}}
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise PermissionNotFoundError(permission)
@@ -277,6 +289,8 @@ class BasePermission(ABC):
         Returns:
             bool: True when every sub-permission evaluates to True for the current user.
         """
+        if self._is_superuser():
+            return True
         return validate_permission_string(
             permission,
             self.instance,
