@@ -41,6 +41,40 @@ Bucket operations respect attribute-level restrictions when populating results.
 
 `ManagerBasedPermission.get_permission_filter()` converts expressions into Django queryset filters. Buckets apply these filters automatically so unauthorised records do not show up in listings.
 
+## Custom permission functions
+
+Use the `register_permission` decorator to add project-specific keywords to the global permission registry:
+
+```python
+from general_manager.permission import register_permission
+
+
+@register_permission("isProjectManager")
+def is_project_manager(instance, user, config):
+    return instance.project.managers.filter(pk=user.pk).exists()
+```
+
+Optionally supply a queryset filter when the permission can be represented as a lookup:
+
+```python
+@register_permission(
+    "inDepartment",
+    permission_filter=lambda user, config: {
+        "filter": {"department__slug": config[0]}
+    }
+    if config
+    else None,
+)
+def in_department(_instance, user, config):
+    return bool(config and user.department.slug == config[0])
+```
+
+Registered permissions are immediately available to every process that imports the module, so each worker should load the module (for example in `AppConfig.ready`). Attempting to register the same name twice raises `ValueError` to prevent accidental overrides.
+
+## Superuser bypass
+
+`BasePermission` short-circuits evaluation for users with `is_superuser=True`. Superusers skip all CRUD checks and associated queryset filters, ensuring the registry logic never blocks administrative maintenance tasks.
+
 ## Extending behaviour
 
 Subclass `ManagerBasedPermission` when you need custom evaluation logic. Override `validate_permission_string` to support new keywords (e.g., location-based permissions) or integrate with external policy engines.
