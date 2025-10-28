@@ -29,3 +29,4 @@ Behind the scenes, `PermissionDataManager` builds a comparison context containin
 - Validate that the delegated attribute resolves to a manager instance; otherwise permission evaluation raises `TypeError`.
 - Use attribute-level overrides (`field = {"update": ["isOwner"]}`) alongside `__based_on__` to fine-tune write access on sensitive fields.
 - In GraphQL mutations, always run permission checks before performing side effects to avoid inconsistent state when a delegated permission rejects the action.
+- Superusers bypass all permission checks and filters, so delegation should focus on regular users while admin tooling continues to function.
