@@ -3,11 +3,11 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser, Group, Permission
+from django.contrib.auth.models import AbstractUser, AnonymousUser, Group, Permission
 from django.test import TestCase
 from django.utils.crypto import get_random_string
 
-from general_manager.permission.permission_checks import permission_functions
+from general_manager.permission import permission_functions, register_permission
 
 
 class PermissionFunctionsTests(TestCase):
@@ -158,3 +158,41 @@ class PermissionFunctionsTests(TestCase):
             check["permission_filter"](self.user, ["members"]),
             {"filter": {"members__id": self.user.id}},
         )
+
+    def test_register_permission_decorator(self) -> None:
+        dummy_instance = MagicMock()
+
+        def custom_filter(user: AnonymousUser | AbstractUser, config: list[str]):
+            return {
+                "filter": {
+                    "custom_flag": config[0] if config else getattr(user, "id", None)
+                }
+            }
+
+        try:
+
+            @register_permission("customPermission", permission_filter=custom_filter)
+            def _custom_permission(
+                _instance,
+                _user,
+                _config: list[str],
+            ) -> bool:
+                return True
+
+            self.assertIn("customPermission", permission_functions)
+            permission_entry = permission_functions["customPermission"]
+            self.assertTrue(
+                permission_entry["permission_method"](dummy_instance, self.user, [])
+            )
+            self.assertEqual(
+                permission_entry["permission_filter"](self.user, []),
+                {"filter": {"custom_flag": self.user.id}},
+            )
+
+            with self.assertRaises(ValueError):
+
+                @register_permission("customPermission")
+                def _duplicate_permission(instance, user, config):
+                    return False
+        finally:
+            permission_functions.pop("customPermission", None)
