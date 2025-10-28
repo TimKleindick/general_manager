@@ -43,6 +43,14 @@
     "graph_ql_property": [
       "general_manager.api.property",
       "graph_ql_property"
+    ],
+    "permission_functions": [
+      "general_manager.permission.permission_checks",
+      "permission_functions"
+    ],
+    "register_permission": [
+      "general_manager.permission.permission_checks",
+      "register_permission"
     ]
   },
   "general_manager.api": {
@@ -259,6 +267,14 @@
     "MutationPermission": [
       "general_manager.permission.mutation_permission",
       "MutationPermission"
+    ],
+    "permission_functions": [
+      "general_manager.permission.permission_checks",
+      "permission_functions"
+    ],
+    "register_permission": [
+      "general_manager.permission.permission_checks",
+      "register_permission"
     ]
   },
   "general_manager.rule": {
