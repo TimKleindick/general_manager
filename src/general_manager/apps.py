@@ -20,6 +20,7 @@ from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.permission.audit import configure_audit_logger_from_settings
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -66,6 +67,7 @@ class GeneralmanagerConfig(AppConfig):
             GeneralManagerMeta.pending_attribute_initialization,
             GeneralManagerMeta.all_classes,
         )
+        configure_audit_logger_from_settings(settings)
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             self.handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
 

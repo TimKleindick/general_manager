@@ -271,3 +271,30 @@ class ManagerBasedPermission(BasePermission):
             filters.append(self._get_permission_filter(permission))
 
         return filters
+
+    def describe_permissions(
+        self,
+        action: permission_type,
+        attribute: str,
+    ) -> tuple[str, ...]:
+        """Return permission expressions considered for the given action/attribute."""
+        if action == "create":
+            base_permissions: tuple[str, ...] = tuple(self.__create__)
+        elif action == "read":
+            base_permissions = tuple(self.__read__)
+        elif action == "update":
+            base_permissions = tuple(self.__update__)
+        else:
+            base_permissions = tuple(self.__delete__)
+
+        attribute_source = self.__attribute_permissions.get(attribute)
+        if isinstance(attribute_source, dict):
+            attribute_permissions = tuple(attribute_source.get(action, []))
+        else:
+            attribute_permissions = tuple()
+        combined = base_permissions + attribute_permissions
+        if self.__based_on_permission is not None:
+            combined += self.__based_on_permission.describe_permissions(
+                action, attribute
+            )
+        return combined

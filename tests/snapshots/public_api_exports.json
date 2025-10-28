@@ -1,5 +1,9 @@
 {
   "general_manager": {
+    "AuditLogger": [
+      "general_manager.permission.audit",
+      "AuditLogger"
+    ],
     "CalculationInterface": [
       "general_manager.interface.calculation_interface",
       "CalculationInterface"
@@ -24,6 +28,10 @@
       "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
     ],
+    "PermissionAuditEvent": [
+      "general_manager.permission.audit",
+      "PermissionAuditEvent"
+    ],
     "ReadOnlyInterface": [
       "general_manager.interface.read_only_interface",
       "ReadOnlyInterface"
@@ -31,6 +39,14 @@
     "Rule": [
       "general_manager.rule.rule",
       "Rule"
+    ],
+    "configure_audit_logger": [
+      "general_manager.permission.audit",
+      "configure_audit_logger"
+    ],
+    "configure_audit_logger_from_settings": [
+      "general_manager.permission.audit",
+      "configure_audit_logger_from_settings"
     ],
     "get_logger": [
       "general_manager.logging",
@@ -256,6 +272,10 @@
     ]
   },
   "general_manager.permission": {
+    "AuditLogger": [
+      "general_manager.permission.audit",
+      "AuditLogger"
+    ],
     "BasePermission": [
       "general_manager.permission.base_permission",
       "BasePermission"
@@ -267,6 +287,18 @@
     "MutationPermission": [
       "general_manager.permission.mutation_permission",
       "MutationPermission"
+    ],
+    "PermissionAuditEvent": [
+      "general_manager.permission.audit",
+      "PermissionAuditEvent"
+    ],
+    "configure_audit_logger": [
+      "general_manager.permission.audit",
+      "configure_audit_logger"
+    ],
+    "configure_audit_logger_from_settings": [
+      "general_manager.permission.audit",
+      "configure_audit_logger_from_settings"
     ],
     "permission_functions": [
       "general_manager.permission.permission_checks",
