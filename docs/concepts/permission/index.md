@@ -12,6 +12,7 @@ The following pages dive into detailed patterns:
 
 - [Manager-based permissions](manager_based_permission.md)
 - [Object-level delegation](object_level.md)
+- [Audit logging](audit_logging.md)
 <!-- - [Practical examples](examples.md) -->
 
 When you write GraphQL resolvers or REST endpoints, always go through the manager API so that permissions stay consistent across entry points.

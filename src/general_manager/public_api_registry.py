@@ -43,19 +43,6 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
         "general_manager.permission.permission_checks",
         "permission_functions",
     ),
-    "configure_audit_logger": (
-        "general_manager.permission.audit",
-        "configure_audit_logger",
-    ),
-    "configure_audit_logger_from_settings": (
-        "general_manager.permission.audit",
-        "configure_audit_logger_from_settings",
-    ),
-    "PermissionAuditEvent": (
-        "general_manager.permission.audit",
-        "PermissionAuditEvent",
-    ),
-    "AuditLogger": ("general_manager.permission.audit", "AuditLogger"),
     "Rule": ("general_manager.rule.rule", "Rule"),
 }
 
@@ -160,6 +147,14 @@ PERMISSION_EXPORTS: LazyExportMap = {
     "configure_audit_logger_from_settings": (
         "general_manager.permission.audit",
         "configure_audit_logger_from_settings",
+    ),
+    "FileAuditLogger": (
+        "general_manager.permission.audit",
+        "FileAuditLogger",
+    ),
+    "DatabaseAuditLogger": (
+        "general_manager.permission.audit",
+        "DatabaseAuditLogger",
     ),
     "PermissionAuditEvent": (
         "general_manager.permission.audit",
