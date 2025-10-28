@@ -14,6 +14,8 @@ __all__ = [
     "get_logger",
     "graph_ql_mutation",
     "graph_ql_property",
+    "permission_functions",
+    "register_permission",
 ]
 
 from general_manager.interface.calculation_interface import CalculationInterface
@@ -27,3 +29,5 @@ from general_manager.rule.rule import Rule
 from general_manager.logging import get_logger
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.api.property import graph_ql_property
+from general_manager.permission.permission_checks import permission_functions
+from general_manager.permission.permission_checks import register_permission

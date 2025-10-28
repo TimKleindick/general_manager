@@ -35,6 +35,14 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
         "general_manager.permission.manager_based_permission",
         "ManagerBasedPermission",
     ),
+    "register_permission": (
+        "general_manager.permission.permission_checks",
+        "register_permission",
+    ),
+    "permission_functions": (
+        "general_manager.permission.permission_checks",
+        "permission_functions",
+    ),
     "Rule": ("general_manager.rule.rule", "Rule"),
 }
 
@@ -123,6 +131,14 @@ PERMISSION_EXPORTS: LazyExportMap = {
     "MutationPermission": (
         "general_manager.permission.mutation_permission",
         "MutationPermission",
+    ),
+    "register_permission": (
+        "general_manager.permission.permission_checks",
+        "register_permission",
+    ),
+    "permission_functions": (
+        "general_manager.permission.permission_checks",
+        "permission_functions",
     ),
 }
 
