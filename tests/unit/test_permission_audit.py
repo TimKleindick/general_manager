@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, ClassVar
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils.crypto import get_random_string
 
 from general_manager.permission.audit import (
     PermissionAuditEvent,
+    DatabaseAuditLogger,
+    FileAuditLogger,
     configure_audit_logger,
     configure_audit_logger_from_settings,
     get_audit_logger,
@@ -53,7 +58,7 @@ class AuditMutationPermission(MutationPermission):
     field: ClassVar[list[str]] = ["public"]
 
 
-class PermissionAuditTests(TestCase):
+class PermissionAuditTests(TransactionTestCase):
     def setUp(self) -> None:
         User = get_user_model()
         self.user = User.objects.create_user(
@@ -136,3 +141,62 @@ class PermissionAuditTests(TestCase):
         configure_audit_logger_from_settings(DummySettings)
         logger = get_audit_logger()
         self.assertIs(logger, DummySettings.AUDIT_LOGGER)
+
+    def test_file_audit_logger_persists_events(self) -> None:
+        event = PermissionAuditEvent(
+            action="create",
+            attributes=("field",),
+            granted=True,
+            user=self.user,
+            manager="Dummy",
+        )
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "audit.log"
+            logger = FileAuditLogger(path, batch_size=1, flush_interval=0.1)
+            logger.record(event)
+            logger.flush()
+            payloads = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(payloads), 1)
+            self.assertEqual(payloads[0]["action"], "create")
+            self.assertEqual(payloads[0]["attributes"], ["field"])
+            self.assertTrue(payloads[0]["granted"])
+
+    def test_database_audit_logger_persists_events(self) -> None:
+        event = PermissionAuditEvent(
+            action="update",
+            attributes=("field",),
+            granted=False,
+            user=self.user,
+            manager="Dummy",
+            permissions=("rule",),
+        )
+        logger = DatabaseAuditLogger(batch_size=1, flush_interval=0.1)
+        logger.record(event)
+        logger.flush()
+        model = logger.model
+        rows = list(
+            model.objects.using("default").values_list(
+                "action", "granted", "permissions"
+            )
+        )
+        self.assertTrue(rows)
+        action, granted, permissions = rows[-1]
+        self.assertEqual(action, "update")
+        self.assertFalse(granted)
+        self.assertEqual(permissions, ["rule"])
+
+    def test_file_logger_configuration(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "audit.log"
+            logger = FileAuditLogger(path, batch_size=5, flush_interval=2.0)
+            self.assertIsInstance(logger, FileAuditLogger)
+
+    def test_database_logger_configuration(self) -> None:
+        logger = DatabaseAuditLogger(
+            using="default", table_name="gm_permission_audit_custom", batch_size=42
+        )
+        self.assertEqual(logger._using, "default")
+        self.assertEqual(logger.table_name, "gm_permission_audit_custom")

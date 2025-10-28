@@ -5,6 +5,8 @@ from __future__ import annotations
 __all__ = [
     "AuditLogger",
     "BasePermission",
+    "DatabaseAuditLogger",
+    "FileAuditLogger",
     "ManagerBasedPermission",
     "MutationPermission",
     "PermissionAuditEvent",
@@ -16,6 +18,8 @@ __all__ = [
 
 from general_manager.permission.audit import AuditLogger
 from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.audit import DatabaseAuditLogger
+from general_manager.permission.audit import FileAuditLogger
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.permission.mutation_permission import MutationPermission
 from general_manager.permission.audit import PermissionAuditEvent
