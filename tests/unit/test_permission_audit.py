@@ -63,6 +63,7 @@ class AuditMutationPermission(MutationPermission):
 class PermissionAuditTests(TransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        super().setUpClass()
         User = get_user_model()
         cls.user = User.objects.create_user(
             username="regular",
@@ -79,6 +80,7 @@ class PermissionAuditTests(TransactionTestCase):
 
     def tearDown(self) -> None:
         configure_audit_logger(None)
+        super().tearDown()
 
     def test_audit_event_emitted_for_create(self) -> None:
         logger = RecordingAuditLogger()
