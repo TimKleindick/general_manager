@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.contrib.auth.models import AbstractUser, AnonymousUser
+from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
 
 from general_manager.permission.audit import (
     PermissionAuditEvent,
@@ -17,6 +17,10 @@ from general_manager.permission.base_permission import (
 )
 from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.utils import validate_permission_string
+from general_manager.logging import get_logger
+
+
+logger = get_logger("permission.mutation")
 
 
 class MutationPermission:
@@ -25,14 +29,14 @@ class MutationPermission:
     __mutate__: list[str]
 
     def __init__(
-        self, data: dict[str, Any], request_user: AbstractUser | AnonymousUser
+        self, data: dict[str, Any], request_user: AbstractBaseUser | AnonymousUser
     ) -> None:
         """
         Create a mutation permission context for the given data and user.
 
         Parameters:
             data (dict[str, Any]): Input payload for the mutation.
-            request_user (AbstractUser | AnonymousUser): User attempting the mutation.
+            request_user (AbstractBaseUser | AnonymousUser): User attempting the mutation.
         """
         self._data: PermissionDataManager = PermissionDataManager(data)
         self._request_user = request_user
@@ -47,7 +51,7 @@ class MutationPermission:
         return self._data
 
     @property
-    def request_user(self) -> AbstractUser | AnonymousUser:
+    def request_user(self) -> AbstractBaseUser | AnonymousUser:
         """Return the user whose permissions are being evaluated."""
         return self._request_user
 
@@ -71,25 +75,26 @@ class MutationPermission:
     def check(
         cls,
         data: dict[str, Any],
-        request_user: AbstractUser | AnonymousUser | Any,
+        request_user: AbstractBaseUser | AnonymousUser | Any,
     ) -> None:
         """
         Validate that the given user is authorized to perform the mutation described by `data`.
 
         Parameters:
             data (dict[str, Any]): Mutation payload mapping field names to values.
-            request_user (AbstractUser | AnonymousUser | Any): A user object or a user identifier; if an identifier is provided it will be resolved to a user.
+            request_user (AbstractBaseUser | AnonymousUser | Any): A user object or a user identifier; if an identifier is provided it will be resolved to a user.
 
         Raises:
             PermissionCheckError: Raised with the `request_user` and a list of field-level error messages when one or more fields fail their permission checks.
         """
         errors: list[str] = []
-        if not isinstance(request_user, (AbstractUser, AnonymousUser)):
+        if not isinstance(request_user, (AbstractBaseUser, AnonymousUser)):
             request_user = BasePermission.get_user_with_id(request_user)
         Permission = cls(data, request_user)
         class_name = cls.__name__
+        is_audit_enabled = audit_logging_enabled()
         if getattr(request_user, "is_superuser", False):
-            if audit_logging_enabled():
+            if is_audit_enabled:
                 for key in data:
                     emit_permission_audit_event(
                         PermissionAuditEvent(
@@ -105,7 +110,7 @@ class MutationPermission:
             return
         for key in data:
             is_allowed = Permission.check_permission(key)
-            if audit_logging_enabled():
+            if is_audit_enabled:
                 emit_permission_audit_event(
                     PermissionAuditEvent(
                         action="mutation",
@@ -117,9 +122,17 @@ class MutationPermission:
                     )
                 )
             if not is_allowed:
-                errors.append(
-                    f"Permission denied for {key} with value {data[key]} for user {request_user}"
+                user_identifier = getattr(request_user, "id", None)
+                logger.info(
+                    "permission denied",
+                    context={
+                        "mutation": class_name,
+                        "action": "mutation",
+                        "attribute": key,
+                        "user_id": user_identifier,
+                    },
                 )
+                errors.append(f"Mutation permission denied for attribute '{key}'")
         if errors:
             raise PermissionCheckError(request_user, errors)
 

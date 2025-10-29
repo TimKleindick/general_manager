@@ -104,7 +104,8 @@ def emit_permission_audit_event(event: PermissionAuditEvent) -> None:
 
 def _serialize_event(event: PermissionAuditEvent) -> dict[str, Any]:
     """Convert an audit event into a JSON-serialisable mapping."""
-    user_id = getattr(event.user, "id", None)
+    user_pk = getattr(event.user, "pk", None)
+    user_id = None if user_pk is None else str(user_pk)
     return {
         "timestamp": timezone.now().isoformat(),
         "action": event.action,
@@ -186,7 +187,7 @@ def _build_field_definitions() -> dict[str, models.Field[Any, Any]]:
         "granted": models.BooleanField(),
         "bypassed": models.BooleanField(),
         "manager": models.CharField(max_length=255, null=True, blank=True),
-        "user_id": models.BigIntegerField(null=True, blank=True),
+        "user_id": models.CharField(max_length=255, null=True, blank=True),
         "user_repr": models.TextField(null=True, blank=True),
         "permissions": models.JSONField(default=list),
         "metadata": models.JSONField(null=True, blank=True),
@@ -222,7 +223,7 @@ def _get_audit_model(table_name: str) -> type[models.Model]:
         return model
 
 
-class _BufferedAuditLogger(AuditLogger):
+class _BufferedAuditLogger:
     """Base class implementing a background worker that processes audit events in batches."""
 
     _SENTINEL = object()

@@ -616,7 +616,7 @@ class PermissionAuditTests(TransactionTestCase):
         )
 
         serialized = _serialize_event(event)
-        self.assertEqual(serialized["user_id"], self.user.id)
+        self.assertEqual(serialized["user_id"], str(self.user.id))
         self.assertIsNone(serialized["user"])
 
     def test_audit_event_serialization_includes_timestamp(self) -> None:

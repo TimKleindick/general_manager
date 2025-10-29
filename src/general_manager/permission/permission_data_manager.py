@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from typing import Callable, Optional, TypeVar, Generic, cast
-from django.contrib.auth.models import AbstractUser
 
 from general_manager.manager.general_manager import GeneralManager
 

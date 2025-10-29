@@ -4,7 +4,7 @@ from general_manager.permission.permission_checks import (
     permission_functions,
 )
 from general_manager.permission.permission_data_manager import PermissionDataManager
-from django.contrib.auth.models import AbstractUser, AnonymousUser
+from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
@@ -26,7 +26,7 @@ class PermissionNotFoundError(ValueError):
 def validate_permission_string(
     permission: str,
     data: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    request_user: AbstractUser | AnonymousUser,
+    request_user: AbstractBaseUser | AnonymousUser,
 ) -> bool:
     """
     Evaluate a compound permission expression joined by '&' operators.
@@ -34,7 +34,7 @@ def validate_permission_string(
     Parameters:
         permission (str): Permission expression where sub-permissions are joined with '&'. Individual sub-permissions may include ':'-separated configuration parts (for example, "isAuthenticated&admin:level").
         data (PermissionDataManager | GeneralManager | GeneralManagerMeta): Object passed to each permission function.
-        request_user (AbstractUser | AnonymousUser): User for whom permissions are evaluated.
+        request_user (AbstractBaseUser | AnonymousUser): User for whom permissions are evaluated.
 
     Returns:
         `true` if every sub-permission evaluates to True, `false` otherwise.

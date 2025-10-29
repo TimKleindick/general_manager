@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, Optional, Dict
-from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.base_permission import BasePermission, UserLike
 
 if TYPE_CHECKING:
     from general_manager.permission.permission_data_manager import (
         PermissionDataManager,
     )
     from general_manager.manager.general_manager import GeneralManager
-    from django.contrib.auth.models import AbstractUser
 
 type permission_type = Literal[
     "create",
@@ -76,14 +75,14 @@ class ManagerBasedPermission(BasePermission):
     def __init__(
         self,
         instance: PermissionDataManager | GeneralManager,
-        request_user: AbstractUser,
+        request_user: UserLike,
     ) -> None:
         """
         Initialise the permission object and gather default and attribute-level rules.
 
         Parameters:
             instance (PermissionDataManager | GeneralManager): Target data used for permission evaluation.
-            request_user (AbstractUser): User whose permissions are being checked.
+            request_user (UserLike): User whose permissions are being checked.
         """
         super().__init__(instance, request_user)
         self.__set_permissions()
@@ -284,8 +283,10 @@ class ManagerBasedPermission(BasePermission):
             base_permissions = tuple(self.__read__)
         elif action == "update":
             base_permissions = tuple(self.__update__)
-        else:
+        elif action == "delete":
             base_permissions = tuple(self.__delete__)
+        else:
+            raise UnknownPermissionActionError(action)
 
         attribute_source = self.__attribute_permissions.get(attribute)
         if isinstance(attribute_source, dict):
