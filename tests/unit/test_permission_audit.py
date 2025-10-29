@@ -61,19 +61,20 @@ class AuditMutationPermission(MutationPermission):
 
 
 class PermissionAuditTests(TransactionTestCase):
-    def setUp(self) -> None:
+    @classmethod
+    def setUpClass(cls) -> None:
         User = get_user_model()
-        self.user = User.objects.create_user(
+        cls.user = User.objects.create_user(
             username="regular",
             email="regular@example.com",
             password=get_random_string(12),
         )
-        self.superuser = User.objects.create_superuser(
+        cls.superuser = User.objects.create_superuser(
             username="super",
             email="super@example.com",
             password=get_random_string(12),
         )
-        self.anonymous = AnonymousUser()
+        cls.anonymous = AnonymousUser()
         configure_audit_logger(None)
 
     def tearDown(self) -> None:
