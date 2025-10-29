@@ -2,6 +2,57 @@
 
 <!-- version list -->
 
+## v0.21.0 (2025-10-29)
+
+### Bug Fixes
+
+- Implement superuser bypass for permission checks and filters
+  ([`851f339`](https://github.com/TimKleindick/general_manager/commit/851f339b9085c6129451c0bd74354be8dd770f33))
+
+- Update user identifier handling in audit logging and permission checks
+  ([`809ec08`](https://github.com/TimKleindick/general_manager/commit/809ec08bdbe0e1b6be0722524279482754101aec))
+
+### Chores
+
+- Remove unused file_based_permission.py
+  ([`6b7a497`](https://github.com/TimKleindick/general_manager/commit/6b7a4973cf042f5cbb3099a6e5055a880640933d))
+
+### Documentation
+
+- Add custom permission functions and superuser bypass details to permission documentation
+  ([`44227df`](https://github.com/TimKleindick/general_manager/commit/44227dfdffa308751eebaf94f9fba74c5b6748ce))
+
+### Features
+
+- Add default file and database loggers
+  ([`5c1e5d1`](https://github.com/TimKleindick/general_manager/commit/5c1e5d1b5b69d8f5d5838dff3d06cca093ec25fd))
+
+- Add permission functions for related user fields and many-to-many relationships
+  ([`8406a9f`](https://github.com/TimKleindick/general_manager/commit/8406a9f1d1c64dafc4833879ed9faf6ccc460947))
+
+- Implement a global registry for permission functions with filters
+  ([`e2c4ee2`](https://github.com/TimKleindick/general_manager/commit/e2c4ee2634094dc539d68f4d5f365ff2a8dd3337))
+
+- Implement audit logging interface for permission evaluations and add related configurations
+  ([`7d72fe7`](https://github.com/TimKleindick/general_manager/commit/7d72fe778c648213babc5da48fc73ee53e46f6cb))
+
+### Refactoring
+
+- Optimize test setup methods for ManagerBasedPermission and PermissionFunctions tests
+  ([`6708991`](https://github.com/TimKleindick/general_manager/commit/6708991b496fe20f401e47df09ec193f4a6ceb34))
+
+### Testing
+
+- Add test for custom permission decorator and its registration
+  ([`3b25f6e`](https://github.com/TimKleindick/general_manager/commit/3b25f6e859cce81bf7bc111a77079f0b1f963333))
+
+- Call superclass methods in setUpClass and tearDown for PermissionAuditTests
+  ([`558294d`](https://github.com/TimKleindick/general_manager/commit/558294db478f1049394164066be8477e07d30a9e))
+
+- Extend test suit for permission and audit handling
+  ([`efd90eb`](https://github.com/TimKleindick/general_manager/commit/efd90ebf5f86905a350492ccd99df2bfb2426417))
+
+
 ## v0.20.1 (2025-10-27)
 
 ### Bug Fixes
