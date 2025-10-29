@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, ClassVar
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -20,6 +21,7 @@ from general_manager.permission.audit import (
 )
 from general_manager.permission.base_permission import BasePermission
 from general_manager.permission.mutation_permission import MutationPermission
+from general_manager.permission.permission_data_manager import PermissionDataManager
 
 
 class RecordingAuditLogger:
@@ -205,7 +207,7 @@ class PermissionAuditTests(TransactionTestCase):
         """Test audit event with custom metadata."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         event = PermissionAuditEvent(
             action="create",
             attributes=("field1", "field2"),
@@ -216,7 +218,7 @@ class PermissionAuditTests(TransactionTestCase):
             metadata={"request_id": "123", "source": "api"},
         )
         logger.record(event)
-        
+
         self.assertEqual(len(logger.events), 1)
         recorded = logger.events[0]
         self.assertEqual(recorded.metadata, {"request_id": "123", "source": "api"})
@@ -227,14 +229,14 @@ class PermissionAuditTests(TransactionTestCase):
         """Test audit event recording with anonymous user."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         class DummyManager:
             __name__ = "DummyManager"
-        
+
         AuditDummyPermission.check_create_permission(
             {"field": "value"}, DummyManager, self.anonymous
         )
-        
+
         self.assertEqual(len(logger.events), 1)
         event = logger.events[0]
         self.assertEqual(event.user, self.anonymous)
@@ -243,20 +245,20 @@ class PermissionAuditTests(TransactionTestCase):
     def test_audit_logging_enabled_function(self) -> None:
         """Test audit_logging_enabled function returns correct state."""
         from general_manager.permission.audit import audit_logging_enabled
-        
+
         configure_audit_logger(None)
         self.assertFalse(audit_logging_enabled())
-        
+
         configure_audit_logger(RecordingAuditLogger())
         self.assertTrue(audit_logging_enabled())
-        
+
         configure_audit_logger(None)
         self.assertFalse(audit_logging_enabled())
 
     def test_emit_permission_audit_event_when_disabled(self) -> None:
         """Test emit_permission_audit_event does nothing when logging is disabled."""
         from general_manager.permission.audit import emit_permission_audit_event
-        
+
         configure_audit_logger(None)
         event = PermissionAuditEvent(
             action="read",
@@ -271,10 +273,10 @@ class PermissionAuditTests(TransactionTestCase):
     def test_emit_permission_audit_event_when_enabled(self) -> None:
         """Test emit_permission_audit_event forwards to logger."""
         from general_manager.permission.audit import emit_permission_audit_event
-        
+
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         event = PermissionAuditEvent(
             action="delete",
             attributes=("field",),
@@ -283,7 +285,7 @@ class PermissionAuditTests(TransactionTestCase):
             manager="TestManager",
         )
         emit_permission_audit_event(event)
-        
+
         self.assertEqual(len(logger.events), 1)
         self.assertEqual(logger.events[0].action, "delete")
         self.assertFalse(logger.events[0].granted)
@@ -292,12 +294,17 @@ class PermissionAuditTests(TransactionTestCase):
         """Test audit event emission for update operations."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
+        permission_data_manager = PermissionDataManager({"field": "new_value"}, None)
         old_instance = type("DummyManager", (), {"field": "old_value"})()
-        AuditDummyPermission.check_update_permission(
-            {"field": "new_value"}, old_instance, self.user
-        )
-        
+        with patch(
+            "general_manager.permission.base_permission.PermissionDataManager.for_update",
+            return_value=permission_data_manager,
+        ):
+            AuditDummyPermission.check_update_permission(
+                {"field": "new_value"}, old_instance, self.user
+            )
+
         self.assertEqual(len(logger.events), 1)
         event = logger.events[0]
         self.assertEqual(event.action, "update")
@@ -309,11 +316,16 @@ class PermissionAuditTests(TransactionTestCase):
         """Test audit event emission for delete operations."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
-        instance = type("DummyManager", (), {"field": "value"})()
-        instance.__dict__ = {"field": "value"}
-        AuditDummyPermission.check_delete_permission(instance, self.user)
-        
+
+        instance = type("DummyManager", (), {})()
+        instance.field = "value"
+        permission_data_manager = PermissionDataManager({"field": "value"}, None)
+        with patch(
+            "general_manager.permission.base_permission.PermissionDataManager",
+            return_value=permission_data_manager,
+        ):
+            AuditDummyPermission.check_delete_permission(instance, self.user)
+
         self.assertEqual(len(logger.events), 1)
         event = logger.events[0]
         self.assertEqual(event.action, "delete")
@@ -324,16 +336,16 @@ class PermissionAuditTests(TransactionTestCase):
         """Test multiple fields in create operation generate separate events."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         class DummyManager:
             __name__ = "DummyManager"
-        
+
         AuditDummyPermission.check_create_permission(
             {"field1": "value1", "field2": "value2", "field3": "value3"},
             DummyManager,
             self.user,
         )
-        
+
         self.assertEqual(len(logger.events), 3)
         attributes = [event.attributes[0] for event in logger.events]
         self.assertIn("field1", attributes)
@@ -344,16 +356,16 @@ class PermissionAuditTests(TransactionTestCase):
         """Test superuser bypass is logged for each field."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         class DummyManager:
             __name__ = "DummyManager"
-        
+
         AuditDummyPermission.check_create_permission(
             {"field1": "value1", "field2": "value2"},
             DummyManager,
             self.superuser,
         )
-        
+
         self.assertEqual(len(logger.events), 2)
         for event in logger.events:
             self.assertTrue(event.bypassed)
@@ -364,7 +376,7 @@ class PermissionAuditTests(TransactionTestCase):
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "audit.log"
             logger = FileAuditLogger(path, batch_size=2, flush_interval=0.1)
-            
+
             for i in range(5):
                 event = PermissionAuditEvent(
                     action="read",
@@ -374,7 +386,7 @@ class PermissionAuditTests(TransactionTestCase):
                     manager="TestManager",
                 )
                 logger.record(event)
-            
+
             logger.flush()
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 5)
@@ -384,7 +396,7 @@ class PermissionAuditTests(TransactionTestCase):
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "nested" / "dir" / "audit.log"
             logger = FileAuditLogger(path, batch_size=1, flush_interval=0.1)
-            
+
             event = PermissionAuditEvent(
                 action="create",
                 attributes=("field",),
@@ -394,14 +406,14 @@ class PermissionAuditTests(TransactionTestCase):
             )
             logger.record(event)
             logger.flush()
-            
+
             self.assertTrue(path.exists())
             self.assertTrue(path.parent.exists())
 
     def test_database_audit_logger_multiple_events(self) -> None:
         """Test DatabaseAuditLogger handles multiple events in batch."""
         logger = DatabaseAuditLogger(batch_size=5, flush_interval=0.1)
-        
+
         for i in range(3):
             event = PermissionAuditEvent(
                 action="create",
@@ -411,7 +423,7 @@ class PermissionAuditTests(TransactionTestCase):
                 manager=f"Manager{i}",
             )
             logger.record(event)
-        
+
         logger.flush()
         model = logger.model
         count = model.objects.using("default").filter(user_id=self.user.id).count()
@@ -429,16 +441,20 @@ class PermissionAuditTests(TransactionTestCase):
         logger = DatabaseAuditLogger(batch_size=1, flush_interval=0.1)
         logger.record(event)
         logger.flush()
-        
+
         model = logger.model
-        rows = list(model.objects.using("default").filter(manager__isnull=True).values_list("manager"))
+        rows = list(
+            model.objects.using("default")
+            .filter(manager__isnull=True)
+            .values_list("manager")
+        )
         self.assertTrue(any(row[0] is None for row in rows))
 
     def test_configure_audit_logger_from_settings_with_class_and_options(self) -> None:
         """Test configure from settings with class path and options."""
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "test.log"
-            
+
             class DummySettings:
                 GENERAL_MANAGER: ClassVar[dict[str, Any]] = {
                     "AUDIT_LOGGER": {
@@ -449,7 +465,7 @@ class PermissionAuditTests(TransactionTestCase):
                         },
                     }
                 }
-            
+
             configure_audit_logger_from_settings(DummySettings)
             logger = get_audit_logger()
             self.assertIsInstance(logger, FileAuditLogger)
@@ -457,10 +473,10 @@ class PermissionAuditTests(TransactionTestCase):
     def test_configure_audit_logger_from_settings_no_config(self) -> None:
         """Test configure from settings with no audit logger config."""
         from general_manager.permission.audit import _NoOpAuditLogger
-        
+
         class DummySettings:
             pass
-        
+
         configure_audit_logger_from_settings(DummySettings)
         logger = get_audit_logger()
         self.assertIsInstance(logger, _NoOpAuditLogger)
@@ -468,10 +484,10 @@ class PermissionAuditTests(TransactionTestCase):
     def test_configure_audit_logger_with_none_resets(self) -> None:
         """Test configuring with None resets to no-op logger."""
         from general_manager.permission.audit import _NoOpAuditLogger
-        
+
         configure_audit_logger(RecordingAuditLogger())
         self.assertNotIsInstance(get_audit_logger(), _NoOpAuditLogger)
-        
+
         configure_audit_logger(None)
         self.assertIsInstance(get_audit_logger(), _NoOpAuditLogger)
 
@@ -484,7 +500,7 @@ class PermissionAuditTests(TransactionTestCase):
             user=self.user,
             manager="TestManager",
         )
-        
+
         self.assertEqual(event.permissions, ())
         self.assertFalse(event.bypassed)
         self.assertIsNone(event.metadata)
@@ -494,7 +510,7 @@ class PermissionAuditTests(TransactionTestCase):
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "audit.log"
             logger = FileAuditLogger(path, batch_size=1, flush_interval=0.1)
-            
+
             event = PermissionAuditEvent(
                 action="create",
                 attributes=("field1",),
@@ -504,7 +520,7 @@ class PermissionAuditTests(TransactionTestCase):
             )
             logger.record(event)
             logger.close()
-            
+
             # Record after close should be ignored
             event2 = PermissionAuditEvent(
                 action="create",
@@ -514,7 +530,7 @@ class PermissionAuditTests(TransactionTestCase):
                 manager="TestManager",
             )
             logger.record(event2)
-            
+
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
 
@@ -540,15 +556,15 @@ class PermissionAuditTests(TransactionTestCase):
         """Test mutation permission audit when permission is denied."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         class RestrictedMutationPermission(MutationPermission):
             __mutate__: ClassVar[list[str]] = ["isAdmin"]
-        
+
         from general_manager.permission.base_permission import PermissionCheckError
-        
+
         with self.assertRaises(PermissionCheckError):
             RestrictedMutationPermission.check({"field": "value"}, self.user)
-        
+
         self.assertEqual(len(logger.events), 1)
         event = logger.events[0]
         self.assertEqual(event.action, "mutation")
@@ -558,12 +574,12 @@ class PermissionAuditTests(TransactionTestCase):
         """Test mutation permission audit for superuser bypass."""
         logger = RecordingAuditLogger()
         configure_audit_logger(logger)
-        
+
         class RestrictedMutationPermission(MutationPermission):
             __mutate__: ClassVar[list[str]] = ["isAdmin"]
-        
+
         RestrictedMutationPermission.check({"field": "value"}, self.superuser)
-        
+
         self.assertEqual(len(logger.events), 1)
         event = logger.events[0]
         self.assertTrue(event.granted)
@@ -572,7 +588,7 @@ class PermissionAuditTests(TransactionTestCase):
     def test_audit_event_serialization_with_anonymous_user(self) -> None:
         """Test event serialization correctly handles anonymous users."""
         from general_manager.permission.audit import _serialize_event
-        
+
         event = PermissionAuditEvent(
             action="read",
             attributes=("field",),
@@ -580,7 +596,7 @@ class PermissionAuditTests(TransactionTestCase):
             user=self.anonymous,
             manager="TestManager",
         )
-        
+
         serialized = _serialize_event(event)
         self.assertIsNone(serialized["user_id"])
         self.assertIsNotNone(serialized["user"])
@@ -589,7 +605,7 @@ class PermissionAuditTests(TransactionTestCase):
     def test_audit_event_serialization_with_authenticated_user(self) -> None:
         """Test event serialization correctly handles authenticated users."""
         from general_manager.permission.audit import _serialize_event
-        
+
         event = PermissionAuditEvent(
             action="create",
             attributes=("field",),
@@ -597,7 +613,7 @@ class PermissionAuditTests(TransactionTestCase):
             user=self.user,
             manager="TestManager",
         )
-        
+
         serialized = _serialize_event(event)
         self.assertEqual(serialized["user_id"], self.user.id)
         self.assertIsNone(serialized["user"])
@@ -605,7 +621,7 @@ class PermissionAuditTests(TransactionTestCase):
     def test_audit_event_serialization_includes_timestamp(self) -> None:
         """Test event serialization includes timestamp."""
         from general_manager.permission.audit import _serialize_event
-        
+
         event = PermissionAuditEvent(
             action="update",
             attributes=("field",),
@@ -613,25 +629,29 @@ class PermissionAuditTests(TransactionTestCase):
             user=self.user,
             manager="TestManager",
         )
-        
+
         serialized = _serialize_event(event)
         self.assertIn("timestamp", serialized)
         self.assertIsNotNone(serialized["timestamp"])
 
     def test_configure_audit_logger_from_settings_callable(self) -> None:
         """Test configure from settings with callable that returns logger."""
+
         class DummySettings:
-            AUDIT_LOGGER = lambda: DummyAuditLogger()
-        
+            @staticmethod
+            def AUDIT_LOGGER() -> DummyAuditLogger:
+                return DummyAuditLogger()
+
         configure_audit_logger_from_settings(DummySettings)
         logger = get_audit_logger()
         self.assertIsInstance(logger, DummyAuditLogger)
 
     def test_configure_audit_logger_from_settings_class(self) -> None:
         """Test configure from settings with class (not instance)."""
+
         class DummySettings:
             AUDIT_LOGGER = DummyAuditLogger
-        
+
         configure_audit_logger_from_settings(DummySettings)
         logger = get_audit_logger()
         self.assertIsInstance(logger, DummyAuditLogger)
@@ -644,7 +664,7 @@ class PermissionAuditTests(TransactionTestCase):
             batch_size=1,
             flush_interval=0.1,
         )
-        
+
         self.assertEqual(logger.table_name, custom_table)
         self.assertEqual(logger.model._meta.db_table, custom_table)
 
@@ -657,9 +677,14 @@ class PermissionAuditTests(TransactionTestCase):
             logger._batch_size = 1
             logger._flush_interval = 0.1
             logger._use_worker = False
-            logger._closed = type("Event", (), {"is_set": (lambda self: False)})()
+
+            class _ClosedEvent:
+                def is_set(self) -> bool:
+                    return False
+
+            logger._closed = _ClosedEvent()
             logger._path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             event = PermissionAuditEvent(
                 action="read",
                 attributes=("field",),
@@ -669,6 +694,6 @@ class PermissionAuditTests(TransactionTestCase):
             )
             # In no-worker mode, _handle_batch is called directly
             logger._handle_batch([event])
-            
+
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)

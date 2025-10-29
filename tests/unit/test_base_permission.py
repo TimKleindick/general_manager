@@ -364,7 +364,7 @@ class BasePermissionTests(TestCase):
         """Test _is_superuser helper method."""
         regular_permission = DummyPermission(self.dummy_instance, self.user)
         superuser_permission = DummyPermission(self.dummy_instance, self.superuser)
-        
+
         self.assertFalse(regular_permission._is_superuser())
         self.assertTrue(superuser_permission._is_superuser())
 
@@ -376,22 +376,22 @@ class BasePermissionTests(TestCase):
     def test_check_create_permission_with_multiple_errors(self) -> None:
         """Test check_create_permission aggregates multiple errors."""
         from general_manager.permission.base_permission import PermissionCheckError
-        
+
         DummyPermission.create_permissions = {
             "field1": "dummy:deny",
             "field2": "dummy:deny",
             "field3": "dummy:pass",
         }
-        
+
         dummy_manager = type("DummyManager", (), {})
-        
+
         with self.assertRaises(PermissionCheckError) as ctx:
             DummyPermission.check_create_permission(
                 {"field1": "v1", "field2": "v2", "field3": "v3"},
                 dummy_manager,
                 self.dummy_user,
             )
-        
+
         error_str = str(ctx.exception)
         self.assertIn("field1", error_str)
         self.assertIn("field2", error_str)
@@ -400,10 +400,10 @@ class BasePermissionTests(TestCase):
     def test_check_update_permission_with_superuser(self) -> None:
         """Test check_update_permission bypasses checks for superuser."""
         DummyPermission.update_permissions = {"field": "dummy:deny"}
-        
+
         old_instance = Mock()
         old_instance.__class__.__name__ = "TestManager"
-        
+
         with patch(
             "general_manager.permission.base_permission.PermissionDataManager.for_update"
         ) as mock_for_update:
@@ -416,11 +416,11 @@ class BasePermissionTests(TestCase):
     def test_check_delete_permission_with_superuser(self) -> None:
         """Test check_delete_permission bypasses checks for superuser."""
         DummyPermission.delete_permissions = {"field": "dummy:deny"}
-        
+
         manager_instance = Mock()
         manager_instance.__class__.__name__ = "TestManager"
-        manager_instance.__dict__ = {"field": "value"}
-        
+        manager_instance.__dict__.update({"field": "value"})
+
         with patch(
             "general_manager.permission.base_permission.PermissionDataManager"
         ) as mock_permission_manager:
@@ -432,7 +432,7 @@ class BasePermissionTests(TestCase):
         """Test get_user_with_id resolves user by primary key."""
         User = get_user_model()
         user = User.objects.create_user(username="pk_test_user")
-        
+
         resolved = BasePermission.get_user_with_id(user.pk)
         self.assertEqual(resolved.id, user.id)
         self.assertEqual(resolved.username, "pk_test_user")
@@ -455,10 +455,10 @@ class BasePermissionTests(TestCase):
     def test_permission_check_error_message_format(self) -> None:
         """Test PermissionCheckError message format."""
         from general_manager.permission.base_permission import PermissionCheckError
-        
+
         errors = ["Error 1", "Error 2"]
         exc = PermissionCheckError(self.dummy_user, errors)
-        
+
         msg = str(exc)
         self.assertIn("Permission denied", msg)
         self.assertIn("anonymous", msg)
@@ -477,7 +477,7 @@ class BasePermissionTests(TestCase):
             "field1": "dummy:allow",
             "field2": "dummy:allow",
         }
-        
+
         result = self.permission_obj.get_permission_filter()
         self.assertEqual(len(result), 2)
         for filter_dict in result:
@@ -488,7 +488,7 @@ class BasePermissionTests(TestCase):
         """Test validate_permission_string with single permission."""
         result = self.permission_obj.validate_permission_string("dummy:pass")
         self.assertTrue(result)
-        
+
         result = self.permission_obj.validate_permission_string("dummy:fail")
         self.assertFalse(result)
 
@@ -496,10 +496,10 @@ class BasePermissionTests(TestCase):
         """Test validate_permission_string with ANDed permissions."""
         result = self.permission_obj.validate_permission_string("dummy:pass&dummy:pass")
         self.assertTrue(result)
-        
+
         result = self.permission_obj.validate_permission_string("dummy:pass&dummy:fail")
         self.assertFalse(result)
-        
+
         result = self.permission_obj.validate_permission_string("dummy:fail&dummy:fail")
         self.assertFalse(result)
 
@@ -507,16 +507,16 @@ class BasePermissionTests(TestCase):
         """Test superuser receives empty filter from _get_permission_filter."""
         DummyPermission.read_permissions = {"field": "dummy:allow"}
         superuser_permission = DummyPermission(self.dummy_instance, self.superuser)
-        
+
         result = superuser_permission._get_permission_filter("dummy:allow")
         self.assertEqual(result, {"filter": {}, "exclude": {}})
 
     def test_check_create_permission_with_empty_manager_name(self) -> None:
         """Test check_create_permission handles manager without __name__."""
         DummyPermission.create_permissions = {}
-        
+
         dummy_manager = type("", (), {})  # No __name__
-        
+
         # Should not raise
         DummyPermission.check_create_permission(
             {"field": "value"}, dummy_manager, self.dummy_user
@@ -525,22 +525,24 @@ class BasePermissionTests(TestCase):
     def test_check_update_permission_logs_user_id(self) -> None:
         """Test check_update_permission includes user_id in logs."""
         DummyPermission.update_permissions = {"field": "dummy:deny"}
-        
+
         User = get_user_model()
         user = User.objects.create_user(
-            username="log_test_user",
-            password=get_random_string(12)
+            username="log_test_user", password=get_random_string(12)
         )
-        
+
         old_instance = Mock()
         old_instance.__class__.__name__ = "TestManager"
-        
+
         with patch(
             "general_manager.permission.base_permission.PermissionDataManager.for_update"
         ) as mock_for_update:
-            mock_for_update.return_value = PermissionDataManager({"field": "value"}, None)
-            
+            mock_for_update.return_value = PermissionDataManager(
+                {"field": "value"}, None
+            )
+
             from general_manager.permission.base_permission import PermissionCheckError
+
             with self.assertRaises(PermissionCheckError):
                 DummyPermission.check_update_permission(
                     {"field": "value"}, old_instance, user
@@ -549,15 +551,17 @@ class BasePermissionTests(TestCase):
     def test_check_delete_permission_with_complex_instance(self) -> None:
         """Test check_delete_permission with instance having multiple attributes."""
         DummyPermission.delete_permissions = {}
-        
+
         manager_instance = Mock()
         manager_instance.__class__.__name__ = "ComplexManager"
-        manager_instance.__dict__ = {
-            "field1": "value1",
-            "field2": "value2",
-            "field3": "value3",
-        }
-        
+        manager_instance.__dict__.update(
+            {
+                "field1": "value1",
+                "field2": "value2",
+                "field3": "value3",
+            }
+        )
+
         with patch(
             "general_manager.permission.base_permission.PermissionDataManager"
         ) as mock_permission_manager:
@@ -579,16 +583,14 @@ class BasePermissionTests(TestCase):
         DummyPermission.read_permissions = {}
         DummyPermission.update_permissions = {}
         DummyPermission.delete_permissions = {}
-        
+
         for action in ["create", "read", "update", "delete"]:
             self.assertTrue(self.permission_obj.check_permission(action, "any_field"))
 
     def test_permission_filter_with_list_of_permissions(self) -> None:
         """Test get_permission_filter when permission value is a list."""
-        DummyPermission.read_permissions = {
-            "field": ["dummy:allow", "dummy:allow"]
-        }
-        
+        DummyPermission.read_permissions = {"field": ["dummy:allow", "dummy:allow"]}
+
         result = self.permission_obj.get_permission_filter()
         # Should have two filter entries for the list
         self.assertEqual(len(result), 2)
@@ -603,7 +605,7 @@ class BasePermissionTests(TestCase):
         )
         user.is_staff = True
         user.save()
-        
+
         resolved = BasePermission.get_user_with_id(user.pk)
         self.assertEqual(resolved.username, "attr_test")
         self.assertEqual(resolved.email, "attr@test.com")
@@ -618,7 +620,7 @@ class BasePermissionTests(TestCase):
     def test_check_create_permission_with_none_manager(self) -> None:
         """Test check_create_permission with None manager."""
         DummyPermission.create_permissions = {}
-        
+
         # Should handle None manager gracefully
         DummyPermission.check_create_permission(
             {"field": "value"}, None, self.dummy_user
@@ -627,6 +629,6 @@ class BasePermissionTests(TestCase):
     def test_permission_check_error_inherits_from_permission_error(self) -> None:
         """Test PermissionCheckError is a PermissionError subclass."""
         from general_manager.permission.base_permission import PermissionCheckError
-        
+
         exc = PermissionCheckError(self.dummy_user, ["error"])
         self.assertIsInstance(exc, PermissionError)

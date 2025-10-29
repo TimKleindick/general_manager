@@ -339,14 +339,14 @@ class ManagerBasedPermissionTests(TestCase):
     def test_describe_permissions_for_create(self) -> None:
         """Test describe_permissions returns correct permissions for create action."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         result = permission.describe_permissions("create", "any_attribute")
         self.assertIn("isAuthenticated", result)
 
     def test_describe_permissions_for_specific_attribute(self) -> None:
         """Test describe_permissions includes attribute-specific permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         result = permission.describe_permissions("create", "specific_attribute")
         self.assertIn("isAuthenticated", result)  # Base permission
         self.assertIn("isAdmin", result)  # Attribute-specific permission
@@ -356,17 +356,17 @@ class ManagerBasedPermissionTests(TestCase):
         based_on_permission = Mock()
         based_on_permission.describe_permissions.return_value = ("basedOnPerm",)
         self.mock_check.return_value = based_on_permission
-        
+
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         result = permission.describe_permissions("read", "any_attribute")
-        
+
         self.assertIn("public", result)
         self.assertIn("basedOnPerm", result)
 
     def test_describe_permissions_for_all_actions(self) -> None:
         """Test describe_permissions works for all CRUD actions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         for action in ["create", "read", "update", "delete"]:
             result = permission.describe_permissions(action, "test_attr")
             self.assertIsInstance(result, tuple)
@@ -374,9 +374,10 @@ class ManagerBasedPermissionTests(TestCase):
 
     def test_init_with_empty_permissions(self) -> None:
         """Test initialization when class has no explicit permissions defined."""
+
         class EmptyPermission(ManagerBasedPermission):
             pass
-        
+
         permission = EmptyPermission(self.mock_instance, self.user)
         # Should use defaults
         self.assertIsNotNone(permission)
@@ -384,10 +385,10 @@ class ManagerBasedPermissionTests(TestCase):
     def test_based_on_with_none_attribute_value(self) -> None:
         """Test based_on handling when attribute exists but is None."""
         self.mock_instance.manager = None
-        
+
         class TestPermission(ManagerBasedPermission):
             __based_on__ = "manager"
-        
+
         permission = TestPermission(self.mock_instance, self.user)
         # Should reset permissions and continue
         self.assertIsNotNone(permission)
@@ -397,28 +398,30 @@ class ManagerBasedPermissionTests(TestCase):
         from general_manager.permission.manager_based_permission import (
             InvalidBasedOnConfigurationError,
         )
-        
+
         class TestPermission(ManagerBasedPermission):
             __based_on__ = "nonexistent_attribute"
-        
+
+        mock_instance = Mock(spec_set=["allowed_attr"])
+        self.check_patcher.stop()
         with self.assertRaises(InvalidBasedOnConfigurationError):
-            TestPermission(self.mock_instance, self.user)
+            TestPermission(mock_instance, self.user)
 
     def test_based_on_with_invalid_type(self) -> None:
         """Test based_on raises error when attribute is not a GeneralManager."""
         from general_manager.permission.manager_based_permission import (
             InvalidBasedOnTypeError,
         )
-        
+
         self.mock_instance.manager = "not a general manager"
-        
+
         class TestPermission(ManagerBasedPermission):
             __based_on__ = "manager"
-        
+
         # Since we're patching the check, we need to let it through to trigger InvalidBasedOnTypeError
         self.mock_check.side_effect = None
         self.mock_check.side_effect = lambda: None
-        
+
         # The actual __get_based_on_permission will be called
         # but we're mocking it, so we need a different approach
         # Let's just verify the error class exists
@@ -426,13 +429,14 @@ class ManagerBasedPermissionTests(TestCase):
 
     def test_check_permission_with_empty_permissions_list(self) -> None:
         """Test check_permission when permissions list is empty."""
+
         class NoRestrictionsPermission(ManagerBasedPermission):
-            __based_on__ = None
-            __read__ = []
-            __create__ = []
-            __update__ = []
-            __delete__ = []
-        
+            __based_on__: ClassVar[Optional[str]] = None
+            __read__: ClassVar[list[str]] = []
+            __create__: ClassVar[list[str]] = []
+            __update__: ClassVar[list[str]] = []
+            __delete__: ClassVar[list[str]] = []
+
         permission = NoRestrictionsPermission(self.mock_instance, self.user)
         # Empty permissions should allow access
         self.assertTrue(permission.check_permission("read", "test"))
@@ -440,24 +444,24 @@ class ManagerBasedPermissionTests(TestCase):
     def test_check_permission_caching_per_action(self) -> None:
         """Test that permission results are cached per action type."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
-        
+
         # First call should evaluate
         result1 = permission.check_permission("update", "attr1")
         # Second call to same action, different attribute should use cache
         result2 = permission.check_permission("update", "attr2")
-        
+
         self.assertEqual(result1, result2)
         self.assertTrue(result1)
 
     def test_check_permission_no_cache_for_attribute_specific(self) -> None:
         """Test that attribute-specific permissions bypass cache."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         # Generic attribute should use cache
         result1 = permission.check_permission("create", "generic_attr")
         # Specific attribute should have its own check
         result2 = permission.check_permission("create", "specific_attribute")
-        
+
         self.assertTrue(result1)  # isAuthenticated passes
         self.assertFalse(result2)  # isAdmin fails for regular user
 
@@ -466,10 +470,10 @@ class ManagerBasedPermissionTests(TestCase):
         based_on_permission = Mock()
         based_on_permission.get_permission_filter.return_value = []
         self.mock_check.return_value = based_on_permission
-        
+
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         filters = permission.get_permission_filter()
-        
+
         # Should still have filters from __read__
         self.assertGreater(len(filters), 0)
 
@@ -481,19 +485,19 @@ class ManagerBasedPermissionTests(TestCase):
         based_on_permission = Mock()
         based_on_permission.get_permission_filter.return_value = based_on_filters
         self.mock_check.return_value = based_on_permission
-        
+
         class PrefixTestPermission(ManagerBasedPermission):
-            __based_on__ = "manager"
-            __read__ = ["public"]
-        
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["public"]
+
         # Need to set the mock properly
         permission = PrefixTestPermission(self.mock_instance, self.user)
         # Manually set the based_on_permission since we're testing prefixing
         permission._ManagerBasedPermission__based_on_permission = based_on_permission
         permission._ManagerBasedPermission__based_on__ = "manager"
-        
+
         filters = permission.get_permission_filter()
-        
+
         # Check that at least one filter has prefixed keys
         found_prefixed = False
         for f in filters:
@@ -506,7 +510,7 @@ class ManagerBasedPermissionTests(TestCase):
         """Test that __check_specific_permission returns True if any permission passes."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         method = permission._ManagerBasedPermission__check_specific_permission
-        
+
         with patch.object(
             CustomManagerBasedPermission,
             "validate_permission_string",
@@ -519,7 +523,7 @@ class ManagerBasedPermissionTests(TestCase):
         """Test that __check_specific_permission returns False if all fail."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         method = permission._ManagerBasedPermission__check_specific_permission
-        
+
         with patch.object(
             CustomManagerBasedPermission,
             "validate_permission_string",
@@ -531,7 +535,7 @@ class ManagerBasedPermissionTests(TestCase):
     def test_check_permission_combines_base_and_attribute_permissions(self) -> None:
         """Test that both base and attribute permissions must pass."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
-        
+
         # Admin user should pass isAdmin but we'll test combination
         result = permission.check_permission("create", "specific_attribute")
         self.assertTrue(result)  # Both isAuthenticated and isAdmin should pass
@@ -541,7 +545,7 @@ class ManagerBasedPermissionTests(TestCase):
         based_on_permission = Mock()
         based_on_permission.check_permission.return_value = False
         self.mock_check.return_value = based_on_permission
-        
+
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
         # Even admin should be denied if based_on denies
         result = permission.check_permission("update", "any_attribute")
@@ -552,17 +556,18 @@ class ManagerBasedPermissionTests(TestCase):
         from general_manager.permission.manager_based_permission import (
             UnknownPermissionActionError,
         )
-        
+
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         with self.assertRaises(UnknownPermissionActionError):
             permission.check_permission("unknown_action", "attribute")  # type: ignore
 
     def test_permission_defaults_when_based_on_is_set(self) -> None:
         """Test that defaults are empty when based_on is configured."""
+
         class BasedOnPermission(ManagerBasedPermission):
             __based_on__ = "manager"
-        
+
         permission = BasedOnPermission(self.mock_instance, self.user)
         # When based_on is set, defaults should be empty unless explicitly defined
         self.assertIsNotNone(permission)
@@ -570,20 +575,22 @@ class ManagerBasedPermissionTests(TestCase):
     def test_permission_defaults_when_based_on_is_none(self) -> None:
         """Test default permissions when based_on is None."""
         permission = CustomManagerBasedPermissionNoBasis(self.mock_instance, self.user)
-        
+
         # Should have default permissions
-        self.assertIsNotNone(permission._ManagerBasedPermission__read__)
-        self.assertIsNotNone(permission._ManagerBasedPermission__create__)
+        self.assertIsNotNone(permission.__read__)
+        self.assertIsNotNone(permission.__create__)
 
     def test_overall_results_caching(self) -> None:
         """Test that overall results are cached correctly."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
-        
+
         # First call
         permission.check_permission("update", "attr1")
         # Cache should be set
-        self.assertIsNotNone(permission._ManagerBasedPermission__overall_results["update"])
-        
+        self.assertIsNotNone(
+            permission._ManagerBasedPermission__overall_results["update"]
+        )
+
         # Second call should use cache
         result = permission.check_permission("update", "attr2")
         self.assertTrue(result)
@@ -591,10 +598,10 @@ class ManagerBasedPermissionTests(TestCase):
     def test_overall_results_reset_per_action(self) -> None:
         """Test that cache is separate for each action."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         permission.check_permission("create", "attr1")
         permission.check_permission("read", "attr1")
-        
+
         # Each action should have its own cache entry
         results = permission._ManagerBasedPermission__overall_results
         self.assertIn("create", results)
@@ -604,7 +611,7 @@ class ManagerBasedPermissionTests(TestCase):
         """Test that __get_attribute_permissions excludes __ prefixed attributes."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         attr_perms = permission._ManagerBasedPermission__attribute_permissions
-        
+
         # Should not include __based_on__, __read__, etc.
         self.assertNotIn("__based_on__", attr_perms)
         self.assertNotIn("__read__", attr_perms)
@@ -614,21 +621,21 @@ class ManagerBasedPermissionTests(TestCase):
         """Test that __get_attribute_permissions includes public attributes."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         attr_perms = permission._ManagerBasedPermission__attribute_permissions
-        
+
         # Should include specific_attribute
         self.assertIn("specific_attribute", attr_perms)
 
     def test_describe_permissions_for_delete_action(self) -> None:
         """Test describe_permissions returns correct permissions for delete."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         result = permission.describe_permissions("delete", "any_attribute")
         self.assertIn("isAuthenticated&isAdmin", result)
 
     def test_describe_permissions_with_no_attribute_specific(self) -> None:
         """Test describe_permissions when attribute has no specific permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
-        
+
         result = permission.describe_permissions("read", "non_specific_attr")
         # Should only have base permissions
         self.assertIn("public", result)
@@ -637,7 +644,7 @@ class ManagerBasedPermissionTests(TestCase):
     def test_check_permission_with_complex_permission_string(self) -> None:
         """Test check_permission with complex ANDed permissions."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
-        
+
         # __delete__ is "isAuthenticated&isAdmin"
         result = permission.check_permission("delete", "any_attribute")
         self.assertTrue(result)  # Admin should pass both
@@ -652,19 +659,17 @@ class ManagerBasedPermissionTests(TestCase):
     def test_superuser_overall_results_set_to_true(self) -> None:
         """Test that superuser sets overall results to True."""
         permission = CustomManagerBasedPermission(self.mock_instance, self.superuser)
-        
+
         permission.check_permission("create", "any_attribute")
         # Cache should be True for superuser
-        self.assertTrue(
-            permission._ManagerBasedPermission__overall_results["create"]
-        )
+        self.assertTrue(permission._ManagerBasedPermission__overall_results["create"])
 
     def test_invalid_based_on_configuration_error_message(self) -> None:
         """Test InvalidBasedOnConfigurationError has correct message."""
         from general_manager.permission.manager_based_permission import (
             InvalidBasedOnConfigurationError,
         )
-        
+
         exc = InvalidBasedOnConfigurationError("test_attr")
         self.assertIn("test_attr", str(exc))
         self.assertIn("not valid", str(exc))
@@ -674,7 +679,7 @@ class ManagerBasedPermissionTests(TestCase):
         from general_manager.permission.manager_based_permission import (
             InvalidBasedOnTypeError,
         )
-        
+
         exc = InvalidBasedOnTypeError("test_attr")
         self.assertIn("test_attr", str(exc))
         self.assertIn("not a GeneralManager", str(exc))
@@ -684,7 +689,7 @@ class ManagerBasedPermissionTests(TestCase):
         from general_manager.permission.manager_based_permission import (
             UnknownPermissionActionError,
         )
-        
+
         exc = UnknownPermissionActionError("invalid_action")
         self.assertIn("invalid_action", str(exc))
         self.assertIn("not found", str(exc))
@@ -700,15 +705,15 @@ class ManagerBasedPermissionTests(TestCase):
         based_on_permission = Mock()
         based_on_permission.get_permission_filter.return_value = based_on_filters
         self.mock_check.return_value = based_on_permission
-        
+
         class TestPermission(ManagerBasedPermission):
-            __based_on__ = "manager"
-            __read__ = ["public"]
-        
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["public"]
+
         permission = TestPermission(self.mock_instance, self.user)
         permission._ManagerBasedPermission__based_on_permission = based_on_permission
         permission._ManagerBasedPermission__based_on__ = "manager"
-        
+
         filters = permission.get_permission_filter()
         # Should have filters with prefixed exclude keys
         self.assertGreater(len(filters), 0)
