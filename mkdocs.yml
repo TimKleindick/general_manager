@@ -91,7 +91,6 @@ nav:
           - concepts/permission/index.md
           - concepts/permission/manager_based_permission.md
           - concepts/permission/object_level.md
-          # - concepts/permission/examples.md
       - Interfaces:
           - concepts/interfaces/index.md
           - concepts/interfaces/db_based_interface.md
@@ -116,11 +115,13 @@ nav:
       - howto/create_project.md
       - howto/add_model_with_measurement.md
       - howto/add_permission_rule.md
+      - howto/permission_walkthrough.md
       - howto/expose_via_graphql.md
       - howto/cache_dependent_calculation.md
       - howto/write_custom_interface.md
       - howto/factory_bulk_generate.md
       - howto/testing_guides.md
+      - howto/audit_logger_analysis.md
       - howto/migrations_gotchas.md
   - Examples (Cookbook):
       - examples/index.md
@@ -129,6 +130,8 @@ nav:
       - examples/derivatives_groups.md
       - examples/graphql_queries.md
       - examples/permission_patterns.md
+      - examples/permission_cookbook.md
+      - examples/audit_logger_custom.md
   - API-Reference:
       - api/core.md
       - api/measurement.md
