@@ -98,7 +98,9 @@ nav:
           - concepts/interfaces/computed_data_interfaces.md
           - concepts/interfaces/dependency_graph.md
       - Observability:
+          - concepts/observability/index.md
           - concepts/observability/logging.md
+          - concepts/observability/audit_logging.md
       - GraphQL:
           - concepts/graphql/index.md
           - concepts/graphql/schema_autogen.md
