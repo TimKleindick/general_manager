@@ -67,73 +67,61 @@ class CustomManagerBasedPermissionNoBasis(ManagerBasedPermission):
 
 
 class ManagerBasedPermissionTests(TestCase):
-    def setUp(self):
-        # Create a test user
-        """
-        Prepare fixtures for ManagerBasedPermission tests.
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._original_permission_functions = permission_functions.copy()
 
-        Sets up test users (regular and staff admin), an AnonymousUser, a Mock instance, and a DummyPermission used as a potential based-on permission. Stores a copy of the current permission_functions and starts a patch for ManagerBasedPermission.__get_based_on_permission, configuring that patched method to return None by default.
-
-        Attributes set on self:
-            user: regular test User
-            admin_user: staff User
-            anonymous_user: AnonymousUser instance
-            mock_instance: Mock used as the manager/instance under test
-            original_permission_functions: copy of permission_functions prior to test modifications
-            check_patcher: patcher for ManagerBasedPermission.__get_based_on_permission
-            mock_check: started patch object for the patched method
-            mock_permission: DummyPermission instance
-        """
-        user_password = get_random_string(12)
-        self.user = User.objects.create_user(
-            username="testuser", email="test@example.com", password=user_password
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.user = User.objects.create_user(
+            username="testuser",
+            email="test@example.com",
+            password=get_random_string(12),
         )
 
-        # Create an admin user
-        admin_password = get_random_string(12)
-        self.admin_user = User.objects.create_user(
-            username="adminuser", email="admin@example.com", password=admin_password
+        cls.admin_user = User.objects.create_user(
+            username="adminuser",
+            email="admin@example.com",
+            password=get_random_string(12),
         )
-        self.admin_user.is_staff = True
-        self.admin_user.save()
+        cls.admin_user.is_staff = True
+        cls.admin_user.save()
 
-        # Create a superuser
-        superuser_password = get_random_string(12)
-        self.superuser = User.objects.create_superuser(
+        cls.superuser = User.objects.create_superuser(
             username="superuser",
             email="super@example.com",
-            password=superuser_password,
+            password=get_random_string(12),
         )
 
-        # Anonymous user
-        self.anonymous_user = AnonymousUser()
+    def setUp(self):
+        super().setUp()
 
-        # Create a mock instance
+        # Reset permission registry to the original state before each test.
+        permission_functions.clear()
+        permission_functions.update(self._original_permission_functions)
+
+        self.anonymous_user = AnonymousUser()
         self.mock_instance = Mock()
 
-        # Store original permission functions
-        self.original_permission_functions = permission_functions.copy()
-
-        # Set up patches for GeneralManager
-        # We'll patch the entire check in __get_based_on_permission to avoid issubclass issues
+        # Patch __get_based_on_permission to keep tests isolated from real checks.
         self.check_patcher = patch(
             "general_manager.permission.manager_based_permission.ManagerBasedPermission._ManagerBasedPermission__get_based_on_permission"
         )
         self.mock_check = self.check_patcher.start()
+        self.addCleanup(self.check_patcher.stop)
 
-        # Create based_on permissions for different scenarios
         self.mock_permission = DummyPermission(Mock(), self.user)
 
         # By default, return None as the based_on permission
         self.mock_check.return_value = None
 
-    def tearDown(self):
-        # Restore original permission functions
-        permission_functions.clear()
-        permission_functions.update(self.original_permission_functions)
+        self.addCleanup(self._restore_permission_functions)
 
-        # Stop all patches
-        self.check_patcher.stop()
+    def _restore_permission_functions(self):
+        permission_functions.clear()
+        permission_functions.update(self._original_permission_functions)
 
     def test_init(self):
         """Test initialization of ManagerBasedPermission."""

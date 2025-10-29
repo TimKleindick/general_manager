@@ -11,27 +11,28 @@ from general_manager.permission import permission_functions, register_permission
 
 
 class PermissionFunctionsTests(TestCase):
-    def setUp(self) -> None:
+    @classmethod
+    def setUpTestData(cls) -> None:
         User = get_user_model()
-        self.user = User.objects.create_user(
+        cls.user = User.objects.create_user(
             username="active-user",
             email="active@example.com",
             password=get_random_string(12),
         )
-        self.inactive_user = User.objects.create_user(
+        cls.inactive_user = User.objects.create_user(
             username="inactive-user",
             email="inactive@example.com",
             password=get_random_string(12),
             is_active=False,
         )
-        self.admin_user = User.objects.create_user(
+        cls.admin_user = User.objects.create_user(
             username="admin-user",
             email="admin@example.com",
             password=get_random_string(12),
         )
-        self.admin_user.is_staff = True
-        self.admin_user.save()
-        self.anonymous = AnonymousUser()
+        cls.admin_user.is_staff = True
+        cls.admin_user.save()
+        cls.anonymous = AnonymousUser()
 
     def test_matches_requires_config(self) -> None:
         matches = permission_functions["matches"]
