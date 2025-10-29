@@ -7,5 +7,7 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 - [Derivative aggregation](derivatives_groups.md)
 - [GraphQL query patterns](graphql_queries.md)
 - [Permission patterns](permission_patterns.md)
+- [Permission cookbook](permission_cookbook.md)
+- [Custom audit logger](audit_logger_custom.md)
 
 Contributions are welcome—add your own recipes as your project evolves.
