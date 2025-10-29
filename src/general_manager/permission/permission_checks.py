@@ -103,7 +103,7 @@ def _permission_matches(
     _user: AbstractUser | AnonymousUser,
     config: list[str],
 ) -> bool:
-    return bool(len(config) >= 2 and getattr(instance, config[0]) == config[1])
+    return bool(len(config) >= 2 and str(getattr(instance, config[0])) == config[1])
 
 
 @register_permission("isAdmin")
