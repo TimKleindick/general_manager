@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
-from django.contrib.auth.models import AbstractBaseUser, AbstractUser, AnonymousUser
+from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
 
 from general_manager.logging import get_logger
 from general_manager.permission.audit import (
@@ -357,10 +357,7 @@ class BasePermission(ABC):
             raise PermissionNotFoundError(permission)
         permission_filter = permission_functions[permission_function][
             "permission_filter"
-        ](
-            cast(AbstractUser | AnonymousUser, self.request_user),
-            config,
-        )
+        ](self.request_user, config)
         if permission_filter is None:
             return {"filter": {}, "exclude": {}}
         return permission_filter
@@ -380,8 +377,4 @@ class BasePermission(ABC):
         """
         if self._is_superuser():
             return True
-        return validate_permission_string(
-            permission,
-            self.instance,
-            cast(AbstractUser | AnonymousUser, self.request_user),
-        )
+        return validate_permission_string(permission, self.instance, self.request_user)

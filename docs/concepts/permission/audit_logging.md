@@ -73,4 +73,4 @@ class GeneralManagerIntegrationConfig(AppConfig):
 - ``FileAuditLogger`` accepts ``batch_size`` and ``flush_interval`` (seconds) besides the file path.
 - ``DatabaseAuditLogger`` accepts ``using`` (database alias), ``table_name`` (audit table name), ``batch_size`` (events per bulk insert) and ``flush_interval`` (seconds between background flushes).
 
-Implement the :class:`AuditLogger` protocol (`record(event: PermissionAuditEvent) -> None`) and register the logger via :func:`configure_audit_logger` or the settings hook. For asynchronous pipelines (Kafka, Celery, …) batch events to minimise request overhead.
+Implement the `AuditLogger` protocol (`record(event: PermissionAuditEvent) -> None`) and register the logger via `configure_audit_logger()` or the settings hook. For asynchronous pipelines (Kafka, Celery, …) batch events to minimise request overhead.

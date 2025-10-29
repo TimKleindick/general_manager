@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, TYPE_CHECKING, TypedDict, Literal
 
 if TYPE_CHECKING:
-    from django.contrib.auth.models import AbstractUser, AnonymousUser
+    from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
     from general_manager.permission.permission_data_manager import (
         PermissionDataManager,
     )
@@ -13,14 +13,14 @@ if TYPE_CHECKING:
     from general_manager.manager.meta import GeneralManagerMeta
 
 type permission_filter = Callable[
-    [AbstractUser | AnonymousUser, list[str]],
+    [AbstractBaseUser | AnonymousUser, list[str]],
     dict[Literal["filter", "exclude"], dict[str, Any]] | None,
 ]
 
 type permission_method = Callable[
     [
         PermissionDataManager | GeneralManager | GeneralManagerMeta,
-        AbstractUser | AnonymousUser,
+        AbstractBaseUser | AnonymousUser,
         list[str],
     ],
     bool,
@@ -42,7 +42,7 @@ _PERMISSION_ALREADY_REGISTERED_MESSAGE = "Permission function is already registe
 
 
 def _default_permission_filter(
-    _user: AbstractUser | AnonymousUser, _config: list[str]
+    _user: AbstractBaseUser | AnonymousUser, _config: list[str]
 ) -> dict[Literal["filter", "exclude"], dict[str, Any]] | None:
     return None
 
@@ -83,14 +83,14 @@ def register_permission(
 @register_permission("public")
 def _permission_public(
     _instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    _user: AbstractUser | AnonymousUser,
+    _user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
     return True
 
 
 def _matches_permission_filter(
-    _user: AbstractUser | AnonymousUser, config: list[str]
+    _user: AbstractBaseUser | AnonymousUser, config: list[str]
 ) -> dict[Literal["filter", "exclude"], dict[str, Any]] | None:
     if len(config) < 2:
         return None
@@ -100,23 +100,25 @@ def _matches_permission_filter(
 @register_permission("matches", permission_filter=_matches_permission_filter)
 def _permission_matches(
     instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    _user: AbstractUser | AnonymousUser,
+    _user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
-    return bool(len(config) >= 2 and str(getattr(instance, config[0])) == config[1])
+    return bool(
+        len(config) >= 2 and str(getattr(instance, config[0], None)) == config[1]
+    )
 
 
 @register_permission("isAdmin")
 def _permission_is_admin(
     _instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
-    return bool(user.is_staff)
+    return bool(getattr(user, "is_staff", False))
 
 
 def _is_self_permission_filter(
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> dict[Literal["filter", "exclude"], dict[str, Any]] | None:
     return {"filter": {"creator_id": getattr(user, "id", None)}}
@@ -125,7 +127,7 @@ def _is_self_permission_filter(
 @register_permission("isSelf", permission_filter=_is_self_permission_filter)
 def _permission_is_self(
     instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
     return bool(instance.creator == user)  # type: ignore[union-attr]
@@ -134,45 +136,52 @@ def _permission_is_self(
 @register_permission("isAuthenticated")
 def _permission_is_authenticated(
     _instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
-    return bool(user.is_authenticated)
+    return bool(getattr(user, "is_authenticated", False))
 
 
 @register_permission("isActive")
 def _permission_is_active(
     _instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     _config: list[str],
 ) -> bool:
-    return bool(user.is_active)
+    return bool(getattr(user, "is_active", False))
 
 
 @register_permission("hasPermission")
 def _permission_has_permission(
     _instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
-    return bool(config and user.has_perm(config[0]))
+    if not config:
+        return False
+    has_perm = getattr(user, "has_perm", None)
+    if not callable(has_perm):
+        return False
+    return bool(has_perm(config[0]))
 
 
 @register_permission("inGroup")
 def _permission_in_group(
     _instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
-    return bool(
-        config
-        and hasattr(user, "groups")
-        and user.groups.filter(name=config[0]).exists()
-    )
+    if not config:
+        return False
+    group_manager = getattr(user, "groups", None)
+    if group_manager is None or not hasattr(group_manager, "filter"):
+        return False
+    filtered = group_manager.filter(name=config[0])  # type: ignore[attr-defined]
+    return bool(hasattr(filtered, "exists") and filtered.exists())  # type: ignore[call-arg]
 
 
 def _related_user_field_permission_filter(
-    user: AbstractUser | AnonymousUser, config: list[str]
+    user: AbstractBaseUser | AnonymousUser, config: list[str]
 ) -> dict[Literal["filter", "exclude"], dict[str, Any]] | None:
     if not config:
         return None
@@ -188,7 +197,7 @@ def _related_user_field_permission_filter(
 )
 def _permission_related_user_field(
     instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
     if not config:
@@ -198,7 +207,7 @@ def _permission_related_user_field(
 
 
 def _many_to_many_contains_user_permission_filter(
-    user: AbstractUser | AnonymousUser, config: list[str]
+    user: AbstractBaseUser | AnonymousUser, config: list[str]
 ) -> dict[Literal["filter", "exclude"], dict[str, Any]] | None:
     if not config:
         return None
@@ -214,7 +223,7 @@ def _many_to_many_contains_user_permission_filter(
 )
 def _permission_many_to_many_contains_user(
     instance: PermissionDataManager | GeneralManager | GeneralManagerMeta,
-    user: AbstractUser | AnonymousUser,
+    user: AbstractBaseUser | AnonymousUser,
     config: list[str],
 ) -> bool:
     if not config:
