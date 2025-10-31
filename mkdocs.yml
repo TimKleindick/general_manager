@@ -73,7 +73,7 @@ nav:
       - index.md
       - quickstart.md
       - installation.md
-      # - roadmap.md
+      - roadmap.md
       - faq.md
   - Concepts:
       - GeneralManager (Core):
