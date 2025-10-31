@@ -82,18 +82,21 @@ class Invoice(GeneralManager):
 Because the GraphQL decorator emits `ID` inputs for manager arguments, the resolver and the accompanying mutation permission receive the identifier and must instantiate the manager explicitly:
 
 ```python
+from typing import Any
+
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.permission.mutation_permission import MutationPermission
 
 
 class RejectInvoicePermission(MutationPermission):
-    def check(self, kwargs, user):
-        invoice_id = int(kwargs["invoice"])
+    @classmethod
+    def check(cls, data: dict[str, Any], request_user: Any) -> None:
+        invoice_id = int(data["invoice"])
         invoice = Invoice(id=invoice_id)
         if invoice.status != "submitted":
-            self.raise_error("Only submitted invoices can be rejected.")
-        if not user.groups.filter(name="finance_lead").exists():
-            self.raise_error("Only finance leads may reject invoices.")
+            cls.raise_error("Only submitted invoices can be rejected.")
+        if not request_user.groups.filter(name="finance_lead").exists():
+            cls.raise_error("Only finance leads may reject invoices.")
 
 
 @graph_ql_mutation(permission=RejectInvoicePermission)
@@ -109,7 +112,7 @@ def reject_invoice(info, invoice: Invoice, reason: str) -> Invoice:
 ```
 
 - `graph_ql_mutation` inspects the resolver signature and return annotation to build the GraphQL payload; no separate `base_type` configuration is required.
-- `MutationPermission.check` receives the resolver kwargs and request user, so convert IDs into managers before enforcing domain rules.
+- `MutationPermission.check` is a classmethod that receives the mutation data and `request_user`, so convert IDs into managers before enforcing domain rules.
 - Use `raise_error()` to produce a structured GraphQL error with `success=False`.
 - Call `GeneralManager.update` instead of writing to model fields directly; it re-runs permission checks and records history comments when provided.
 
@@ -122,7 +125,6 @@ from general_manager.permission.base_permission import BasePermission, Permissio
 def test_finance_cannot_delete_archived_invoice(finance_user, archived_invoice):
     with pytest.raises(PermissionCheckError):
         BasePermission.check_delete_permission(
-            archived_invoice,
             archived_invoice,
             request_user=finance_user,
         )
