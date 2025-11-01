@@ -1,8 +1,9 @@
 """Database-backed interface implementation for GeneralManager classes."""
 
 from __future__ import annotations
-from typing import Any, Callable, ClassVar, Generic, TYPE_CHECKING, TypeVar, Type, cast
-from django.db import models
+from typing import Any, Callable, ClassVar, Generic, TYPE_CHECKING, Type, TypeVar, cast
+from django.db import models, transaction
+from django.db.models import NOT_PROVIDED
 
 from datetime import datetime, date, time, timedelta
 from django.utils import timezone
@@ -24,19 +25,69 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.interface.database_interface_protocols import (
+    SupportsActivation,
+    SupportsHistory,
+)
 from general_manager.interface.models import (
     GeneralManagerBasisModel,
     GeneralManagerModel,
     get_full_clean_methode,
 )
 from django.contrib.contenttypes.fields import GenericForeignKey
+from simple_history.utils import update_change_reason  # type: ignore
 
 if TYPE_CHECKING:
     from general_manager.rule.rule import Rule
 
-modelsModel = TypeVar("modelsModel", bound=models.Model)
+HistoryModelT = TypeVar("HistoryModelT", bound=models.Model)
+WritableModelT = TypeVar("WritableModelT", bound=models.Model)
 
-MODEL_TYPE = TypeVar("MODEL_TYPE", bound=GeneralManagerBasisModel)
+
+class InvalidFieldValueError(ValueError):
+    """Raised when assigning a value incompatible with the model field."""
+
+    def __init__(self, field_name: str, value: object) -> None:
+        """
+        Initialize an InvalidFieldValueError for a specific model field and value.
+
+        Parameters:
+            field_name (str): Name of the field that received an invalid value.
+            value (object): The invalid value provided; included in the exception message.
+
+        """
+        super().__init__(f"Invalid value for {field_name}: {value}.")
+
+
+class InvalidFieldTypeError(TypeError):
+    """Raised when assigning a value with an unexpected type."""
+
+    def __init__(self, field_name: str, error: Exception) -> None:
+        """
+        Initialize the InvalidFieldTypeError with the field name and the originating exception.
+
+        Parameters:
+            field_name (str): Name of the model field that received an unexpected type.
+            error (Exception): The original exception or error encountered for the field.
+
+        Notes:
+            The exception's message is formatted as "Type error for {field_name}: {error}."
+        """
+        super().__init__(f"Type error for {field_name}: {error}.")
+
+
+class UnknownFieldError(ValueError):
+    """Raised when keyword arguments reference fields not present on the model."""
+
+    def __init__(self, field_name: str, model_name: str) -> None:
+        """
+        Initialize an UnknownFieldError indicating a field name is not present on a model.
+
+        Parameters:
+            field_name (str): The field name that was not found on the model.
+            model_name (str): The name of the model in which the field was expected.
+        """
+        super().__init__(f"{field_name} does not exist in {model_name}.")
 
 
 class DuplicateFieldNameError(ValueError):
@@ -51,10 +102,10 @@ class DuplicateFieldNameError(ValueError):
         super().__init__("Field name already exists.")
 
 
-class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
+class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     """Interface implementation that persists data using Django ORM models."""
 
-    _model: Type[MODEL_TYPE]
+    _model: Type[HistoryModelT]
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
     database: ClassVar[str | None] = None
 
@@ -66,7 +117,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         return getattr(cls, "database", None)
 
     @classmethod
-    def _get_manager(cls) -> models.Manager[MODEL_TYPE]:
+    def _get_manager(cls) -> models.Manager[HistoryModelT]:
         """
         Return the model manager configured to operate on the selected database.
         """
@@ -74,14 +125,14 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         database_alias = cls._get_database_alias()
         if database_alias:
             manager = manager.db_manager(database_alias)
-        return cast(models.Manager[MODEL_TYPE], manager)
+        return cast(models.Manager[HistoryModelT], manager)
 
     @classmethod
-    def _get_queryset(cls) -> models.QuerySet[MODEL_TYPE]:
+    def _get_queryset(cls) -> models.QuerySet[HistoryModelT]:
         """
         Return a queryset initialised against the configured database alias.
         """
-        return cast(models.QuerySet[MODEL_TYPE], cls._get_manager().all())
+        return cast(models.QuerySet[HistoryModelT], cls._get_manager().all())
 
     def __init__(
         self,
@@ -102,9 +153,9 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
-        self._instance: MODEL_TYPE = self.get_data(search_date)
+        self._instance: HistoryModelT = self.get_data(search_date)
 
-    def get_data(self, search_date: datetime | None = None) -> MODEL_TYPE:
+    def get_data(self, search_date: datetime | None = None) -> HistoryModelT:
         """
         Fetch the underlying model instance, optionally as of a historical date.
 
@@ -115,7 +166,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             MODEL_TYPE: Current or historical instance matching the primary key.
         """
         manager = self.__class__._get_manager()
-        instance = cast(MODEL_TYPE, manager.get(pk=self.pk))
+        instance = cast(HistoryModelT, manager.get(pk=self.pk))
         if search_date is not None:
             # Normalize to aware datetime if needed
             if timezone.is_naive(search_date):
@@ -165,7 +216,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         queryset = cls._get_queryset().filter(**kwargs)
 
         return DatabaseBucket(
-            queryset,
+            cast(models.QuerySet[models.Model], queryset),
             cls._parent_class,
             cls.__create_filter_definitions(**kwargs),
         )
@@ -185,7 +236,7 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         queryset = cls._get_queryset().exclude(**kwargs)
 
         return DatabaseBucket(
-            queryset,
+            cast(models.QuerySet[models.Model], queryset),
             cls._parent_class,
             cls.__create_filter_definitions(**kwargs),
         )
@@ -208,24 +259,25 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     @classmethod
     def get_historical_record(
-        cls, instance: MODEL_TYPE, search_date: datetime | None = None
-    ) -> MODEL_TYPE | None:
+        cls, instance: HistoryModelT, search_date: datetime | None = None
+    ) -> HistoryModelT | None:
         """
         Retrieves the most recent historical record of a model instance at or before a specified date.
 
         Parameters:
-            instance (MODEL_TYPE): Model instance whose history is queried.
+            instance (HistoryModelT): Model instance whose history is queried.
             search_date (datetime | None): Cutoff datetime used to select the historical record.
 
         Returns:
-            MODEL_TYPE | None: Historical instance as of the specified date, if available.
+            HistoryModelT | None: Historical instance as of the specified date, if available.
         """
-        history_manager = instance.history  # type: ignore[attr-defined]
+        history_source = cast(SupportsHistory, instance)
+        history_manager = history_source.history
         database_alias = cls._get_database_alias()
         if database_alias:
-            history_manager = history_manager.using(database_alias)  # type: ignore[attr-defined]
-        historical = history_manager.filter(history_date__lte=search_date).last()  # type: ignore[attr-defined]
-        return cast(MODEL_TYPE | None, historical)
+            history_manager = history_manager.using(database_alias)
+        historical = history_manager.filter(history_date__lte=search_date).last()
+        return cast(HistoryModelT | None, historical)
 
     @classmethod
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
@@ -645,3 +697,247 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         ):
             return field.related_model._general_manager_class  # type: ignore
         return type(field)
+
+
+class MissingActivationSupportError(TypeError):
+    """Raised when a model does not provide activation support."""
+
+    def __init__(self, model_name: str) -> None:
+        super().__init__(f"{model_name} must define an 'is_active' attribute.")
+
+
+class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
+    """DB-based interface with write capabilities for models supporting persistence."""
+
+    _model: Type[WritableModelT]
+    _interface_type = "database"
+
+    @classmethod
+    def create(
+        cls, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        """
+        Create a new model instance using the provided field values.
+
+        Parameters:
+            creator_id (int | None): ID of the user to record as the change author, or None to leave unset.
+            history_comment (str | None): Optional comment to attach to the instance history.
+            **kwargs: Field values used to populate the model; many-to-many relations may be provided as `<field>_id_list`.
+
+        Returns:
+            dict[str, Any]: Primary key of the newly created instance wrapped in a dict.
+
+        Raises:
+            UnknownFieldError: If kwargs contain names that do not correspond to model fields.
+        """
+        model_cls = cls._model
+        cls._check_for_invalid_kwargs(
+            cast(Type[models.Model], model_cls), kwargs=kwargs
+        )
+        kwargs, many_to_many_kwargs = cls._sort_kwargs(
+            cast(Type[models.Model], model_cls), kwargs
+        )
+        instance = cls.__set_attr_for_write(model_cls(), kwargs)
+        pk = cls._save_with_history(instance, creator_id, history_comment)
+        cls.__set_many_to_many_attributes(instance, many_to_many_kwargs)
+        return {"id": pk}
+
+    def update(
+        self, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        """
+        Update this instance with the provided field values.
+
+        Parameters:
+            creator_id (int | None): ID of the user recording the change; used to set `changed_by_id`.
+            history_comment (str | None): Optional comment to attach to the instance's change history.
+            **kwargs (Any): Field names and values to apply to the instance; many-to-many updates may be supplied using the `<relation>_id_list` convention.
+
+        Returns:
+            dict[str, Any]: Primary key of the updated instance wrapped in a dict.
+
+        Raises:
+            UnknownFieldError: If any provided kwarg does not correspond to a model field.
+        """
+        model_cls = self._model
+        self._check_for_invalid_kwargs(
+            cast(Type[models.Model], model_cls), kwargs=kwargs
+        )
+        kwargs, many_to_many_kwargs = self._sort_kwargs(
+            cast(Type[models.Model], model_cls), kwargs
+        )
+        manager = self.__class__._get_manager()
+        instance = self.__set_attr_for_write(manager.get(pk=self.pk), kwargs)
+        pk = self._save_with_history(instance, creator_id, history_comment)
+        self.__set_many_to_many_attributes(instance, many_to_many_kwargs)
+        return {"id": pk}
+
+    def deactivate(
+        self, creator_id: int | None, history_comment: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Mark the current model instance as inactive and record the change.
+
+        Parameters:
+            creator_id (int | None): Identifier of the user performing the action.
+            history_comment (str | None): Optional comment stored in the history log.
+
+        Returns:
+            dict[str, Any]: Primary key of the deactivated instance wrapped in a dict.
+        """
+        manager = self.__class__._get_manager()
+        instance = manager.get(pk=self.pk)
+        if not isinstance(instance, SupportsActivation):
+            raise MissingActivationSupportError(instance.__class__.__name__)
+        instance.is_active = False
+        if history_comment:
+            history_comment = f"{history_comment} (deactivated)"
+        else:
+            history_comment = "Deactivated"
+        return {"id": self._save_with_history(instance, creator_id, history_comment)}
+
+    @staticmethod
+    def __set_many_to_many_attributes(
+        instance: WritableModelT, many_to_many_kwargs: dict[str, list[Any]]
+    ) -> WritableModelT:
+        """
+        Set many-to-many relationship values on the provided instance.
+
+        Parameters:
+            instance (WritableModelT): Model instance whose relations are updated.
+            many_to_many_kwargs (dict[str, list[Any]]): Mapping of relation names to values.
+
+        Returns:
+            WritableModelT: Updated instance.
+        """
+        from general_manager.manager.general_manager import GeneralManager
+
+        for key, value in many_to_many_kwargs.items():
+            if value is None or value is NOT_PROVIDED:
+                continue
+            field_name = key.removesuffix("_id_list")
+            if isinstance(value, list) and all(
+                isinstance(v, GeneralManager) for v in value
+            ):
+                value = [
+                    v.identification["id"] if hasattr(v, "identification") else v
+                    for v in value
+                ]
+            getattr(instance, field_name).set(value)
+
+        return instance
+
+    @staticmethod
+    def __set_attr_for_write(
+        instance: WritableModelT,
+        kwargs: dict[str, Any],
+    ) -> WritableModelT:
+        """
+        Populate non-relational fields on an instance and prepare values for writing.
+
+        Converts any GeneralManager value to its `id` and appends `_id` to the attribute name, skips values equal to `NOT_PROVIDED`, sets each attribute on the instance, and translates underlying `ValueError`/`TypeError` from attribute assignment into `InvalidFieldValueError` and `InvalidFieldTypeError` respectively.
+
+        Parameters:
+            instance (WritableModelT): The model instance to modify.
+            kwargs (dict[str, Any]): Mapping of attribute names to values to apply.
+
+        Returns:
+            WritableModelT: The same instance with attributes updated.
+
+        Raises:
+            InvalidFieldValueError: If setting an attribute raises a `ValueError`.
+            InvalidFieldTypeError: If setting an attribute raises a `TypeError`.
+        """
+        from general_manager.manager.general_manager import GeneralManager
+
+        for key, value in kwargs.items():
+            if isinstance(value, GeneralManager):
+                value = value.identification["id"]
+                key = f"{key}_id"
+            if value is NOT_PROVIDED:
+                continue
+            try:
+                setattr(instance, key, value)
+            except ValueError as error:
+                raise InvalidFieldValueError(key, value) from error
+            except TypeError as error:
+                raise InvalidFieldTypeError(key, error) from error
+        return instance
+
+    @staticmethod
+    def _check_for_invalid_kwargs(
+        model: Type[models.Model], kwargs: dict[str, Any]
+    ) -> None:
+        """
+        Validate that each key in `kwargs` corresponds to an attribute or field on `model`.
+
+        Parameters:
+            model (type[models.Model]): The Django model class to validate against.
+            kwargs (dict[str, Any]): Mapping of keyword names to values; keys ending with `_id_list` are validated after stripping that suffix.
+
+        Raises:
+            UnknownFieldError: If any provided key (after removing a trailing `_id_list`) does not match a model attribute or field name.
+        """
+        attributes = vars(model)
+        field_names = {f.name for f in model._meta.get_fields()}
+        for key in kwargs:
+            temp_key = key.split("_id_list")[0]  # Remove '_id_list' suffix
+            if temp_key not in attributes and temp_key not in field_names:
+                raise UnknownFieldError(key, model.__name__)
+
+    @staticmethod
+    def _sort_kwargs(
+        model: Type[models.Model], kwargs: dict[Any, Any]
+    ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
+        """
+        Separate provided kwargs into simple model-field arguments and many-to-many relation arguments.
+
+        This function removes keys targeting many-to-many relations from the input kwargs and returns them separately. A many-to-many key is identified by the suffix "_id_list" whose base name matches a many-to-many field on the given model.
+
+        Parameters:
+            model (Type[models.Model]): Django model whose many-to-many field names are inspected.
+            kwargs (dict[Any, Any]): Mapping of keyword arguments to partition; keys matching many-to-many relations are removed in-place.
+
+        Returns:
+            tuple[dict[str, Any], dict[str, list[Any]]]: A tuple where the first element is the original kwargs dict with many-to-many keys removed, and the second element maps the removed many-to-many keys to their values.
+        """
+        many_to_many_fields = [field.name for field in model._meta.many_to_many]
+        many_to_many_kwargs: dict[Any, Any] = {}
+        for key, _value in list(kwargs.items()):
+            many_to_many_key = key.split("_id_list")[0]
+            if many_to_many_key in many_to_many_fields:
+                many_to_many_kwargs[key] = kwargs.pop(key)
+        return kwargs, many_to_many_kwargs
+
+    @classmethod
+    @transaction.atomic
+    def _save_with_history(
+        cls,
+        instance: WritableModelT,
+        creator_id: int | None,
+        history_comment: str | None,
+    ) -> int:
+        """
+        Atomically saves a model instance with validation and optional history comment.
+
+        Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within a database transaction.
+
+        Returns:
+            The primary key of the saved instance.
+        """
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            instance._state.db = database_alias  # type: ignore[attr-defined]
+        try:
+            instance.changed_by_id = creator_id  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        instance.full_clean()
+        if database_alias:
+            instance.save(using=database_alias)
+        else:
+            instance.save()
+        if history_comment:
+            update_change_reason(instance, history_comment)
+
+        return instance.pk
