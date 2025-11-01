@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import (
     Any,
     Type,
-    cast,
 )
 from django.db import models, transaction
 from simple_history.utils import update_change_reason  # type: ignore
@@ -85,7 +84,7 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             UnknownFieldError: If kwargs contain names that do not correspond to model fields.
             ValidationError: If model validation fails during save.
         """
-        model_cls = cast(type[GeneralManagerModel], cls._model)
+        model_cls = cls._model
         cls._check_for_invalid_kwargs(model_cls, kwargs=kwargs)
         kwargs, many_to_many_kwargs = cls._sort_kwargs(model_cls, kwargs)
         instance = cls.__set_attr_for_write(model_cls(), kwargs)
@@ -111,10 +110,11 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
             UnknownFieldError: If any provided kwarg does not correspond to a model field.
             ValidationError: If model validation fails during save.
         """
-        model_cls = cast(type[GeneralManagerModel], self._model)
+        model_cls = self._model
         self._check_for_invalid_kwargs(model_cls, kwargs=kwargs)
         kwargs, many_to_many_kwargs = self._sort_kwargs(model_cls, kwargs)
-        instance = self.__set_attr_for_write(model_cls.objects.get(pk=self.pk), kwargs)
+        manager = self.__class__._get_manager()
+        instance = self.__set_attr_for_write(manager.get(pk=self.pk), kwargs)
         pk = self._save_with_history(instance, creator_id, history_comment)
         self.__set_many_to_many_attributes(instance, many_to_many_kwargs)
         return {"id": pk}
@@ -132,8 +132,8 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         Returns:
             int: Primary key of the deactivated instance.
         """
-        model_cls = cast(type[GeneralManagerModel], self._model)
-        instance = model_cls.objects.get(pk=self.pk)
+        manager = self.__class__._get_manager()
+        instance = manager.get(pk=self.pk)
         instance.is_active = False
         if history_comment:
             history_comment = f"{history_comment} (deactivated)"
@@ -270,9 +270,18 @@ class DatabaseInterface(DBBasedInterface[GeneralManagerModel]):
         Returns:
             The primary key of the saved instance.
         """
-        instance.changed_by_id = creator_id
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            instance._state.db = database_alias  # type: ignore[attr-defined]
+        try:
+            instance.changed_by_id = creator_id
+        except AttributeError:
+            pass
         instance.full_clean()
-        instance.save()
+        if database_alias:
+            instance.save(using=database_alias)
+        else:
+            instance.save()
         if history_comment:
             update_change_reason(instance, history_comment)
 

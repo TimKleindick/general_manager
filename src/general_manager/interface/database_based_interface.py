@@ -56,6 +56,32 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
 
     _model: Type[MODEL_TYPE]
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+    database: ClassVar[str | None] = None
+
+    @classmethod
+    def _get_database_alias(cls) -> str | None:
+        """
+        Return the configured database alias, if any, for ORM operations.
+        """
+        return getattr(cls, "database", None)
+
+    @classmethod
+    def _get_manager(cls) -> models.Manager[MODEL_TYPE]:
+        """
+        Return the model manager configured to operate on the selected database.
+        """
+        manager = cls._model._default_manager
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            manager = manager.db_manager(database_alias)
+        return cast(models.Manager[MODEL_TYPE], manager)
+
+    @classmethod
+    def _get_queryset(cls) -> models.QuerySet[MODEL_TYPE]:
+        """
+        Return a queryset initialised against the configured database alias.
+        """
+        return cast(models.QuerySet[MODEL_TYPE], cls._get_manager().all())
 
     def __init__(
         self,
@@ -88,8 +114,8 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns:
             MODEL_TYPE: Current or historical instance matching the primary key.
         """
-        model = self._model
-        instance = cast(MODEL_TYPE, model.objects.get(pk=self.pk))
+        manager = self.__class__._get_manager()
+        instance = cast(MODEL_TYPE, manager.get(pk=self.pk))
         if search_date is not None:
             # Normalize to aware datetime if needed
             if timezone.is_naive(search_date):
@@ -136,9 +162,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         """
 
         kwargs = cls.__parse_kwargs(**kwargs)
+        queryset = cls._get_queryset().filter(**kwargs)
 
         return DatabaseBucket(
-            cls._model.objects.filter(**kwargs),
+            queryset,
             cls._parent_class,
             cls.__create_filter_definitions(**kwargs),
         )
@@ -155,9 +182,10 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
             DatabaseBucket: Bucket wrapping the excluded queryset.
         """
         kwargs = cls.__parse_kwargs(**kwargs)
+        queryset = cls._get_queryset().exclude(**kwargs)
 
         return DatabaseBucket(
-            cls._model.objects.exclude(**kwargs),
+            queryset,
             cls._parent_class,
             cls.__create_filter_definitions(**kwargs),
         )
@@ -192,7 +220,11 @@ class DBBasedInterface(InterfaceBase, Generic[MODEL_TYPE]):
         Returns:
             MODEL_TYPE | None: Historical instance as of the specified date, if available.
         """
-        historical = instance.history.filter(history_date__lte=search_date).last()  # type: ignore[attr-defined]
+        history_manager = instance.history  # type: ignore[attr-defined]
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            history_manager = history_manager.using(database_alias)  # type: ignore[attr-defined]
+        historical = history_manager.filter(history_date__lte=search_date).last()  # type: ignore[attr-defined]
         return cast(MODEL_TYPE | None, historical)
 
     @classmethod
