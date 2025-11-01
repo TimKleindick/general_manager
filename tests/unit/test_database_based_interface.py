@@ -107,8 +107,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Cleans up PersonModel data and restores the Django app registry after the tests.
         """
-        PersonModel.tags.through.objects.all().delete()
-        PersonModel.objects.all().delete()
+        with connection.schema_editor() as schema:
+            schema.delete_model(PersonModel)
+
         app_models = cls._app_config.models
         registry_models = apps.all_models.setdefault("general_manager", {})
 
@@ -957,7 +958,8 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         Cleans up test data.
         """
         WritableInterfaceTestModel.objects.all().delete()
-        User.objects.all().delete()
+        # Users are flushed automatically by TransactionTestCase; manual deletion can clash
+        # with temporary models removed in other tests.
 
     def test_create_with_basic_fields(self):
         """

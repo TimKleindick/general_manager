@@ -2,6 +2,7 @@ from django.test import TransactionTestCase
 from django.db import models, connection
 from general_manager.factory.auto_factory import AutoFactory
 from typing import Any, Iterable
+from unittest.mock import patch
 
 
 class DummyInterface:
@@ -65,6 +66,11 @@ class AutoFactoryTestCase(TransactionTestCase):
         Creates database tables for DummyModel and DummyModel2 before running any tests in the test case.
         """
         super().setUpClass()
+        cls._wrap_patcher = patch(
+            "general_manager.factory.auto_factory.AutoFactory._wrap_generated_objects",
+            side_effect=lambda generated: generated,
+        )
+        cls._wrap_patcher.start()
         with connection.schema_editor() as schema:
             schema.create_model(DummyModel)
             schema.create_model(DummyModel2)
@@ -75,6 +81,7 @@ class AutoFactoryTestCase(TransactionTestCase):
         Deletes the database tables for DummyModel and DummyModel2 after all tests in the class have run.
         """
         super().tearDownClass()
+        cls._wrap_patcher.stop()
         with connection.schema_editor() as schema:
             schema.delete_model(DummyModel)
             schema.delete_model(DummyModel2)
@@ -99,6 +106,7 @@ class AutoFactoryTestCase(TransactionTestCase):
         """
         Tests that the factory creates and saves a DummyModel instance with non-null fields.
         """
+
         instance = self.factory_class.create()
         self.assertIsInstance(instance, DummyModel)
         self.assertIsNotNone(instance.name)  # type: ignore
@@ -389,6 +397,15 @@ class AutoFactoryTestCase(TransactionTestCase):
 
         error = UndefinedAdjustmentMethodError()
         self.assertIn("_adjustmentMethod", str(error))
+
+    def test_missing_manager_class_error_message(self):
+        """
+        Tests that MissingManagerClassError has appropriate message.
+        """
+        from general_manager.factory.auto_factory import MissingManagerClassError
+
+        error = MissingManagerClassError()
+        self.assertIn("manager class", str(error))
 
     def test_missing_identification_field_error_message(self):
         """
