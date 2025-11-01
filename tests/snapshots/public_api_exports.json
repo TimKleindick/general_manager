@@ -8,6 +8,10 @@
       "general_manager.interface.database_interface",
       "DatabaseInterface"
     ],
+    "ExistingModelInterface": [
+      "general_manager.interface.existing_model_interface",
+      "ExistingModelInterface"
+    ],
     "GeneralManager": [
       "general_manager.manager.general_manager",
       "GeneralManager"
@@ -205,6 +209,10 @@
     "DatabaseInterface": [
       "general_manager.interface.database_interface",
       "DatabaseInterface"
+    ],
+    "ExistingModelInterface": [
+      "general_manager.interface.existing_model_interface",
+      "ExistingModelInterface"
     ],
     "InterfaceBase": [
       "general_manager.interface.base_interface",

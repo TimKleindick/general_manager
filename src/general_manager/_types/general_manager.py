@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "CalculationInterface",
     "DatabaseInterface",
+    "ExistingModelInterface",
     "GeneralManager",
     "GraphQL",
     "Input",
@@ -20,6 +21,7 @@ __all__ = [
 
 from general_manager.interface.calculation_interface import CalculationInterface
 from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface.existing_model_interface import ExistingModelInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.input import Input
