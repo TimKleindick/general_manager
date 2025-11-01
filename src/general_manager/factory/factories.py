@@ -172,6 +172,8 @@ def get_field_value(
     elif isinstance(field, models.DurationField):
         return cast(timedelta, Faker("time_delta"))
     elif isinstance(field, models.CharField):
+        if field.max_length == 0:
+            return ""
         max_length = field.max_length or 100
         # Check for RegexValidator
         regex = None
@@ -183,8 +185,6 @@ def get_field_value(
             # Use exrex to generate a string matching the regex
             return LazyFunction(lambda: exrex.getone(regex))
         else:
-            if max_length <= 0:
-                return ""
             if max_length < 5:
                 alphabet = string.ascii_letters + string.digits
                 return LazyFunction(
@@ -320,7 +320,10 @@ def _ensure_model_instance(value: Any) -> models.Model:
         if instance is not None:
             return cast(models.Model, instance)
         manager_cls = value.__class__
-        model_cls = getattr(manager_cls.Interface, "_model", None)  # type: ignore[attr-defined]
+        interface_cls = getattr(manager_cls, "Interface", None)
+        if interface_cls is None:
+            raise UnableToResolveManagerInstanceError(value)
+        model_cls = getattr(interface_cls, "_model", None)
         if model_cls is not None:
             return cast(type[models.Model], model_cls).objects.get(
                 **value.identification
