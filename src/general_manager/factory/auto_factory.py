@@ -11,7 +11,7 @@ from general_manager.factory.factories import (
 from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
-    from general_manager.interface.database_interface import (
+    from general_manager.interface.database_based_interface import (
         DBBasedInterface,
     )
 
