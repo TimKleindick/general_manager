@@ -249,7 +249,14 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         for field, value in kwargs.items():
             setattr(obj, field, value)
         obj.full_clean()
-        obj.save()
+        database_alias: str | None = None
+        if hasattr(cls.interface, "_get_database_alias"):
+            database_alias = cls.interface._get_database_alias()
+
+        if database_alias:
+            obj.save(using=database_alias)
+        else:
+            obj.save()
         return obj
 
     @classmethod
