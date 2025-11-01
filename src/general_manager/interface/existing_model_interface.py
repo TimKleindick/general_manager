@@ -108,11 +108,12 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         name: generalManagerClassName,
         interface_cls: type["ExistingModelInterface"],
         model: type[ExistingModelT],
+        factory_definition: type | None = None,
     ) -> type[AutoFactory]:
         """
         Build an AutoFactory subclass bound to the existing Django model.
         """
-        factory_definition = getattr(cls, "Factory", None)
+        factory_definition = factory_definition or getattr(cls, "Factory", None)
         factory_attributes: dict[str, Any] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
@@ -145,9 +146,12 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         concrete_interface._model = cast(type[ExistingModelT], model)
         concrete_interface.model = model
 
+        manager_factory = cast(type | None, attrs.pop("Factory", None))
         attrs["_interface_type"] = interface_cls._interface_type
         attrs["Interface"] = concrete_interface
-        attrs["Factory"] = interface_cls._build_factory(name, concrete_interface, model)
+        attrs["Factory"] = interface_cls._build_factory(
+            name, concrete_interface, model, manager_factory
+        )
 
         return attrs, concrete_interface, model
 

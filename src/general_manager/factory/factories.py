@@ -1,6 +1,7 @@
 """Helpers for generating realistic factory values for Django models."""
 
 from __future__ import annotations
+import string
 from typing import Any, cast
 
 from factory.declarations import LazyFunction
@@ -13,6 +14,7 @@ from decimal import Decimal
 from random import SystemRandom
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurement_field import MeasurementField
+from general_manager.manager.general_manager import GeneralManager
 
 
 _RNG = SystemRandom()
@@ -60,6 +62,19 @@ class InvalidRelatedModelTypeError(TypeError):
         super().__init__(
             f"Related model for {field_name} must be a Django model class, got {related!r}."
         )
+
+
+class UnableToResolveManagerInstanceError(ValueError):
+    """Raised when a GeneralManager instance cannot be converted back into its model."""
+
+    def __init__(self, manager: GeneralManager) -> None:
+        """
+        Initialize with the offending manager instance.
+
+        Parameters:
+            manager (GeneralManager): The manager instance that could not be resolved.
+        """
+        super().__init__(f"Unable to resolve model instance from manager {manager!r}.")
 
 
 def get_field_value(
@@ -168,12 +183,19 @@ def get_field_value(
             # Use exrex to generate a string matching the regex
             return LazyFunction(lambda: exrex.getone(regex))
         else:
+            if max_length <= 0:
+                return ""
+            if max_length < 5:
+                alphabet = string.ascii_letters + string.digits
+                return LazyFunction(
+                    lambda: "".join(_RNG.choice(alphabet) for _ in range(max_length))
+                )
             return cast(str, Faker("text", max_nb_chars=max_length))
     elif isinstance(field, models.OneToOneField):
         related_model = get_related_model(field)
         if hasattr(related_model, "_general_manager_class"):
             related_factory = related_model._general_manager_class.Factory  # type: ignore
-            return related_factory()
+            return _ensure_model_instance(related_factory())
         else:
             # If no factory exists, pick a random existing instance
             related_instances = list(related_model.objects.all())
@@ -193,7 +215,7 @@ def get_field_value(
                     return LazyFunction(lambda: _RNG.choice(existing_instances))
 
             related_factory = related_model._general_manager_class.Factory  # type: ignore
-            return related_factory()
+            return _ensure_model_instance(related_factory())
 
         else:
             # If no factory exists, pick a random existing instance
@@ -268,10 +290,14 @@ def get_many_to_many_field_value(
             number_to_pick = len(related_instances)
         existing_instances = _RNG.sample(related_instances, number_to_pick)
         new_instances = [related_factory() for _ in range(number_to_create)]
-        return existing_instances + new_instances
+        return existing_instances + [
+            _ensure_model_instance(instance) for instance in new_instances
+        ]
     elif related_factory:
         number_to_create = number_of_instances
-        new_instances = [related_factory() for _ in range(number_to_create)]
+        new_instances = [
+            _ensure_model_instance(related_factory()) for _ in range(number_to_create)
+        ]
         return new_instances
     elif related_instances:
         number_to_create = 0
@@ -282,3 +308,22 @@ def get_many_to_many_field_value(
         return existing_instances
     else:
         raise MissingFactoryOrInstancesError(related_model)
+
+
+def _ensure_model_instance(value: Any) -> models.Model:
+    """
+    Convert factory outputs to Django model instances, unwrapping GeneralManager objects when necessary.
+    """
+    if isinstance(value, GeneralManager):
+        interface = getattr(value, "_interface", None)
+        instance = getattr(interface, "_instance", None) if interface else None
+        if instance is not None:
+            return cast(models.Model, instance)
+        manager_cls = value.__class__
+        model_cls = getattr(manager_cls.Interface, "_model", None)  # type: ignore[attr-defined]
+        if model_cls is not None:
+            return cast(type[models.Model], model_cls).objects.get(
+                **value.identification
+            )
+        raise UnableToResolveManagerInstanceError(value)
+    return cast(models.Model, value)

@@ -631,7 +631,8 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         attrs["Interface"] = interface_cls
 
         # Build the associated factory class
-        factory_definition = getattr(interface, "Factory", None)
+        manager_factory = cast(type | None, attrs.pop("Factory", None))
+        factory_definition = manager_factory or getattr(interface, "Factory", None)
         factory_attributes: dict[str, Any] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
@@ -663,6 +664,10 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         """
         interface_class._parent_class = new_class
         model._general_manager_class = new_class  # type: ignore
+        try:
+            new_class.objects = interface_class._get_manager()  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
 
     @classmethod
     def handle_interface(
