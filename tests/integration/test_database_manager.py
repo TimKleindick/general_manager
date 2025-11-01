@@ -76,6 +76,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         super().setUp()
         self.TestCountry.Interface.sync_data()  # type: ignore
+        self.User1 = User.objects.create(username="human-owner-1")
 
         self.test_human1 = self.TestHuman.create(
             creator_id=None,
@@ -492,3 +493,13 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         related_humans = self.TestHuman.filter(country=country_to_delete)
         self.assertEqual(len(related_humans), 1)
         self.assertEqual(related_humans[0].name, "Alice")
+
+    def test_factory_creates_instances(self) -> None:
+        """
+        Test that the Factory class creates instances of the GeneralManager with correct default attributes.
+        """
+        factory_instance = self.TestHuman.Factory.create_batch(1)[0]
+        self.assertIsInstance(factory_instance, self.TestHuman)
+        self.assertEqual(factory_instance.name, "Legacy Customer")
+        stored = self.TestHuman.objects.get(pk=factory_instance.identification["id"])
+        self.assertIsNotNone(stored)
