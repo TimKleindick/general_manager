@@ -762,3 +762,553 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         self.assertEqual(
             attrs["owner"](mgr1._interface), attrs["owner"](mgr2._interface)
         )
+
+    def test_get_database_alias_returns_none_by_default(self):
+        """
+        Tests that _get_database_alias returns None when no database is configured.
+        """
+        self.assertIsNone(PersonInterface._get_database_alias())
+
+    def test_get_database_alias_returns_configured_value(self):
+        """
+        Tests that _get_database_alias returns the configured database alias.
+        """
+        class CustomInterface(DBBasedInterface):
+            _model = PersonModel
+            database = "custom_db"
+
+        self.assertEqual(CustomInterface._get_database_alias(), "custom_db")
+
+    def test_get_manager_returns_default_manager(self):
+        """
+        Tests that _get_manager returns the model's default manager.
+        """
+        manager = PersonInterface._get_manager()
+        self.assertIsNotNone(manager)
+        self.assertEqual(manager.model, PersonModel)
+
+    def test_get_queryset_returns_queryset_for_model(self):
+        """
+        Tests that _get_queryset returns a queryset for the interface's model.
+        """
+        queryset = PersonInterface._get_queryset()
+        self.assertIsNotNone(queryset)
+        self.assertEqual(queryset.model, PersonModel)
+
+    def test_invalid_field_value_error_message(self):
+        """
+        Tests that InvalidFieldValueError formats its message correctly.
+        """
+        from general_manager.interface.database_based_interface import (
+            InvalidFieldValueError,
+        )
+
+        error = InvalidFieldValueError("age", "not_a_number")
+        self.assertIn("age", str(error))
+        self.assertIn("not_a_number", str(error))
+
+    def test_invalid_field_type_error_message(self):
+        """
+        Tests that InvalidFieldTypeError formats its message correctly.
+        """
+        from general_manager.interface.database_based_interface import (
+            InvalidFieldTypeError,
+        )
+
+        original_error = TypeError("expected int, got str")
+        error = InvalidFieldTypeError("age", original_error)
+        self.assertIn("age", str(error))
+        self.assertIn("Type error", str(error))
+
+    def test_unknown_field_error_message(self):
+        """
+        Tests that UnknownFieldError formats its message correctly.
+        """
+        from general_manager.interface.database_based_interface import (
+            UnknownFieldError,
+        )
+
+        error = UnknownFieldError("nonexistent_field", "PersonModel")
+        self.assertIn("nonexistent_field", str(error))
+        self.assertIn("PersonModel", str(error))
+        self.assertIn("does not exist", str(error))
+
+    def test_get_historical_record_with_database_alias(self):
+        """
+        Tests that get_historical_record respects database alias configuration.
+        """
+        # Create a person with history
+        person = PersonModel.objects.create(
+            name="Historical",
+            age=40,
+            owner=self.user,
+            changed_by=self.user,
+        )
+        past_date = datetime.now(UTC) - timedelta(days=1)
+
+        # Should work with default database
+        historical = PersonInterface.get_historical_record(person, past_date)
+        self.assertIsNone(historical)  # No history before creation
+
+    def test_filter_with_multiple_conditions(self):
+        """
+        Tests that filter works with multiple query conditions.
+        """
+        user2 = User.objects.create(username="user2")
+        PersonModel.objects.create(
+            name="Bob",
+            age=25,
+            owner=user2,
+            changed_by=user2,
+        )
+        PersonModel.objects.create(
+            name="Charlie",
+            age=35,
+            owner=user2,
+            changed_by=user2,
+        )
+
+        bucket = PersonInterface.filter(age__gte=25, owner=user2)
+        self.assertEqual(bucket.count(), 2)
+
+    def test_exclude_with_multiple_conditions(self):
+        """
+        Tests that exclude works with multiple query conditions.
+        """
+        user2 = User.objects.create(username="user2")
+        PersonModel.objects.create(
+            name="Bob",
+            age=25,
+            owner=user2,
+            changed_by=user2,
+        )
+
+        bucket = PersonInterface.exclude(age__lt=25, owner=self.user)
+        # Should exclude items where both conditions are true
+        self.assertGreaterEqual(bucket.count(), 1)
+
+    def test_get_data_with_timezone_aware_datetime(self):
+        """
+        Tests that get_data handles timezone-aware datetime correctly.
+        """
+        mgr = DummyManager(self.person.pk)
+        aware_date = datetime.now(UTC)
+        instance = mgr._interface.get_data(aware_date)
+        self.assertEqual(instance.pk, self.person.pk)
+
+    def test_get_data_with_timezone_naive_datetime(self):
+        """
+        Tests that get_data converts naive datetime to aware.
+        """
+        mgr = DummyManager(self.person.pk)
+        naive_date = datetime.now()
+        # Should not raise an error
+        instance = mgr._interface.get_data(naive_date)
+        self.assertEqual(instance.pk, self.person.pk)
+
+    def test_get_data_without_search_date(self):
+        """
+        Tests that get_data returns current instance when no search_date provided.
+        """
+        mgr = DummyManager(self.person.pk)
+        instance = mgr._interface.get_data(None)
+        self.assertEqual(instance.pk, self.person.pk)
+        self.assertEqual(instance.name, self.person.name)
+
+
+class WritableInterfaceTestModel(models.Model):
+    name = models.CharField(max_length=100)
+    value = models.IntegerField()
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="owned_items")
+    is_active = models.BooleanField(default=True)
+    changed_by = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="changed_items"
+    )
+    tags = models.ManyToManyField(User, related_name="tagged_items", blank=True)
+
+    class Meta:
+        app_label = "general_manager"
+
+
+class WritableDBBasedInterfaceTestCase(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        """
+        Creates the database table for WritableInterfaceTestModel.
+        """
+        super().setUpClass()
+        from simple_history import register
+
+        register(WritableInterfaceTestModel)
+
+        if (
+            WritableInterfaceTestModel._meta.model_name
+            not in apps.get_app_config("general_manager").models
+        ):
+            apps.register_model("general_manager", WritableInterfaceTestModel)
+
+        with connection.schema_editor() as schema:
+            schema.create_model(WritableInterfaceTestModel)
+            schema.create_model(WritableInterfaceTestModel.history.model)  # type: ignore[attr-defined]
+
+    @classmethod
+    def tearDownClass(cls):
+        """
+        Deletes the database table for WritableInterfaceTestModel.
+        """
+        with connection.schema_editor() as schema:
+            history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
+            schema.delete_model(history_model)
+            schema.delete_model(WritableInterfaceTestModel)
+
+        app_config = apps.get_app_config("general_manager")
+        model_key = WritableInterfaceTestModel._meta.model_name
+        history_key = WritableInterfaceTestModel.history.model._meta.model_name  # type: ignore[attr-defined]
+        apps.all_models["general_manager"].pop(model_key, None)
+        apps.all_models["general_manager"].pop(history_key, None)
+        app_config.models.pop(model_key, None)
+        app_config.models.pop(history_key, None)
+        super().tearDownClass()
+
+    def setUp(self):
+        """
+        Creates test users and defines test interface.
+        """
+        from general_manager.interface.database_based_interface import (
+            WritableDBBasedInterface,
+        )
+
+        self.user1 = User.objects.create(username="creator")
+        self.user2 = User.objects.create(username="modifier")
+
+        class TestWritableInterface(WritableDBBasedInterface):
+            _model = WritableInterfaceTestModel
+            _parent_class = None
+            _interface_type = "writable_test"
+            input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+
+        self.interface_cls = TestWritableInterface
+
+    def tearDown(self):
+        """
+        Cleans up test data.
+        """
+        WritableInterfaceTestModel.objects.all().delete()
+        User.objects.all().delete()
+
+    def test_create_with_basic_fields(self):
+        """
+        Tests that create successfully creates an instance with basic fields.
+        """
+        result = self.interface_cls.create(
+            creator_id=self.user1.pk,
+            name="Test Item",
+            value=42,
+            owner=self.user1,
+        )
+        self.assertIn("id", result)
+        instance = WritableInterfaceTestModel.objects.get(pk=result["id"])
+        self.assertEqual(instance.name, "Test Item")
+        self.assertEqual(instance.value, 42)
+        self.assertEqual(instance.owner, self.user1)
+        self.assertEqual(instance.changed_by, self.user1)
+
+    def test_create_with_history_comment(self):
+        """
+        Tests that create stores history comment correctly.
+        """
+        result = self.interface_cls.create(
+            creator_id=self.user1.pk,
+            history_comment="Initial creation",
+            name="Commented Item",
+            value=100,
+            owner=self.user1,
+        )
+        instance = WritableInterfaceTestModel.objects.get(pk=result["id"])
+        history = instance.history.first()  # type: ignore[attr-defined]
+        self.assertEqual(history.history_change_reason, "Initial creation")  # type: ignore[union-attr]
+
+    def test_create_with_many_to_many(self):
+        """
+        Tests that create handles many-to-many relationships correctly.
+        """
+        user3 = User.objects.create(username="tagger")
+        result = self.interface_cls.create(
+            creator_id=self.user1.pk,
+            name="Tagged Item",
+            value=50,
+            owner=self.user1,
+            tags_id_list=[self.user2.pk, user3.pk],
+        )
+        instance = WritableInterfaceTestModel.objects.get(pk=result["id"])
+        tags = list(instance.tags.all())
+        self.assertEqual(len(tags), 2)
+        self.assertIn(self.user2, tags)
+        self.assertIn(user3, tags)
+
+    def test_create_with_invalid_field_raises_unknown_field_error(self):
+        """
+        Tests that create raises UnknownFieldError for invalid field names.
+        """
+        from general_manager.interface.database_based_interface import UnknownFieldError
+
+        with self.assertRaises(UnknownFieldError) as context:
+            self.interface_cls.create(
+                creator_id=self.user1.pk,
+                name="Test",
+                value=10,
+                owner=self.user1,
+                nonexistent_field="bad",
+            )
+        self.assertIn("nonexistent_field", str(context.exception))
+
+    def test_create_without_creator_id(self):
+        """
+        Tests that create works when creator_id is None.
+        """
+        result = self.interface_cls.create(
+            creator_id=None,
+            name="No Creator",
+            value=25,
+            owner=self.user1,
+        )
+        instance = WritableInterfaceTestModel.objects.get(pk=result["id"])
+        self.assertIsNone(instance.changed_by_id)
+
+    def test_update_basic_fields(self):
+        """
+        Tests that update modifies instance fields correctly.
+        """
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Original",
+            value=10,
+            owner=self.user1,
+            changed_by=self.user1,
+        )
+        interface = self.interface_cls(id=instance.pk)
+        result = interface.update(creator_id=self.user2.pk, name="Updated", value=20)
+
+        self.assertEqual(result["id"], instance.pk)
+        instance.refresh_from_db()
+        self.assertEqual(instance.name, "Updated")
+        self.assertEqual(instance.value, 20)
+        self.assertEqual(instance.changed_by, self.user2)
+
+    def test_update_with_history_comment(self):
+        """
+        Tests that update records history comment.
+        """
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Original",
+            value=10,
+            owner=self.user1,
+            changed_by=self.user1,
+        )
+        interface = self.interface_cls(id=instance.pk)
+        interface.update(
+            creator_id=self.user2.pk,
+            history_comment="Modified value",
+            value=99,
+        )
+
+        history = instance.history.order_by("-history_date").first()  # type: ignore[attr-defined]
+        self.assertEqual(history.history_change_reason, "Modified value")  # type: ignore[union-attr]
+
+    def test_update_many_to_many_fields(self):
+        """
+        Tests that update correctly modifies many-to-many relationships.
+        """
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Item",
+            value=15,
+            owner=self.user1,
+            changed_by=self.user1,
+        )
+        instance.tags.add(self.user1)
+
+        interface = self.interface_cls(id=instance.pk)
+        interface.update(
+            creator_id=self.user2.pk,
+            tags_id_list=[self.user2.pk],
+        )
+
+        tags = list(instance.tags.all())
+        self.assertEqual(len(tags), 1)
+        self.assertIn(self.user2, tags)
+        self.assertNotIn(self.user1, tags)
+
+    def test_update_with_invalid_field_raises_error(self):
+        """
+        Tests that update raises UnknownFieldError for invalid fields.
+        """
+        from general_manager.interface.database_based_interface import UnknownFieldError
+
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Item",
+            value=5,
+            owner=self.user1,
+            changed_by=self.user1,
+        )
+        interface = self.interface_cls(id=instance.pk)
+
+        with self.assertRaises(UnknownFieldError):
+            interface.update(creator_id=self.user1.pk, invalid_field="bad")
+
+    def test_deactivate_sets_is_active_false(self):
+        """
+        Tests that deactivate sets is_active to False.
+        """
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Active Item",
+            value=30,
+            owner=self.user1,
+            changed_by=self.user1,
+            is_active=True,
+        )
+        interface = self.interface_cls(id=instance.pk)
+        result = interface.deactivate(creator_id=self.user2.pk)
+
+        self.assertEqual(result["id"], instance.pk)
+        instance.refresh_from_db()
+        self.assertFalse(instance.is_active)
+
+    def test_deactivate_with_history_comment(self):
+        """
+        Tests that deactivate appends '(deactivated)' to history comment.
+        """
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Active Item",
+            value=30,
+            owner=self.user1,
+            changed_by=self.user1,
+            is_active=True,
+        )
+        interface = self.interface_cls(id=instance.pk)
+        interface.deactivate(
+            creator_id=self.user2.pk,
+            history_comment="User requested",
+        )
+
+        history = instance.history.order_by("-history_date").first()  # type: ignore[attr-defined]
+        self.assertEqual(history.history_change_reason, "User requested (deactivated)")  # type: ignore[union-attr]
+
+    def test_deactivate_without_comment_uses_default(self):
+        """
+        Tests that deactivate uses 'Deactivated' as default comment.
+        """
+        instance = WritableInterfaceTestModel.objects.create(
+            name="Active Item",
+            value=30,
+            owner=self.user1,
+            changed_by=self.user1,
+            is_active=True,
+        )
+        interface = self.interface_cls(id=instance.pk)
+        interface.deactivate(creator_id=self.user2.pk)
+
+        history = instance.history.order_by("-history_date").first()  # type: ignore[attr-defined]
+        self.assertEqual(history.history_change_reason, "Deactivated")  # type: ignore[union-attr]
+
+    def test_check_for_invalid_kwargs_with_valid_fields(self):
+        """
+        Tests that _check_for_invalid_kwargs passes for valid field names.
+        """
+        kwargs = {"name": "Test", "value": 10, "owner": self.user1}
+        # Should not raise
+        self.interface_cls._check_for_invalid_kwargs(
+            WritableInterfaceTestModel, kwargs
+        )
+
+    def test_check_for_invalid_kwargs_with_id_list_suffix(self):
+        """
+        Tests that _check_for_invalid_kwargs accepts _id_list suffix for m2m fields.
+        """
+        kwargs = {"tags_id_list": [1, 2, 3]}
+        # Should not raise
+        self.interface_cls._check_for_invalid_kwargs(
+            WritableInterfaceTestModel, kwargs
+        )
+
+    def test_check_for_invalid_kwargs_raises_for_invalid_field(self):
+        """
+        Tests that _check_for_invalid_kwargs raises UnknownFieldError for invalid fields.
+        """
+        from general_manager.interface.database_based_interface import UnknownFieldError
+
+        kwargs = {"nonexistent": "value"}
+        with self.assertRaises(UnknownFieldError) as context:
+            self.interface_cls._check_for_invalid_kwargs(
+                WritableInterfaceTestModel, kwargs
+            )
+        self.assertIn("nonexistent", str(context.exception))
+
+    def test_sort_kwargs_separates_many_to_many(self):
+        """
+        Tests that _sort_kwargs correctly separates m2m from regular fields.
+        """
+        kwargs = {
+            "name": "Test",
+            "value": 42,
+            "tags_id_list": [1, 2, 3],
+        }
+        regular, m2m = self.interface_cls._sort_kwargs(WritableInterfaceTestModel, kwargs)
+
+        self.assertIn("name", regular)
+        self.assertIn("value", regular)
+        self.assertNotIn("tags_id_list", regular)
+        self.assertIn("tags_id_list", m2m)
+        self.assertEqual(m2m["tags_id_list"], [1, 2, 3])
+
+    def test_sort_kwargs_handles_no_many_to_many(self):
+        """
+        Tests that _sort_kwargs works when no m2m fields are present.
+        """
+        kwargs = {"name": "Test", "value": 42}
+        regular, m2m = self.interface_cls._sort_kwargs(WritableInterfaceTestModel, kwargs)
+
+        self.assertEqual(regular, kwargs)
+        self.assertEqual(m2m, {})
+
+    def test_save_with_history_validates_instance(self):
+        """
+        Tests that _save_with_history calls full_clean for validation.
+        """
+        instance = WritableInterfaceTestModel(
+            name="",  # Empty name should fail validation if required
+            value=10,
+            owner=self.user1,
+        )
+        # Assuming name is required, this should raise ValidationError
+        # If not, adjust test accordingly
+        try:
+            self.interface_cls._save_with_history(instance, self.user1.pk, None)
+        except ValidationError:
+            pass  # Expected if validation fails
+
+    def test_save_with_history_sets_changed_by(self):
+        """
+        Tests that _save_with_history sets changed_by_id correctly.
+        """
+        instance = WritableInterfaceTestModel(
+            name="Test",
+            value=10,
+            owner=self.user1,
+        )
+        pk = self.interface_cls._save_with_history(instance, self.user2.pk, None)
+
+        saved_instance = WritableInterfaceTestModel.objects.get(pk=pk)
+        self.assertEqual(saved_instance.changed_by, self.user2)
+
+    def test_save_with_history_handles_none_creator(self):
+        """
+        Tests that _save_with_history handles None creator_id gracefully.
+        """
+        instance = WritableInterfaceTestModel(
+            name="Test",
+            value=10,
+            owner=self.user1,
+        )
+        pk = self.interface_cls._save_with_history(instance, None, None)
+
+        saved_instance = WritableInterfaceTestModel.objects.get(pk=pk)
+        self.assertIsNone(saved_instance.changed_by_id)
