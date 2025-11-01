@@ -180,4 +180,6 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         """
         Return the Python type for a field on the existing model.
         """
+        if not hasattr(cls, "_model"):
+            cls._resolve_model_class()
         return super().get_field_type(field_name)
