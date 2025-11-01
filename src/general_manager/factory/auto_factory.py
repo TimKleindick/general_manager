@@ -1,7 +1,15 @@
 """Auto-generating factory utilities for GeneralManager models."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Type, Callable, Union, Any, TypeVar, Literal
+from typing import (
+    TYPE_CHECKING,
+    Type,
+    Callable,
+    Union,
+    Any,
+    TypeVar,
+    Literal,
+)
 from django.db import models
 from factory.django import DjangoModelFactory
 from general_manager.factory.factories import (
@@ -11,9 +19,8 @@ from general_manager.factory.factories import (
 from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
-    from general_manager.interface.database_based_interface import (
-        DBBasedInterface,
-    )
+    from general_manager.interface.database_based_interface import DBBasedInterface
+    from general_manager.manager.general_manager import GeneralManager
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 
@@ -52,6 +59,22 @@ class UndefinedAdjustmentMethodError(ValueError):
         super().__init__("_adjustmentMethod is not defined.")
 
 
+class MissingIdentificationFieldError(AttributeError):
+    """Raised when a factory cannot resolve an identification field on a generated model instance."""
+
+    def __init__(self, field_name: str, instance: models.Model) -> None:
+        """
+        Initialize the error with the missing field and offending instance.
+
+        Parameters:
+            field_name (str): Name of the identification field that could not be resolved.
+            instance (models.Model): The Django model instance missing the expected attribute.
+        """
+        super().__init__(
+            f"Unable to resolve identification field '{field_name}' from instance {instance!r}"
+        )
+
+
 class AutoFactory(DjangoModelFactory[modelsModel]):
     """Factory that auto-populates model fields based on interface metadata."""
 
@@ -63,7 +86,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @classmethod
     def _generate(
         cls, strategy: Literal["build", "create"], params: dict[str, Any]
-    ) -> models.Model | list[models.Model]:
+    ) -> models.Model | list[models.Model] | "GeneralManager" | list["GeneralManager"]:
         """
         Generate and populate model instances using automatically derived field values.
 
@@ -96,8 +119,8 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         special_fields: list[models.Field[Any, Any]] = [
             getattr(model, field_name) for field_name in field_name_list
         ]
-        pre_declarations = getattr(cls._meta, "pre_declarations", [])
-        post_declarations = getattr(cls._meta, "post_declarations", [])
+        pre_declarations = getattr(cls._meta, "pre_declarations", ())
+        post_declarations = getattr(cls._meta, "post_declarations", ())
         declared_fields: set[str] = set(pre_declarations) | set(post_declarations)
 
         field_list: list[models.Field[Any, Any] | models.ForeignObjectRel] = [
@@ -110,6 +133,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
+            declared_default = cls._get_declared_default(field.name)
+            if declared_default is not None:
+                params[field.name] = declared_default
+                continue
             params[field.name] = get_field_value(field)
 
         obj: list[models.Model] | models.Model = super()._generate(strategy, params)
@@ -120,6 +147,8 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 cls._handle_many_to_many_fields_after_creation(item, params)
         else:
             cls._handle_many_to_many_fields_after_creation(obj, params)
+        if strategy == "create":
+            return cls._wrap_generated_objects(obj)
         return obj
 
     @classmethod
@@ -266,3 +295,62 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             else:
                 created_objects.append(cls._model_building(model_cls, **record))
         return created_objects
+
+    @classmethod
+    def _wrap_generated_objects(
+        cls, generated: models.Model | list[models.Model]
+    ) -> "GeneralManager" | list["GeneralManager"]:
+        """
+        Convert generated model instance(s) into their corresponding GeneralManager instances.
+        """
+        manager_cls = getattr(cls.interface, "_parent_class", None)
+        if manager_cls is None:
+            return generated  # type: ignore[return-value]
+
+        def _to_manager(instance: models.Model) -> "GeneralManager":
+            identification = cls._extract_identification(instance)
+            return manager_cls(**identification)  # type: ignore[call-arg]
+
+        if isinstance(generated, list):
+            return [_to_manager(instance) for instance in generated]
+        return _to_manager(generated)
+
+    @classmethod
+    def _extract_identification(cls, instance: models.Model) -> dict[str, Any]:
+        """
+        Build a manager identification mapping by reading the interface input fields from a model instance.
+        """
+        identification: dict[str, Any] = {}
+        for name in cls.interface.input_fields.keys():
+            value = cls._resolve_identification_value(instance, name)
+            identification[name] = value
+        return cls.interface.format_identification(dict(identification))
+
+    @staticmethod
+    def _resolve_identification_value(instance: models.Model, field_name: str) -> Any:
+        """
+        Resolve an identification value from an instance attribute, falling back to *_id accessors.
+        """
+        if hasattr(instance, field_name):
+            value = getattr(instance, field_name)
+        elif hasattr(instance, f"{field_name}_id"):
+            value = getattr(instance, f"{field_name}_id")
+        else:
+            raise MissingIdentificationFieldError(field_name, instance)
+
+        if isinstance(value, models.Model):
+            return getattr(value, "pk", value)
+        return value
+
+    @classmethod
+    def _get_declared_default(cls, field_name: str) -> Any | None:
+        """
+        Retrieve a constant default value declared directly on the factory class.
+        """
+        if field_name in cls.__dict__:
+            value = cls.__dict__[field_name]
+            if not callable(value) and not isinstance(
+                value, (classmethod, staticmethod)
+            ):
+                return value
+        return None
