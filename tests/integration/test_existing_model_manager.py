@@ -84,7 +84,11 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
 
     def tearDown(self) -> None:
         self.LegacyCustomer.objects.all().delete()
-        User.objects.all().delete()
+        for user in (getattr(self, "user1", None), getattr(self, "user2", None)):
+            if user is None or user.pk is None:
+                continue
+            qs = User.objects.filter(pk=user.pk)
+            qs._raw_delete(qs.db)
         super().tearDown()
 
     def test_create_and_attribute_access(self) -> None:
