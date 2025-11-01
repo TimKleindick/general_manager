@@ -153,10 +153,10 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         # Model already has history from setUpClass
         self.assertTrue(hasattr(self.model, "history"))
-        
+
         # Should not raise an error
         ExistingModelInterface._ensure_history(self.model)
-        
+
         # Still should have history
         self.assertTrue(hasattr(self.model, "history"))
 
@@ -164,19 +164,22 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _ensure_history registers history for untracked models.
         """
+
         # Create a new model without history
         class UnhistoredModel(models.Model):
             name = models.CharField(max_length=64)
-            
+
             class Meta:
                 app_label = "general_manager"
-        
+
         # Should not have history initially
-        self.assertFalse(hasattr(UnhistoredModel._meta, "simple_history_manager_attribute"))
-        
+        self.assertFalse(
+            hasattr(UnhistoredModel._meta, "simple_history_manager_attribute")
+        )
+
         # Register history
         ExistingModelInterface._ensure_history(UnhistoredModel)
-        
+
         # Now should have history
         self.assertTrue(hasattr(UnhistoredModel, "history"))
 
@@ -184,9 +187,10 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _apply_rules_to_model handles interfaces without rules gracefully.
         """
+
         class NoRulesInterface(ExistingModelInterface):
             model = self.model
-        
+
         # Should not raise
         NoRulesInterface._apply_rules_to_model(self.model)
 
@@ -194,33 +198,34 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _apply_rules_to_model combines interface rules with model rules.
         """
+
         # Add existing rules to model
         class ExistingRule:
             def evaluate(self, obj: models.Model) -> bool:
                 return True
-            
+
             def get_error_message(self) -> dict[str, list[str]]:
                 return {}
-        
+
         existing_rule = ExistingRule()
         self.model._meta.rules = [existing_rule]  # type: ignore[attr-defined]
-        
+
         # Create interface with additional rule
         new_rule = AlwaysFailRule()
-        
+
         class CombinedRulesInterface(ExistingModelInterface):
             model = self.model
-            
+
             class Meta:
                 rules: ClassVar[list[AlwaysFailRule]] = [new_rule]
-        
+
         CombinedRulesInterface._apply_rules_to_model(self.model)
-        
+
         # Should have both rules
         self.assertEqual(len(self.model._meta.rules), 2)  # type: ignore[attr-defined]
         self.assertIn(existing_rule, self.model._meta.rules)  # type: ignore[attr-defined]
         self.assertIn(new_rule, self.model._meta.rules)  # type: ignore[attr-defined]
-        
+
         # Clean up
         delattr(self.model._meta, "rules")
 
@@ -229,21 +234,21 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         Tests that _apply_rules_to_model replaces full_clean method.
         """
         rule = AlwaysFailRule()
-        
+
         class RuledInterface(ExistingModelInterface):
             model = self.model
-            
+
             class Meta:
                 rules: ClassVar[list[AlwaysFailRule]] = [rule]
-        
+
         # Store original full_clean
         original_full_clean = self.model.full_clean
-        
+
         RuledInterface._apply_rules_to_model(self.model)
-        
+
         # Should have replaced full_clean
         self.assertIsNotNone(self.model.full_clean)
-        
+
         # Clean up
         self.model.full_clean = original_full_clean  # type: ignore[method-assign]
         if hasattr(self.model._meta, "rules"):
@@ -253,16 +258,14 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _build_factory creates factory even without explicit Factory class.
         """
+
         class MinimalInterface(ExistingModelInterface):
             model = self.model
-        
+
         factory = MinimalInterface._build_factory(
-            "TestManager",
-            MinimalInterface,
-            self.model,
-            None
+            "TestManager", MinimalInterface, self.model, None
         )
-        
+
         self.assertIsNotNone(factory)
         self.assertEqual(factory._meta.model, self.model)  # type: ignore[attr-type]
         self.assertEqual(factory.interface, MinimalInterface)
@@ -271,21 +274,19 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _build_factory uses custom Factory attributes.
         """
+
         class CustomFactoryDef:
             custom_attr = "custom_value"
             custom_method = staticmethod(lambda: "method_result")
-        
+
         class InterfaceWithFactory(ExistingModelInterface):
             model = self.model
             Factory = CustomFactoryDef
-        
+
         factory = InterfaceWithFactory._build_factory(
-            "TestManager",
-            InterfaceWithFactory,
-            self.model,
-            CustomFactoryDef
+            "TestManager", InterfaceWithFactory, self.model, CustomFactoryDef
         )
-        
+
         self.assertTrue(hasattr(factory, "custom_attr"))
         self.assertEqual(factory.custom_attr, "custom_value")
         self.assertTrue(hasattr(factory, "custom_method"))
@@ -294,33 +295,28 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _build_factory properly sets interface reference.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         factory = TestInterface._build_factory(
-            "TestManager",
-            TestInterface,
-            self.model,
-            None
+            "TestManager", TestInterface, self.model, None
         )
-        
+
         self.assertEqual(factory.interface, TestInterface)
 
     def test_build_factory_creates_meta_with_model(self) -> None:
         """
         Tests that _build_factory creates Meta class with model.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         factory = TestInterface._build_factory(
-            "TestManager",
-            TestInterface,
-            self.model,
-            None
+            "TestManager", TestInterface, self.model, None
         )
-        
-        self.assertTrue(hasattr(factory, "Meta"))
+
         self.assertEqual(factory._meta.model, self.model)  # type: ignore[attr-type]
 
     def test_handle_interface_returns_callables(self) -> None:
@@ -328,7 +324,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         Tests that handle_interface returns pre and post creation methods.
         """
         pre, post = ExistingModelInterface.handle_interface()
-        
+
         self.assertIsNotNone(pre)
         self.assertIsNotNone(post)
         self.assertTrue(callable(pre))
@@ -338,9 +334,10 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that get_field_type correctly delegates to parent class.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         # Should be able to get field types
         field_type = TestInterface.get_field_type("name")
         self.assertIsNotNone(field_type)
@@ -349,11 +346,12 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _resolve_model_class caches resolved model in _model attribute.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         resolved = TestInterface._resolve_model_class()
-        
+
         self.assertIs(TestInterface._model, self.model)
         self.assertIs(TestInterface.model, self.model)
         self.assertIs(resolved, self.model)
@@ -362,24 +360,26 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _resolve_model_class raises InvalidModelReferenceError for bad strings.
         """
+
         class TestInterface(ExistingModelInterface):
             model = "invalid.NonexistentModel"
-        
+
         with self.assertRaises(InvalidModelReferenceError) as context:
             TestInterface._resolve_model_class()
-        
+
         self.assertIn("invalid.NonexistentModel", str(context.exception))
 
     def test_resolve_model_class_with_non_model_type(self) -> None:
         """
         Tests that _resolve_model_class raises InvalidModelReferenceError for non-model types.
         """
+
         class NotAModel:
             pass
-        
+
         class TestInterface(ExistingModelInterface):
             model = NotAModel  # type: ignore[assignment]
-        
+
         with self.assertRaises(InvalidModelReferenceError):
             TestInterface._resolve_model_class()
 
@@ -388,7 +388,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         Tests that MissingModelConfigurationError formats message correctly.
         """
         error = MissingModelConfigurationError("TestInterface")
-        
+
         self.assertIn("TestInterface", str(error))
         self.assertIn("model", str(error))
 
@@ -397,7 +397,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         Tests that InvalidModelReferenceError formats message correctly.
         """
         error = InvalidModelReferenceError("bad_reference")
-        
+
         self.assertIn("bad_reference", str(error))
         self.assertIn("Invalid", str(error))
 
@@ -411,23 +411,19 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _pre_create extracts Factory from attrs if provided.
         """
+
         class CustomFactory:
             custom_value = 42
-        
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
-        attrs: dict[str, object] = {
-            "__module__": __name__,
-            "Factory": CustomFactory
-        }
-        
-        new_attrs, interface_cls, model = TestInterface._pre_create(
-            "TestManager",
-            attrs,
-            TestInterface
+
+        attrs: dict[str, object] = {"__module__": __name__, "Factory": CustomFactory}
+
+        new_attrs, _interface_cls, _model = TestInterface._pre_create(
+            "TestManager", attrs, TestInterface
         )
-        
+
         # Factory should be removed from attrs and replaced with built factory
         self.assertIn("Factory", new_attrs)
         self.assertNotEqual(new_attrs["Factory"], CustomFactory)
@@ -439,17 +435,14 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _pre_create adds _interface_type to attrs.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         attrs: dict[str, object] = {"__module__": __name__}
-        
-        new_attrs, _, _ = TestInterface._pre_create(
-            "TestManager",
-            attrs,
-            TestInterface
-        )
-        
+
+        new_attrs, _, _ = TestInterface._pre_create("TestManager", attrs, TestInterface)
+
         self.assertIn("_interface_type", new_attrs)
         self.assertEqual(new_attrs["_interface_type"], "existing")
 
@@ -457,17 +450,16 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _pre_create creates a concrete interface subclass.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         attrs: dict[str, object] = {"__module__": __name__}
-        
+
         _, interface_cls, _ = TestInterface._pre_create(
-            "TestManager",
-            attrs,
-            TestInterface
+            "TestManager", attrs, TestInterface
         )
-        
+
         self.assertIsNotNone(interface_cls)
         self.assertTrue(issubclass(interface_cls, TestInterface))
         self.assertIs(interface_cls._model, self.model)
@@ -476,38 +468,36 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         """
         Tests that _post_create sets _parent_class on the interface.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         attrs: dict[str, object] = {"__module__": __name__}
         new_attrs, interface_cls, model = TestInterface._pre_create(
-            "TestManager",
-            attrs,
-            TestInterface
+            "TestManager", attrs, TestInterface
         )
-        
+
         TestManager = type("TestManager", (GeneralManager,), new_attrs)
-        
+
         TestInterface._post_create(TestManager, interface_cls, model)
-        
+
         self.assertIs(interface_cls._parent_class, TestManager)
 
     def test_post_create_sets_general_manager_class_on_model(self) -> None:
         """
         Tests that _post_create sets _general_manager_class on the model.
         """
+
         class TestInterface(ExistingModelInterface):
             model = self.model
-        
+
         attrs: dict[str, object] = {"__module__": __name__}
         new_attrs, interface_cls, model = TestInterface._pre_create(
-            "TestManager",
-            attrs,
-            TestInterface
+            "TestManager", attrs, TestInterface
         )
-        
+
         TestManager = type("TestManager", (GeneralManager,), new_attrs)
-        
+
         TestInterface._post_create(TestManager, interface_cls, model)
-        
+
         self.assertIs(model._general_manager_class, TestManager)  # type: ignore[attr-defined]

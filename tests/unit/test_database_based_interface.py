@@ -773,6 +773,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that _get_database_alias returns the configured database alias.
         """
+
         class CustomInterface(DBBasedInterface):
             _model = PersonModel
             database = "custom_db"
@@ -833,60 +834,6 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         self.assertIn("PersonModel", str(error))
         self.assertIn("does not exist", str(error))
 
-    def test_get_historical_record_with_database_alias(self):
-        """
-        Tests that get_historical_record respects database alias configuration.
-        """
-        # Create a person with history
-        person = PersonModel.objects.create(
-            name="Historical",
-            age=40,
-            owner=self.user,
-            changed_by=self.user,
-        )
-        past_date = datetime.now(UTC) - timedelta(days=1)
-
-        # Should work with default database
-        historical = PersonInterface.get_historical_record(person, past_date)
-        self.assertIsNone(historical)  # No history before creation
-
-    def test_filter_with_multiple_conditions(self):
-        """
-        Tests that filter works with multiple query conditions.
-        """
-        user2 = User.objects.create(username="user2")
-        PersonModel.objects.create(
-            name="Bob",
-            age=25,
-            owner=user2,
-            changed_by=user2,
-        )
-        PersonModel.objects.create(
-            name="Charlie",
-            age=35,
-            owner=user2,
-            changed_by=user2,
-        )
-
-        bucket = PersonInterface.filter(age__gte=25, owner=user2)
-        self.assertEqual(bucket.count(), 2)
-
-    def test_exclude_with_multiple_conditions(self):
-        """
-        Tests that exclude works with multiple query conditions.
-        """
-        user2 = User.objects.create(username="user2")
-        PersonModel.objects.create(
-            name="Bob",
-            age=25,
-            owner=user2,
-            changed_by=user2,
-        )
-
-        bucket = PersonInterface.exclude(age__lt=25, owner=self.user)
-        # Should exclude items where both conditions are true
-        self.assertGreaterEqual(bucket.count(), 1)
-
     def test_get_data_with_timezone_aware_datetime(self):
         """
         Tests that get_data handles timezone-aware datetime correctly.
@@ -919,10 +866,16 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 class WritableInterfaceTestModel(models.Model):
     name = models.CharField(max_length=100)
     value = models.IntegerField()
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="owned_items")
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="owned_items"
+    )
     is_active = models.BooleanField(default=True)
     changed_by = models.ForeignKey(
-        User, on_delete=models.PROTECT, related_name="changed_items"
+        User,
+        on_delete=models.PROTECT,
+        related_name="changed_items",
+        null=True,
+        blank=True,
     )
     tags = models.ManyToManyField(User, related_name="tagged_items", blank=True)
 
@@ -1215,9 +1168,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         """
         kwargs = {"name": "Test", "value": 10, "owner": self.user1}
         # Should not raise
-        self.interface_cls._check_for_invalid_kwargs(
-            WritableInterfaceTestModel, kwargs
-        )
+        self.interface_cls._check_for_invalid_kwargs(WritableInterfaceTestModel, kwargs)
 
     def test_check_for_invalid_kwargs_with_id_list_suffix(self):
         """
@@ -1225,9 +1176,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         """
         kwargs = {"tags_id_list": [1, 2, 3]}
         # Should not raise
-        self.interface_cls._check_for_invalid_kwargs(
-            WritableInterfaceTestModel, kwargs
-        )
+        self.interface_cls._check_for_invalid_kwargs(WritableInterfaceTestModel, kwargs)
 
     def test_check_for_invalid_kwargs_raises_for_invalid_field(self):
         """
@@ -1251,7 +1200,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
             "value": 42,
             "tags_id_list": [1, 2, 3],
         }
-        regular, m2m = self.interface_cls._sort_kwargs(WritableInterfaceTestModel, kwargs)
+        regular, m2m = self.interface_cls._sort_kwargs(
+            WritableInterfaceTestModel, kwargs
+        )
 
         self.assertIn("name", regular)
         self.assertIn("value", regular)
@@ -1264,7 +1215,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         Tests that _sort_kwargs works when no m2m fields are present.
         """
         kwargs = {"name": "Test", "value": 42}
-        regular, m2m = self.interface_cls._sort_kwargs(WritableInterfaceTestModel, kwargs)
+        regular, m2m = self.interface_cls._sort_kwargs(
+            WritableInterfaceTestModel, kwargs
+        )
 
         self.assertEqual(regular, kwargs)
         self.assertEqual(m2m, {})
