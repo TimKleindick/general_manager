@@ -59,6 +59,16 @@ class UndefinedAdjustmentMethodError(ValueError):
         super().__init__("_adjustmentMethod is not defined.")
 
 
+class MissingManagerClassError(ValueError):
+    """Raised when attempting to wrap generated objects without a manager class."""
+
+    def __init__(self) -> None:
+        """
+        Initialize the error indicating that wrapping requires a manager class on the interface.
+        """
+        super().__init__("Cannot wrap objects without a manager class.")
+
+
 class MissingIdentificationFieldError(AttributeError):
     """Raised when a factory cannot resolve an identification field on a generated model instance."""
 
@@ -312,11 +322,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         manager_cls = getattr(cls.interface, "_parent_class", None)
         if manager_cls is None:
-            return generated  # type: ignore[return-value]
+            raise MissingManagerClassError()
 
         def _to_manager(instance: models.Model) -> "GeneralManager":
             identification = cls._extract_identification(instance)
-            return manager_cls(**identification)  # type: ignore[call-arg]
+            return manager_cls(**identification)
 
         if isinstance(generated, list):
             return [_to_manager(instance) for instance in generated]
