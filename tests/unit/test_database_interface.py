@@ -4,6 +4,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.db import models, connection
 from django.test import TransactionTestCase
+from django.apps import apps
 
 from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -16,6 +17,8 @@ class SafeDict(dict):
 
 
 class DatabaseInterfaceTestCase(TransactionTestCase):
+    _created_tables: ClassVar[set[str]] = set()
+
     @classmethod
     def setUpClass(cls):
         """
@@ -107,13 +110,32 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         cls.BookManager = BookManager
         BookInterface._parent_class = BookManager
 
-        with connection.schema_editor() as schema:
-            schema.create_model(BookModel)
+        cls._created_tables = set()
+        app_config = apps.get_app_config("general_manager")
+        for model in (cls.BookModel, cls.BookModel.readers.through):
+            model_key = model._meta.model_name
+            if model_key not in app_config.models:
+                apps.register_model("general_manager", model)
+
+        before_tables = set(connection.introspection.table_names())
+        if cls.BookModel._meta.db_table not in before_tables:
+            with connection.schema_editor() as schema:
+                schema.create_model(cls.BookModel)
+        after_tables = set(connection.introspection.table_names())
+        cls._created_tables.update(after_tables - before_tables)
 
     @classmethod
     def tearDownClass(cls):
         with connection.schema_editor() as schema:
-            schema.delete_model(cls.BookModel)
+            if cls.BookModel._meta.db_table in cls._created_tables:
+                schema.delete_model(cls.BookModel)
+
+        app_config = apps.get_app_config("general_manager")
+        for model in (cls.BookModel, cls.BookModel.readers.through):
+            model_key = model._meta.model_name
+            app_config.models.pop(model_key, None)
+            apps.all_models["general_manager"].pop(model_key, None)
+
         super().tearDownClass()
 
     def setUp(self):
@@ -154,7 +176,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
 
         inst = Dummy()
         with patch(
-            "general_manager.interface.database_interface.update_change_reason"
+            "general_manager.interface.database_based_interface.update_change_reason"
         ) as mock_update:
             pk = self.BookInterface._save_with_history(inst, 7, "comment")
         self.assertEqual(pk, 5)

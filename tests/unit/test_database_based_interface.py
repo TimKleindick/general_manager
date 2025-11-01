@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from django.db import models
 from django.core.exceptions import ValidationError, FieldDoesNotExist
+from django.apps import apps
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.database_based_interface import (
@@ -74,6 +75,11 @@ class DummyManager(GeneralManager):
 
 PersonInterface._parent_class = DummyManager
 
+_app_config = apps.get_app_config("general_manager")
+for _model in (PersonModel, PersonModel.tags.through):
+    _app_config.models.pop(_model._meta.model_name, None)
+    apps.all_models["general_manager"].pop(_model._meta.model_name, None)
+
 
 class DBBasedInterfaceTestCase(TransactionTestCase):
     @classmethod
@@ -82,6 +88,12 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Creates the database table for the PersonModel before running any tests in the test case class.
         """
         super().setUpClass()
+        for model in (PersonModel, PersonModel.tags.through):
+            if (
+                model._meta.model_name
+                not in apps.get_app_config("general_manager").models
+            ):
+                apps.register_model("general_manager", model)
         with connection.schema_editor() as schema:
             schema.create_model(PersonModel)
 
@@ -92,14 +104,18 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         with connection.schema_editor() as schema:
             schema.delete_model(PersonModel)
-        super().tearDownClass()
+        from django.apps import apps
 
-    def tearDown(self):
-        """
-        Deletes all PersonModel and User instances from the database to clean up after each test.
-        """
-        PersonModel.objects.all().delete()
-        User.objects.all().delete()
+        app_config = apps.get_app_config("general_manager")
+        person_model_name = PersonModel._meta.model_name
+        app_config.models.pop(person_model_name, None)
+        apps.all_models["general_manager"].pop(person_model_name, None)
+
+        through_model = PersonModel.tags.through
+        through_model_name = through_model._meta.model_name
+        app_config.models.pop(through_model_name, None)
+        apps.all_models["general_manager"].pop(through_model_name, None)
+        super().tearDownClass()
 
     def setUp(self):
         """

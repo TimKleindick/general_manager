@@ -125,6 +125,7 @@ class GMTestCaseMeta(type):
                     Callable[[str], AppConfig | None], handler
                 )
 
+            cls._gm_created_tables = set()
             # 1) user-defined setUpClass (if any)
             if user_setup:
                 if isinstance(user_setup, classmethod):
@@ -137,7 +138,8 @@ class GMTestCaseMeta(type):
             # 2) clear URL patterns
             _default_graphql_url_clear()
             # 3) register models & create tables
-            existing = connection.introspection.table_names()
+            preexisting_tables = set(connection.introspection.table_names())
+            known_tables = set(preexisting_tables)
             with connection.schema_editor() as editor:
                 for manager_class in cls.general_manager_classes:
                     if not hasattr(manager_class, "Interface") or not hasattr(
@@ -148,11 +150,18 @@ class GMTestCaseMeta(type):
                         type[models.Model],
                         manager_class.Interface._model,  # type: ignore
                     )
-                    if model_class._meta.db_table not in existing:
+                    model_table = model_class._meta.db_table
+                    if model_table not in known_tables:
                         editor.create_model(model_class)
-                        history_model = getattr(model_class, "history", None)
-                        if history_model:
+                        known_tables.add(model_table)
+                    history_model = getattr(model_class, "history", None)
+                    if history_model:
+                        history_table = history_model.model._meta.db_table  # type: ignore[attr-defined]
+                        if history_table not in known_tables:
                             editor.create_model(history_model.model)  # type: ignore[attr-defined]
+                            known_tables.add(history_table)
+            post_tables = set(connection.introspection.table_names())
+            cls._gm_created_tables.update(post_tables - preexisting_tables)
             # 4) GM & GraphQL initialization
             GeneralmanagerConfig.initialize_general_manager_classes(
                 cls.general_manager_classes, cls.general_manager_classes
@@ -236,6 +245,7 @@ class GeneralManagerTransactionTestCase(
     general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
     read_only_classes: ClassVar[list[type[GeneralManager]]] = []
     fallback_app: str | None = "general_manager"
+    _gm_created_tables: ClassVar[set[str]] = set()
 
     def setUp(self) -> None:
         """
@@ -258,7 +268,12 @@ class GeneralManagerTransactionTestCase(
         _default_graphql_url_clear()
 
         # drop generated tables and unregister models from Django's app registry
-        existing = connection.introspection.table_names()
+        created_tables: set[str] = set(getattr(cls, "_gm_created_tables", set()))
+        tables_to_remove = {
+            table
+            for table in created_tables
+            if table in connection.introspection.table_names()
+        }
         with connection.schema_editor() as editor:
             for manager_class in cls.general_manager_classes:
                 interface = getattr(manager_class, "Interface", None)
@@ -266,25 +281,59 @@ class GeneralManagerTransactionTestCase(
                 if not model:
                     continue
                 model = cast(type[models.Model], model)
-                if model._meta.db_table in existing:
+                auto_through_models: set[type[models.Model]] = set()
+                for field in model._meta.local_many_to_many:
+                    m2m_field = cast(Any, field)
+                    through_model = cast(
+                        type[models.Model], m2m_field.remote_field.through
+                    )
+                    if getattr(through_model._meta, "auto_created", False):
+                        auto_through_models.add(through_model)
+                model_table = model._meta.db_table
+                if model_table in tables_to_remove:
                     editor.delete_model(model)
+                    tables_to_remove.discard(model_table)
+                    for through in auto_through_models:
+                        tables_to_remove.discard(through._meta.db_table)
                 history_model = getattr(model, "history", None)
-                if history_model and history_model.model._meta.db_table in existing:
-                    editor.delete_model(history_model.model)
+                if history_model:
+                    history_table = history_model.model._meta.db_table
+                    if history_table in tables_to_remove:
+                        editor.delete_model(history_model.model)
+                        tables_to_remove.discard(history_table)
+                for through in auto_through_models:
+                    through_table = through._meta.db_table
+                    if through_table in tables_to_remove:
+                        editor.delete_model(through)
+                        tables_to_remove.discard(through_table)
 
                 app_label = model._meta.app_label
                 model_key = model.__name__.lower()
-                global_apps.all_models[app_label].pop(model_key, None)
-                app_config = global_apps.get_app_config(app_label)
-                with suppress(LookupError):
-                    app_config.models.pop(model_key, None)
-                if history_model:
+                if model_table in created_tables:
+                    global_apps.all_models[app_label].pop(model_key, None)
+                    app_config = global_apps.get_app_config(app_label)
+                    with suppress(LookupError):
+                        app_config.models.pop(model_key, None)
+                if (
+                    history_model
+                    and history_model.model._meta.db_table in created_tables
+                ):
                     hist_key = history_model.model.__name__.lower()
                     global_apps.all_models[app_label].pop(hist_key, None)
                     with suppress(LookupError):
                         app_config.models.pop(hist_key, None)
+                for through in auto_through_models:
+                    through_label = through._meta.app_label
+                    through_key = through.__name__.lower()
+                    if through._meta.db_table in created_tables:
+                        global_apps.all_models[through_label].pop(through_key, None)
+                        with suppress(LookupError):
+                            global_apps.get_app_config(through_label).models.pop(
+                                through_key, None
+                            )
 
         global_apps.clear_cache()
+        cls._gm_created_tables = set()
 
         # remove classes from metaclass registries
         GeneralManagerMeta.all_classes = [
