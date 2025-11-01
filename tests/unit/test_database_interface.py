@@ -135,7 +135,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             model_key = model._meta.model_name
             app_config.models.pop(model_key, None)
             apps.all_models["general_manager"].pop(model_key, None)
-
+        apps.clear_cache()
         super().tearDownClass()
 
     def setUp(self):

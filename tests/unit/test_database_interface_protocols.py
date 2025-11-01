@@ -61,6 +61,7 @@ class ProtocolsTestCase(TransactionTestCase):
         apps.all_models["general_manager"].pop(history_key, None)
         app_config.models.pop(model_key, None)
         app_config.models.pop(history_key, None)
+        apps.clear_cache()
         super().tearDownClass()
 
     def test_supports_history_protocol_recognizes_history_attribute(self):
