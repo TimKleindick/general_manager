@@ -67,6 +67,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         apps.all_models["general_manager"].pop(history_key, None)
         app_config.models.pop(model_key, None)
         app_config.models.pop(history_key, None)
+        apps.clear_cache()
         super().tearDownClass()
 
     def test_resolve_model_class_from_class_reference(self) -> None:

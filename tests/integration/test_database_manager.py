@@ -500,5 +500,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         factory_instance = self.TestHuman.Factory.create_batch(1)[0]
         self.assertIsInstance(factory_instance, self.TestHuman)
-        stored = self.TestHuman.objects.get(pk=factory_instance.identification["id"])
+        stored = self.TestHuman.Interface._model.objects.get(
+            pk=factory_instance.identification["id"]
+        )
         self.assertIsNotNone(stored)

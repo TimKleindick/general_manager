@@ -75,11 +75,6 @@ class DummyManager(GeneralManager):
 
 PersonInterface._parent_class = DummyManager
 
-_app_config = apps.get_app_config("general_manager")
-for _model in (PersonModel, PersonModel.tags.through):
-    _app_config.models.pop(_model._meta.model_name, None)
-    apps.all_models["general_manager"].pop(_model._meta.model_name, None)
-
 
 class DBBasedInterfaceTestCase(TransactionTestCase):
     @classmethod
@@ -88,33 +83,48 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Creates the database table for the PersonModel before running any tests in the test case class.
         """
         super().setUpClass()
+        cls._app_config = apps.get_app_config("general_manager")
+        cls._original_app_models: dict[str, type[models.Model] | None] = {}
+        cls._original_all_models: dict[str, type[models.Model] | None] = {}
+
+        app_models = cls._app_config.models
+        registry_models = apps.all_models.setdefault("general_manager", {})
+
         for model in (PersonModel, PersonModel.tags.through):
-            if (
-                model._meta.model_name
-                not in apps.get_app_config("general_manager").models
-            ):
-                apps.register_model("general_manager", model)
+            model_name = model._meta.model_name
+            cls._original_app_models[model_name] = app_models.get(model_name)
+            cls._original_all_models[model_name] = registry_models.get(model_name)
+
+            app_models[model_name] = model
+            registry_models[model_name] = model
+
+        apps.clear_cache()
         with connection.schema_editor() as schema:
             schema.create_model(PersonModel)
 
     @classmethod
     def tearDownClass(cls):
         """
-        Deletes the PersonModel table from the test database after all tests in the class have run.
+        Cleans up PersonModel data and restores the Django app registry after the tests.
         """
-        with connection.schema_editor() as schema:
-            schema.delete_model(PersonModel)
-        from django.apps import apps
+        PersonModel.tags.through.objects.all().delete()
+        PersonModel.objects.all().delete()
+        app_models = cls._app_config.models
+        registry_models = apps.all_models.setdefault("general_manager", {})
 
-        app_config = apps.get_app_config("general_manager")
-        person_model_name = PersonModel._meta.model_name
-        app_config.models.pop(person_model_name, None)
-        apps.all_models["general_manager"].pop(person_model_name, None)
+        for model_name, original in cls._original_app_models.items():
+            if original is None:
+                app_models.pop(model_name, None)
+            else:
+                app_models[model_name] = original
 
-        through_model = PersonModel.tags.through
-        through_model_name = through_model._meta.model_name
-        app_config.models.pop(through_model_name, None)
-        apps.all_models["general_manager"].pop(through_model_name, None)
+        for model_name, original in cls._original_all_models.items():
+            if original is None:
+                registry_models.pop(model_name, None)
+            else:
+                registry_models[model_name] = original
+
+        apps.clear_cache()
         super().tearDownClass()
 
     def setUp(self):
