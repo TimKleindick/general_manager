@@ -326,7 +326,7 @@ class GraphQL:
         """
         Register GraphQL mutation classes for a GeneralManager based on its Interface.
 
-        If the manager's Interface overrides the default `create`, `update`, or `deactivate` methods, corresponding mutation classes are generated and stored in the class-level mutation registry under the names `create<ManagerName>`, `update<ManagerName>`, and `delete<ManagerName>`. Each generated mutation exposes a `success` flag and a field named for the manager class that returns the created/updated/deactivated object.
+        If the manager's Interface overrides the default `create`, `update`, or `delete` methods, corresponding mutation classes are generated and stored in the class-level mutation registry under the names `create<ManagerName>`, `update<ManagerName>`, and `delete<ManagerName>`. Each generated mutation exposes a `success` flag and a field named for the manager class that returns the created/updated/deleted object when available.
 
         Parameters:
             generalManagerClass (type[GeneralManager]): Manager class whose `Interface` determines which mutations are generated and registered.
@@ -370,7 +370,7 @@ class GraphQL:
                 },
             )
 
-        if InterfaceBase.deactivate.__code__ != interface_cls.deactivate.__code__:
+        if InterfaceBase.delete.__code__ != interface_cls.delete.__code__:
             delete_name = f"delete{generalManagerClass.__name__}"
             cls._mutations[delete_name] = cls.generate_delete_mutation_class(
                 generalManagerClass, default_return_values
@@ -1775,9 +1775,9 @@ class GraphQL:
         default_return_values: dict[str, Any],
     ) -> type[graphene.Mutation] | None:
         """
-        Generates a GraphQL mutation class for deactivating (soft-deleting) an instance of a GeneralManager subclass.
+        Generates a GraphQL mutation class for deleting an instance of a GeneralManager subclass.
 
-        The generated mutation accepts input fields defined by the manager's interface, deactivates the specified instance using its ID, and returns a dictionary containing a success status and the deactivated instance keyed by the class name. Returns None if the manager class does not define an interface.
+        The generated mutation accepts input fields defined by the manager's interface, deletes the specified instance using its ID, and returns a dictionary containing a success status and the deleted instance (when available) keyed by the class name. Returns None if the manager class does not define an interface.
 
         Returns:
             The generated Graphene mutation class, or None if no interface is defined.
@@ -1794,16 +1794,16 @@ class GraphQL:
             **kwargs: Any,
         ) -> dict:
             """
-            Deactivates the identified GeneralManager instance.
+            Deletes the identified GeneralManager instance.
 
             Returns:
-                dict: `success` key with `True` if deactivation succeeded, `False` otherwise. On success, includes an additional key equal to the manager class name containing the deactivated instance.
+                dict: `success` key with `True` if deletion succeeded, `False` otherwise. On success, includes an additional key equal to the manager class name containing the deleted instance when available.
             """
             manager_id = kwargs.pop("id", None)
             if manager_id is None:
                 raise GraphQL._handle_graph_ql_error(MissingManagerIdentifierError())
             try:
-                instance = generalManagerClass(id=manager_id).deactivate(
+                instance = generalManagerClass(id=manager_id).delete(
                     creator_id=info.context.user.id
                 )
             except HANDLED_MANAGER_ERRORS as error:

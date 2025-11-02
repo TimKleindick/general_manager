@@ -1,6 +1,7 @@
 """Database-backed interface implementation for GeneralManager classes."""
 
 from __future__ import annotations
+import warnings
 from typing import Any, Callable, ClassVar, Generic, TYPE_CHECKING, Type, TypeVar, cast
 from django.db import models, transaction
 from django.db.models import NOT_PROVIDED
@@ -32,6 +33,8 @@ from general_manager.interface.database_interface_protocols import (
 from general_manager.interface.models import (
     GeneralManagerBasisModel,
     GeneralManagerModel,
+    SoftDeleteGeneralManagerModel,
+    SoftDeleteMixin,
     get_full_clean_methode,
 )
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -105,6 +108,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     _model: Type[HistoryModelT]
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
     database: ClassVar[str | None] = None
+    _active_manager: ClassVar[models.Manager[models.Model] | None] = None
 
     @classmethod
     def _get_database_alias(cls) -> str | None:
@@ -117,14 +121,41 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         return getattr(cls, "database", None)
 
     @classmethod
-    def _get_manager(cls) -> models.Manager[HistoryModelT]:
+    def _get_manager(cls, *, only_active: bool = True) -> models.Manager[HistoryModelT]:
         """
         Get the model manager for the interface's model, bound to the configured database alias if one is set.
 
         Returns:
             manager (django.db.models.Manager[HistoryModelT]): The model manager for the interface's model, using the configured database alias when provided.
         """
-        manager = cls._model._default_manager
+        if getattr(cls, "_use_soft_delete", False):
+            if not only_active and hasattr(cls._model, "all_objects"):
+                manager = cast(models.Manager[HistoryModelT], cls._model.all_objects)  # type: ignore[attr-defined]
+            elif only_active and not hasattr(cls._model, "all_objects"):
+                cached_manager = cast(
+                    models.Manager[HistoryModelT] | None,
+                    getattr(cls, "_active_manager", None),
+                )
+                if cached_manager is None:
+                    base_manager = cls._model._default_manager
+
+                    class _FilteredManager(models.Manager[HistoryModelT]):  # type: ignore[misc]
+                        def get_queryset(self_inner) -> models.QuerySet[HistoryModelT]:
+                            queryset = base_manager.get_queryset()
+                            if self_inner._db:  # type: ignore[attr-defined]
+                                queryset = queryset.using(self_inner._db)  # type: ignore[attr-defined]
+                            return queryset.filter(is_active=True)
+
+                    filtered_manager: models.Manager[HistoryModelT] = _FilteredManager()
+                    filtered_manager.model = cls._model  # type: ignore[attr-defined]
+                    cls._active_manager = filtered_manager  # type: ignore[attr-defined]
+                    manager = filtered_manager
+                else:
+                    manager = cached_manager
+            else:
+                manager = cls._model._default_manager
+        else:
+            manager = cls._model._default_manager
         database_alias = cls._get_database_alias()
         if database_alias:
             manager = manager.db_manager(database_alias)
@@ -135,9 +166,16 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         """
         Get a queryset for the interface's model using the configured database alias.
 
-        @returns: A Django QuerySet of the interface's model (models.QuerySet[HistoryModelT]) bound to the configured database alias.
+        Returns:
+            A Django QuerySet of the interface's model (models.QuerySet[HistoryModelT]) bound to the configured database alias.
         """
-        return cast(models.QuerySet[HistoryModelT], cls._get_manager().all())
+        manager = cls._get_manager(only_active=True)
+        queryset: models.QuerySet[HistoryModelT] = manager.all()  # type: ignore[assignment]
+        if getattr(cls, "_use_soft_delete", False) and not hasattr(
+            cls._model, "all_objects"
+        ):
+            queryset = queryset.filter(is_active=True)
+        return cast(models.QuerySet[HistoryModelT], queryset)
 
     def __init__(
         self,
@@ -170,7 +208,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         Returns:
             HistoryModelT: The current model instance, or the historical instance at or before `search_date` if one is found.
         """
-        manager = self.__class__._get_manager()
+        manager = self.__class__._get_manager(only_active=True)
         instance = cast(HistoryModelT, manager.get(pk=self.pk))
         if search_date is not None:
             # Normalize to aware datetime if needed
@@ -217,8 +255,12 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
             DatabaseBucket: Bucket wrapping the filtered queryset.
         """
 
+        include_inactive = kwargs.pop("include_inactive", False)
         kwargs = cls.__parse_kwargs(**kwargs)
-        queryset = cls._get_queryset().filter(**kwargs)
+        queryset_base = cls._get_queryset()
+        if include_inactive:
+            queryset_base = cls._get_manager(only_active=False).all()
+        queryset = queryset_base.filter(**kwargs)
 
         return DatabaseBucket(
             cast(models.QuerySet[models.Model], queryset),
@@ -237,8 +279,12 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         Returns:
             DatabaseBucket: Bucket wrapping the queryset after applying the exclusions.
         """
+        include_inactive = kwargs.pop("include_inactive", False)
         kwargs = cls.__parse_kwargs(**kwargs)
-        queryset = cls._get_queryset().exclude(**kwargs)
+        queryset_base = cls._get_queryset()
+        if include_inactive:
+            queryset_base = cls._get_manager(only_active=False).all()
+        queryset = queryset_base.exclude(**kwargs)
 
         return DatabaseBucket(
             cast(models.QuerySet[models.Model], queryset),
@@ -603,6 +649,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         """
         model_fields: dict[str, Any] = {}
         meta_class = None
+        use_soft_delete = False
         for attr_name, attr_value in interface.__dict__.items():
             if not attr_name.startswith("__"):
                 if attr_name == "Meta" and isinstance(attr_value, type):
@@ -617,25 +664,45 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         # Attach the Meta class or create a default one
         rules: list[Rule] | None = None
         if meta_class:
+            if hasattr(meta_class, "use_soft_delete"):
+                use_soft_delete = bool(meta_class.use_soft_delete)
+                delattr(meta_class, "use_soft_delete")
             model_fields["Meta"] = meta_class
-
             if hasattr(meta_class, "rules"):
                 rules = meta_class.rules
                 delattr(meta_class, "rules")
 
         # Create the concrete Django model dynamically
+        if use_soft_delete:
+            if (
+                base_model_class is GeneralManagerModel
+                or base_model_class is GeneralManagerBasisModel
+            ) and issubclass(SoftDeleteGeneralManagerModel, base_model_class):
+                base_classes: tuple[type[GeneralManagerBasisModel], ...] = (
+                    SoftDeleteGeneralManagerModel,
+                )
+            elif issubclass(base_model_class, SoftDeleteMixin):
+                base_classes = (base_model_class,)
+            else:
+                base_classes = (SoftDeleteMixin, base_model_class)  # type: ignore
+        else:
+            base_classes = (base_model_class,)
+
         model = cast(
             type[GeneralManagerBasisModel],
-            type(name, (base_model_class,), model_fields),
+            type(name, base_classes, model_fields),
         )
         if meta_class and rules:
             model._meta.rules = rules  # type: ignore[attr-defined]
             # add full_clean method
             model.full_clean = get_full_clean_methode(model)  # type: ignore[assignment]
+        if meta_class and use_soft_delete:
+            model._meta.use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
         # Determine interface type
         attrs["_interface_type"] = interface._interface_type
         interface_cls = type(interface.__name__, (interface,), {})
         interface_cls._model = model  # type: ignore[attr-defined]
+        interface_cls._use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
         attrs["Interface"] = interface_cls
 
         # Build the associated factory class
@@ -676,6 +743,12 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
             new_class.objects = interface_class._get_manager()  # type: ignore[attr-defined]
         except AttributeError:
             pass
+        if getattr(interface_class, "_use_soft_delete", False) and hasattr(
+            model, "all_objects"
+        ):
+            new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
+                only_active=False
+            )
 
     @classmethod
     def handle_interface(
@@ -786,35 +859,69 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         kwargs, many_to_many_kwargs = self._sort_kwargs(
             cast(Type[models.Model], model_cls), kwargs
         )
-        manager = self.__class__._get_manager()
+        manager = self.__class__._get_manager(only_active=False)
         instance = self.__set_attr_for_write(manager.get(pk=self.pk), kwargs)
         pk = self._save_with_history(instance, creator_id, history_comment)
         self.__set_many_to_many_attributes(instance, many_to_many_kwargs)
         return {"id": pk}
 
-    def deactivate(
+    def delete(
         self, creator_id: int | None, history_comment: str | None = None
     ) -> dict[str, Any]:
         """
-        Mark the current model instance as inactive and record the change in history.
+        Delete the current model instance, performing either a soft or hard delete.
 
         Parameters:
             creator_id (int | None): Identifier of the user performing the action, or None.
             history_comment (str | None): Optional comment to attach to the history entry.
 
         Returns:
-            dict[str, Any]: Dictionary containing the key `"id"` with the primary key of the deactivated instance.
+            dict[str, Any]: Dictionary containing the key `"id"` with the primary key of the deleted instance.
         """
-        manager = self.__class__._get_manager()
+        manager = self.__class__._get_manager(only_active=False)
         instance = manager.get(pk=self.pk)
-        if not isinstance(instance, SupportsActivation):
-            raise MissingActivationSupportError(instance.__class__.__name__)
-        instance.is_active = False
-        if history_comment:
-            history_comment = f"{history_comment} (deactivated)"
-        else:
-            history_comment = "Deactivated"
-        return {"id": self._save_with_history(instance, creator_id, history_comment)}
+        if getattr(self.__class__, "_use_soft_delete", False):
+            if not isinstance(instance, SupportsActivation):
+                raise MissingActivationSupportError(instance.__class__.__name__)
+            instance.is_active = False
+            history_comment = (
+                f"{history_comment} (deactivated)" if history_comment else "Deactivated"
+            )
+            return {
+                "id": self._save_with_history(instance, creator_id, history_comment)
+            }
+
+        history_comment = f"{history_comment} (deleted)" or "Deleted"
+        try:
+            instance.changed_by_id = creator_id  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        update_change_reason(instance, history_comment)
+        database_alias = self.__class__._get_database_alias()
+        atomic_context = (
+            transaction.atomic(using=database_alias)
+            if database_alias
+            else transaction.atomic()
+        )
+        with atomic_context:
+            if database_alias:
+                instance.delete(using=database_alias)
+            else:
+                instance.delete()
+        return {"id": self.pk}
+
+    def deactivate(
+        self, creator_id: int | None, history_comment: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Deprecated compatibility wrapper for `delete`.
+        """
+        warnings.warn(
+            "deactivate() is deprecated; use delete() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.delete(creator_id=creator_id, history_comment=history_comment)
 
     @staticmethod
     def __set_many_to_many_attributes(

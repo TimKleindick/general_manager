@@ -1,4 +1,5 @@
 from __future__ import annotations
+import warnings
 from typing import TYPE_CHECKING, Any, Iterator, Self, Type
 
 from general_manager.api.property import GraphQLProperty
@@ -211,33 +212,31 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return self.__class__(**self.identification)
 
     @data_change
-    def deactivate(
+    def delete(
         self,
         creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
-    ) -> Self:
+    ) -> Self | None:
         """
-        Deactivate the managed object and return a manager for the resulting state.
+        Delete the managed object. Performs a soft delete when the underlying interface is configured accordingly.
 
         Parameters:
             creator_id (int | None): Optional identifier of the user performing the action.
-            history_comment (str | None): Audit comment recorded with the deactivation.
+            history_comment (str | None): Audit comment recorded with the deletion.
             ignore_permission (bool): When True, skip permission validation.
 
         Returns:
-            Self: Manager instance representing the deactivated object.
+            Self | None: Manager instance representing the resulting state when using soft delete, otherwise ``None``.
 
         Raises:
             PermissionError: Propagated if the permission check fails.
         """
         if not ignore_permission:
             self.Permission.check_delete_permission(self, creator_id)
-        self._interface.deactivate(
-            creator_id=creator_id, history_comment=history_comment
-        )
+        self._interface.delete(creator_id=creator_id, history_comment=history_comment)
         logger.info(
-            "manager deactivated",
+            "manager deleted",
             context={
                 "manager": self.__class__.__name__,
                 "creator_id": creator_id,
@@ -245,7 +244,29 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 "identification": self.identification,
             },
         )
-        return self.__class__(**self.identification)
+        if getattr(self.Interface, "_use_soft_delete", False):
+            return self.__class__(**self.identification)
+        return None
+
+    def deactivate(
+        self,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        ignore_permission: bool = False,
+    ) -> Self | None:
+        """
+        Deprecated compatibility wrapper for `delete`.
+        """
+        warnings.warn(
+            "deactivate() is deprecated; use delete() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.delete(
+            creator_id=creator_id,
+            history_comment=history_comment,
+            ignore_permission=ignore_permission,
+        )
 
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[Self]:

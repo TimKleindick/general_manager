@@ -175,6 +175,8 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             if getattr(f, "editable", True) and not getattr(f, "primary_key", False)
         } - {"is_active"}
 
+        manager = model.all_objects if hasattr(model, "all_objects") else model.objects
+
         with transaction.atomic():
             json_unique_values: set[tuple[Any, ...]] = set()
 
@@ -189,7 +191,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                     )
                 unique_identifier = tuple(lookup[field] for field in unique_field_order)
                 json_unique_values.add(unique_identifier)
-                instance = model.objects.filter(**lookup).first()
+                instance = manager.filter(**lookup).first()
                 is_created = False
                 if instance is None:
                     # sanitize input and create with race-safety
@@ -202,7 +204,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                         is_created = True
                     except IntegrityError:
                         # created concurrently — fetch it
-                        instance = model.objects.filter(**lookup).first()
+                        instance = manager.filter(**lookup).first()
                         if instance is None:
                             raise
                 updated = False
@@ -211,8 +213,8 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                     if getattr(instance, field_name, None) != value:
                         setattr(instance, field_name, value)
                         updated = True
-                if updated or not instance.is_active:
-                    instance.is_active = True
+                if updated or not instance.is_active:  # type: ignore[union-attr]
+                    instance.is_active = True  # type: ignore[union-attr]
                     instance.save()
                     changes["created" if is_created else "updated"].append(instance)
 
@@ -224,7 +226,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                 }
                 unique_identifier = tuple(lookup[field] for field in unique_field_order)
                 if unique_identifier not in json_unique_values:
-                    instance.is_active = False
+                    instance.is_active = False  # type: ignore[attr-defined]
                     instance.save()
                     changes["deactivated"].append(instance)
 
@@ -363,6 +365,11 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             Returns:
                 The result of calling the wrapped function with `base_model_class` set to `GeneralManagerBasisModel`.
             """
+            meta = getattr(interface, "Meta", None)
+            if meta is None:
+                meta = type("Meta", (), {})
+                interface.Meta = meta  # type: ignore[attr-defined]
+            meta.use_soft_delete = True  # type: ignore[union-attr]
             return func(
                 name, attrs, interface, base_model_class=GeneralManagerBasisModel
             )

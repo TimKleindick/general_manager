@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
+import warnings
 from typing import (
     Type,
     TYPE_CHECKING,
@@ -147,6 +148,7 @@ class InterfaceBase(ABC):
 
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
+    _use_soft_delete: ClassVar[bool]
     input_fields: ClassVar[dict[str, "Input"]]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -319,9 +321,18 @@ class InterfaceBase(ABC):
         """Update the underlying record."""
         raise NotImplementedError
 
-    def deactivate(self, *args: Any, **kwargs: Any) -> Any:
-        """Deactivate the underlying record."""
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Delete the underlying record."""
         raise NotImplementedError
+
+    def deactivate(self, *args: Any, **kwargs: Any) -> Any:
+        """Deprecated compatibility wrapper for `delete`."""
+        warnings.warn(
+            "deactivate() is deprecated; use delete() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.delete(*args, **kwargs)
 
     @abstractmethod
     def get_data(self, search_date: datetime | None = None) -> Any:
