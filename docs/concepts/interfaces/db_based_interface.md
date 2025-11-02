@@ -1,6 +1,6 @@
 # Database Interfaces
 
-`DatabaseInterface` connects a manager to a Django model. It generates CRUD behaviour and keeps audit metadata in sync with your application.
+`DatabaseInterface` connects a manager to a Django model. It generates CRUD behaviour and keeps audit metadata in sync with your application. When you already have a Django model and only need the GeneralManager layer, use [`ExistingModelInterface`](existing_model_interface.md) instead of generating a new table.
 
 ## Defining fields
 
