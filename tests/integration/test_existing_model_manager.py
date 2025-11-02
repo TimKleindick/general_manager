@@ -16,7 +16,7 @@ class AlwaysPassRule:
     def __init__(self) -> None:
         """
         Initialize the AlwaysPassRule, setting up its internal call counter.
-        
+
         Sets the `calls` attribute to 0 to track how many times `evaluate` is invoked.
         """
         self.calls = 0
@@ -24,12 +24,12 @@ class AlwaysPassRule:
     def evaluate(self, obj: models.Model) -> bool:
         """
         Evaluate the rule against a Django model instance.
-        
+
         Increments the rule's internal call counter (`self.calls`) and always evaluates as passing.
-        
+
         Parameters:
             obj (models.Model): The model instance being evaluated.
-        
+
         Returns:
             `True` (this rule always passes).
         """
@@ -39,7 +39,7 @@ class AlwaysPassRule:
     def get_error_message(self) -> dict[str, list[str]]:
         """
         Return an empty mapping of field names to lists of validation error messages.
-        
+
         Returns:
             dict[str, list[str]]: An empty dictionary indicating no validation errors.
         """
@@ -51,21 +51,22 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Set up test fixtures by dynamically defining a LegacyCustomer model, an interface, and a manager used by the integration tests.
-        
+
         Defines:
         - LegacyCustomer: a Django model with fields `name`, `notes`, `is_active`, `changed_by` (FK to User), and `owners` (M2M to User), with Meta.app_label = "general_manager".
         - rule: an AlwaysPassRule instance used to track rule evaluation.
         - CustomerInterface: an ExistingModelInterface bound to LegacyCustomer with the rule in its Meta.rules.
         - CustomerManager: a GeneralManager using CustomerInterface, exposing a class-level `_rule_tracker` and an inner Factory (name = "Legacy Customer").
-        
+
         Assigns the created classes to class attributes on `cls`:
         - cls.LegacyCustomer, cls.CustomerInterface, cls.CustomerManager,
         - cls.general_manager_classes (list containing CustomerManager),
         - cls.read_only_classes (empty list).
-        
+
         Parameters:
             cls: The test class on which the model, interface, and manager are attached.
         """
+
         class LegacyCustomer(models.Model):
             name = models.CharField(max_length=64)
             notes = models.TextField(blank=True)
@@ -105,11 +106,11 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def setUp(self) -> None:
         """
         Prepare test fixtures for each test: reset the rule tracker, create two User instances, and create two LegacyCustomer-backed manager instances.
-        
+
         This sets the following attributes on self:
         - user1, user2: created User records.
         - customer_a, customer_b: instances created via CustomerManager.create with predefined fields and history_comment for customer_a.
-        
+
         All created records are persisted to the test database.
         """
         super().setUp()
@@ -133,7 +134,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def tearDown(self) -> None:
         """
         Clean up created test data and run superclass teardown.
-        
+
         Deletes all LegacyCustomer records, removes self.user1 and self.user2 from the database if they exist, and then calls the superclass tearDown.
         """
         self.LegacyCustomer.objects.all().delete()
@@ -147,7 +148,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def test_create_and_attribute_access(self) -> None:
         """
         Verify that creating a LegacyCustomer via the manager persists fields, records a creation history entry, and exposes related owners and attributes through the manager API.
-        
+
         Asserts that:
         - the persisted model's last history entry has reason "created customer",
         - the manager instance's `name` is "Acme Corp",
@@ -167,7 +168,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def test_update_applies_changes_and_history(self) -> None:
         """
         Verifies that updating a manager-backed instance applies field changes, updates its owners list, and records the provided history reason.
-        
+
         Asserts that the instance's name is changed, the owners_list contains the given user IDs, and the last historical record for the instance has the expected history_change_reason.
         """
         updated = self.customer_a.update(
@@ -206,7 +207,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def test_filter_exclude_and_all(self) -> None:
         """
         Verifies that `all()`, `filter()`, and `exclude()` on the manager return manager-wrapped objects and yield correct subsets.
-        
+
         Asserts that:
         - `all()` returns two manager instances.
         - `filter(name="Acme Corp")` returns a single manager instance whose identification matches `self.customer_a`.

@@ -81,7 +81,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
     def setUpClass(cls):
         """
         Prepare test database and app registry for PersonModel.
-        
+
         Registers PersonModel and its many-to-many through model in the "general_manager" app registry (saving the original registry entries for later restoration), clears the app cache, and creates the database table for PersonModel so tests in the test case class have a concrete schema to operate on.
         """
         super().setUpClass()
@@ -108,7 +108,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
     def tearDownClass(cls):
         """
         Tears down test database state and restores the app model registry for the "general_manager" app.
-        
+
         Deletes the PersonModel table, restores modified entries in the test class's app config and the global apps.all_models mapping for "general_manager", clears the apps cache, and then calls the superclass teardown.
         """
         with connection.schema_editor() as schema:
@@ -135,7 +135,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
     def setUp(self):
         """
         Create a test User and a PersonModel instance linked to that user for use in tests.
-        
+
         Sets self.user to a newly created User, sets self.person to a new PersonModel owned and changed_by that user, and adds the user to self.person.tags.
         """
         self.user = User.objects.create(username="tester")
@@ -903,7 +903,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     def setUpClass(cls):
         """
         Register WritableInterfaceTestModel with simple_history, ensure it's in the 'general_manager' app registry, and create database tables for the model and its history model.
-        
+
         This runs once for the test class to prepare the database schema required by tests.
         """
         super().setUpClass()
@@ -925,7 +925,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     def tearDownClass(cls):
         """
         Remove the WritableInterfaceTestModel and its history model from the database and app registry.
-        
+
         Deletes the database tables for the model and its history model, removes their entries from the "general_manager" app registry, and invokes the superclass teardown.
         """
         with connection.schema_editor() as schema:
@@ -945,7 +945,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     def setUp(self):
         """
         Create two test users and define a writable test interface class.
-        
+
         Creates User instances assigned to self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface class (assigned to self.interface_cls) configured for WritableInterfaceTestModel with an `id` input field.
         """
         from general_manager.interface.database_based_interface import (

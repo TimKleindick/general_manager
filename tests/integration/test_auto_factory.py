@@ -19,7 +19,7 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Register GeneralManager-backed test models on the test class for AutoFactory integration tests.
-        
+
         Defines four nested GeneralManager classes (Manufacturer, CarOption, Car, Fleet), each with a DatabaseInterface and Factory configuration used by the integration tests, and assigns them to class attributes (Manufacturer, CarOption, Car, Fleet). Also sets `general_manager_classes` to the list of those managers and initializes `read_only_classes` as an empty list.
         """
 
@@ -86,15 +86,15 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
                 ) -> list[dict[str, Any]]:
                     """
                     Create a deterministic list of fleet record dictionaries for integration tests.
-                    
+
                     Each record has a "label" of the form "{label}-{index}" and a "capacity" equal to capacity + index.
                     Parameters:
-                    	label (str): Base label used for each record. Defaults to "Fleet".
-                    	capacity (int): Starting capacity value for the first record.
-                    	count (int): Number of records to generate.
-                    	**extra (Any): Additional fields to include; if `changed_by` is present it will be copied into each record.
+                        label (str): Base label used for each record. Defaults to "Fleet".
+                        capacity (int): Starting capacity value for the first record.
+                        count (int): Number of records to generate.
+                        **extra (Any): Additional fields to include; if `changed_by` is present it will be copied into each record.
                     Returns:
-                    	list[dict[str, Any]]: List of record dictionaries with keys "label" and "capacity", and "changed_by" if provided.
+                        list[dict[str, Any]]: List of record dictionaries with keys "label" and "capacity", and "changed_by" if provided.
                     """
                     changed_by = extra.get("changed_by")
                     records: list[dict[str, Any]] = []
@@ -118,7 +118,7 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
     def setUp(self) -> None:
         """
         Create and persist a unique test user and assign it to self.user.
-        
+
         Creates a user with a UUID-based username using Django's user model and stores the resulting user instance on self.user for use in tests.
         """
         super().setUp()

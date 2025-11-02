@@ -37,7 +37,7 @@ class MissingModelConfigurationError(ValueError):
     def __init__(self, interface_name: str) -> None:
         """
         Initialize the MissingModelConfigurationError for a specific interface that did not define a required `model` attribute.
-        
+
         Parameters:
             interface_name (str): The name of the interface used to construct the error message.
         """
@@ -50,7 +50,7 @@ class InvalidModelReferenceError(TypeError):
     def __init__(self, reference: object) -> None:
         """
         Initialize the InvalidModelReferenceError with the offending model reference.
-        
+
         Parameters:
             reference (object): The model reference that could not be resolved; used in the error message.
         """
@@ -67,12 +67,12 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def _resolve_model_class(cls) -> type[models.Model]:
         """
         Resolve the configured `model` attribute to a concrete Django model class.
-        
+
         If `cls.model` is a string, attempt to resolve it via Django's app registry; if it is already a Django model class, use it directly. The resolved class is cached on `cls._model` and `cls.model`.
-        
+
         Returns:
             type[~django.db.models.Model]: The resolved Django model class.
-        
+
         Raises:
             MissingModelConfigurationError: If the interface did not define a `model` attribute.
             InvalidModelReferenceError: If `model` is neither a Django model class nor a resolvable app label.
@@ -101,10 +101,10 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def _ensure_history(model: type[models.Model]) -> None:
         """
         Attach django-simple-history tracking to a Django model if it isn't already registered.
-        
+
         Parameters:
             model (type[models.Model]): The Django model class to register for history tracking.
-        
+
         Notes:
             If the model is already registered for simple-history, this function is a no-op.
         """
@@ -116,9 +116,9 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def _apply_rules_to_model(cls, model: type[models.Model]) -> None:
         """
         Attach interface-defined validation rules to the provided Django model and replace its `full_clean` with a validating implementation.
-        
+
         If the interface defines no rules, the model is left unchanged. When rules are present, they are appended to the model's `_meta.rules` and the model's `full_clean` method is replaced with a generated validating method.
-        
+
         Parameters:
             model (type[models.Model]): The Django model class to modify.
         """
@@ -144,13 +144,13 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     ) -> type[AutoFactory]:
         """
         Create a new AutoFactory subclass configured to produce instances of the given Django model.
-        
+
         Parameters:
             name (str): Base name used to name the generated factory class (the factory will be "<name>Factory").
             interface_cls (type[ExistingModelInterface]): Interface class that the factory will reference via its `interface` attribute.
             model (type[models.Model]): Django model class that the factory's inner `Meta.model` will point to.
             factory_definition (type | None): Optional existing Factory class whose non-dunder attributes will be copied into the generated factory.
-        
+
         Returns:
             type[AutoFactory]: A dynamically created AutoFactory subclass bound to `model`, with copied attributes, an `interface` attribute set to `interface_cls`, and an inner `Meta` class referencing `model`.
         """
@@ -173,13 +173,13 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         """
         Prepare an interface for GeneralManager creation by resolving and attaching the existing Django model, ensuring history and rules are applied, and wiring a bound Factory.
-        
+
         Parameters:
             name: The name to use for the generated manager class (used when building the Factory).
             attrs: The attribute dict that will be used to create the manager class; this function mutates and returns it.
             interface: The interface class object that declares `model` (class or app label); a concrete interface subclass bound to the resolved model is produced.
             base_model_class: Ignored hook parameter kept for compatibility with the creation pipeline.
-        
+
         Returns:
             A tuple (attrs, concrete_interface, model) where `attrs` is the possibly-modified attribute dict, `concrete_interface` is the new interface class bound to the resolved model, and `model` is the resolved Django model class.
         """
@@ -213,9 +213,9 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     ) -> None:
         """
         Link the created GeneralManager subclass with its interface and the resolved Django model.
-        
+
         Sets the interface's internal parent reference to the newly created manager class and, if a model is provided, assigns that manager class to the model's `_general_manager_class` attribute.
-        
+
         Parameters:
             new_class: The newly created GeneralManager subclass to be linked as the parent.
             interface_class: The interface class instance that should reference `new_class` as its parent.
@@ -229,7 +229,7 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         Provide the pre- and post-creation hooks used by GeneralManagerMeta.
-        
+
         Returns:
             tuple[classPreCreationMethod, classPostCreationMethod]: A pair where the first element is the pre-creation hook (called before class creation) and the second element is the post-creation hook (called after class creation).
         """
@@ -239,10 +239,10 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def get_field_type(cls, field_name: str) -> type:
         """
         Get the Python type for a field on the wrapped model, resolving the configured model first if not already resolved.
-        
+
         Parameters:
             field_name (str): Name of the field on the underlying Django model.
-        
+
         Returns:
             type: The Python type corresponding to the specified model field.
         """

@@ -32,7 +32,7 @@ class ProtocolsTestCase(TransactionTestCase):
     def setUpClass(cls):
         """
         Prepare database and app state for ProtocolTestModel tests.
-        
+
         Registers ProtocolTestModel with simple_history, ensures the model is registered on the "general_manager"
         app, and creates database tables for both the model and its associated history model.
         """
@@ -55,7 +55,7 @@ class ProtocolsTestCase(TransactionTestCase):
     def tearDownClass(cls):
         """
         Remove the test model and its history model from the database schema and application registries, then clear app caches and invoke the superclass teardown.
-        
+
         Deletes the ProtocolTestModel and its associated history model from the database schema, removes their entries from the "general_manager" app's model registries and the global apps registry, clears Django's app cache, and calls the parent class's tearDownClass.
         """
         with connection.schema_editor() as schema:
@@ -197,7 +197,7 @@ class ProtocolsTestCase(TransactionTestCase):
     def test_history_query_chaining(self):
         """
         Verify that the model instance's history relation supports chaining queryset methods.
-        
+
         Create an instance, perform multiple updates to generate history entries, then call using(...).filter(...).last() on the history relation and assert a non-None result.
         """
         instance = ProtocolTestModel.objects.create(name="Chainable", is_active=True)

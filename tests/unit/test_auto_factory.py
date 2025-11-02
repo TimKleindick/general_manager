@@ -427,7 +427,7 @@ class FactoriesHelpersTestCase(TransactionTestCase):
     def setUpClass(cls):
         """
         Create database tables for DummyModel and DummyModel2 for the test class.
-        
+
         This class-level setup uses Django's schema editor to create the models' tables before any tests run.
         """
         super().setUpClass()
@@ -439,7 +439,7 @@ class FactoriesHelpersTestCase(TransactionTestCase):
     def tearDownClass(cls):
         """
         Tear down database tables created for the test models.
-        
+
         Deletes the database tables for DummyModel and DummyModel2 that were created in setUpClass.
         """
         super().tearDownClass()
