@@ -276,6 +276,9 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         Returns:
             HistoryModelT | None: Historical instance as of the specified date, if available.
         """
+        if not isinstance(instance, SupportsHistory):
+            return None
+
         history_source = cast(SupportsHistory, instance)
         history_manager = history_source.history
         database_alias = cls._get_database_alias()
