@@ -6,7 +6,7 @@ GeneralManager keeps cached data in sync by recording dependencies during read o
 
 When a manager or bucket resolves data, it records the operation in `DependencyTracker`. The tracker stores tuples of `(manager_name, operation, identifier)`. Any code wrapped in a `with DependencyTracker()` context receives a set of dependencies it touched.
 
-CRUD methods (`create`, `update`, `deactivate`) emit cache invalidation signals that match these tuples. When a match occurs, in-memory caches and persistent dependency indices can expire stale entries.
+CRUD methods (`create`, `update`, `delete`) emit cache invalidation signals that match these tuples. When a match occurs, in-memory caches and persistent dependency indices can expire stale entries.
 
 ### Composite filters and excludes
 

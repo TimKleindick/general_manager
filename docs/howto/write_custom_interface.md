@@ -25,7 +25,7 @@ class ExternalReportInterface(InterfaceBase):
 
 ## Step 2: Implement manager operations
 
-Provide the methods your manager needs. For read-only data, implement `filter`, `exclude`, and `all`. For write capabilities, add `create`, `update`, and `deactivate`.
+Provide the methods your manager needs. For read-only data, implement `filter`, `exclude`, and `all`. For write capabilities, add `create`, `update`, and `delete` (the legacy `deactivate` name now simply proxies to `delete`).
 
 ```python
 class ExternalReportInterface(InterfaceBase):

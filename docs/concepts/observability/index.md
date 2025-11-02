@@ -4,7 +4,7 @@ GeneralManager emits structured events for logs, audits, and cache changes so yo
 
 ## Goals
 
-- Surface every meaningful manager lifecycle change (`create`, `update`, `deactivate`) with consistent metadata (`manager`, `identification`, `creator_id`, touched fields).
+- Surface every meaningful manager lifecycle change (`create`, `update`, `delete`) with consistent metadata (`manager`, `identification`, `creator_id`, touched fields).
 - Ensure permission evaluations, cache invalidations, and rule executions leave an explainable trail for debugging and compliance.
 - Allow projects to plug additional telemetry (traces, metrics) on top of the emitted signals without modifying GeneralManager internals.
 

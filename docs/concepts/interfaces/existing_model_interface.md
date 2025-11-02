@@ -1,6 +1,6 @@
 # Existing Model Interfaces
 
-`ExistingModelInterface` (`general_manager.interface.existing_model_interface.ExistingModelInterface`) lets a manager wrap an existing Django model without generating new tables. It keeps the GeneralManager API intact—`create`, `update`, `deactivate`, factories, and history tracking all work the same—while pointing at the tables you already manage elsewhere.
+`ExistingModelInterface` (`general_manager.interface.existing_model_interface.ExistingModelInterface`) lets a manager wrap an existing Django model without generating new tables. It keeps the GeneralManager API intact—`create`, `update`, `delete`, factories, and history tracking all work the same—while pointing at the tables you already manage elsewhere. When the legacy model exposes an `is_active` column the interface enables soft delete automatically (`delete()` toggles the flag and the deprecated `deactivate()` alias forwards to it).
 
 ## When to use it
 
@@ -37,7 +37,7 @@ The interface resolves `"crm.Customer"` through Django's app registry, registers
 ## Auditing and validation
 
 - `create` and `update` assign `changed_by_id` when the model exposes that column and record `history_comment` values using `django-simple-history`.
-- `deactivate` toggles `is_active` and appends `" (deactivated)"` to the provided history comment; make sure the legacy model exposes an `is_active` field if you plan to call it.
+- `delete` toggles `is_active` (when the column exists) and appends `" (deactivated)"` to the provided history comment; if your legacy model lacks that field the interface performs a hard delete instead. Use `filter(include_inactive=True)` when you need to surface soft-deleted rows explicitly.
 - Define `Meta.rules` on the interface to add GeneralManager validation alongside any rules already declared on the model. The interface merges both sets and replaces `full_clean()` so the rule set runs consistently everywhere.
 
 ## Writing data through the manager
