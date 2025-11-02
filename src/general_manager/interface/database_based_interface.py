@@ -929,7 +929,6 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         return kwargs, many_to_many_kwargs
 
     @classmethod
-    @transaction.atomic
     def _save_with_history(
         cls,
         instance: WritableModelT,
@@ -950,16 +949,22 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         database_alias = cls._get_database_alias()
         if database_alias:
             instance._state.db = database_alias  # type: ignore[attr-defined]
-        try:
-            instance.changed_by_id = creator_id  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-        instance.full_clean()
-        if database_alias:
-            instance.save(using=database_alias)
-        else:
-            instance.save()
-        if history_comment:
-            update_change_reason(instance, history_comment)
+        atomic_context = (
+            transaction.atomic(using=database_alias)
+            if database_alias
+            else transaction.atomic()
+        )
+        with atomic_context:
+            try:
+                instance.changed_by_id = creator_id  # type: ignore[attr-defined]
+            except AttributeError:
+                pass
+            instance.full_clean()
+            if database_alias:
+                instance.save(using=database_alias)
+            else:
+                instance.save()
+            if history_comment:
+                update_change_reason(instance, history_comment)
 
         return instance.pk
