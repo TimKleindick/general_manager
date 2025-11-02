@@ -10,11 +10,13 @@ from typing import (
     TypeVar,
     Literal,
 )
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from factory.django import DjangoModelFactory
 from general_manager.factory.factories import (
     get_field_value,
     get_many_to_many_field_value,
+    _ensure_model_instance,
 )
 from django.contrib.contenttypes.fields import GenericForeignKey
 
@@ -178,7 +180,8 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             else:
                 m2m_values = get_many_to_many_field_value(field)
             if m2m_values:
-                getattr(obj, field.name).set(m2m_values)
+                normalized_values = cls._coerce_many_to_many_values(m2m_values)
+                getattr(obj, field.name).set(normalized_values)
 
     @classmethod
     def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
@@ -193,8 +196,18 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         """
         model: Type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
-        for field_name in m2m_fields:
-            kwargs.pop(field_name, None)
+        for field_name in list(kwargs.keys()):
+            if field_name in m2m_fields:
+                kwargs.pop(field_name, None)
+                continue
+            try:
+                field = model._meta.get_field(field_name)
+            except FieldDoesNotExist:
+                continue
+            if field.is_relation and (field.many_to_one or field.one_to_one):
+                kwargs[field_name] = cls._coerce_single_related_value(
+                    kwargs[field_name]
+                )
         return kwargs
 
     @classmethod
@@ -371,3 +384,25 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             ):
                 return value
         return None
+
+    @staticmethod
+    def _coerce_single_related_value(value: Any) -> Any:
+        """
+        Convert GeneralManager instances into their underlying Django model objects when used for relations.
+        """
+        return _ensure_model_instance(value)
+
+    @classmethod
+    def _coerce_many_to_many_values(cls, values: Any) -> list[models.Model] | Any:
+        """
+        Normalize many-to-many assignments so both manager instances and models are accepted.
+        """
+        if isinstance(values, models.Manager):
+            iterable = list(values.all())
+        elif isinstance(values, models.QuerySet):
+            iterable = list(values)
+        elif isinstance(values, (list, tuple, set)):
+            iterable = list(values)
+        else:
+            iterable = [values]
+        return [cls._coerce_single_related_value(item) for item in iterable]
