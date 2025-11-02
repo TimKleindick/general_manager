@@ -76,11 +76,11 @@ class MissingIdentificationFieldError(AttributeError):
 
     def __init__(self, field_name: str, instance: models.Model) -> None:
         """
-        Initialize the error with the missing field and offending instance.
+        Initialize an error indicating an identification field could not be resolved from a model instance.
 
         Parameters:
             field_name (str): Name of the identification field that could not be resolved.
-            instance (models.Model): The Django model instance missing the expected attribute.
+            instance (models.Model): The Django model instance that lacks the expected attribute.
         """
         super().__init__(
             f"Unable to resolve identification field '{field_name}' from instance {instance!r}"
@@ -100,14 +100,14 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls, strategy: Literal["build", "create"], params: dict[str, Any]
     ) -> models.Model | list[models.Model] | "GeneralManager" | list["GeneralManager"]:
         """
-        Generate and populate model instances using automatically derived field values.
+        Generate and populate model instances using interface-derived values and declared defaults.
 
         Parameters:
-            strategy (Literal["build", "create"]): Either "build" (unsaved instance) or "create" (saved instance).
-            params (dict[str, Any]): Field values supplied by the caller; any missing non-auto fields will be populated automatically.
+            strategy (Literal["build", "create"]): "build" returns unsaved model instance(s); "create" returns saved model instance(s).
+            params (dict[str, Any]): Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values.
 
         Returns:
-            models.Model | list[models.Model]: A generated model instance or a list of generated model instances.
+            A Django model instance or a list of Django model instances. If `strategy` is "create", returns a `GeneralManager` instance or a list of `GeneralManager` instances wrapping the created model(s).
 
         Raises:
             InvalidAutoFactoryModelError: If the factory target `_meta.model` is not a Django model class.
@@ -186,13 +186,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @classmethod
     def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
         """
-        Remove many-to-many keys from kwargs prior to model instantiation.
-
-        Parameters:
-            **kwargs (dict[str, Any]): Field values supplied by the caller.
+        Strip many-to-many entries from kwargs and coerce single-related values for foreign/one-to-one relation fields.
 
         Returns:
-            dict[str, Any]: Keyword arguments with many-to-many entries stripped.
+            dict[str, Any]: Keyword arguments with many-to-many fields removed and relation field values normalized.
         """
         model: Type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
@@ -331,13 +328,31 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         cls, generated: models.Model | list[models.Model]
     ) -> "GeneralManager" | list["GeneralManager"]:
         """
-        Convert generated model instance(s) into their corresponding GeneralManager instances.
+        Wrap one or more Django model instances into GeneralManager instances using the interface's parent manager class.
+
+        Returns:
+            A `GeneralManager` instance or a list of `GeneralManager` instances corresponding to the provided model instance(s).
+
+        Raises:
+            MissingManagerClassError: If the interface does not define a `_parent_class` manager to wrap instances.
         """
         manager_cls = getattr(cls.interface, "_parent_class", None)
         if manager_cls is None:
             raise MissingManagerClassError()
 
         def _to_manager(instance: models.Model) -> "GeneralManager":
+            """
+            Wrap a Django model instance into a GeneralManager using the instance's identification.
+
+            Parameters:
+                instance (models.Model): The Django model instance whose identification will be extracted.
+
+            Returns:
+                GeneralManager: A manager instance constructed with the identification extracted from `instance`.
+
+            Raises:
+                MissingIdentificationFieldError: If a required identification field cannot be resolved from `instance`.
+            """
             identification = cls._extract_identification(instance)
             return manager_cls(**identification)
 
@@ -348,7 +363,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @classmethod
     def _extract_identification(cls, instance: models.Model) -> dict[str, Any]:
         """
-        Build a manager identification mapping by reading the interface input fields from a model instance.
+        Builds the identification dictionary used to instantiate a manager by reading the interface's input fields from the given model instance.
+
+        Returns:
+            dict[str, Any]: A mapping of identification field names to their resolved values, formatted via the interface's `format_identification` method.
         """
         identification: dict[str, Any] = {}
         for name in cls.interface.input_fields.keys():
@@ -359,7 +377,18 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @staticmethod
     def _resolve_identification_value(instance: models.Model, field_name: str) -> Any:
         """
-        Resolve an identification value from an instance attribute, falling back to *_id accessors.
+        Resolve an identification value from a model instance for a given identification field.
+
+        Parameters:
+            instance (models.Model): The model instance to extract the value from.
+            field_name (str): The identification field name to resolve; if the attribute does not exist,
+                the function will attempt to use the corresponding `<field_name>_id` attribute.
+
+        Returns:
+            Any: The resolved value. If the resolved value is a Django model, its primary key (`pk`) is returned.
+
+        Raises:
+            MissingIdentificationFieldError: If neither `field_name` nor `field_name_id` exist on the instance.
         """
         if hasattr(instance, field_name):
             value = getattr(instance, field_name)
@@ -375,7 +404,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @classmethod
     def _get_declared_default(cls, field_name: str) -> Any | None:
         """
-        Retrieve a constant default value declared directly on the factory class.
+        Return the constant default value for field_name declared on the factory class, if present.
+
+        Parameters:
+            field_name (str): Field name to look up on the factory class.
+
+        Returns:
+            Any | None: The declared value if the class attribute exists and is not callable or a method descriptor (classmethod/staticmethod); otherwise `None`.
         """
         if field_name in cls.__dict__:
             value = cls.__dict__[field_name]
@@ -388,14 +423,26 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @staticmethod
     def _coerce_single_related_value(value: Any) -> Any:
         """
-        Convert GeneralManager instances into their underlying Django model objects when used for relations.
+        Resolve a related value to a Django model instance.
+
+        Parameters:
+            value (Any): A related value such as a Django model instance or a GeneralManager wrapper.
+
+        Returns:
+            Any: The Django model instance corresponding to the input, or the original value if it cannot be resolved to a model.
         """
         return _ensure_model_instance(value)
 
     @classmethod
     def _coerce_many_to_many_values(cls, values: Any) -> list[models.Model] | Any:
         """
-        Normalize many-to-many assignments so both manager instances and models are accepted.
+        Normalize various many-to-many assignment forms into a flat list of related model instances or values.
+
+        Parameters:
+            values (Any): A related-value or collection accepted for a many-to-many field — can be a Django Manager, QuerySet, any iterable (list/tuple/set), or a single model/identifier.
+
+        Returns:
+            list[models.Model] | list[Any]: A list where each element has been normalized; wrapper/manager-like inputs are converted to their underlying model instances or preserved values when conversion is not applicable.
         """
         if isinstance(values, models.Manager):
             iterable = list(values.all())

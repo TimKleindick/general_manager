@@ -19,19 +19,44 @@ from general_manager.manager.general_manager import GeneralManager
 
 class AlwaysFailRule:
     def __init__(self) -> None:
+        """
+        Initialize the rule instance and reset its invocation flag.
+
+        Sets the `called` attribute to False to indicate the rule has not been invoked yet.
+        """
         self.called = False
 
     def evaluate(self, obj: models.Model) -> bool:
+        """
+        Mark the rule as invoked for the given model instance and indicate validation failure.
+
+        Parameters:
+            obj (models.Model): The model instance being evaluated.
+
+        Returns:
+            bool: `False` always, indicating the object does not pass this rule.
+        """
         self.called = True
         return False
 
     def get_error_message(self) -> dict[str, list[str]]:
+        """
+        Provide a mapping of field names to validation error codes for this rule.
+
+        Returns:
+            dict[str, list[str]]: Mapping where each key is a field name and each value is a list of error codes; e.g., {"name": ["invalid"]}.
+        """
         return {"name": ["invalid"]}
 
 
 class ExistingModelInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        """
+        Prepare test fixtures by defining and registering a temporary Django model and creating its database tables.
+
+        Defines an in-file model class named ExistingUnitCustomer, registers it under the "general_manager" app if not already registered, ensures history tracking is attached, and creates the model and its history table in the test database. Assigns the model class to cls.model as a class-level attribute.
+        """
         super().setUpClass()
 
         class ExistingUnitCustomer(models.Model):
@@ -56,6 +81,11 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        """
+        Tears down the dynamically created model and its history, removing their database tables and unregistering them from the app registry.
+
+        Deletes the history model and main model tables, removes both models from the "general_manager" app registry and global model caches, clears the apps cache, and then delegates to the superclass tearDownClass for any additional cleanup.
+        """
         with connection.schema_editor() as schema:
             history_model = cls.model.history.model  # type: ignore[attr-defined]
             schema.delete_model(history_model)
@@ -92,6 +122,13 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
             InterfaceUnderTest._resolve_model_class()
 
     def test_resolve_model_class_invalid_reference_raises(self) -> None:
+        """
+        Verifies that resolving an invalid model string reference raises InvalidModelReferenceError.
+
+        Creates an interface class whose `model` attribute is an invalid string reference and asserts
+        that calling `_resolve_model_class()` raises `InvalidModelReferenceError`.
+        """
+
         class InterfaceUnderTest(ExistingModelInterface):
             model = "nonexistent.App"
 
@@ -99,6 +136,15 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
             InterfaceUnderTest._resolve_model_class()
 
     def test_pre_create_registers_history_and_factory(self) -> None:
+        """
+        Verifies that _pre_create registers model history, builds a Factory and Interface, and applies interface rules to model validation.
+
+        Asserts that:
+        - the resolved model is returned and the new attributes include `_interface_type` set to "existing", `Interface`, and a built `Factory`;
+        - the built Factory is bound to the created interface class and its `_meta.model` points to the model;
+        - the model has a `history` attribute and the interface rule is copied into `model._meta.rules`;
+        - creating a model instance that violates the rule causes `full_clean()` to raise `ValidationError` and the rule's `evaluate` was invoked.
+        """
         rule = AlwaysFailRule()
 
         class InterfaceUnderTest(ExistingModelInterface):
@@ -132,6 +178,16 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         self.assertTrue(rule.called)
 
     def test_post_create_links_manager_and_model(self) -> None:
+        """
+        Verifies that post-creation links the generated manager class with the interface and model.
+
+        After running _pre_create and dynamically creating a manager subclass, _post_create should:
+        - set the interface class's _parent_class to the manager class,
+        - set the model's _general_manager_class to the manager class,
+        - attach a concrete Interface class on the manager that is a type,
+        - ensure that the attached Interface has its _parent_class set to the manager and its _model set to the model.
+        """
+
         class InterfaceUnderTest(ExistingModelInterface):
             model = self.model
 
@@ -203,9 +259,24 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         # Add existing rules to model
         class ExistingRule:
             def evaluate(self, obj: models.Model) -> bool:
+                """
+                Indicates whether the rule accepts the provided model instance.
+
+                Parameters:
+                    obj (models.Model): The model instance to evaluate.
+
+                Returns:
+                    `true` if the instance satisfies the rule; for this implementation it is always `true`.
+                """
                 return True
 
             def get_error_message(self) -> dict[str, list[str]]:
+                """
+                Provide the rule's error messages keyed by field names.
+
+                Returns:
+                    dict[str, list[str]]: A mapping from model field names to a list of error messages for each field; an empty dict if there are no error messages.
+                """
                 return {}
 
         existing_rule = ExistingRule()
@@ -410,7 +481,9 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
 
     def test_pre_create_handles_factory_in_attrs(self) -> None:
         """
-        Tests that _pre_create extracts Factory from attrs if provided.
+        Verify that _pre_create replaces a provided Factory class in attrs with a constructed factory preserving custom attributes.
+
+        Asserts that the returned attrs contain a "Factory" entry that is not the original Factory class and that the constructed factory exposes attributes defined on the provided Factory definition (e.g., `custom_value`).
         """
 
         class CustomFactory:
@@ -486,7 +559,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
 
     def test_post_create_sets_general_manager_class_on_model(self) -> None:
         """
-        Tests that _post_create sets _general_manager_class on the model.
+        Ensure that after post-creation the model's _general_manager_class attribute references the created GeneralManager subclass.
         """
 
         class TestInterface(ExistingModelInterface):
