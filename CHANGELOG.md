@@ -2,6 +2,94 @@
 
 <!-- version list -->
 
+## v0.22.0 (2025-11-02)
+
+### Bug Fixes
+
+- Add database alias handling for model saving in AutoFactory
+  ([`8ed71b4`](https://github.com/TimKleindick/general_manager/commit/8ed71b44a15b446d7566bceb277c4e82f68d4504))
+
+- Add MissingManagerClassError for better error handling in AutoFactory
+  ([`bcaff0d`](https://github.com/TimKleindick/general_manager/commit/bcaff0d6743fe511232b7a0c249f71cf48481304))
+
+- Add type check for instance in get_historical_instance method
+  ([`052e732`](https://github.com/TimKleindick/general_manager/commit/052e7329a1e5b3ea1bd2581a6b41a1ddfeee78cf))
+
+- Clear app cache in tearDownClass methods for better resource management
+  ([`f567764`](https://github.com/TimKleindick/general_manager/commit/f56776419f6ac4fcdd941c2fc654cb27a2152f52))
+
+- Enhance AutoFactory to handle many-to-many relationships and related values
+  ([`ffaa33b`](https://github.com/TimKleindick/general_manager/commit/ffaa33be326f3526dc4a0ff614d1a51a48621133))
+
+- Ensure model class is resolved before retrieving field type in ExistingModelInterface
+  ([`27c1277`](https://github.com/TimKleindick/general_manager/commit/27c1277ffecd06ee8bf727456416c330e62fff36))
+
+- Handle empty CharField values and improve manager instance resolution
+  ([`c0f7b76`](https://github.com/TimKleindick/general_manager/commit/c0f7b7618ae77a2489577e0caf0867f6213a318c))
+
+- Transaction handling in WritableDBBasedInterface to use context manager
+  ([`826c045`](https://github.com/TimKleindick/general_manager/commit/826c045a12a76fabd2a09708313ee8842e320563))
+
+### Documentation
+
+- Add audit logging documentation and update navigation in MkDocs
+  ([`3eda396`](https://github.com/TimKleindick/general_manager/commit/3eda3967284e6017a93a1b4a576fc6a984ab4c87))
+
+- Add custom audit logger and permission cookbook examples, enhance audit logger analysis tutorial
+  ([`156be12`](https://github.com/TimKleindick/general_manager/commit/156be125c123b9c13b8f5be8f9a6b321dde8e6e9))
+
+- Add docstrings for existing model interface and auto factory
+  ([`91b38f8`](https://github.com/TimKleindick/general_manager/commit/91b38f8b260bbb90c7677062907202178f7b217a))
+
+- Add ExistingModelInterface documentation and examples
+  ([`1e6a871`](https://github.com/TimKleindick/general_manager/commit/1e6a871cb1e30e52053448b9b9177dcc3aacf9cf))
+
+- Add roadmap
+  ([`2a45105`](https://github.com/TimKleindick/general_manager/commit/2a451053445be78db92b1b436f65fc1e88eac7df))
+
+- Update RejectInvoicePermission to use classmethod and improve error handling
+  ([`e9ccd23`](https://github.com/TimKleindick/general_manager/commit/e9ccd23ffe2644d76694af395231c85ddd9899f6))
+
+### Features
+
+- Add ExistingModelInterface
+  ([`3d74984`](https://github.com/TimKleindick/general_manager/commit/3d7498464db1d137918d6a68995a296d15169bc1))
+
+- Enable multiple databases to be used with database based mangers
+  ([`890b78c`](https://github.com/TimKleindick/general_manager/commit/890b78cdf39316ae5d54235dce112a5c71e5741a))
+
+- Enhance factory utilities to support GeneralManager instances and improve field value generation
+  ([`4cf4b76`](https://github.com/TimKleindick/general_manager/commit/4cf4b76950ebb432e822d4f173d8d346c1e3ced5))
+
+- Implement protocols for database interface capabilities
+  ([`1be213b`](https://github.com/TimKleindick/general_manager/commit/1be213becc712bafe3ac6cec7cc64604ea3b5f98))
+
+### Refactoring
+
+- Simplify DatabaseInterface and splitting read and write
+  ([`fd2dbc6`](https://github.com/TimKleindick/general_manager/commit/fd2dbc66feab61e691ff00d5f443ee72c2181226))
+
+### Testing
+
+- Add integration tests for AutoFactory with GeneralManager classes
+  ([`19d6e2e`](https://github.com/TimKleindick/general_manager/commit/19d6e2e6b467fd051966c2a27bc2ee7942f7459d))
+
+- Add integration tests for ExistingModelInterface and DatabaseInterface
+  ([`83c37bc`](https://github.com/TimKleindick/general_manager/commit/83c37bc36bb6edcfb462d6a4eb809d6d57086516))
+
+- Add unit test for MissingManagerClassError message in AutoFactoryTestCase
+  ([`a8ddeda`](https://github.com/TimKleindick/general_manager/commit/a8ddeda47fa76324888865a82f82742f6e703198))
+
+- Improve user deletion logic in tearDown method to handle None values
+  ([`6bef499`](https://github.com/TimKleindick/general_manager/commit/6bef499c7a3b1027525c3bab02464e5862fa212d))
+
+- Refactor and clean up unit tests for AutoFactory and ExistingModelInterface
+  ([`28e6027`](https://github.com/TimKleindick/general_manager/commit/28e6027776d6aed993ba0e01a71e2ae730a6a68d))
+
+- Remove user cleanup from tearDown method in AutoFactoryIntegrationTest
+  ([`483b97d`](https://github.com/TimKleindick/general_manager/commit/483b97d6232a99b506f42232a6c8ea0ba8ccef0d))
+
+
 ## v0.21.0 (2025-10-29)
 
 ### Bug Fixes
