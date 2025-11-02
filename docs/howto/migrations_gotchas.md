@@ -16,7 +16,7 @@ When you rename a manager attribute or interface field, update existing migratio
 
 ## Read-only interfaces
 
-Read-only data synchronises `_data` entries during startup. If you remove entries, they are deactivated rather than deleted. Write data migrations when you need permanent removal.
+Read-only data synchronises `_data` entries during startup. If you remove entries, they are soft-deleted (`Meta.use_soft_delete = True` is forced for read-only managers). Write data migrations when you need permanent removal.
 
 ## Historical data
 

@@ -43,7 +43,7 @@ for summary in ProjectSummary.filter(project=my_project):
     print(summary.date, summary.total_volume)
 ```
 
-Because calculation managers do not persist data, `create`, `update`, and `deactivate` are unavailable. They still participate in dependency tracking, so cached calculations refresh when related managers change.
+Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking, so cached calculations refresh when related managers change.
 
 ## Input helpers
 

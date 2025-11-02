@@ -25,7 +25,7 @@ You can use all field types, including custom fields like `MeasurementField`. Dj
 
 ## CRUD operations
 
-Managers expose `create`, `update`, and `deactivate` methods that call the interface. Each method accepts `creator_id` and `history_comment` arguments for audit trails.
+Managers expose `create`, `update`, and `delete` methods that call the interface. Each method accepts `creator_id` and `history_comment` arguments for audit trails. The legacy `deactivate` name remains available as a deprecated alias.
 
 ```python
 material = Material.create(
@@ -39,6 +39,10 @@ material.update(
     description="Updated description",
 )
 ```
+
+### Soft deletes
+
+New database-backed managers perform hard deletes by default. Add `use_soft_delete = True` to the interface's `Meta` class to keep the historical `is_active` flag and route `delete()` calls through a soft delete. When enabled GeneralManager automatically injects filtered managers (`objects` returns active rows, `all_objects` includes inactive ones), honours explicit `filter(is_active=…)` lookups, and preserves the existing history comments (`"… (deactivated)"`). Pass `include_inactive=True` to `filter()`/`exclude()` when you need the full dataset without touching the model's managers directly.
 
 ## Many-to-many relationships
 
@@ -68,7 +72,7 @@ class Country(GeneralManager):
         name = CharField(max_length=50)
 ```
 
-On startup the interface synchronises `_data` with the table, creating, updating, or deactivating entries as needed. Managers expose read operations only; write attempts raise exceptions.
+On startup the interface synchronises `_data` with the table, creating, updating, or soft-deleting entries as needed (read-only interfaces force `Meta.use_soft_delete = True`). Managers expose read operations only; write attempts raise exceptions.
 
 ## Validation hooks
 

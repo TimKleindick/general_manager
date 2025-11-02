@@ -4,7 +4,7 @@ Use the following strategies to test managers, permissions, and GraphQL APIs eff
 
 ## Unit tests
 
-- Test manager behaviour in isolation by instantiating them with factories and calling methods such as `update`, `deactivate`, and computed properties.
+- Test manager behaviour in isolation by instantiating them with factories and calling methods such as `update`, `delete`, and computed properties.
 - Evaluate rules by asserting that invalid payloads raise `ValidationError`.
 
 ## Permission tests

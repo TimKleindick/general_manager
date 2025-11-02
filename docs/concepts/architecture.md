@@ -9,7 +9,7 @@ A manager is a lightweight wrapper around an interface. It exposes attributes de
 Key properties:
 
 - Lazy attribute resolution: attributes are evaluated when accessed, allowing caching and property descriptors such as `@graph_ql_property`.
-- Uniform API: `create`, `update`, `deactivate`, `filter`, and `all` methods behave consistently across interfaces.
+- Uniform API: `create`, `update`, `delete`, `filter`, and `all` methods behave consistently across interfaces (with the deprecated `deactivate` alias forwarding to `delete`).
 - Permission hook: operations delegate to the nested `Permission` class before touching the database.
 
 ## Interfaces
@@ -17,7 +17,7 @@ Key properties:
 Interfaces (see `general_manager.interface`) implement the actual persistence or computation strategy. GeneralManager ships with database-backed, read-only, and calculation interfaces. Interfaces provide:
 
 - Field definitions that map to Django model fields or `Input` descriptors.
-- CRUD implementations, including `create`, `update`, and `deactivate`.
+- CRUD implementations, including `create`, `update`, and `delete`.
 - Hooks for validation (`clean`), change history recording, and dependency updates.
 
 Interfaces expose an `.identification` structure used by managers to rehydrate objects after operations.
