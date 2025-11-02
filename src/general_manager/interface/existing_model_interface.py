@@ -195,6 +195,7 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         )
         concrete_interface._model = cast(type[ExistingModelT], model)
         concrete_interface.model = model
+        concrete_interface._use_soft_delete = hasattr(model, "is_active")
 
         manager_factory = cast(type | None, attrs.pop("Factory", None))
         attrs["_interface_type"] = interface_cls._interface_type
@@ -224,6 +225,24 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         interface_class._parent_class = new_class
         if model is not None:
             model._general_manager_class = new_class  # type: ignore[attr-defined]
+        try:
+            new_class.objects = interface_class._get_manager()  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        if (
+            getattr(interface_class, "_use_soft_delete", False)
+            and model is not None
+            and hasattr(model, "all_objects")
+        ):
+            new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
+                only_active=False
+            )
+        elif getattr(interface_class, "_use_soft_delete", False) and model is not None:
+            if not hasattr(model, "all_objects"):
+                model.all_objects = model._default_manager  # type: ignore[attr-defined]
+            new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
+                only_active=False
+            )
 
     @classmethod
     def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:

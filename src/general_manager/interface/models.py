@@ -54,14 +54,39 @@ def get_full_clean_methode(model: Type[models.Model]) -> Callable[..., None]:
     return full_clean
 
 
+class ActiveManager(models.Manager):
+    """Manager returning only rows marked as active."""
+
+    def get_queryset(self) -> models.QuerySet[Any]:
+        """Return queryset limited to active objects."""
+        return super().get_queryset().filter(is_active=True)
+
+
+class SoftDeleteMixin(models.Model):
+    """Mixin providing soft-delete support via an `is_active` flag."""
+
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    objects = ActiveManager()  # type: ignore[var-annotated]
+    all_objects = models.Manager()  # type: ignore[var-annotated]
+
+    class Meta:
+        abstract = True
+
+
 class GeneralManagerBasisModel(models.Model):
     """Abstract base model providing shared fields for GeneralManager storage."""
 
     _general_manager_class: ClassVar[Type[GeneralManager]]
-    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
     history = HistoricalRecords(inherit=True)
 
     class Meta:
+        abstract = True
+
+
+class SoftDeleteGeneralManagerModel(SoftDeleteMixin, GeneralManagerBasisModel):
+    """Soft-delete capable variant of the base GeneralManager model."""
+
+    class Meta:  # type: ignore
         abstract = True
 
 
