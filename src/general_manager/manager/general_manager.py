@@ -217,7 +217,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         creator_id: int | None = None,
         history_comment: str | None = None,
         ignore_permission: bool = False,
-    ) -> Self | None:
+    ) -> None:
         """
         Delete the managed object. Performs a soft delete when the underlying interface is configured accordingly.
 
@@ -225,9 +225,6 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             creator_id (int | None): Optional identifier of the user performing the action.
             history_comment (str | None): Audit comment recorded with the deletion.
             ignore_permission (bool): When True, skip permission validation.
-
-        Returns:
-            Self | None: Manager instance representing the resulting state when using soft delete, otherwise ``None``.
 
         Raises:
             PermissionError: Propagated if the permission check fails.
@@ -244,9 +241,6 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 "identification": self.identification,
             },
         )
-        if getattr(self.Interface, "_use_soft_delete", False):
-            return self.__class__(**self.identification)
-        return None
 
     def deactivate(
         self,
