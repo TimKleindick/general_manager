@@ -94,6 +94,7 @@ nav:
       - Interfaces:
           - concepts/interfaces/index.md
           - concepts/interfaces/db_based_interface.md
+          - concepts/interfaces/existing_model_interface.md
           - concepts/interfaces/computed_data_interfaces.md
           - concepts/interfaces/dependency_graph.md
       - Observability:
@@ -126,12 +127,12 @@ nav:
   - Examples (Cookbook):
       - examples/index.md
       - examples/project_volume_curve.md
-      # - examples/nested_set_bom.md
       - examples/derivatives_groups.md
       - examples/graphql_queries.md
       - examples/permission_patterns.md
       - examples/permission_cookbook.md
       - examples/audit_logger_custom.md
+      - examples/existing_model_interface.md
   - API-Reference:
       - api/core.md
       - api/measurement.md

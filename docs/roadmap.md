@@ -6,12 +6,12 @@ This roadmap highlights the major initiatives planned for GeneralManager. Target
 
 Deliver a cohesive domain platform that lets Django teams define business logic once, connect to multiple data sources, observe runtime behaviour, and deploy reliably from local demos to production-grade clusters.
 
+## Recently Shipped
+
+- **ExistingModelInterface** (Q4 2025): Managers can now wrap legacy Django models without generating new tables. See the [Existing Model Interfaces guide](concepts/interfaces/existing_model_interface.md) for usage patterns, validation hooks, history integration, and factory support.
+
 ## Near-Term Priorities
 
-- **ExistingModelInterface**: Provide an Interface to wrap pre-existing Django models inside GeneralManager, including:
-  - Compatibility requirements (history tracking, `is_active`, validation hooks).
-  - Strategies for read-only vs. read/write integration and error mapping.
-  - Schema-sync safeguards and automated metadata discovery for GraphQL, permissions, and factories.
 - **RequestInterface Foundations**: Provide a base HTTP interface with:
   - Pluggable authentication (API keys, OAuth token callbacks) and resilient retry/backoff options.
   - Mapping conventions for buckets (`filter`, `exclude`) and normalization of responses to Manager objects.

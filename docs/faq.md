@@ -4,6 +4,10 @@
 
 Managers declare fields using type hints. The nested interface class defines the Django model fields and handles ORM interactions. When a manager is instantiated, it wraps the interface and exposes typed attributes. The interface runs migrations and maintains the link to the database table.
 
+## How do I make the Django User model work with GeneralManager?
+
+Wrap it with `ExistingModelInterface`. Import `django.contrib.auth.get_user_model()`, declare a manager with the fields you want to expose, and set `model = get_user_model()` on the interface. `ExistingModelInterface` registers simple-history automatically, honours `is_active`, and wires in factories so you can call `User.create()` or `User.Factory.create()` directly. See the [Existing model interface recipes](examples/existing_model_interface.md) for a full snippet.
+
 ## Where should I register managers so Django finds the models?
 
 Import the module containing your managers inside the `AppConfig.ready()` hook or `models.py`. This ensures Django evaluates the interface definitions during startup and generates migrations.
