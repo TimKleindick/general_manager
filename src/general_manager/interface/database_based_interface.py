@@ -64,14 +64,11 @@ class InvalidFieldTypeError(TypeError):
 
     def __init__(self, field_name: str, error: Exception) -> None:
         """
-        Initialize the InvalidFieldTypeError with the field name and the originating exception.
-
+        Create an InvalidFieldTypeError that records the field name and the originating exception.
+        
         Parameters:
-            field_name (str): Name of the model field that received an unexpected type.
-            error (Exception): The original exception or error encountered for the field.
-
-        Notes:
-            The exception's message is formatted as "Type error for {field_name}: {error}."
+            field_name (str): Name of the model field that received a value of an unexpected type.
+            error (Exception): The original exception encountered for the field.
         """
         super().__init__(f"Type error for {field_name}: {error}.")
 
@@ -112,14 +109,20 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def _get_database_alias(cls) -> str | None:
         """
-        Return the configured database alias, if any, for ORM operations.
+        Get the configured database alias for ORM operations.
+        
+        Returns:
+            The database alias string, or `None` if no alias is configured.
         """
         return getattr(cls, "database", None)
 
     @classmethod
     def _get_manager(cls) -> models.Manager[HistoryModelT]:
         """
-        Return the model manager configured to operate on the selected database.
+        Get the model manager for the interface's model, bound to the configured database alias if one is set.
+        
+        Returns:
+            manager (django.db.models.Manager[HistoryModelT]): The model manager for the interface's model, using the configured database alias when provided.
         """
         manager = cls._model._default_manager
         database_alias = cls._get_database_alias()
@@ -130,7 +133,9 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def _get_queryset(cls) -> models.QuerySet[HistoryModelT]:
         """
-        Return a queryset initialised against the configured database alias.
+        Get a queryset for the interface's model using the configured database alias.
+        
+        @returns: A Django QuerySet of the interface's model (models.QuerySet[HistoryModelT]) bound to the configured database alias.
         """
         return cast(models.QuerySet[HistoryModelT], cls._get_manager().all())
 
@@ -157,13 +162,13 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
 
     def get_data(self, search_date: datetime | None = None) -> HistoryModelT:
         """
-        Fetch the underlying model instance, optionally as of a historical date.
-
+        Return the model instance backing this interface; if `search_date` is provided, return the most recent historical record at or before that timestamp.
+        
         Parameters:
-            search_date (datetime | None): When provided, retrieve the state closest to this timestamp.
-
+            search_date (datetime | None): Timestamp for retrieving historical state. Naive datetimes will be converted to timezone-aware before lookup.
+        
         Returns:
-            MODEL_TYPE: Current or historical instance matching the primary key.
+            HistoryModelT: The current model instance, or the historical instance at or before `search_date` if one is found.
         """
         manager = self.__class__._get_manager()
         instance = cast(HistoryModelT, manager.get(pk=self.pk))
@@ -203,11 +208,11 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def filter(cls, **kwargs: Any) -> DatabaseBucket:
         """
-        Return a bucket of model instances filtered by the provided lookups.
-
+        Create a DatabaseBucket containing model instances that match the given Django-style filter expressions.
+        
         Parameters:
-            **kwargs (Any): Django-style filter expressions.
-
+            kwargs (Any): Django-style filter lookups to apply to the queryset.
+        
         Returns:
             DatabaseBucket: Bucket wrapping the filtered queryset.
         """
@@ -224,13 +229,13 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def exclude(cls, **kwargs: Any) -> DatabaseBucket:
         """
-        Return a bucket excluding model instances that match the provided lookups.
-
+        Exclude model instances matching the provided Django-style lookup expressions and wrap the resulting queryset in a DatabaseBucket.
+        
         Parameters:
-            **kwargs (Any): Django-style exclusion expressions.
-
+            **kwargs (Any): Django-style exclusion lookup expressions (field lookups and query expressions).
+        
         Returns:
-            DatabaseBucket: Bucket wrapping the excluded queryset.
+            DatabaseBucket: Bucket wrapping the queryset after applying the exclusions.
         """
         kwargs = cls.__parse_kwargs(**kwargs)
         queryset = cls._get_queryset().exclude(**kwargs)
@@ -282,10 +287,10 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         """
-        Builds a mapping of model attribute names to their type metadata for the interface.
-
-        Produces entries for model fields, custom measurement-like fields, foreign-key relations, many-to-many relations, and reverse one-to-many relations. For related models that expose a general manager class, the attribute type is that manager class; many-to-many and reverse relation attributes are exposed with a "_list" suffix. GenericForeignKey fields are omitted.
-
+        Build a mapping of the model's exposed attribute names to their type metadata for this interface.
+        
+        Includes direct model fields, custom fields, foreign-key relations, many-to-many relations, and reverse one-to-many relations. Related models that expose a `_general_manager_class` use that class as the attribute type. Many-to-many and reverse relation attributes are exposed with a "_list" suffix. GenericForeignKey fields are omitted.
+        
         Returns:
             dict[str, AttributeTypedDict]: Mapping from attribute name to metadata with keys:
                 - `type`: the attribute's Python type or general-manager class for related models (common Django field classes are translated to built-in Python types),
@@ -293,7 +298,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
                 - `is_required`: `True` if the attribute must be present (e.g., field null is False and no default),
                 - `is_editable`: `True` if the field is editable on the model,
                 - `default`: the field's default value or `None` when not applicable.
-
+        
         Raises:
             DuplicateFieldNameError: if a generated attribute name collides with an existing attribute name.
         """
@@ -582,16 +587,16 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         # Collect fields defined directly on the interface class
         """
-        Create a Django model class, a corresponding interface subclass, and a Factory class from an interface definition.
-
+        Generate a concrete Django model class, a corresponding Interface subclass, and an AutoFactory from an Interface definition.
+        
         Parameters:
-            name (generalManagerClassName): Name to assign to the generated Django model class.
-            attrs (attributes): Attribute dictionary to be updated with the generated Interface and Factory entries.
-            interface (interfaceBaseClass): Interface definition used to derive the model and interface subclass.
-            base_model_class (type[GeneralManagerBasisModel]): Base class for the generated Django model (defaults to GeneralManagerModel).
-
+        	name (str): Name for the generated Django model class.
+        	attrs (dict): Attribute dictionary to be updated with the generated Interface and Factory entries.
+        	interface (type): Interface base class used to derive the model and Interface subclass.
+        	base_model_class (type): Base Django model class to inherit from for the generated model (defaults to GeneralManagerModel).
+        
         Returns:
-            tuple[attributes, interfaceBaseClass, relatedClass]: A tuple containing the updated attributes dictionary, the newly created interface subclass, and the generated Django model class.
+        	tuple: (updated_attrs, interface_cls, model) where `updated_attrs` is the input attrs dict updated with "Interface" and "Factory" keys, `interface_cls` is the created Interface subclass, and `model` is the generated Django model class.
         """
         model_fields: dict[str, Any] = {}
         meta_class = None
@@ -674,25 +679,26 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         cls,
     ) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
-        Provide hooks invoked before and after dynamic interface class creation.
-
+        Return the pre- and post-creation hooks used for dynamic interface class creation.
+        
         Returns:
-            tuple[classPreCreationMethod, classPostCreationMethod]: A pair (pre_create, post_create) where `pre_create` is invoked before the manager class is created to allow customization, and `post_create` is invoked after creation to finalize setup.
+            tuple: A pair (pre_create, post_create) where `pre_create` is called before the manager class is created to prepare attributes and configuration, and `post_create` is called after creation to finalize wiring and attach managers.
         """
         return cls._pre_create, cls._post_create
 
     @classmethod
     def get_field_type(cls, field_name: str) -> type:
         """
-        Return the type associated with a given model field name.
-
-        If the field is a relation and its related model has a `_general_manager_class` attribute, that class is returned; otherwise, returns the Django field type.
-
+        Determine the class used to represent a model field for this interface.
+        
+        If the field is a relation and the related model exposes a `_general_manager_class`,
+        that manager class is returned; otherwise the Django field class is returned.
+        
         Parameters:
-            field_name (str): Name of the model field.
-
+            field_name (str): Name of the model field to inspect.
+        
         Returns:
-            type: Type or GeneralManager class representing the field.
+            type: The related model's GeneralManager class when present, otherwise the Django field class.
         """
         field = cls._model._meta.get_field(field_name)
         if (
@@ -708,6 +714,12 @@ class MissingActivationSupportError(TypeError):
     """Raised when a model does not provide activation support."""
 
     def __init__(self, model_name: str) -> None:
+        """
+        Initialize the exception indicating a model lacks activation support.
+        
+        Parameters:
+            model_name (str): The name of the model missing an `is_active` attribute. The exception message will include this name.
+        """
         super().__init__(f"{model_name} must define an 'is_active' attribute.")
 
 
@@ -781,14 +793,14 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         self, creator_id: int | None, history_comment: str | None = None
     ) -> dict[str, Any]:
         """
-        Mark the current model instance as inactive and record the change.
-
+        Mark the current model instance as inactive and record the change in history.
+        
         Parameters:
-            creator_id (int | None): Identifier of the user performing the action.
-            history_comment (str | None): Optional comment stored in the history log.
-
+            creator_id (int | None): Identifier of the user performing the action, or None.
+            history_comment (str | None): Optional comment to attach to the history entry.
+        
         Returns:
-            dict[str, Any]: Primary key of the deactivated instance wrapped in a dict.
+            dict[str, Any]: Dictionary containing the key `"id"` with the primary key of the deactivated instance.
         """
         manager = self.__class__._get_manager()
         instance = manager.get(pk=self.pk)
@@ -806,14 +818,16 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         instance: WritableModelT, many_to_many_kwargs: dict[str, list[Any]]
     ) -> WritableModelT:
         """
-        Set many-to-many relationship values on the provided instance.
-
+        Apply many-to-many relation values to a model instance.
+        
+        Keys in many_to_many_kwargs are expected to end with the suffix "_id_list"; the suffix is removed to obtain the relation attribute name. Values that are lists of GeneralManager instances are converted to their underlying ids (uses identification["id"] when present). Entries with value None or NOT_PROVIDED are ignored. Each relation is applied via the relation manager's set() method.
+        
         Parameters:
-            instance (WritableModelT): Model instance whose relations are updated.
-            many_to_many_kwargs (dict[str, list[Any]]): Mapping of relation names to values.
-
+            instance (WritableModelT): The model instance to update.
+            many_to_many_kwargs (dict[str, list[Any]]): Mapping from relation keys (with "_id_list" suffix) to lists of related ids or GeneralManager instances.
+        
         Returns:
-            WritableModelT: Updated instance.
+            WritableModelT: The same instance with updated many-to-many relations.
         """
         from general_manager.manager.general_manager import GeneralManager
 
@@ -838,17 +852,17 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         kwargs: dict[str, Any],
     ) -> WritableModelT:
         """
-        Populate non-relational fields on an instance and prepare values for writing.
-
-        Converts any GeneralManager value to its `id` and appends `_id` to the attribute name, skips values equal to `NOT_PROVIDED`, sets each attribute on the instance, and translates underlying `ValueError`/`TypeError` from attribute assignment into `InvalidFieldValueError` and `InvalidFieldTypeError` respectively.
-
+        Set non-relational writable fields on an instance, converting manager references to primary keys.
+        
+        Converts any GeneralManager value to its underlying `id` and uses `<field>_id` as the attribute name, skips values equal to `NOT_PROVIDED`, assigns each remaining value on the given instance, and translates assignment `ValueError`/`TypeError` into `InvalidFieldValueError` and `InvalidFieldTypeError`.
+        
         Parameters:
             instance (WritableModelT): The model instance to modify.
             kwargs (dict[str, Any]): Mapping of attribute names to values to apply.
-
+        
         Returns:
             WritableModelT: The same instance with attributes updated.
-
+        
         Raises:
             InvalidFieldValueError: If setting an attribute raises a `ValueError`.
             InvalidFieldTypeError: If setting an attribute raises a `TypeError`.
@@ -923,12 +937,15 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         history_comment: str | None,
     ) -> int:
         """
-        Atomically saves a model instance with validation and optional history comment.
-
-        Sets the `changed_by_id` field, validates the instance, applies a history comment if provided, and saves the instance within a database transaction.
-
+        Save a model instance with validation, optional changed_by assignment, and an optional history comment.
+        
+        Parameters:
+            instance (WritableModelT): The model instance to validate and persist.
+            creator_id (int | None): ID to assign to the instance's `changed_by_id` attribute if present.
+            history_comment (str | None): Optional change reason to attach to the instance's history.
+        
         Returns:
-            The primary key of the saved instance.
+            int: The primary key of the saved instance.
         """
         database_alias = cls._get_database_alias()
         if database_alias:

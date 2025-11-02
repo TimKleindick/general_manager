@@ -80,7 +80,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Creates the database table for the PersonModel before running any tests in the test case class.
+        Prepare test database and app registry for PersonModel.
+        
+        Registers PersonModel and its many-to-many through model in the "general_manager" app registry (saving the original registry entries for later restoration), clears the app cache, and creates the database table for PersonModel so tests in the test case class have a concrete schema to operate on.
         """
         super().setUpClass()
         cls._app_config = apps.get_app_config("general_manager")
@@ -105,7 +107,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
     @classmethod
     def tearDownClass(cls):
         """
-        Cleans up PersonModel data and restores the Django app registry after the tests.
+        Tears down test database state and restores the app model registry for the "general_manager" app.
+        
+        Deletes the PersonModel table, restores modified entries in the test class's app config and the global apps.all_models mapping for "general_manager", clears the apps cache, and then calls the superclass teardown.
         """
         with connection.schema_editor() as schema:
             schema.delete_model(PersonModel)
@@ -130,9 +134,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def setUp(self):
         """
-        Creates a test user and a corresponding PersonModel instance for use in test cases.
-
-        Initializes self.user with a new User and self.person with a new PersonModel linked to that user, including adding the user to the person's tags.
+        Create a test User and a PersonModel instance linked to that user for use in tests.
+        
+        Sets self.user to a newly created User, sets self.person to a new PersonModel owned and changed_by that user, and adds the user to self.person.tags.
         """
         self.user = User.objects.create(username="tester")
         self.person = PersonModel.objects.create(
@@ -821,7 +825,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_invalid_field_type_error_message(self):
         """
-        Tests that InvalidFieldTypeError formats its message correctly.
+        Verify InvalidFieldTypeError includes the field name and a descriptive type error in its message.
         """
         from general_manager.interface.database_based_interface import (
             InvalidFieldTypeError,
@@ -898,7 +902,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Creates the database table for WritableInterfaceTestModel.
+        Register WritableInterfaceTestModel with simple_history, ensure it's in the 'general_manager' app registry, and create database tables for the model and its history model.
+        
+        This runs once for the test class to prepare the database schema required by tests.
         """
         super().setUpClass()
         from simple_history import register
@@ -918,7 +924,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     @classmethod
     def tearDownClass(cls):
         """
-        Deletes the database table for WritableInterfaceTestModel.
+        Remove the WritableInterfaceTestModel and its history model from the database and app registry.
+        
+        Deletes the database tables for the model and its history model, removes their entries from the "general_manager" app registry, and invokes the superclass teardown.
         """
         with connection.schema_editor() as schema:
             history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
@@ -936,7 +944,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
     def setUp(self):
         """
-        Creates test users and defines test interface.
+        Create two test users and define a writable test interface class.
+        
+        Creates User instances assigned to self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface class (assigned to self.interface_cls) configured for WritableInterfaceTestModel with an `id` input field.
         """
         from general_manager.interface.database_based_interface import (
             WritableDBBasedInterface,
@@ -955,7 +965,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
     def tearDown(self):
         """
-        Cleans up test data.
+        Remove all WritableInterfaceTestModel rows created during the test and avoid touching user records to prevent clashes with TransactionTestCase cleanup.
         """
         WritableInterfaceTestModel.objects.all().delete()
         # Users are flushed automatically by TransactionTestCase; manual deletion can clash
@@ -1061,7 +1071,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_update_with_history_comment(self):
         """
-        Tests that update records history comment.
+        Verifies that updating an instance stores the provided history comment on the latest historical record.
         """
         instance = WritableInterfaceTestModel.objects.create(
             name="Original",

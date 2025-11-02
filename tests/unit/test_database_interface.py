@@ -22,9 +22,9 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Prepare test fixtures for DatabaseInterface tests by defining in-test manager and interface classes and creating the BookModel table.
-
-        Defines UserInterface and its UserManager, BookInterface and its BookManager, and a BookModel Django model attached to the test case. Creates the database schema for BookModel so tests can run against the model.
+        Prepare class-level fixtures for DatabaseInterface tests.
+        
+        Defines temporary User and Book interface and manager classes, registers the BookModel and its many-to-many through model with the "general_manager" app when necessary, creates the BookModel database table if it does not exist, and records any newly created table names in cls._created_tables.
         """
         super().setUpClass()
 
@@ -126,6 +126,11 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
 
     @classmethod
     def tearDownClass(cls):
+        """
+        Tear down class-level test fixtures and clean up the dynamically registered BookModel and its through model.
+        
+        If BookModel's table was created during setup (tracked in `_created_tables`), it is removed from the database. The BookModel and its readers through-model are unregistered from the "general_manager" app and Django's global model registry, the app cache is cleared, and the superclass teardown is called.
+        """
         with connection.schema_editor() as schema:
             if cls.BookModel._meta.db_table in cls._created_tables:
                 schema.delete_model(cls.BookModel)
@@ -139,6 +144,14 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         super().tearDownClass()
 
     def setUp(self):
+        """
+        Prepare test fixtures: create a user, a book authored and changed by that user, add the user as a reader, and create a manager bound to that user.
+        
+        Sets:
+        - self.user: created User with username "tester".
+        - self.book: created BookModel instance titled "Initial", with author and changed_by set to self.user, and with self.user added to its readers.
+        - self.user_manager: instance of UserManager initialized with self.user.pk.
+        """
         self.user = User.objects.create(username="tester")
         self.book = self.BookModel.objects.create(
             title="Initial",

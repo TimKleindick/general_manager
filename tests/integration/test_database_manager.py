@@ -70,9 +70,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Prepares the test database with sample country, human, and family data for integration tests.
-
-        Synchronizes country data, creates two human instances (one linked to a country), and a family instance associating both humans.
+        Set up test data by synchronizing countries and creating a user, two humans, and a family linking them.
+        
+        Synchronizes TestCountry data, creates a User, creates two TestHuman instances (one linked to the US country and one without a country), and creates a TestFamily that includes both humans. Records are created with permission checks ignored for test purposes.
         """
         super().setUp()
         self.TestCountry.Interface.sync_data()  # type: ignore
@@ -476,7 +476,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_data_integrity_and_constraints(self):
         """
-        Test data integrity and model constraints.
+        Verify database constraints: uniqueness of country codes and expected relationships to countries.
+        
+        Asserts that all TestCountry.code values are unique and that querying TestHuman for the country with code "US" returns the expected related human ("Alice").
         """
         # Test unique constraint on country code
         countries = self.TestCountry.all()

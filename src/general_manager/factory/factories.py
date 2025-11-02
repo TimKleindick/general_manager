@@ -81,20 +81,18 @@ def get_field_value(
     field: models.Field[Any, Any] | models.ForeignObjectRel,
 ) -> Any:
     """
-    Generate a realistic sample value for a Django model field or relation.
-
-    This returns a value appropriate for the field's type (e.g., text for TextField, Decimal for DecimalField,
-    datetime for DateTimeField, a LazyFunction that creates or selects a related instance for relational fields).
-    If the field is nullable there is a 10% chance this will return `None`.
-
+    Generate a realistic sample value appropriate for the given Django model field or relation.
+    
+    This returns a value suitable for assignment to the field: common scalar and text fields produce Faker-generated values; Decimal/Float/Integer/Boolean/Date/DateTime/UUID/Duration/GUID/IP/Email/URL fields return matching scalar values; CharField respects max_length and RegexValidator (generates a matching string when a regex is present); MeasurementField returns a LazyFunction that produces a Measurement in the field's base unit; relational fields (OneToOneField, ForeignKey, Many-to-many via other helpers) return model instances or LazyFunction wrappers that either create instances via a GeneralManager factory or select existing related instances. If the field is nullable there is a 10% chance this will return None.
+    
     Parameters:
-        field (models.Field | models.ForeignObjectRel): The Django field or relation to generate a value for.
-
+        field (models.Field | models.ForeignObjectRel): The Django model field or relation to generate a value for.
+    
     Returns:
-        object: A value suitable for assignment to the given field (or `None`).
-
+        A value suitable for assignment to the field (scalar, string, Measurement-producing LazyFunction, model instance, LazyFunction that yields a related instance, or `None`).
+    
     Raises:
-        MissingFactoryOrInstancesError: When a related field's model has neither a factory nor any existing instances.
+        MissingFactoryOrInstancesError: When a related field's model has neither a registered factory nor any existing instances.
         MissingRelatedModelError: When a relational field does not declare a related model.
         InvalidRelatedModelTypeError: When a relational field's related value is not a Django model class.
     """
@@ -312,7 +310,19 @@ def get_many_to_many_field_value(
 
 def _ensure_model_instance(value: Any) -> models.Model:
     """
-    Convert factory outputs to Django model instances, unwrapping GeneralManager objects when necessary.
+    Normalize a factory output into a Django model instance.
+    
+    Attempts to convert GeneralManager objects produced by factories into their underlying Django model
+    instances. If `value` is already a Django model instance, it is returned unchanged.
+    
+    Parameters:
+        value (Any): A factory output, either a GeneralManager or a Django model instance.
+    
+    Returns:
+        models.Model: The resolved Django model instance.
+    
+    Raises:
+        UnableToResolveManagerInstanceError: If `value` is a GeneralManager that cannot be resolved to a model instance.
     """
     if isinstance(value, GeneralManager):
         interface = getattr(value, "_interface", None)

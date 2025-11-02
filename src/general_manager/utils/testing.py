@@ -102,9 +102,12 @@ class GMTestCaseMeta(type):
             cls: type["GeneralManagerTransactionTestCase"],
         ) -> None:
             """
-            Prepare the test environment for GeneralManager GraphQL tests.
-
-            Resets GraphQL and manager registries, optionally overrides Django's app-config lookup to use a fallback app, clears the default GraphQL URL pattern, creates missing database tables for models referenced by the test class's `general_manager_classes`, initializes GeneralManager classes and read-only interfaces, registers GraphQL types/fields, and then invokes the base class `setUpClass`.
+            Prepare the test class environment for GeneralManager GraphQL tests.
+            
+            Resets GraphQL and manager registries, optionally installs an app-config fallback, clears the default GraphQL URL pattern, creates any missing database tables for models referenced by the class's `general_manager_classes` (and records those created tables on `cls._gm_created_tables`), initializes GeneralManager classes and read-only interfaces, registers GraphQL types/fields, runs any user-defined `setUpClass`, and finally invokes the base `GraphQLTransactionTestCase.setUpClass`.
+            
+            Parameters:
+                cls (type[GeneralManagerTransactionTestCase]): The test class being initialized.
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
@@ -249,9 +252,9 @@ class GeneralManagerTransactionTestCase(
 
     def setUp(self) -> None:
         """
-        Install a logging cache backend and reset its operation log for the test.
-
-        Replaces Django's default cache connection with a LoggingCache instance and clears any prior cache operation records so tests start with a fresh cache operation log.
+        Install a LoggingCache as the default cache backend for the test and clear its operation log.
+        
+        Replaces Django's default cache connection with a LoggingCache instance and resets the cache operation log so the test starts with no prior cache operations recorded.
         """
         super().setUp()
         caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
@@ -260,9 +263,9 @@ class GeneralManagerTransactionTestCase(
     @classmethod
     def tearDownClass(cls) -> None:
         """
-        Tear down test-class state by removing dynamically created models and restoring patched global state.
-
-        Performs these actions: removes the GraphQL URL pattern added during setup; drops database tables for any models created for the test (including associated history models); unregisters those models from Django's app registry and clears the app cache; removes the test's GeneralManager classes from metaclass registries; restores the original app-config lookup function; and finally calls the superclass teardown.
+        Tear down test-class state by removing dynamically created DB tables, unregistering their models, restoring patched global state, and cleaning metaclass registries.
+        
+        This clears the GraphQL URL pattern added during setup; drops database tables created for the test (including auto-created many-to-many through tables and history tables) if they still exist; unregisters those models from Django's app registry and clears the app registry cache; removes the test's GeneralManager classes from metaclass registries; restores the original app-config lookup function; and resets the test-class created-table tracking.
         """
         # remove GraphQL URL pattern added during setUpClass
         _default_graphql_url_clear()
