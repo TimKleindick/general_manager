@@ -121,9 +121,6 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
         self.CarOption.Interface._model.objects.all().delete()
         self.Manufacturer.Interface._model.objects.all().delete()
         self.Fleet.Interface._model.objects.all().delete()
-        user = getattr(self, "user", None)
-        if user is not None and user.pk is not None:
-            user.__class__.objects.filter(pk=user.pk).delete()
         super().tearDown()
 
     def test_factory_create_wraps_model_in_manager(self) -> None:
