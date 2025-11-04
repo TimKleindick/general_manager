@@ -110,7 +110,8 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         """
         if hasattr(model._meta, "simple_history_manager_attribute"):
             return
-        register(model)
+        m2m_fields = [field.name for field in model._meta.local_many_to_many]
+        register(model, m2m_fields=m2m_fields)
 
     @classmethod
     def _apply_rules_to_model(cls, model: type[models.Model]) -> None:
