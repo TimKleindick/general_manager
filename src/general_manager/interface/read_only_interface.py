@@ -370,9 +370,7 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
                 meta = type("Meta", (), {})
                 interface.Meta = meta  # type: ignore[attr-defined]
             meta.use_soft_delete = True  # type: ignore[union-attr]
-            return func(
-                name, attrs, interface, base_model_class=GeneralManagerBasisModel
-            )
+            return func(name, attrs, interface, base_model_class)
 
         return wrapper
 

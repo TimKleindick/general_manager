@@ -25,12 +25,9 @@ class CalculationInterface(InterfaceBase):
     _interface_type: ClassVar[str] = "calculation"
     input_fields: ClassVar[dict[str, Input]]
 
-    def get_data(self, search_date: datetime | None = None) -> Any:
+    def get_data(self) -> Any:
         """
         Indicates that calculation interfaces do not provide stored data.
-
-        Parameters:
-            search_date (datetime | None): Date for which data would be requested.
 
         Raises:
             NotImplementedError: Always raised with the message "Calculations do not store data."
