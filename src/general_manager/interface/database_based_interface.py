@@ -4,7 +4,7 @@ from __future__ import annotations
 import warnings
 from typing import Any, Callable, ClassVar, Generic, TYPE_CHECKING, Type, TypeVar, cast
 from django.db import models, transaction
-from django.db.models import NOT_PROVIDED
+from django.db.models import NOT_PROVIDED, Subquery
 
 from datetime import datetime, date, time, timedelta
 from django.utils import timezone
@@ -38,6 +38,7 @@ from general_manager.interface.models import (
     get_full_clean_methode,
 )
 from django.contrib.contenttypes.fields import GenericForeignKey
+from simple_history.models import HistoricalChanges
 from simple_history.utils import update_change_reason  # type: ignore
 
 if TYPE_CHECKING:
@@ -109,6 +110,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
     database: ClassVar[str | None] = None
     _active_manager: ClassVar[models.Manager[models.Model] | None] = None
+    _search_date: datetime | None
 
     @classmethod
     def _get_database_alias(cls) -> str | None:
@@ -196,29 +198,57 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
-        self._instance: HistoryModelT = self.get_data(search_date)
+        self._search_date = self.normalize_search_date(search_date)
+        self._instance: HistoryModelT = self.get_data()
 
-    def get_data(self, search_date: datetime | None = None) -> HistoryModelT:
+    @staticmethod
+    def normalize_search_date(search_date: datetime | None) -> datetime | None:
         """
-        Return the model instance backing this interface; if `search_date` is provided, return the most recent historical record at or before that timestamp.
+        Normalize a search_date to a timezone-aware datetime if provided.
 
         Parameters:
-            search_date (datetime | None): Timestamp for retrieving historical state. Naive datetimes will be converted to timezone-aware before lookup.
+            search_date (datetime | None): The input search date, potentially naive.
+        Returns:
+            datetime | None: The normalized timezone-aware datetime, or `None` if no date was provided.
+        """
+        if search_date is not None and timezone.is_naive(search_date):
+            search_date = timezone.make_aware(search_date)
+        return search_date
+
+    def get_data(self) -> HistoryModelT:
+        """
+        Return the model instance backing this interface; if `search_date` is provided, return the most recent historical record at or before that timestamp.
 
         Returns:
             HistoryModelT: The current model instance, or the historical instance at or before `search_date` if one is found.
         """
-        manager = self.__class__._get_manager(only_active=True)
-        instance = cast(HistoryModelT, manager.get(pk=self.pk))
-        if search_date is not None:
-            # Normalize to aware datetime if needed
-            if timezone.is_naive(search_date):
-                search_date = timezone.make_aware(search_date)
-            if search_date <= timezone.now() - timedelta(seconds=5):
-                historical = self.get_historical_record(instance, search_date)
+        manager = self.__class__._get_manager(
+            only_active=not getattr(self.__class__, "_use_soft_delete", False)
+        )
+        model_cls = self.__class__._model
+        instance: HistoryModelT | None
+        missing_error: Exception | None = None
+        try:
+            instance = cast(HistoryModelT, manager.get(pk=self.pk))
+        except model_cls.DoesNotExist as error:  # type: ignore[attr-defined]
+            instance = None
+            missing_error = error
+        if self._search_date is not None:
+            if self._search_date <= timezone.now() - timedelta(seconds=5):
+                historical: HistoryModelT | None
+                if instance is not None:
+                    historical = self.get_historical_record(instance, self._search_date)
+                else:
+                    historical = self.__class__._get_historical_record_by_pk(
+                        self.pk, self._search_date
+                    )
                 if historical is not None:
-                    instance = historical
-        return instance
+                    return historical
+        if instance is not None:
+            return instance
+        if missing_error is not None:
+            raise missing_error
+        raise model_cls.DoesNotExist  # type: ignore[attr-defined]
 
     @staticmethod
     def __parse_kwargs(**kwargs: Any) -> dict[str, Any]:
@@ -330,8 +360,32 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         database_alias = cls._get_database_alias()
         if database_alias:
             history_manager = history_manager.using(database_alias)
-        historical = history_manager.filter(history_date__lte=search_date).last()
-        return cast(HistoryModelT | None, historical)
+        historical = (
+            cast(models.QuerySet, history_manager.filter(history_date__lte=search_date))
+            .order_by("history_date")
+            .last()
+        )
+        return cast(HistoryModelT, historical)
+
+    @classmethod
+    def _get_historical_record_by_pk(
+        cls, pk: Any, search_date: datetime | None
+    ) -> HistoryModelT | None:
+        """
+        Retrieve a historical record for a primary key when no live instance exists.
+        """
+        if search_date is None or not hasattr(cls._model, "history"):
+            return None
+        history_manager = cls._model.history  # type: ignore[attr-defined]
+        database_alias = cls._get_database_alias()
+        if database_alias:
+            history_manager = history_manager.using(database_alias)
+        historical = (
+            history_manager.filter(id=pk, history_date__lte=search_date)
+            .order_by("history_date")
+            .last()
+        )
+        return cast(HistoryModelT, historical)
 
     @classmethod
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
@@ -545,12 +599,70 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
                 )
             else:
                 field_values[f"{field_name}_list"] = (
-                    lambda self, field_call=field_call: getattr(
-                        self._instance, field_call
-                    ).all()
+                    lambda self,
+                    field_call=field_call,
+                    field_name=field_name: cls.__resolve_many_to_many(
+                        self, field_call, field_name
+                    )
                 )
 
         return field_values
+
+    def __resolve_many_to_many(
+        self: DBBasedInterface, field_call: str, field_name: str
+    ) -> models.QuerySet[Any]:
+        """
+        Resolve many-to-many relations for both live and historical instances.
+
+        For historical instances generated by django-simple-history, the related
+        manager yields HistoricalChanges rows rather than the original related
+        model. This helper extracts the underlying related objects so that the
+        GeneralManager API continues to return the expected model instances.
+
+        Parameters:
+            self (DBBasedInterface): The interface instance containing the model instance.
+            field_call (str): The name of the many-to-many relation accessor.
+            field_name (str): The name of the many-to-many field.
+
+        Returns:
+            list[Any] | models.QuerySet[Any]: The related objects for the many-to-many relation.
+        """
+        manager = getattr(self._instance, field_call)
+        queryset = manager.all()
+        model_cls = getattr(queryset, "model", None)
+        if isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges):
+            target_field = self._model._meta.get_field(field_name)
+            target_model = getattr(target_field, "related_model", None)
+            if target_model is None:
+                return manager.none()
+            target_model = cast(Type[models.Model], target_model)
+            related_attr = None
+            for rel_field in model_cls._meta.get_fields():  # type: ignore[attr-defined]
+                related_model = getattr(rel_field, "related_model", None)
+                if related_model == target_model:
+                    related_attr = rel_field.name
+                    break
+            if related_attr is None:
+                return target_model._default_manager.none()
+            related_id_field = f"{related_attr}_id"
+            related_ids_query = queryset.values_list(related_id_field, flat=True)
+            if not hasattr(target_model, "history") or self._search_date is None:
+                return target_model._default_manager.filter(
+                    pk__in=Subquery(related_ids_query)
+                )
+            target_model = cast(Type[SupportsHistory], target_model)
+
+            related_ids = list(related_ids_query)
+            if not related_ids:
+                return target_model._default_manager.none()  # type: ignore[return-value]
+            return cast(
+                models.QuerySet[Any],
+                target_model.history.as_of(self._search_date).filter(  # type: ignore[attr-defined]
+                    pk__in=related_ids
+                ),
+            )
+
+        return queryset
 
     @staticmethod
     def handle_custom_fields(
@@ -832,7 +944,9 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         )
         instance = cls.__set_attr_for_write(model_cls(), kwargs)
         pk = cls._save_with_history(instance, creator_id, history_comment)
-        cls.__set_many_to_many_attributes(instance, many_to_many_kwargs)
+        cls.__set_many_to_many_attributes(
+            instance, many_to_many_kwargs, history_comment
+        )
         return {"id": pk}
 
     def update(
@@ -862,7 +976,9 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         manager = self.__class__._get_manager(only_active=False)
         instance = self.__set_attr_for_write(manager.get(pk=self.pk), kwargs)
         pk = self._save_with_history(instance, creator_id, history_comment)
-        self.__set_many_to_many_attributes(instance, many_to_many_kwargs)
+        self.__set_many_to_many_attributes(
+            instance, many_to_many_kwargs, history_comment
+        )
         return {"id": pk}
 
     def delete(
@@ -925,7 +1041,9 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
 
     @staticmethod
     def __set_many_to_many_attributes(
-        instance: WritableModelT, many_to_many_kwargs: dict[str, list[Any]]
+        instance: WritableModelT,
+        many_to_many_kwargs: dict[str, list[Any]],
+        history_comment: str | None,
     ) -> WritableModelT:
         """
         Apply many-to-many relation values to a model instance.
@@ -953,7 +1071,7 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
                     for v in value
                 ]
             getattr(instance, field_name).set(value)
-
+        update_change_reason(instance, history_comment)
         return instance
 
     @staticmethod
