@@ -335,7 +335,7 @@ class InterfaceBase(ABC):
         return self.delete(*args, **kwargs)
 
     @abstractmethod
-    def get_data(self, search_date: datetime | None = None) -> Any:
+    def get_data(self) -> Any:
         """Return data materialised for the manager object."""
         raise NotImplementedError
 
