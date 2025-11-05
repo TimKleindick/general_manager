@@ -499,11 +499,10 @@ class DecoratorTests(SimpleTestCase):
             return (name, attrs, interface, base_model_class)
 
         wrapper = ReadOnlyInterface.read_only_pre_create(pre_hook)
-        result = wrapper("MyName", {"a": 1}, "iface")
+        iface = type("iface", (), {})  # just to have an interface class
+        result = wrapper("MyName", {"a": 1}, iface)
         # The last parameter must be GeneralManagerBasisModel
-        self.assertEqual(
-            result, ("MyName", {"a": 1}, "iface", GeneralManagerBasisModel)
-        )
+        self.assertEqual(result, ("MyName", {"a": 1}, iface, GeneralManagerBasisModel))
 
     def test_handle_interface_returns_two_callables(self):
         """

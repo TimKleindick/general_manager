@@ -1,11 +1,14 @@
 # type: ignore
 
 from __future__ import annotations
+from datetime import timedelta
 from django.db import models
 from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
+from django.utils import timezone
 from typing import ClassVar
+from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.database_interface import DatabaseInterface
 from general_manager.interface.read_only_interface import ReadOnlyInterface
@@ -264,15 +267,40 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         )
 
         # Test deleting a human
-        human_count_before = len(self.TestHuman.filter(is_active=True))
-        test_human3.deactivate(ignore_permission=True)
-        human_count_after = len(self.TestHuman.filter(is_active=True))
+        human_count_before = len(self.TestHuman.all())
+        test_human3.delete(ignore_permission=True)
+        human_count_after = len(self.TestHuman.all())
         self.assertEqual(human_count_after, human_count_before - 1)
 
         # Verify the deleted human is not in any families
-        remaining_humans = self.TestHuman.filter(is_active=True)
+        remaining_humans = self.TestHuman.all()
         for human in remaining_humans:
             self.assertNotEqual(human.name, "Charlie")
+
+    def test_get_historical_records_for_deleted_manager(self):
+        historical_human = self.TestHuman.create(
+            creator_id=self.User1.pk,
+            name="Historian",
+            ignore_permission=True,
+        )
+        human_id = historical_human.identification["id"]
+        snapshot = timezone.now()
+
+        historical_human.delete(
+            creator_id=self.User1.pk,
+            history_comment="cleanup",
+            ignore_permission=True,
+        )
+
+        with self.assertRaises(self.TestHuman.Interface._model.DoesNotExist):  # type: ignore[attr-defined]
+            self.TestHuman(id=human_id)
+
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=10)
+        ):
+            historical_view = self.TestHuman(id=human_id, search_date=snapshot)
+
+        self.assertEqual(historical_view.name, "Historian")
 
     def test_bucket_operations(self):
         """

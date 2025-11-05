@@ -10,6 +10,7 @@ from general_manager.utils.testing import (
 )
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from typing import ClassVar
+from django.core.exceptions import ObjectDoesNotExist
 
 
 class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
@@ -31,6 +32,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
 
                 class Meta:
                     app_label = "general_manager"
+                    use_soft_delete = True
 
         cls.TestProject = TestProject
         cls.general_manager_classes = [TestProject]
@@ -439,12 +441,12 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Set up test fixtures: create and log in a user, create a TestProject instance, and prepare the deactivate GraphQL mutation.
+        Set up test fixtures: create and log in a user, create a TestProject instance, and prepare the delete GraphQL mutation.
 
         Sets these attributes on the test instance:
             - self.user: the created and authenticated user.
-            - self.project: the created TestProject instance to be deactivated in tests.
-            - self.deactivate_mutation: GraphQL mutation string for deactivating a TestProject.
+            - self.project: the created TestProject instance to be deleted in tests.
+            - self.delete_mutation: GraphQL mutation string for deleting a TestProject.
         """
         User = get_user_model()
         password = get_random_string(12)
@@ -458,8 +460,8 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
             creator_id=self.user.id,
         )
 
-        self.deactivate_mutation = """
-        mutation DeactivateProject($id: Int!) {
+        self.delete_mutation = """
+        mutation DeleteProject($id: Int!) {
             deleteTestProject(id: $id) {
                 TestProject {
                     name
@@ -474,27 +476,20 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
         }
         """
 
-    def test_deactivate_project(self):
+    def test_delete_project(self):
         """
-        Tests successful deactivation of a TestProject instance via GraphQL mutation.
-        Verifies that the mutation response indicates success, the returned data matches the deactivated values, and the deactivated database record has the correct field values and is attributed to the test user.
+        Tests successful deletion of a TestProject instance via GraphQL mutation.
+        Verifies that the mutation response indicates success, the returned data matches the deleted values, and the soft-deleted database record has the correct field values and is attributed to the test user.
         """
         variables = {
             "id": self.project.id,
         }
 
-        response = self.query(self.deactivate_mutation, variables=variables)
+        response = self.query(self.delete_mutation, variables=variables)
         self.assertResponseNoErrors(response)
         response = response.json()
         data = response.get("data", {})
         self.assertTrue(data["deleteTestProject"]["success"])
 
-        data = data["deleteTestProject"]["TestProject"]
-        self.assertEqual(data["name"], "Project to Deactivate")
-        self.assertEqual(data["number"], 1)
-        self.assertEqual(data["budget"]["value"], 1000)
-        self.assertEqual(data["budget"]["unit"], "EUR")
-
-        deactivated_project = self.TestProject(self.project.id)
-        self.assertFalse(deactivated_project.is_active)
-        self.assertEqual(deactivated_project.changed_by, self.user)
+        with self.assertRaises(ObjectDoesNotExist):
+            self.TestProject(self.project.id)

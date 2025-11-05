@@ -32,9 +32,9 @@ class DummyInterface(InterfaceBase):
         """
         raise NotImplementedError
 
-    def deactivate(self, *args, **kwargs):
+    def delete(self, *args, **kwargs):
         """
-        Raises NotImplementedError to indicate that deactivation is not supported.
+        Raises NotImplementedError to indicate that deletion is not supported.
         """
         raise NotImplementedError
 

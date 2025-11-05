@@ -50,7 +50,7 @@ class DummyInterface:
     def update(self, *args: object, **kwargs: object) -> None:
         return None
 
-    def deactivate(self, *args: object, **kwargs: object) -> None:
+    def delete(self, *args: object, **kwargs: object) -> None:
         return None
 
 
