@@ -78,6 +78,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             _model = BookModel
             _parent_class = None
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+            _use_soft_delete = True
 
             @classmethod
             def handle_interface(cls):
@@ -198,7 +199,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         self.assertTrue(inst.saved)
         mock_update.assert_called_once_with(inst, "comment")
 
-    def test_create_update_and_deactivate(self):
+    def test_create_update_and_delete(self):
         captured: dict[str, Any] = {}
 
         def fake_save(instance, creator_id, comment):
@@ -207,10 +208,15 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             captured["comment"] = comment
             return getattr(instance, "pk", 99) or 99
 
-        with patch.object(
-            self.BookInterface,
-            "_save_with_history",
-            side_effect=fake_save,
+        with (
+            patch.object(
+                self.BookInterface,
+                "_save_with_history",
+                side_effect=fake_save,
+            ),
+            patch(
+                "general_manager.interface.database_based_interface.update_change_reason"
+            ) as mock_change_reason,
         ):
             pk = self.BookInterface.create(
                 creator_id=self.user.pk,
@@ -237,9 +243,10 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
                 creator_id=self.user.pk,
                 readers_id_list=[self.user.pk],
             )["id"]
-            pk3 = mgr._interface.deactivate(
-                creator_id=self.user.pk, history_comment="reason"
-            )["id"]
-            self.assertEqual(pk3, self.book.pk)
+            mgr._interface.delete(creator_id=self.user.pk, history_comment="reason")
             self.assertFalse(captured["instance"].is_active)
             self.assertEqual(captured["comment"], "reason (deactivated)")
+            self.assertListEqual(
+                [record.args[1] for record in mock_change_reason.call_args_list],
+                ["new", "up", None],
+            )

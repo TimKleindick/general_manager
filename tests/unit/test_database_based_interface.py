@@ -188,11 +188,16 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Verifies that the method filters the history manager by date and returns the last matching record.
         """
         mock = MagicMock()
-        mock.filter.return_value.last.return_value = "hist"
+        history_qs = MagicMock()
+        ordered_qs = MagicMock()
+        ordered_qs.last.return_value = "hist"
+        history_qs.order_by.return_value = ordered_qs
+        mock.filter.return_value = history_qs
         dummy = SimpleNamespace(history=mock)
         dt = datetime(2020, 1, 1)
         res = PersonInterface.get_historical_record(dummy, dt)
         mock.filter.assert_called_once_with(history_date__lte=dt)
+        history_qs.order_by.assert_called_once_with("history_date")
         self.assertEqual(res, "hist")
 
     def test_get_attribute_types_and_field_type(self):
@@ -423,11 +428,16 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests that get_historical_record handles None date appropriately.
         """
         mock = MagicMock()
-        mock.filter.return_value.last.return_value = None
+        history_qs = MagicMock()
+        ordered_qs = MagicMock()
+        ordered_qs.last.return_value = None
+        history_qs.order_by.return_value = ordered_qs
+        mock.filter.return_value = history_qs
         dummy = SimpleNamespace(history=mock)
 
         res = PersonInterface.get_historical_record(dummy, None)
         mock.filter.assert_called_once_with(history_date__lte=None)
+        history_qs.order_by.assert_called_once_with("history_date")
         self.assertIsNone(res)
 
     def test_get_historical_record_with_future_date(self):
@@ -435,12 +445,17 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests that get_historical_record works with future dates.
         """
         mock = MagicMock()
-        mock.filter.return_value.last.return_value = "future_hist"
+        history_qs = MagicMock()
+        ordered_qs = MagicMock()
+        ordered_qs.last.return_value = "future_hist"
+        history_qs.order_by.return_value = ordered_qs
+        mock.filter.return_value = history_qs
         dummy = SimpleNamespace(history=mock)
         future_date = datetime.now() + timedelta(days=1)
 
         res = PersonInterface.get_historical_record(dummy, future_date)
         mock.filter.assert_called_once_with(history_date__lte=future_date)
+        history_qs.order_by.assert_called_once_with("history_date")
         self.assertEqual(res, "future_hist")
 
     def test_get_attribute_types_completeness(self):
@@ -853,19 +868,19 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that get_data handles timezone-aware datetime correctly.
         """
-        mgr = DummyManager(self.person.pk)
         aware_date = datetime.now(UTC)
-        instance = mgr._interface.get_data(aware_date)
+        mgr = DummyManager(self.person.pk, search_date=aware_date)
+        instance = mgr._interface.get_data()
         self.assertEqual(instance.pk, self.person.pk)
 
     def test_get_data_with_timezone_naive_datetime(self):
         """
         Tests that get_data converts naive datetime to aware.
         """
-        mgr = DummyManager(self.person.pk)
         naive_date = datetime.now()
+        mgr = DummyManager(self.person.pk, search_date=naive_date)
         # Should not raise an error
-        instance = mgr._interface.get_data(naive_date)
+        instance = mgr._interface.get_data()
         self.assertEqual(instance.pk, self.person.pk)
 
     def test_get_data_without_search_date(self):
@@ -873,7 +888,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests that get_data returns current instance when no search_date provided.
         """
         mgr = DummyManager(self.person.pk)
-        instance = mgr._interface.get_data(None)
+        instance = mgr._interface.get_data()
         self.assertEqual(instance.pk, self.person.pk)
         self.assertEqual(instance.name, self.person.name)
 
@@ -960,6 +975,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
             _parent_class = None
             _interface_type = "writable_test"
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+            _use_soft_delete = True
 
         self.interface_cls = TestWritableInterface
 
@@ -1129,9 +1145,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         with self.assertRaises(UnknownFieldError):
             interface.update(creator_id=self.user1.pk, invalid_field="bad")
 
-    def test_deactivate_sets_is_active_false(self):
+    def test_delete_sets_is_active_false(self):
         """
-        Tests that deactivate sets is_active to False.
+        Tests that delete sets is_active to False.
         """
         instance = WritableInterfaceTestModel.objects.create(
             name="Active Item",
@@ -1141,15 +1157,14 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
             is_active=True,
         )
         interface = self.interface_cls(id=instance.pk)
-        result = interface.deactivate(creator_id=self.user2.pk)
+        interface.delete(creator_id=self.user2.pk)
 
-        self.assertEqual(result["id"], instance.pk)
         instance.refresh_from_db()
         self.assertFalse(instance.is_active)
 
-    def test_deactivate_with_history_comment(self):
+    def test_delete_with_history_comment(self):
         """
-        Tests that deactivate appends '(deactivated)' to history comment.
+        Tests that delete appends '(deactivated)' to history comment.
         """
         instance = WritableInterfaceTestModel.objects.create(
             name="Active Item",
@@ -1159,7 +1174,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
             is_active=True,
         )
         interface = self.interface_cls(id=instance.pk)
-        interface.deactivate(
+        interface.delete(
             creator_id=self.user2.pk,
             history_comment="User requested",
         )
@@ -1167,9 +1182,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         history = instance.history.order_by("-history_date").first()  # type: ignore[attr-defined]
         self.assertEqual(history.history_change_reason, "User requested (deactivated)")  # type: ignore[union-attr]
 
-    def test_deactivate_without_comment_uses_default(self):
+    def test_delete_without_comment_uses_default(self):
         """
-        Tests that deactivate uses 'Deactivated' as default comment.
+        Tests that delete uses 'Deactivated' as default comment.
         """
         instance = WritableInterfaceTestModel.objects.create(
             name="Active Item",
@@ -1179,10 +1194,35 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
             is_active=True,
         )
         interface = self.interface_cls(id=instance.pk)
-        interface.deactivate(creator_id=self.user2.pk)
+        interface.delete(creator_id=self.user2.pk)
 
         history = instance.history.order_by("-history_date").first()  # type: ignore[attr-defined]
         self.assertEqual(history.history_change_reason, "Deactivated")  # type: ignore[union-attr]
+
+    def test_get_queryset_respects_soft_delete(self) -> None:
+        """Soft-deleted rows are hidden unless explicitly requested."""
+        active = WritableInterfaceTestModel.objects.create(
+            name="Active",
+            value=10,
+            owner=self.user1,
+            changed_by=self.user1,
+            is_active=True,
+        )
+        inactive = WritableInterfaceTestModel.objects.create(
+            name="Inactive",
+            value=20,
+            owner=self.user1,
+            changed_by=self.user1,
+            is_active=True,
+        )
+        self.interface_cls(id=inactive.pk).delete(creator_id=self.user2.pk)
+
+        queryset = self.interface_cls._get_queryset()
+        self.assertListEqual(list(queryset.values_list("pk", flat=True)), [active.pk])
+
+        bucket = self.interface_cls.filter(include_inactive=True)
+        data = bucket._data.values_list("pk", flat=True)  # type: ignore[attr-defined]
+        self.assertCountEqual(list(data), [active.pk, inactive.pk])
 
     def test_check_for_invalid_kwargs_with_valid_fields(self):
         """

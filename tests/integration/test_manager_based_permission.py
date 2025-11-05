@@ -51,6 +51,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                     blank=True,
                 )
 
+                class Meta:
+                    use_soft_delete = True
+
             class Permission(ManagerBasedPermission):
                 __based_on__: ClassVar[str] = "country"
 
@@ -212,7 +215,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_delete_with_permissions(self):
         """
-        Tests that a human instance can be deleted (deactivated) when permissions allow, and verifies the instance is no longer active in the database.
+        Tests that a human instance can be soft-deleted when permissions allow, and verifies the instance is no longer active in the database.
         """
         # Create a temporary human for deletion test
         temp_human = self.TestHuman.create(
@@ -220,7 +223,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         )
 
         human_id = temp_human.id  # type: ignore
-        temp_human.deactivate()
+        temp_human.delete()
 
         # Verify the human was deleted
         deleted_human = self.TestHuman.filter(id=human_id, is_active=True).first()

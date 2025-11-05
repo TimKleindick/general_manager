@@ -299,7 +299,7 @@ class DummyInterface(InterfaceBase):
     def update(self, *args, **kwargs):
         raise NotImplementedError
 
-    def deactivate(self, *args, **kwargs):
+    def delete(self, *args, **kwargs):
         raise NotImplementedError
 
     def get_data(self, search_date=None):
@@ -508,7 +508,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def update(self, *args, **kwargs):
                 raise NotImplementedError
 
-            def deactivate(self, *args, **kwargs):
+            def delete(self, *args, **kwargs):
                 raise NotImplementedError
 
             def get_data(self, search_date=None):
@@ -567,7 +567,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def update(self, *args, **kwargs):
                 raise NotImplementedError
 
-            def deactivate(self, *args, **kwargs):
+            def delete(self, *args, **kwargs):
                 raise NotImplementedError
 
             def get_data(self, search_date=None):

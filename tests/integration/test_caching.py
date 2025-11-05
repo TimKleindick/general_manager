@@ -47,6 +47,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
                 class Meta:
                     app_label = "general_manager"
+                    use_soft_delete = True
 
             class Permission(ManagerBasedPermission):
                 __create__: ClassVar[list[str]] = ["public"]
@@ -410,9 +411,9 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertEqual(commercials1.similar_name_count, 2)
         self.assert_cache_hit()
 
-    def test_deactivation_invalidation(self):
+    def test_delete_invalidation(self):
         """
-        Ensure deactivating a project invalidates caches that depend on active records.
+        Ensure deleting a project (soft delete via `use_soft_delete`) invalidates caches that depend on active records.
         """
         commercials1 = self.TestCommercials(project=self.project1)
 
@@ -421,7 +422,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertEqual(commercials1.active_project_count, 3)
         self.assert_cache_hit()
 
-        self.project3 = self.project3.deactivate(ignore_permission=True)
+        self.project3.delete(ignore_permission=True)
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(refreshed_commercials1.active_project_count, 2)

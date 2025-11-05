@@ -276,7 +276,7 @@ class TestGrapQlMutation(TestCase):
                 def update(self, *_args, **kwargs):
                     pass
 
-                def deactivate(self, *_args, **kwargs):
+                def delete(self, *_args, **kwargs):
                     pass
 
         class DummyManager2:
@@ -608,7 +608,7 @@ class TestGrapQlMutation(TestCase):
         Verifies that the generated mutation class:
         - Inherits from `graphene.Mutation`.
         - Defines a `success` field.
-        - Calls the manager's `deactivate` method and returns a success flag.
+        - Calls the manager's `delete` method and returns a success flag.
         - Raises a `GraphQLError` if the mutation context (`info`) is missing.
         """
 
@@ -618,6 +618,7 @@ class TestGrapQlMutation(TestCase):
                 Initialize the instance and set the value of `field1` from keyword arguments if provided.
                 """
                 self.field1 = kwargs.get("field1")
+                self._use_soft_delete = True
 
             class Interface(InterfaceBase):
                 input_fields: ClassVar[dict] = {"id": None}
@@ -634,9 +635,8 @@ class TestGrapQlMutation(TestCase):
                         }
                     }
 
-            @classmethod
-            def deactivate(cls, *_args, **_kwargs):
-                return True
+            def delete(self, *_args, **_kwargs):
+                return self
 
         default_return_values = {
             "success": graphene.Boolean(),

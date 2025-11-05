@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import ClassVar
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.db import models
+from django.utils import timezone
 
 from general_manager.interface.existing_model_interface import ExistingModelInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -188,14 +191,15 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
         )  # type: ignore[attr-defined]
         self.assertEqual(history.history_change_reason, "renamed")  # type: ignore[union-attr]
 
-    def test_deactivate_marks_customer_inactive(self) -> None:
-        deactivated = self.customer_b.deactivate(
+    def test_delete_marks_customer_inactive(self) -> None:
+        self.customer_b.delete(
             creator_id=self.user1.pk,
             history_comment="manual block",
             ignore_permission=True,
         )
-        reloaded = self.LegacyCustomer.objects.get(pk=deactivated.identification["id"])
-        self.assertFalse(deactivated.is_active)
+        reloaded = self.LegacyCustomer.all_objects.get(
+            pk=self.customer_b.identification["id"]
+        )
         self.assertFalse(reloaded.is_active)
         history = (
             self.LegacyCustomer.history.filter(id=reloaded.pk)
@@ -203,6 +207,41 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
             .last()
         )  # type: ignore[attr-defined]
         self.assertEqual(history.history_change_reason, "manual block (deactivated)")  # type: ignore[union-attr]
+
+    def test_get_historical_records_for_deleted_manager(self) -> None:
+        historical_customer = self.CustomerManager.create(
+            creator_id=self.user1.pk,
+            history_comment="baseline",
+            name="Historical LLC",
+            notes="historical",
+            owners_id_list=[self.user1.pk],
+            ignore_permission=True,
+        )
+        self.user1.first_name = "Updated"
+        self.user1.save()
+        snapshot = timezone.now()
+        historical_customer.delete(
+            creator_id=self.user1.pk,
+            history_comment="cleanup",
+            ignore_permission=True,
+        )
+
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=10)
+        ):
+            historical_view = self.CustomerManager(
+                id=historical_customer.identification["id"],
+                search_date=snapshot,
+            )
+
+        self.user1.first_name = "Updated2"
+        self.user1.save()
+
+        self.assertEqual(historical_view.name, "Historical LLC")
+        self.assertTrue(historical_view.is_active)
+        self.assertEqual(dict(historical_view)["notes"], "historical")
+        owners = list(historical_view.owners_list)
+        self.assertEqual(owners[0].pk, self.user1.pk)
 
     def test_filter_exclude_and_all(self) -> None:
         """

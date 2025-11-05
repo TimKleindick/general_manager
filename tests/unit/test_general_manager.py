@@ -49,9 +49,9 @@ class DummyInterface:
         """
         return {"id": "dummy_id"}
 
-    def deactivate(self, *args, **kwargs):
+    def delete(self, *args, **kwargs):
         """
-        Simulates deactivating an object and returns a dummy identification dictionary.
+        Simulates deleting an object and returns a dummy identification dictionary.
         """
         return {"id": "dummy_id"}
 
@@ -79,6 +79,7 @@ class GeneralManagerTestCase(TestCase):
             "id": "dummy_id",
         }
         self.manager.Interface = DummyInterface  # type: ignore
+        DummyInterface._use_soft_delete = True
         self.manager.Permission = ManagerBasedPermission  # type: ignore
 
         self.post_list = []
@@ -268,23 +269,48 @@ class GeneralManagerTestCase(TestCase):
             self.assertEqual(self.post_list[0]["action"], "update")
             self.assertEqual(self.post_list[0]["name"], "New Manager")
 
-    def test_classmethod_deactivate(self):
-        # Test the deactivate class method
-        """
-        Tests that the deactivate method calls the interface's deactivate, returns a GeneralManager instance, and emits pre- and post-data change signals with the correct action and instance.
-        """
+    def test_delete(self):
+        """Tests that the delete method calls the interface and emits signals."""
         manager_obj = self.manager()
         with (
             patch.object(
-                DummyInterface, "deactivate", return_value={"id": "new_id"}
-            ) as mock_create,
+                DummyInterface, "delete", return_value={"id": "new_id"}
+            ) as mock_delete,
         ):
-            new_manager = manager_obj.deactivate(creator_id=1)
-            mock_create.assert_called_once_with(creator_id=1, history_comment=None)
-            self.assertIsInstance(new_manager, GeneralManager)
+            new_manager = manager_obj.delete(creator_id=1)
+            mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
+            self.assertIsNone(new_manager)
             self.assertEqual(len(self.pre_list), 1)
-            self.assertEqual(self.pre_list[0]["action"], "deactivate")
+            self.assertEqual(self.pre_list[0]["action"], "delete")
             self.assertEqual(self.pre_list[0]["instance"], manager_obj)
 
             self.assertEqual(len(self.post_list), 1)
-            self.assertEqual(self.post_list[0]["action"], "deactivate")
+            self.assertEqual(self.post_list[0]["action"], "delete")
+            self.assertIsNone(self.post_list[0]["instance"])
+
+    def test_deactivate_alias_emits_warning(self):
+        """Ensure deactivate proxies to delete and warns."""
+        manager_obj = self.manager()
+        with (
+            patch.object(
+                DummyInterface, "delete", return_value={"id": "new_id"}
+            ) as mock_delete,
+            self.assertWarns(DeprecationWarning),
+        ):
+            result = manager_obj.deactivate(creator_id=1)
+            mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
+            self.assertIsNone(result)
+
+    def test_delete_returns_none_when_hard_delete(self):
+        """Hard deletes should return None from the manager API."""
+        manager_obj = self.manager()
+        DummyInterface._use_soft_delete = False
+        try:
+            with patch.object(
+                DummyInterface, "delete", return_value={"id": "new_id"}
+            ) as mock_delete:
+                result = manager_obj.delete(creator_id=1)
+                mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
+                self.assertIsNone(result)
+        finally:
+            DummyInterface._use_soft_delete = True
