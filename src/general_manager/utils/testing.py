@@ -330,13 +330,13 @@ class GeneralManagerTransactionTestCase(
                     for through in auto_through_models:
                         tables_to_remove.discard(through._meta.db_table)
                 history_model = getattr(model, "history", None)
-                m2m_history_models: list[type[models.Model]] = []
+                related_history_models: list[type[models.Model]] = []
                 if history_model:
                     history_model_class = cast(
                         type[models.Model],
                         history_model.model,  # type: ignore[attr-defined]
                     )
-                    m2m_history_models = _get_historical_changes_related_models(
+                    related_history_models = _get_historical_changes_related_models(
                         history_model_class
                     )
                 if history_model:
@@ -344,11 +344,11 @@ class GeneralManagerTransactionTestCase(
                     if history_table in tables_to_remove:
                         editor.delete_model(history_model.model)
                         tables_to_remove.discard(history_table)
-                    for m2m_history_model in m2m_history_models:
-                        m2m_history_table = m2m_history_model._meta.db_table
-                        if m2m_history_table in tables_to_remove:
-                            editor.delete_model(m2m_history_model)
-                            tables_to_remove.discard(m2m_history_table)
+                    for related_history_model in related_history_models:
+                        related_history_table = related_history_model._meta.db_table
+                        if related_history_table in tables_to_remove:
+                            editor.delete_model(related_history_model)
+                            tables_to_remove.discard(related_history_table)
                 for through in auto_through_models:
                     through_table = through._meta.db_table
                     if through_table in tables_to_remove:
@@ -370,11 +370,11 @@ class GeneralManagerTransactionTestCase(
                     global_apps.all_models[app_label].pop(hist_key, None)
                     with suppress(LookupError):
                         app_config.models.pop(hist_key, None)
-                for m2m_history_model in m2m_history_models:
-                    table = m2m_history_model._meta.db_table
+                for related_history_model in related_history_models:
+                    table = related_history_model._meta.db_table
                     if table in created_tables:
-                        label = m2m_history_model._meta.app_label
-                        key = m2m_history_model.__name__.lower()
+                        label = related_history_model._meta.app_label
+                        key = related_history_model.__name__.lower()
                         global_apps.all_models[label].pop(key, None)
                         with suppress(LookupError):
                             global_apps.get_app_config(label).models.pop(key, None)
