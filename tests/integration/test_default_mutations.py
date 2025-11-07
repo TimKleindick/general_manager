@@ -18,7 +18,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Create and register a dynamic TestProject model on the test class for use in tests.
-        
+
         The model exposes an Interface with a required `name` (CharField, max_length=100), an optional `number` (IntegerField, null/blank allowed), and a `budget` MeasurementField with base unit "EUR". The model uses app label "general_manager" and enables soft delete. Assigns the model to `cls.TestProject` and sets `cls.general_manager_classes` to a list containing it.
         """
 
@@ -479,7 +479,7 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
     def test_delete_project(self):
         """
         Verifies that deleting a TestProject via the GraphQL delete mutation reports success and the project is no longer retrievable.
-        
+
         Asserts the GraphQL response contains no errors, that the mutation's `success` field is true, and that attempting to access the deleted project raises `ObjectDoesNotExist`.
         """
         variables = {

@@ -84,10 +84,10 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             def handle_interface(cls):
                 """
                 Create pre/post handler callables used when attaching an interface to a parent class.
-                
+
                 Parameters:
                     cls (type): Parent/owner class for the interface; its `_model` attribute is provided to the `pre` callable.
-                
+
                 Returns:
                     tuple: A pair `(pre, post)` where:
                         - `pre(name, attrs, interface)` -> `(attrs, parent_class, model)`: supplies attributes, the parent class, and the model to use when preparing the interface class.
@@ -147,7 +147,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
     def setUp(self):
         """
         Set up test fixtures: create a User, a BookModel authored and changed by that user, add the user as a reader, and create a UserManager bound to that user.
-        
+
         Attributes set:
         - self.user: User instance with username "tester".
         - self.book: BookModel instance titled "Initial" with author and changed_by set to self.user; self.user is added to book.readers.
@@ -167,7 +167,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             def __init__(self):
                 """
                 Initialize a lightweight dummy object used in tests.
-                
+
                 Sets:
                 - `pk` to 5
                 - `saved` to False
@@ -200,12 +200,12 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         def fake_save(instance, creator_id, comment):
             """
             Record the provided instance, creator id, and comment into the outer `captured` dict and return the instance primary key fallback.
-            
+
             Parameters:
                 instance: The object being saved; its `pk` attribute will be returned if truthy.
                 creator_id: Identifier of the actor performing the save.
                 comment: Change reason or history comment associated with the save.
-            
+
             Returns:
                 An integer: the instance's `pk` if it exists and is truthy, otherwise `99`.
             """

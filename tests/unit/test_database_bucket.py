@@ -29,7 +29,7 @@ class DummyInterface(InterfaceBase):
     def update(self, *args, **kwargs):
         """
         Indicates that updating is not supported for this interface.
-        
+
         Raises:
             NotImplementedError: Always raised to signal that update operations are unsupported.
         """
@@ -38,7 +38,7 @@ class DummyInterface(InterfaceBase):
     def delete(self, *args, **kwargs):
         """
         Indicates that deletion is not supported for this interface.
-        
+
         Raises:
             NotImplementedError: Always raised to signal that deletion is unsupported.
         """

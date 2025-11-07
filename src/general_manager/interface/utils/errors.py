@@ -23,7 +23,7 @@ class InvalidFieldValueError(ValueError):
     def __init__(self, field_name: str, value: object) -> None:
         """
         Initialize the exception indicating a value is invalid for a specific model field.
-        
+
         Parameters:
             field_name: Name of the field that received the invalid value.
             value: The invalid value that caused the error.
@@ -37,7 +37,7 @@ class InvalidFieldTypeError(TypeError):
     def __init__(self, field_name: str, error: Exception) -> None:
         """
         Construct an InvalidFieldTypeError describing a type-related error for a model field.
-        
+
         Parameters:
             field_name (str): Name of the field that received a value with an unexpected type.
             error (Exception): The underlying exception or error message that caused the type error; its text is included in the constructed message.
@@ -51,7 +51,7 @@ class UnknownFieldError(ValueError):
     def __init__(self, field_name: str, model_name: str) -> None:
         """
         Initialize the exception for a missing field on a model.
-        
+
         Parameters:
             field_name (str): Name of the field that was not found.
             model_name (str): Name of the model where the field was expected.
@@ -65,7 +65,7 @@ class DuplicateFieldNameError(ValueError):
     def __init__(self) -> None:
         """
         Initialize the DuplicateFieldNameError with a standard message indicating a field name conflict.
-        
+
         The exception message is "Field name already exists." and no parameters are accepted.
         """
         super().__init__("Field name already exists.")
@@ -77,7 +77,7 @@ class MissingActivationSupportError(TypeError):
     def __init__(self, model_name: str) -> None:
         """
         Initialize the error with a message stating that the given model must expose an `is_active` attribute.
-        
+
         Parameters:
             model_name (str): Name of the model missing the required `is_active` attribute.
         """
@@ -90,7 +90,7 @@ class MissingReadOnlyDataError(ValueError):
     def __init__(self, interface_name: str) -> None:
         """
         Error raised when a read-only interface does not declare the required `_data` attribute.
-        
+
         Parameters:
             interface_name (str): Name of the read-only interface missing the `_data` attribute; used to construct the exception message.
         """
@@ -105,7 +105,7 @@ class MissingUniqueFieldError(ValueError):
     def __init__(self, interface_name: str) -> None:
         """
         Initialize the exception raised when a read-only interface does not declare any unique identifier fields.
-        
+
         Parameters:
             interface_name (str): Name of the read-only interface missing a unique field; included in the exception message.
         """
@@ -120,7 +120,7 @@ class InvalidReadOnlyDataFormatError(TypeError):
     def __init__(self) -> None:
         """
         Initialize the exception with a standardized message about the expected `_data` JSON structure.
-        
+
         Sets the exception message to "_data JSON must decode to a list of dictionaries."
         """
         super().__init__("_data JSON must decode to a list of dictionaries.")
@@ -132,7 +132,7 @@ class InvalidReadOnlyDataTypeError(TypeError):
     def __init__(self) -> None:
         """
         Error raised when a read-only manager's `_data` is neither a JSON string nor a list of dictionaries.
-        
+
         Initializes the exception with the message: "_data must be a JSON string or a list of dictionaries."
         """
         super().__init__("_data must be a JSON string or a list of dictionaries.")
@@ -144,10 +144,10 @@ class MissingModelConfigurationError(ValueError):
     def __init__(self, interface_name: str) -> None:
         """
         Indicates that an interface is missing its required `model` configuration.
-        
+
         Parameters:
             interface_name (str): Name of the interface that must declare a `model` attribute.
-        
+
         Description:
             Initializes the exception with a message stating which interface must define a `model` attribute.
         """
@@ -160,7 +160,7 @@ class InvalidModelReferenceError(TypeError):
     def __init__(self, reference: object) -> None:
         """
         Initialize the exception for an invalid model reference.
-        
+
         Parameters:
             reference (object): The model reference that could not be resolved; its representation is included in the exception message.
         """

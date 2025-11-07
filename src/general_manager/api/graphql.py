@@ -1776,12 +1776,12 @@ class GraphQL:
     ) -> type[graphene.Mutation] | None:
         """
         Generate a Graphene Mutation subclass that deletes a GeneralManager instance identified by ID.
-        
+
         The created mutation exposes the manager's input fields defined by its Interface (filtered to the Interface's input_fields), requires an `id` to identify the instance, invokes the manager's `delete(...)` method with the request user as `creator_id`, and returns a payload containing a `success` flag and the manager-named field (the manager-named field will be `None` when the underlying delete does not return an instance).
-        
+
         Returns:
             The generated Graphene Mutation subclass for the delete operation, or `None` if the provided manager class has no `Interface`.
-        
+
         Raises:
             GraphQLError: produced via GraphQL._handle_graph_ql_error when the `id` is missing or when handled manager errors occur.
         """
@@ -1798,15 +1798,15 @@ class GraphQL:
         ) -> dict:
             """
             Deletes the identified GeneralManager instance.
-            
+
             Parameters:
                 id (str|int): Identifier of the manager instance to delete; passed via kwargs.
-            
+
             Returns:
                 dict: Mapping with keys:
                     - `success`: `True` when deletion completed without raising a handled error.
                     - `<ManagerName>`: The value returned by the underlying delete operation for the manager (often `None`).
-            
+
             Raises:
                 GraphQLError: If `id` is missing or a handled manager error (e.g., PermissionError, ValidationError, ValueError, LookupError, TypeError, AttributeError, RuntimeError) occurs; errors are converted via GraphQL._handle_graph_ql_error.
             """

@@ -170,7 +170,7 @@ class BaseTestInterface(InterfaceBase):
     def update(self, *args, **kwargs):
         """
         Abstract placeholder for update operations that must be implemented by subclasses.
-        
+
         Raises:
             NotImplementedError: Always raised to indicate the method must be overridden.
         """
@@ -179,11 +179,11 @@ class BaseTestInterface(InterfaceBase):
     def delete(self, *args, **kwargs):
         """
         Delete one or more resources managed by this interface.
-        
+
         Parameters:
             *args: Positional arguments whose meaning is defined by the subclass.
             **kwargs: Keyword arguments whose meaning is defined by the subclass.
-        
+
         Raises:
             NotImplementedError: Always raised in the base class; subclasses must implement this method.
         """

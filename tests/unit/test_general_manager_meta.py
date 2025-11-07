@@ -299,9 +299,9 @@ class DummyInterface(InterfaceBase):
     def update(self, *args, **kwargs):
         """
         Hook to apply updates to an interface-managed resource.
-        
+
         This method is a placeholder hook that should be overridden to perform update operations; it accepts arbitrary positional and keyword arguments forwarded by the caller.
-        
+
         Raises:
             NotImplementedError: Always raised by the base implementation.
         """
@@ -310,13 +310,13 @@ class DummyInterface(InterfaceBase):
     def delete(self, *args, **kwargs):
         """
         Delete an entity or resource represented by the interface implementation.
-        
+
         Implementations should perform the deletion using the provided positional and keyword arguments.
-        
+
         Parameters:
             *args: Positional arguments forwarded to the implementation.
             **kwargs: Keyword arguments forwarded to the implementation.
-        
+
         Raises:
             NotImplementedError: Always raised by the base implementation; subclasses must override.
         """
@@ -325,10 +325,10 @@ class DummyInterface(InterfaceBase):
     def get_data(self, search_date=None):
         """
         Retrieve interface data optionally filtered by a reference date.
-        
+
         Parameters:
             search_date (datetime.date | datetime.datetime | None): Optional date used to filter or select the returned data.
-        
+
         Returns:
             dict: Mapping of attribute names to their corresponding values.
         """
@@ -537,11 +537,11 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def update(self, *args, **kwargs):
                 """
                 Handle updating an existing resource or object; intended to be implemented by subclasses.
-                
+
                 Parameters:
                     *args: Positional arguments passed through from callers.
                     **kwargs: Keyword arguments passed through from callers.
-                
+
                 Raises:
                     NotImplementedError: Always raised by the base implementation to require subclasses to provide behavior.
                 """
@@ -550,7 +550,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def delete(self, *args, **kwargs):
                 """
                 Placeholder hook for deleting an interface-backed resource; subclasses must implement this method.
-                
+
                 Raises:
                     NotImplementedError: Always raised by the base implementation to require subclasses to provide behavior.
                 """
@@ -559,15 +559,15 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def get_data(self, search_date=None):
                 """
                 Retrieve interface-specific data, optionally filtered by a date.
-                
+
                 Subclasses must override this method to return the interface's data or records for the provided date.
-                
+
                 Parameters:
                     search_date (datetime.date | datetime.datetime | None): Date used to filter the returned data. When None, no date-based filtering is applied.
-                
+
                 Returns:
                     Any: Implementation-specific data representing the interface's state or records for the given date.
-                
+
                 Raises:
                     NotImplementedError: Indicates that subclasses are required to implement this method.
                 """
@@ -626,11 +626,11 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def update(self, *args, **kwargs):
                 """
                 Handle updating an existing resource or object; intended to be implemented by subclasses.
-                
+
                 Parameters:
                     *args: Positional arguments passed through from callers.
                     **kwargs: Keyword arguments passed through from callers.
-                
+
                 Raises:
                     NotImplementedError: Always raised by the base implementation to require subclasses to provide behavior.
                 """
@@ -639,7 +639,7 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def delete(self, *args, **kwargs):
                 """
                 Placeholder hook for deleting an interface-backed resource; subclasses must implement this method.
-                
+
                 Raises:
                     NotImplementedError: Always raised by the base implementation to require subclasses to provide behavior.
                 """
@@ -648,15 +648,15 @@ class GeneralManagerMetaTests(SimpleTestCase):
             def get_data(self, search_date=None):
                 """
                 Retrieve interface-specific data, optionally filtered by a date.
-                
+
                 Subclasses must override this method to return the interface's data or records for the provided date.
-                
+
                 Parameters:
                     search_date (datetime.date | datetime.datetime | None): Date used to filter the returned data. When None, no date-based filtering is applied.
-                
+
                 Returns:
                     Any: Implementation-specific data representing the interface's state or records for the given date.
-                
+
                 Raises:
                     NotImplementedError: Indicates that subclasses are required to implement this method.
                 """
