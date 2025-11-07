@@ -83,10 +83,13 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def _get_manager(cls, *, only_active: bool = True) -> models.Manager[HistoryModelT]:
         """
-        Get the model manager for the interface's model, bound to the configured database alias if one is set.
-
+        Return the model manager for the interface's model, bound to the configured database alias.
+        
+        Parameters:
+            only_active (bool): If True, return the active manager (respecting soft-delete); if False, return the manager that exposes all records.
+        
         Returns:
-            manager (django.db.models.Manager[HistoryModelT]): The model manager for the interface's model, using the configured database alias when provided.
+            manager (django.db.models.Manager[HistoryModelT]): The selected Django model manager for the interface's model.
         """
         selector = DjangoManagerSelector[HistoryModelT](
             model=cls._model,
@@ -104,10 +107,10 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def _get_queryset(cls) -> models.QuerySet[HistoryModelT]:
         """
-        Get a queryset for the interface's model using the configured database alias.
-
+        Get a QuerySet for the interface's model from the active manager and configured database alias.
+        
         Returns:
-            A Django QuerySet of the interface's model (models.QuerySet[HistoryModelT]) bound to the configured database alias.
+            queryset (models.QuerySet[HistoryModelT]): A QuerySet of active model instances bound to the configured database alias.
         """
         manager = cls._get_manager(only_active=True)
         queryset: models.QuerySet[HistoryModelT] = manager.all()  # type: ignore[assignment]
@@ -115,10 +118,22 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
 
     @classmethod
     def _payload_normalizer(cls) -> PayloadNormalizer:
+        """
+        Create a PayloadNormalizer configured for this interface's Django model.
+        
+        Returns:
+            PayloadNormalizer: An instance bound to the interface's `_model` used to normalize and validate payloads for database operations.
+        """
         return PayloadNormalizer(cast(Type[models.Model], cls._model))
 
     @classmethod
     def _get_field_descriptors(cls) -> dict[str, FieldDescriptor]:
+        """
+        Lazily build and return the mapping of field names to FieldDescriptor objects for this interface class.
+        
+        Returns:
+            dict[str, FieldDescriptor]: Mapping from attribute name to its FieldDescriptor. The mapping is cached on the class after first construction.
+        """
         if cls._field_descriptors is None:
             cls._field_descriptors = build_field_descriptors(cls)
         return cls._field_descriptors
@@ -161,13 +176,15 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
 
     def get_data(self) -> HistoryModelT:
         """
-        Return the model instance backing this interface; if `search_date` is provided, return the most recent historical record at or before that timestamp.
-        Historical lookups only run when `search_date` trails the current time by
-        at least `historical_lookup_buffer_seconds` (default: 5 seconds) to avoid
-        racing with in-flight updates.
-
+        Load the model instance backing this interface, optionally resolving historical state as of the interface's search date.
+        
+        If a search date is set and is earlier than the current time by at least the class's
+        historical_lookup_buffer_seconds, the method will attempt to return the most recent
+        historical record at or before that timestamp; otherwise it returns the live instance.
+        If no matching instance (live or historical) is found, the model's DoesNotExist is raised.
+        
         Returns:
-            HistoryModelT: The current model instance, or the historical instance at or before `search_date` if one is found.
+            HistoryModelT: The live model instance or a historical snapshot at or before the configured search date.
         """
         manager = self.__class__._get_manager(
             only_active=not getattr(self.__class__, "_use_soft_delete", False)
@@ -202,13 +219,15 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def filter(cls, **kwargs: Any) -> DatabaseBucket:
         """
-        Create a DatabaseBucket containing model instances that match the given Django-style filter expressions.
-
+        Builds a DatabaseBucket from a queryset filtered by Django-style lookup kwargs.
+        
+        Filter keys are normalized using the interface's PayloadNormalizer before applying them. A special keyword argument `include_inactive` (default False) may be provided to use the manager that includes inactive records.
+        
         Parameters:
-            kwargs (Any): Django-style filter lookups to apply to the queryset.
-
+            kwargs (Any): Django-style filter lookups; may include `include_inactive` (bool) to include inactive records.
+        
         Returns:
-            DatabaseBucket: Bucket wrapping the filtered queryset.
+            DatabaseBucket: A bucket wrapping the filtered queryset and the filter definitions used.
         """
 
         include_inactive = kwargs.pop("include_inactive", False)
@@ -300,7 +319,14 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         cls, pk: Any, search_date: datetime | None
     ) -> HistoryModelT | None:
         """
-        Retrieve a historical record for a primary key when no live instance exists.
+        Fetch the model's historical snapshot for the given primary key as of the provided search_date.
+        
+        Parameters:
+            pk (Any): Primary key value of the requested record.
+            search_date (datetime | None): A timezone-aware datetime to query history up to; if `None`, no historical lookup is performed.
+        
+        Returns:
+            HistoryModelT | None: The historical model instance whose history_date is less than or equal to `search_date`, or `None` if no such historical record exists. The configured database alias is respected when querying history.
         """
         if search_date is None or not hasattr(cls._model, "history"):
             return None
@@ -339,12 +365,12 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @classmethod
     def get_attributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
-        Builds a mapping of attribute names to accessor callables for a DBBasedInterface instance.
-
-        Includes accessors for custom fields, standard model fields, foreign-key relations, many-to-many relations, and reverse relations. Descriptors shared with `get_attribute_types` ensure attribute metadata and resolver logic stay in sync.
-
+        Builds a mapping of attribute names to accessor callables for this interface.
+        
+        The mapping includes accessors for model fields, custom fields, foreign-key relations, many-to-many relations, and reverse relations; each value is a callable that accepts a DBBasedInterface instance and returns the attribute's value.
+        
         Returns:
-            dict[str, Callable[[DBBasedInterface], Any]]: Mapping from attribute name to a callable that accepts a DBBasedInterface and returns that attribute's value.
+            dict[str, Callable[[DBBasedInterface], Any]]: Mapping from attribute name to an accessor callable.
         """
         descriptors = cls._get_field_descriptors()
         return {name: descriptor.accessor for name, descriptor in descriptors.items()}
@@ -353,20 +379,16 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         self: DBBasedInterface, field_call: str, field_name: str
     ) -> models.QuerySet[Any]:
         """
-        Resolve many-to-many relations for both live and historical instances.
-
-        For historical instances generated by django-simple-history, the related
-        manager yields HistoricalChanges rows rather than the original related
-        model. This helper extracts the underlying related objects so that the
-        GeneralManager API continues to return the expected model instances.
-
+        Resolve a many-to-many relation on the interface's instance and return the related model instances or historical snapshots.
+        
+        Given the name of the relation accessor (field_call) and the corresponding model field name (field_name), this returns the related objects. When the relation points to django-simple-history change rows, it resolves underlying related IDs and returns either the current related model instances or their historical records as of the interface's search date.
+        
         Parameters:
-            self (DBBasedInterface): The interface instance containing the model instance.
-            field_call (str): The name of the many-to-many relation accessor.
-            field_name (str): The name of the many-to-many field.
-
+            field_call (str): Attribute name on the instance used to obtain the related manager (e.g., "tags").
+            field_name (str): The many-to-many field name on the interface's model used to identify the relation.
+        
         Returns:
-            list[Any] | models.QuerySet[Any]: The related objects for the many-to-many relation.
+            models.QuerySet[Any]: A queryset of related model instances (or historical snapshots when applicable); returns an empty queryset if no related objects can be resolved.
         """
         manager = getattr(self._instance, field_call)
         queryset = manager.all()
@@ -447,6 +469,16 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     def _collect_model_fields(
         interface: interfaceBaseClass,
     ) -> tuple[dict[str, Any], type | None]:
+        """
+        Collects field-like attributes and an optional Meta class from an interface class.
+        
+        Parameters:
+        	interface (type): The interface class to inspect for model field definitions and an optional `Meta` inner class.
+        
+        Returns:
+        	model_fields (dict[str, Any]): Mapping of attribute names (excluding dunder names and the `Factory` attribute) to their values.
+        	meta_class (type | None): The `Meta` inner class found on the interface, or `None` if absent.
+        """
         model_fields: dict[str, Any] = {}
         meta_class: type | None = None
         for attr_name, attr_value in interface.__dict__.items():
@@ -464,6 +496,17 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     def _apply_meta_configuration(
         meta_class: type | None,
     ) -> tuple[type | None, bool, list[Any] | None]:
+        """
+        Extract soft-delete and rules configuration from a Meta-like class and return the cleaned Meta class along with the extracted values.
+        
+        If provided, removes `use_soft_delete` and `rules` attributes from `meta_class` and returns them separately.
+        
+        Parameters:
+        	meta_class (type | None): A Meta-like class or None.
+        
+        Returns:
+        	tuple[type | None, bool, list[Any] | None]: A tuple of (meta_class or None, use_soft_delete flag, rules list or None).
+        """
         use_soft_delete = False
         rules: list[Any] | None = None
         if meta_class is None:
@@ -481,6 +524,22 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         base_model_class: type[GeneralManagerBasisModel],
         use_soft_delete: bool,
     ) -> tuple[type[models.Model], ...]:
+        """
+        Select base model classes, adding soft-delete support when requested.
+        
+        When `use_soft_delete` is False, the original `base_model_class` is returned as the sole base.
+        When `use_soft_delete` is True, returns a tuple that ensures the resulting model inherits soft-delete behavior:
+        - If the provided base already is or can be replaced by the centrally defined soft-delete general manager model, that model is returned alone.
+        - If the provided base already implements SoftDeleteMixin, it is returned alone.
+        - Otherwise, returns (SoftDeleteMixin, base_model_class) so the new model gains soft-delete capabilities.
+        
+        Parameters:
+            base_model_class: The candidate base model class to evaluate for inheritance.
+            use_soft_delete: If True, include soft-delete-capable base(s) in the returned tuple.
+        
+        Returns:
+            A tuple of model base classes to use when constructing the final model, arranged to provide soft-delete behavior when requested.
+        """
         if not use_soft_delete:
             return (base_model_class,)
         if (
@@ -500,6 +559,17 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         use_soft_delete: bool,
         rules: list[Any] | None,
     ) -> None:
+        """
+        Finalize a dynamically constructed Django model class by applying Meta-derived configuration.
+        
+        When a Meta-like class and rules are provided, attach the rules to the model's _meta and set a model-level full_clean method. When use_soft_delete is true and a Meta-like class is present, record the soft-delete flag on the model's _meta.
+        
+        Parameters:
+            model (type[GeneralManagerBasisModel]): The dynamically created Django model class to modify.
+            meta_class (type | None): The Meta-like class extracted from the interface; when None no Meta-based modifications are applied.
+            use_soft_delete (bool): Whether the model should be marked as supporting soft-delete; applied only if meta_class is present.
+            rules (list[Any] | None): Validation or business rules to attach to model._meta; applied only if meta_class is present.
+        """
         if meta_class and rules:
             model._meta.rules = rules  # type: ignore[attr-defined]
             model.full_clean = get_full_clean_methode(model)  # type: ignore[assignment]
@@ -512,6 +582,17 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         model: type[GeneralManagerBasisModel],
         use_soft_delete: bool,
     ) -> newlyCreatedInterfaceClass:
+        """
+        Create a new interface subclass bound to a specific Django model and soft-delete configuration.
+        
+        Parameters:
+            interface (type): Base interface class to inherit from.
+            model (type[GeneralManagerBasisModel]): The Django model type the new interface will manage.
+            use_soft_delete (bool): Whether the interface should be marked to use soft-delete semantics.
+        
+        Returns:
+            type: A new interface class that inherits from `interface`, with `_model` set to `model`, `_use_soft_delete` set to `use_soft_delete`, and `_field_descriptors` initialized to `None`.
+        """
         interface_cls = type(interface.__name__, (interface,), {})
         interface_cls._model = model  # type: ignore[attr-defined]
         interface_cls._use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
@@ -526,6 +607,18 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         interface_cls: newlyCreatedInterfaceClass,
         model: type[GeneralManagerBasisModel],
     ) -> type[AutoFactory]:
+        """
+        Create a new AutoFactory subclass wired to a specific interface and model.
+        
+        Parameters:
+            name (str): Base name used to form the new factory class name ("{name}Factory").
+            factory_definition (type | None): Optional existing factory class whose non-dunder attributes will be copied into the new factory.
+            interface_cls (type): Interface class to attach to the factory as the `interface` attribute.
+            model (type[GeneralManagerBasisModel]): Django model class to set as `Meta.model` on the factory.
+        
+        Returns:
+            type[AutoFactory]: A new AutoFactory subclass named "{name}Factory" with the provided attributes, `interface`, and `Meta` configured.
+        """
         factory_attributes: dict[str, Any] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
@@ -543,6 +636,20 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         interface: interfaceBaseClass,
         base_model_class: type[GeneralManagerBasisModel] = GeneralManagerModel,
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
+        """
+        Create a concrete Django model, its corresponding interface class, and an associated factory, then attach them to the provided attributes mapping.
+        
+        This method collects model field definitions from the given interface, applies Meta-derived configuration (including optional soft-delete and validation rules), constructs a new model type, finalizes its class metadata, builds an interface class bound to that model, and produces a factory class for creating instances. The attrs mapping is updated with keys for "__module__", "Meta" (if present), "Interface", and "Factory" before being returned.
+        
+        Parameters:
+        	name: The desired name for the generated model and related classes.
+        	attrs: Attribute mapping to populate for the new manager class; will be mutated to include module, Interface, and Factory entries.
+        	interface: The interface base class whose declared fields and metadata will drive model construction.
+        	base_model_class: The base Django model type to inherit from when constructing the new model (defaults to GeneralManagerModel).
+        
+        Returns:
+        	tuple: (attrs, interface_cls, model) where `attrs` is the updated attributes mapping, `interface_cls` is the newly created interface class bound to the model, and `model` is the constructed Django model class.
+        """
         model_fields, meta_class = cls._collect_model_fields(interface)
         model_fields["__module__"] = attrs.get("__module__")
         meta_class, use_soft_delete, rules = cls._apply_meta_configuration(meta_class)
@@ -582,14 +689,16 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         model: relatedClass,
     ) -> None:
         """
-        Finalizes the setup of dynamically created classes by linking the interface and model to the new general manager class.
-
-        This method sets the `_parent_class` attribute on the interface class and attaches the new general manager class to the model via the `_general_manager_class` attribute.
-
+        Finalize dynamic wiring between a generated general manager, its interface, and the model.
+        
+        Sets the interface's _parent_class and the model's _general_manager_class, then attempts to assign
+        interface-provided managers to the generated class as `objects` and, when soft-delete is enabled
+        and available on the model, `all_objects`.
+        
         Parameters:
-            new_class (newlyCreatedGeneralManagerClass): Generated GeneralManager subclass.
-            interface_class (newlyCreatedInterfaceClass): Concrete interface class created for the model.
-            model (relatedClass): Django model linked to the manager.
+            new_class (newlyCreatedGeneralManagerClass): The generated GeneralManager subclass.
+            interface_class (newlyCreatedInterfaceClass): The concrete interface class for the model.
+            model (relatedClass): The Django model associated with the manager.
         """
         interface_class._parent_class = new_class
         model._general_manager_class = new_class  # type: ignore
@@ -609,26 +718,23 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         cls,
     ) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
-        Return the pre- and post-creation hooks used for dynamic interface class creation.
-
+        Provide pre- and post-creation hooks for dynamic interface class creation.
+        
         Returns:
-            tuple: A pair (pre_create, post_create) where `pre_create` is called before the manager class is created to prepare attributes and configuration, and `post_create` is called after creation to finalize wiring and attach managers.
+            tuple: A pair (pre_create, post_create) where `pre_create` prepares attributes and configuration before a manager class is created, and `post_create` finalizes wiring and attaches managers after creation.
         """
         return cls._pre_create, cls._post_create
 
     @classmethod
     def get_field_type(cls, field_name: str) -> type:
         """
-        Determine the class used to represent a model field for this interface.
-
-        If the field is a relation and the related model exposes a `_general_manager_class`,
-        that manager class is returned; otherwise the Django field class is returned.
-
+        Return the interface type used to represent a model field.
+        
         Parameters:
             field_name (str): Name of the model field to inspect.
-
+        
         Returns:
-            type: The related model's GeneralManager class when present, otherwise the Django field class.
+            type: The related model's general manager class if the field is a relation and the related model exposes `_general_manager_class`; otherwise the Django field class.
         """
         field = cls._model._meta.get_field(field_name)
         if (
@@ -679,16 +785,16 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         self, creator_id: int | None, history_comment: str | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         """
-        Update this instance with the provided field values.
-
+        Apply provided field values to the current instance and persist the change with optional history metadata.
+        
         Parameters:
-            creator_id (int | None): ID of the user recording the change; used to set `changed_by_id`.
-            history_comment (str | None): Optional comment to attach to the instance's change history.
-            **kwargs (Any): Field names and values to apply to the instance; many-to-many updates may be supplied using the `<relation>_id_list` convention.
-
+            creator_id: ID of the user recording the change; used to set `changed_by_id` on the saved record.
+            history_comment: Optional comment to attach as the change reason in the instance's history.
+            **kwargs: Field names and values to apply. Many-to-many updates may be supplied using the `<relation>_id_list` convention.
+        
         Returns:
-            dict[str, Any]: Primary key of the updated instance wrapped in a dict.
-
+            dict: A mapping containing the updated instance primary key as {"id": <pk>}.
+        
         Raises:
             UnknownFieldError: If any provided kwarg does not correspond to a model field.
         """
@@ -757,7 +863,12 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         self, creator_id: int | None, history_comment: str | None = None
     ) -> dict[str, Any]:
         """
-        Deprecated compatibility wrapper for `delete`.
+        Deprecated compatibility method that removes the current instance, preserving the model's history and soft-delete semantics.
+        
+        This method is deprecated and will emit a DeprecationWarning when called. It performs the same removal behavior as the interface's deletion path, including history change reasons and soft-delete handling when configured.
+        
+        Returns:
+            result (dict[str, Any]): Dictionary containing the primary key of the affected instance, e.g. `{"id": pk}`.
         """
         warnings.warn(
             "deactivate() is deprecated; use delete() instead.",
@@ -830,13 +941,15 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         history_comment: str | None,
     ) -> int:
         """
-        Save a model instance with validation, optional changed_by assignment, and an optional history comment.
-
+        Persist the given model instance after validation and optionally record the actor and a history comment.
+        
+        If the model exposes a `changed_by_id` attribute, `creator_id` will be assigned to it before saving. Validation is performed via `full_clean()` and the instance is saved using the interface's configured database alias when present. If `history_comment` is provided, it is attached to the instance's history/change reason.
+        
         Parameters:
-            instance (WritableModelT): The model instance to validate and persist.
-            creator_id (int | None): ID to assign to the instance's `changed_by_id` attribute if present.
+            instance (WritableModelT): Model instance to validate and persist.
+            creator_id (int | None): ID to assign to `changed_by_id` on the instance when available.
             history_comment (str | None): Optional change reason to attach to the instance's history.
-
+        
         Returns:
             int: The primary key of the saved instance.
         """

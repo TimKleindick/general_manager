@@ -274,9 +274,26 @@ class TestGrapQlMutation(TestCase):
                     pass
 
                 def update(self, *_args, **kwargs):
+                    """
+                    Apply provided attribute updates to this instance and return the modified instance.
+                    
+                    Updates attributes on the instance using keyword arguments where keys are attribute names and values are the new values to set. Positional arguments are ignored.
+                    
+                    Parameters:
+                        **kwargs: Mapping of attribute names to values to assign on the instance.
+                    
+                    Returns:
+                        The same instance after applying the updates.
+                    """
                     pass
 
                 def delete(self, *_args, **kwargs):
+                    """
+                    Delete this manager instance and return it.
+                    
+                    Returns:
+                        self: The same manager instance after deletion.
+                    """
                     pass
 
         class DummyManager2:
@@ -615,7 +632,10 @@ class TestGrapQlMutation(TestCase):
         class DummyManager:
             def __init__(self, *_, **kwargs):
                 """
-                Initialize the instance and set the value of `field1` from keyword arguments if provided.
+                Initialize the instance, set the `field1` attribute from kwargs if present, and enable soft-delete behavior.
+                
+                Parameters:
+                    field1: Optional value provided via keyword argument used to initialize `self.field1`.
                 """
                 self.field1 = kwargs.get("field1")
                 self._use_soft_delete = True
@@ -625,6 +645,19 @@ class TestGrapQlMutation(TestCase):
 
                 @classmethod
                 def get_attribute_types(cls):
+                    """
+                    Provide a mapping of attribute names to their type and metadata for the interface.
+                    
+                    Each mapping value is a dictionary with the following keys:
+                    - `type`: the Python type of the attribute (e.g., `int`, `str`).
+                    - `is_required`: `True` if the attribute must be provided.
+                    - `is_editable`: `True` if the attribute can be written via mutations.
+                    - `is_derived`: `True` if the attribute is computed/derived (and should be excluded from write inputs).
+                    - `default`: the default value for the attribute when not provided.
+                    
+                    Returns:
+                        dict: A mapping from attribute name to its metadata dictionary.
+                    """
                     return {
                         "id": {
                             "type": int,
@@ -636,6 +669,16 @@ class TestGrapQlMutation(TestCase):
                     }
 
             def delete(self, *_args, **_kwargs):
+                """
+                Perform the manager's delete operation and return the instance.
+                
+                Parameters:
+                    *_args: Additional positional arguments accepted by the delete API; ignored by this implementation.
+                    **_kwargs: Additional keyword arguments accepted by the delete API; ignored by this implementation.
+                
+                Returns:
+                    The same instance after the delete operation.
+                """
                 return self
 
         default_return_values = {

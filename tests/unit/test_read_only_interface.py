@@ -496,6 +496,18 @@ class DecoratorTests(SimpleTestCase):
         """
 
         def pre_hook(name, attrs, interface, base_model_class=None):
+            """
+            Package the pre-create hook inputs into a 4-tuple.
+            
+            Parameters:
+            	name (str): The proposed name for the model/class.
+            	attrs (dict): Attribute dictionary for the model definition.
+            	interface (type): The interface class associated with the model.
+            	base_model_class (type or None): Optional base model class to be set as the model's parent.
+            
+            Returns:
+            	tuple: A tuple (name, attrs, interface, base_model_class) containing the provided inputs.
+            """
             return (name, attrs, interface, base_model_class)
 
         wrapper = ReadOnlyInterface.read_only_pre_create(pre_hook)

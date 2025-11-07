@@ -48,9 +48,19 @@ class DummyInterface:
         return {"id": "created"}
 
     def update(self, *args: object, **kwargs: object) -> None:
+        """
+        No-op placeholder for updating an interface; accepts any positional and keyword arguments but performs no action.
+        
+        Parameters:
+            *args: Positional arguments are accepted and ignored.
+            **kwargs: Keyword arguments are accepted and ignored.
+        """
         return None
 
     def delete(self, *args: object, **kwargs: object) -> None:
+        """
+        No-op delete method that exists as a placeholder to satisfy the interface.
+        """
         return None
 
 

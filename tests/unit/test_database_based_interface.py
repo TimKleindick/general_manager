@@ -953,9 +953,9 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
     def setUp(self):
         """
-        Create two test users and define a writable test interface class.
-
-        Creates User instances assigned to self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface class (assigned to self.interface_cls) configured for WritableInterfaceTestModel with an `id` input field.
+        Create two test users and register a writable test interface class for WritableInterfaceTestModel.
+        
+        Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
         from general_manager.interface.database_based_interface import (
             WritableDBBasedInterface,

@@ -42,16 +42,19 @@ class DummyInterface:
 
     def update(self, *args, **kwargs):
         """
-        Simulates an update operation and returns a fixed identification dictionary.
-
+        Return a fixed identification dictionary representing a simulated update operation.
+        
         Returns:
-            dict: A dictionary with a dummy ID.
+            dict: A dictionary with key 'id' set to 'dummy_id'.
         """
         return {"id": "dummy_id"}
 
     def delete(self, *args, **kwargs):
         """
-        Simulates deleting an object and returns a dummy identification dictionary.
+        Simulate deleting the instance and provide a dummy identification for the deleted object.
+        
+        Returns:
+            dict: Identification dictionary with key `"id"` set to the deleted object's identifier (in this dummy implementation, `"dummy_id"`).
         """
         return {"id": "dummy_id"}
 
@@ -67,9 +70,9 @@ class GeneralManagerTestCase(TestCase):
     def setUp(self):
         # Set up any necessary data or state before each test
         """
-        Prepares the test environment before each test.
-
-        Initializes the GeneralManager with test attributes, assigns a dummy interface, and connects temporary receivers to pre- and post-data change signals to capture emitted events.
+        Prepare the test environment before each test.
+        
+        Initializes GeneralManager attributes and collaborators for testing: assigns a DummyInterface and ManagerBasedPermission, enables soft-delete on the interface, and creates a test user. Installs temporary pre- and post-data-change signal receivers that capture each signal's keyword arguments into `self.pre_list` and `self.post_list`.
         """
         self.manager = GeneralManager
         self.manager._attributes = {

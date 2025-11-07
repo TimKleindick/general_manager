@@ -83,15 +83,15 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
             @classmethod
             def handle_interface(cls):
                 """
-                Provide pre/post handler callables used when attaching an interface to a class.
-
+                Create pre/post handler callables used when attaching an interface to a parent class.
+                
                 Parameters:
-                    cls (type): The class that will act as the parent/owner of the interface.
-
+                    cls (type): Parent/owner class for the interface; its `_model` attribute is provided to the `pre` callable.
+                
                 Returns:
                     tuple: A pair `(pre, post)` where:
-                        - `pre(name, attrs, interface)` returns a three-tuple `(attrs, parent_class, model)` to be used when preparing the interface class.
-                        - `post(new_cls, interface_cls, model)` is called after the interface class is created; it assigns the interface to the new class and sets the interface's `_parent_class` to that new class.
+                        - `pre(name, attrs, interface)` -> `(attrs, parent_class, model)`: supplies attributes, the parent class, and the model to use when preparing the interface class.
+                        - `post(new_cls, interface_cls, model)`: runs after the interface class is created; attaches the interface to `new_cls` and sets `interface_cls._parent_class` to `new_cls`.
                 """
 
                 def pre(name, attrs, interface):
@@ -146,12 +146,12 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
 
     def setUp(self):
         """
-        Prepare test fixtures: create a user, a book authored and changed by that user, add the user as a reader, and create a manager bound to that user.
-
-        Sets:
-        - self.user: created User with username "tester".
-        - self.book: created BookModel instance titled "Initial", with author and changed_by set to self.user, and with self.user added to its readers.
-        - self.user_manager: instance of UserManager initialized with self.user.pk.
+        Set up test fixtures: create a User, a BookModel authored and changed by that user, add the user as a reader, and create a UserManager bound to that user.
+        
+        Attributes set:
+        - self.user: User instance with username "tester".
+        - self.book: BookModel instance titled "Initial" with author and changed_by set to self.user; self.user is added to book.readers.
+        - self.user_manager: UserManager instance initialized with self.user.pk.
         """
         self.user = User.objects.create(username="tester")
         self.book = self.BookModel.objects.create(
@@ -165,6 +165,14 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
     def test_save_with_history(self):
         class Dummy:
             def __init__(self):
+                """
+                Initialize a lightweight dummy object used in tests.
+                
+                Sets:
+                - `pk` to 5
+                - `saved` to False
+                - `cleaned` to False
+                """
                 self.pk = 5
                 self.saved = False
                 self.cleaned = False
@@ -190,6 +198,17 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         captured: dict[str, Any] = {}
 
         def fake_save(instance, creator_id, comment):
+            """
+            Record the provided instance, creator id, and comment into the outer `captured` dict and return the instance primary key fallback.
+            
+            Parameters:
+                instance: The object being saved; its `pk` attribute will be returned if truthy.
+                creator_id: Identifier of the actor performing the save.
+                comment: Change reason or history comment associated with the save.
+            
+            Returns:
+                An integer: the instance's `pk` if it exists and is truthy, otherwise `99`.
+            """
             captured["instance"] = instance
             captured["creator"] = creator_id
             captured["comment"] = comment

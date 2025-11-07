@@ -72,15 +72,15 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @classmethod
     def sync_data(cls) -> None:
         """
-        Synchronize the Django model with the parent manager's class-level `_data` JSON.
-
-        Parses the parent class's `_data` (JSON string or list of dicts), ensures the model schema is up to date, and within a single transaction creates, updates, or deactivates model instances to match the parsed data. Newly created or updated instances are marked `is_active = True`; existing active instances absent from the data are marked `is_active = False`. Logs a summary when any changes occur.
-
+        Synchronize the Django model table with the parent manager's class-level `_data` payload.
+        
+        Parses the parent manager's `_data` (either a JSON string decoding to a list of dicts or an already-parsed list of dicts) and updates the model to match: create records present in the data, update editable fields of existing records, and deactivate previously active records that are not present in the data. Logs a summary if any records were created, updated, or deactivated.
+        
         Raises:
             MissingReadOnlyDataError: If the parent manager class does not define `_data`.
-            InvalidReadOnlyDataFormatError: If `_data` is a JSON string that does not decode to a list of dictionaries.
+            InvalidReadOnlyDataFormatError: If a JSON string `_data` does not decode to a list of dictionaries or an item is missing required unique fields.
             InvalidReadOnlyDataTypeError: If `_data` is neither a string nor a list.
-            MissingUniqueFieldError: If the model exposes no unique fields to identify records.
+            MissingUniqueFieldError: If the model exposes no unique fields usable to identify records.
         """
         if cls.ensure_schema_is_up_to_date(cls._parent_class, cls._model):
             logger.warning(
@@ -293,9 +293,15 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
     @staticmethod
     def read_only_pre_create(func: Callable[..., Any]) -> Callable[..., Any]:
         """
-        Decorator for pre-creation hook functions that ensures the base model class is set to `GeneralManagerBasisModel`.
-
-        Wraps a pre-creation function, injecting `GeneralManagerBasisModel` as the `base_model_class` argument before the manager class is created.
+        Wrap a manager pre-creation function to ensure the interface has a Meta with use_soft_delete=True before invocation.
+        
+        The returned wrapper creates a dummy Meta on the provided interface if one does not exist, sets Meta.use_soft_delete = True, and then calls the original pre-creation function with the same arguments (including the original `base_model_class`).
+        
+        Parameters:
+            func (Callable[..., Any]): A pre-creation hook that accepts (name, attrs, interface, base_model_class) and returns (attrs, interface, base_model_class | None).
+        
+        Returns:
+            Callable[..., Any]: A wrapper function that performs the Meta initialization and soft-delete enabling, then returns the wrapped function's result.
         """
 
         def wrapper(
@@ -307,15 +313,16 @@ class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):
             attributes, interfaceBaseClass, type[GeneralManagerBasisModel] | None
         ]:
             """
-            Wraps a function to ensure the `base_model_class` argument is set to `GeneralManagerBasisModel` before invocation.
-
+            Ensure the interface has a Meta with soft-delete enabled, then invoke the wrapped pre-create function.
+            
             Parameters:
                 name: The name of the manager class being created.
-                attrs: Attributes for the manager class.
-                interface: The interface base class to use.
-
+                attrs: Attributes to assign to the manager class.
+                interface: The interface base class; a `Meta` class will be created on it if missing and `use_soft_delete` will be set to True.
+                base_model_class: The base model class to pass through to the wrapped function (defaults to GeneralManagerBasisModel).
+            
             Returns:
-                The result of calling the wrapped function with `base_model_class` set to `GeneralManagerBasisModel`.
+                A tuple of (attrs, interface, base_model_class_or_none) as returned by the wrapped function.
             """
             meta = getattr(interface, "Meta", None)
             if meta is None:

@@ -27,8 +27,8 @@ class CalculationInterface(InterfaceBase):
 
     def get_data(self) -> Any:
         """
-        Indicates that calculation interfaces do not provide stored data.
-
+        Indicates that calculation interfaces do not provide stored data and always raise a NotImplementedError.
+        
         Raises:
             NotImplementedError: Always raised with the message "Calculations do not store data."
         """
