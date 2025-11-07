@@ -64,6 +64,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                     "general_manager.TestHuman",
                     related_name="families",
                 )
+                use_soft_delete = True
 
         cls.TestCountry = TestCountry
         cls.TestHuman = TestHuman
@@ -121,6 +122,31 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         for human in humans:
             self.assertEqual(human.name, dict(human)["name"])
             self.assertEqual(human.country, dict(human)["country"])
+
+    def test_soft_delete_behavior(self):
+        """
+        Test the soft-delete behavior of the TestFamily manager.
+
+        Verifies that after soft-deleting a TestFamily instance, it is excluded from standard queries but can be accessed when including soft-deleted records.
+        """
+        family_id = self.test_family.identification["id"]
+
+        # Soft delete the family
+        self.test_family.delete(ignore_permission=True)
+
+        # Verify it is excluded from standard queries
+        families_after_delete = self.TestFamily.all()
+        self.assertNotIn(
+            family_id,
+            [f.identification["id"] for f in families_after_delete],
+        )
+
+        # Verify it can be accessed when including soft-deleted records
+        all_families = self.TestFamily.filter(include_inactive=True)
+        self.assertIn(
+            family_id,
+            [f.id for f in all_families],
+        )
 
     def test_manager_connections(self):
         """
