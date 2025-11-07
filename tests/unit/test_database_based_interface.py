@@ -954,7 +954,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     def setUp(self):
         """
         Create two test users and register a writable test interface class for WritableInterfaceTestModel.
-        
+
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
         from general_manager.interface.database_based_interface import (
@@ -1312,14 +1312,58 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         self.assertIsNone(saved_instance.changed_by_id)
 
 
-class PayloadNormalizerTestCase(WritableDBBasedInterfaceTestCase):
+class PayloadNormalizerTestCase(TransactionTestCase):
     """
     Comprehensive tests for PayloadNormalizer utility class.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        """
+        Ensure WritableInterfaceTestModel is registered and its tables exist for PayloadNormalizer tests.
+        """
+        super().setUpClass()
+        from simple_history import register
+
+        if not hasattr(
+            WritableInterfaceTestModel._meta, "simple_history_manager_attribute"
+        ):
+            register(WritableInterfaceTestModel)
+
+        if (
+            WritableInterfaceTestModel._meta.model_name
+            not in apps.get_app_config("general_manager").models
+        ):
+            apps.register_model("general_manager", WritableInterfaceTestModel)
+
+        with connection.schema_editor() as schema:
+            schema.create_model(WritableInterfaceTestModel)
+            schema.create_model(WritableInterfaceTestModel.history.model)  # type: ignore[attr-defined]
+
+    @classmethod
+    def tearDownClass(cls):
+        """
+        Drop WritableInterfaceTestModel tables and remove them from the registry.
+        """
+        with connection.schema_editor() as schema:
+            history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
+            schema.delete_model(history_model)
+            schema.delete_model(WritableInterfaceTestModel)
+
+        app_config = apps.get_app_config("general_manager")
+        model_key = WritableInterfaceTestModel._meta.model_name
+        history_key = WritableInterfaceTestModel.history.model._meta.model_name  # type: ignore[attr-defined]
+        apps.all_models["general_manager"].pop(model_key, None)
+        apps.all_models["general_manager"].pop(history_key, None)
+        app_config.models.pop(model_key, None)
+        app_config.models.pop(history_key, None)
+        super().tearDownClass()
+
     def setUp(self):
         """Set up test models and normalizer."""
         super().setUp()
+        self.user1 = User.objects.create_user(username="user1")
+        self.user2 = User.objects.create_user(username="user2")
         self.normalizer = PayloadNormalizer(WritableInterfaceTestModel)
 
     def test_normalize_filter_kwargs_with_plain_values(self):
