@@ -194,7 +194,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def test_delete_marks_customer_inactive(self) -> None:
         """
         Verifies that deleting a manager-backed customer marks the underlying legacy record inactive and records a deactivation history entry.
-        
+
         The test deletes the manager instance with a history comment, reloads the persisted LegacyCustomer via `all_objects`, asserts `is_active` is False, and asserts the most recent history entry's change reason equals "manual block (deactivated)".
         """
         self.customer_b.delete(

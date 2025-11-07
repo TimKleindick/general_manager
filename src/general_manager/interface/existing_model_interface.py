@@ -79,10 +79,10 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def _ensure_history(model: type[models.Model]) -> None:
         """
         Attach django-simple-history tracking to the given Django model if it is not already registered.
-        
+
         This registers the model with simple-history and includes the model's local many-to-many fields for history tracking.
         If the model is already registered (indicated by a `simple_history_manager_attribute` on its `_meta`), the function does nothing.
-        
+
         Parameters:
             model (type[models.Model]): The Django model class to enable history tracking for.
         """
@@ -95,9 +95,9 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def _apply_rules_to_model(cls, model: type[models.Model]) -> None:
         """
         Attach validation rules defined on the interface's Meta to the given Django model and replace its `full_clean` with a validating implementation.
-        
+
         If `Meta.rules` exists on the interface class, its entries are appended to `model._meta.rules` (preserving any existing rules) and `model.full_clean` is replaced with a generated validating method. If no rules are defined on the interface, the model is left unchanged.
-        
+
         Parameters:
             model (type[models.Model]): The Django model class to modify.
         """
@@ -152,13 +152,13 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
         """
         Prepare and bind a concrete interface and Factory for creating a GeneralManager backed by the configured Django model.
-        
+
         Parameters:
             name: Name to use when building the manager's Factory class.
             attrs: Attribute dictionary for the manager class; this dict is mutated and returned.
             interface: Interface class that declares `model` (class or app label); a concrete subclass bound to the resolved model is created.
             base_model_class: Compatibility hook (not used).
-        
+
         Returns:
             tuple: (attrs, concrete_interface, model) where
                 - attrs: the possibly-modified attribute dict to be used for class creation,
@@ -196,9 +196,9 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     ) -> None:
         """
         Link the created GeneralManager subclass with its interface and the resolved Django model.
-        
+
         Sets the interface's parent reference to the newly created manager class and, when a model is provided, records the manager class on the model. Also attaches manager instances to the created class: assigns `objects` from the interface's manager and, if the interface indicates soft-delete support, provides `all_objects` (configured with `only_active=False`). If the model lacks an `all_objects` attribute but soft-delete is used, the model's `all_objects` is ensured by falling back to its default manager.
-        
+
         Parameters:
             new_class: The newly created GeneralManager subclass to be linked as the parent.
             interface_class: The interface class that should reference `new_class` as its parent.
@@ -230,7 +230,7 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
     def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
         """
         Get the pre- and post-creation hooks used by GeneralManagerMeta.
-        
+
         Returns:
             tuple[classPreCreationMethod, classPostCreationMethod]: A tuple whose first element is the pre-creation hook (called before class creation) and whose second element is the post-creation hook (called after class creation).
         """

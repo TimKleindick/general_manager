@@ -50,7 +50,7 @@ class DummyInterface:
     def update(self, *args: object, **kwargs: object) -> None:
         """
         No-op placeholder for updating an interface; accepts any positional and keyword arguments but performs no action.
-        
+
         Parameters:
             *args: Positional arguments are accepted and ignored.
             **kwargs: Keyword arguments are accepted and ignored.

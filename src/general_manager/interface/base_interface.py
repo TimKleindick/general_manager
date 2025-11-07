@@ -320,7 +320,7 @@ class InterfaceBase(ABC):
     def update(self, *args: Any, **kwargs: Any) -> Any:
         """
         Update the underlying record.
-        
+
         Returns:
             The updated record or a manager-specific result.
         """
@@ -329,7 +329,7 @@ class InterfaceBase(ABC):
     def delete(self, *args: Any, **kwargs: Any) -> Any:
         """
         Perform deletion of the underlying record managed by this interface.
-        
+
         Returns:
             The result of the deletion operation as defined by the concrete implementation.
         """
@@ -338,11 +338,11 @@ class InterfaceBase(ABC):
     def deactivate(self, *args: Any, **kwargs: Any) -> Any:
         """
         Provide a deprecated compatibility wrapper that issues a DeprecationWarning and performs the record deletion.
-        
+
         Parameters:
             *args: Positional arguments forwarded to the underlying deletion implementation.
             **kwargs: Keyword arguments forwarded to the underlying deletion implementation.
-        
+
         Returns:
             The result returned by the deletion operation.
         """
@@ -357,12 +357,12 @@ class InterfaceBase(ABC):
     def get_data(self) -> Any:
         """
         Return materialized data for the manager object.
-        
+
         Subclasses must implement this to provide the concrete representation of the underlying managed record.
-        
+
         Returns:
             The materialized data for this manager (implementation-defined).
-        
+
         Raises:
             NotImplementedError: if the method is not implemented by the subclass.
         """

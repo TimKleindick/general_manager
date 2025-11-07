@@ -22,7 +22,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Create and attach nested GeneralManager test models (TestCountry, TestHuman, TestFamily) to the test class.
-        
+
         Each nested class defines its Interface, relationships, and seed data as used by the integration tests. The created classes are assigned to class attributes (cls.TestCountry, cls.TestHuman, cls.TestFamily) and collected into cls.general_manager_classes and cls.read_only_classes for test orchestration.
         """
 
@@ -118,7 +118,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def test_iter(self):
         """
         Verify retrieval of all TestHuman records and that each instance's `name` and `country` match its dictionary representation.
-        
+
         Asserts there are exactly two records and for each record checks `human.name == dict(human)["name"]` and `human.country == dict(human)["country"]`.
         """
         humans = self.TestHuman.all()
@@ -130,7 +130,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def test_soft_delete_behavior(self):
         """
         Verify that soft-deleted TestFamily instances are excluded from default queries but retrievable when including inactive records.
-        
+
         Soft-delete the test family, assert it is not present in TestFamily.all(), and assert it is returned by TestFamily.filter(include_inactive=True).
         """
         family_id = self.test_family.identification["id"]
@@ -287,7 +287,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def test_delete_operations(self):
         """
         Verifies that deleting a human removes them from query results and related collections.
-        
+
         Creates a human named "Charlie", deletes it, asserts the total human count decreases by one, and asserts the deleted human no longer appears among remaining humans or in any family memberships.
         """
         # Create additional test data for deletion
