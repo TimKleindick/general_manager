@@ -726,7 +726,9 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
                 "id": self._save_with_history(instance, creator_id, history_comment)
             }
 
-        history_comment = f"{history_comment} (deleted)" or "Deleted"
+        history_comment = (
+            f"{history_comment} (deleted)" if history_comment else "Deleted"
+        )
         try:
             instance.changed_by_id = creator_id  # type: ignore[attr-defined]
         except AttributeError:
