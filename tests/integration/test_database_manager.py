@@ -64,7 +64,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                     "general_manager.TestHuman",
                     related_name="families",
                 )
-                use_soft_delete = True
+
+                class Meta:
+                    use_soft_delete = True
 
         cls.TestCountry = TestCountry
         cls.TestHuman = TestHuman
