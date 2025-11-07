@@ -318,15 +318,34 @@ class InterfaceBase(ABC):
         raise NotImplementedError
 
     def update(self, *args: Any, **kwargs: Any) -> Any:
-        """Update the underlying record."""
+        """
+        Update the underlying record.
+        
+        Returns:
+            The updated record or a manager-specific result.
+        """
         raise NotImplementedError
 
     def delete(self, *args: Any, **kwargs: Any) -> Any:
-        """Delete the underlying record."""
+        """
+        Perform deletion of the underlying record managed by this interface.
+        
+        Returns:
+            The result of the deletion operation as defined by the concrete implementation.
+        """
         raise NotImplementedError
 
     def deactivate(self, *args: Any, **kwargs: Any) -> Any:
-        """Deprecated compatibility wrapper for `delete`."""
+        """
+        Provide a deprecated compatibility wrapper that issues a DeprecationWarning and performs the record deletion.
+        
+        Parameters:
+            *args: Positional arguments forwarded to the underlying deletion implementation.
+            **kwargs: Keyword arguments forwarded to the underlying deletion implementation.
+        
+        Returns:
+            The result returned by the deletion operation.
+        """
         warnings.warn(
             "deactivate() is deprecated; use delete() instead.",
             DeprecationWarning,
@@ -336,7 +355,17 @@ class InterfaceBase(ABC):
 
     @abstractmethod
     def get_data(self) -> Any:
-        """Return data materialised for the manager object."""
+        """
+        Return materialized data for the manager object.
+        
+        Subclasses must implement this to provide the concrete representation of the underlying managed record.
+        
+        Returns:
+            The materialized data for this manager (implementation-defined).
+        
+        Raises:
+            NotImplementedError: if the method is not implemented by the subclass.
+        """
         raise NotImplementedError
 
     @classmethod
