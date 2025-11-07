@@ -954,7 +954,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
     def setUp(self):
         """
         Create two test users and register a writable test interface class for WritableInterfaceTestModel.
-        
+
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
         from general_manager.interface.database_based_interface import (
@@ -1310,3 +1310,288 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
         saved_instance = WritableInterfaceTestModel.objects.get(pk=pk)
         self.assertIsNone(saved_instance.changed_by_id)
+
+
+class PayloadNormalizerTestCase(TransactionTestCase):
+    """
+    Comprehensive tests for PayloadNormalizer utility class.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        """
+        Ensure WritableInterfaceTestModel is registered and its tables exist for PayloadNormalizer tests.
+        """
+        super().setUpClass()
+        from simple_history import register
+
+        if not hasattr(
+            WritableInterfaceTestModel._meta, "simple_history_manager_attribute"
+        ):
+            register(WritableInterfaceTestModel)
+
+        if (
+            WritableInterfaceTestModel._meta.model_name
+            not in apps.get_app_config("general_manager").models
+        ):
+            apps.register_model("general_manager", WritableInterfaceTestModel)
+
+        with connection.schema_editor() as schema:
+            schema.create_model(WritableInterfaceTestModel)
+            schema.create_model(WritableInterfaceTestModel.history.model)  # type: ignore[attr-defined]
+
+    @classmethod
+    def tearDownClass(cls):
+        """
+        Drop WritableInterfaceTestModel tables and remove them from the registry.
+        """
+        with connection.schema_editor() as schema:
+            history_model = WritableInterfaceTestModel.history.model  # type: ignore[attr-defined]
+            schema.delete_model(history_model)
+            schema.delete_model(WritableInterfaceTestModel)
+
+        app_config = apps.get_app_config("general_manager")
+        model_key = WritableInterfaceTestModel._meta.model_name
+        history_key = WritableInterfaceTestModel.history.model._meta.model_name  # type: ignore[attr-defined]
+        apps.all_models["general_manager"].pop(model_key, None)
+        apps.all_models["general_manager"].pop(history_key, None)
+        app_config.models.pop(model_key, None)
+        app_config.models.pop(history_key, None)
+        super().tearDownClass()
+
+    def setUp(self):
+        """Set up test models and normalizer."""
+        super().setUp()
+        self.user1 = User.objects.create_user(username="user1")
+        self.user2 = User.objects.create_user(username="user2")
+        self.normalizer = PayloadNormalizer(WritableInterfaceTestModel)
+
+    def test_normalize_filter_kwargs_with_plain_values(self):
+        """
+        Test that normalize_filter_kwargs passes through plain values unchanged.
+        """
+        kwargs = {"name": "Test", "value": 42}
+        result = self.normalizer.normalize_filter_kwargs(kwargs)
+        self.assertEqual(result, kwargs)
+
+    def test_normalize_filter_kwargs_unwraps_general_manager(self):
+        """
+        Test that normalize_filter_kwargs unwraps GeneralManager instances.
+        """
+        # Create a test instance and manager
+        test_instance = WritableInterfaceTestModel.objects.create(
+            name="Test", value=10, owner=self.user1, changed_by=self.user1
+        )
+
+        # Create a mock GeneralManager with the right structure
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": test_instance.pk}
+        mock_interface = MagicMock()
+        mock_interface._instance = test_instance
+        mock_manager._interface = mock_interface
+
+        # Patch the base class check
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            kwargs = {"owner": mock_manager}
+            result = self.normalizer.normalize_filter_kwargs(kwargs)
+            self.assertEqual(result["owner"], test_instance)
+
+    def test_normalize_simple_values_with_plain_values(self):
+        """
+        Test that normalize_simple_values passes through plain values.
+        """
+        kwargs = {"name": "Test", "value": 42}
+        result = self.normalizer.normalize_simple_values(kwargs)
+        self.assertEqual(result, kwargs)
+
+    def test_normalize_simple_values_converts_manager_to_id(self):
+        """
+        Test that normalize_simple_values converts GeneralManager to _id field.
+        """
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": 123}
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            kwargs = {"owner": mock_manager}
+            result = self.normalizer.normalize_simple_values(kwargs)
+            self.assertEqual(result["owner_id"], 123)
+            self.assertNotIn("owner", result)
+
+    def test_normalize_simple_values_handles_field_already_with_id_suffix(self):
+        """
+        Test that normalize_simple_values handles fields already ending with _id.
+        """
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": 456}
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            kwargs = {"owner_id": mock_manager}
+            result = self.normalizer.normalize_simple_values(kwargs)
+            self.assertEqual(result["owner_id"], 456)
+
+    def test_normalize_many_values_with_list_of_values(self):
+        """
+        Test that normalize_many_values handles list of plain values.
+        """
+        kwargs = {"tags_id_list": [1, 2, 3]}
+        result = self.normalizer.normalize_many_values(kwargs)
+        self.assertEqual(result["tags_id_list"], [1, 2, 3])
+
+    def test_normalize_many_values_with_general_managers(self):
+        """
+        Test that normalize_many_values converts list of GeneralManager instances.
+        """
+        mock_manager1 = MagicMock()
+        mock_manager1.identification = {"id": 100}
+        mock_manager2 = MagicMock()
+        mock_manager2.identification = {"id": 200}
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            kwargs = {"tags_id_list": [mock_manager1, mock_manager2]}
+            result = self.normalizer.normalize_many_values(kwargs)
+            self.assertEqual(result["tags_id_list"], [100, 200])
+
+    def test_normalize_many_values_with_single_value(self):
+        """
+        Test that normalize_many_values wraps single value in list.
+        """
+        kwargs = {"tags_id_list": 42}
+        result = self.normalizer.normalize_many_values(kwargs)
+        self.assertEqual(result["tags_id_list"], [42])
+
+    def test_normalize_many_values_skips_none(self):
+        """
+        Test that normalize_many_values skips None values.
+        """
+        kwargs = {"tags_id_list": None}
+        result = self.normalizer.normalize_many_values(kwargs)
+        self.assertNotIn("tags_id_list", result)
+
+    def test_normalize_many_values_skips_not_provided(self):
+        """
+        Test that normalize_many_values skips NOT_PROVIDED values.
+        """
+        kwargs = {"tags_id_list": models.NOT_PROVIDED}
+        result = self.normalizer.normalize_many_values(kwargs)
+        self.assertNotIn("tags_id_list", result)
+
+    def test_normalize_many_values_handles_string_as_single_value(self):
+        """
+        Test that normalize_many_values treats strings as single values, not iterables.
+        """
+        kwargs = {"tags_id_list": "test"}
+        result = self.normalizer.normalize_many_values(kwargs)
+        self.assertEqual(result["tags_id_list"], ["test"])
+
+    def test_normalize_many_values_handles_bytes_as_single_value(self):
+        """
+        Test that normalize_many_values treats bytes as single values, not iterables.
+        """
+        kwargs = {"tags_id_list": b"test"}
+        result = self.normalizer.normalize_many_values(kwargs)
+        self.assertEqual(result["tags_id_list"], [b"test"])
+
+    def test_unwrap_manager_with_plain_value(self):
+        """
+        Test that _unwrap_manager returns plain values unchanged.
+        """
+        result = PayloadNormalizer._unwrap_manager(42)
+        self.assertEqual(result, 42)
+
+    def test_unwrap_manager_with_general_manager(self):
+        """
+        Test that _unwrap_manager extracts instance from GeneralManager.
+        """
+        test_instance = WritableInterfaceTestModel.objects.create(
+            name="Test", value=10, owner=self.user1, changed_by=self.user1
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": test_instance.pk}
+        mock_interface = MagicMock()
+        mock_interface._instance = test_instance
+        mock_manager._interface = mock_interface
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            result = PayloadNormalizer._unwrap_manager(mock_manager)
+            self.assertEqual(result, test_instance)
+
+    def test_maybe_general_manager_with_non_manager(self):
+        """
+        Test that _maybe_general_manager returns default for non-manager values.
+        """
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=False,
+        ):
+            result = PayloadNormalizer._maybe_general_manager(42, default=None)
+            self.assertIsNone(result)
+
+    def test_maybe_general_manager_extracts_id(self):
+        """
+        Test that _maybe_general_manager extracts ID from GeneralManager.
+        """
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": 999}
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            result = PayloadNormalizer._maybe_general_manager(mock_manager)
+            self.assertEqual(result, 999)
+
+    def test_maybe_general_manager_prefer_instance(self):
+        """
+        Test that _maybe_general_manager can return instance when prefer_instance=True.
+        """
+        test_instance = WritableInterfaceTestModel.objects.create(
+            name="Test", value=10, owner=self.user1, changed_by=self.user1
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": test_instance.pk}
+        mock_interface = MagicMock()
+        mock_interface._instance = test_instance
+        mock_manager._interface = mock_interface
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            result = PayloadNormalizer._maybe_general_manager(
+                mock_manager, prefer_instance=True
+            )
+            self.assertEqual(result, test_instance)
+
+    def test_maybe_general_manager_prefer_instance_falls_back_to_id(self):
+        """
+        Test that _maybe_general_manager falls back to ID if instance not available.
+        """
+        mock_manager = MagicMock()
+        mock_manager.identification = {"id": 888}
+        mock_manager._interface = None
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
+            result = PayloadNormalizer._maybe_general_manager(
+                mock_manager, prefer_instance=True
+            )
+            self.assertEqual(result, 888)
