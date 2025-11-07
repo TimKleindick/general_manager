@@ -69,6 +69,25 @@ def _default_graphql_url_clear() -> None:
             break
 
 
+def _get_historical_changes_related_models(
+    history_model_class: type[models.Model],
+) -> list[type[models.Model]]:
+    """
+    Return HistoricalChanges-related models attached to a history model via ManyToOne relations.
+    """
+    related_models: list[type[models.Model]] = []
+    for rel in history_model_class._meta.get_fields():
+        if not isinstance(rel, models.ManyToOneRel):
+            continue
+        related_model = getattr(rel, "related_model", None)
+        if not isinstance(related_model, type):
+            continue
+        if not issubclass(related_model, HistoricalChanges):
+            continue
+        related_models.append(cast(type[models.Model], related_model))
+    return related_models
+
+
 class GMTestCaseMeta(type):
     """
     Metaclass that wraps setUpClass: first calls user-defined setup,
@@ -168,15 +187,9 @@ class GMTestCaseMeta(type):
                         if history_table not in known_tables:
                             editor.create_model(history_model_class)
                             known_tables.add(history_table)
-                        for rel in history_model_class._meta.get_fields():
-                            if not isinstance(rel, models.ManyToOneRel):
-                                continue
-                            related_model = getattr(rel, "related_model", None)
-                            if not isinstance(related_model, type):
-                                continue
-                            if not issubclass(related_model, HistoricalChanges):
-                                continue
-                            related_model = cast(type[models.Model], related_model)
+                        for related_model in _get_historical_changes_related_models(
+                            history_model_class
+                        ):
                             related_table = related_model._meta.db_table
                             if related_table not in known_tables:
                                 editor.create_model(related_model)
@@ -323,17 +336,9 @@ class GeneralManagerTransactionTestCase(
                         type[models.Model],
                         history_model.model,  # type: ignore[attr-defined]
                     )
-                    for rel in history_model_class._meta.get_fields():
-                        if not isinstance(rel, models.ManyToOneRel):
-                            continue
-                        related_model = getattr(rel, "related_model", None)
-                        if not isinstance(related_model, type):
-                            continue
-                        if not issubclass(related_model, HistoricalChanges):
-                            continue
-                        m2m_history_models.append(
-                            cast(type[models.Model], related_model)
-                        )
+                    m2m_history_models = _get_historical_changes_related_models(
+                        history_model_class
+                    )
                 if history_model:
                     history_table = history_model.model._meta.db_table
                     if history_table in tables_to_remove:
