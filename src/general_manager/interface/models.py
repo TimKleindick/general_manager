@@ -18,15 +18,15 @@ modelsModel = TypeVar("modelsModel", bound=models.Model)
 
 def get_full_clean_methode(model: Type[models.Model]) -> Callable[..., None]:
     """
-    Return a custom `full_clean` method for a Django model that performs both standard validation and additional rule-based checks.
-
-    The generated method first applies Django's built-in model validation, then evaluates custom rules defined in the model's `_meta.rules` attribute. If any validation or rule fails, it raises a `ValidationError` containing all collected errors.
-
+    Create a custom `full_clean` method for a Django model that runs Django's standard validation and evaluates additional rule-based checks.
+    
+    The generated method calls the model's superclass `full_clean`, collects any ValidationError messages, then iterates rules from `self._meta.rules` and merges any rule error messages. If any errors are collected, the method raises a `ValidationError` containing the aggregated error mapping.
+    
     Parameters:
-        model (Type[models.Model]): The Django model class for which to generate the custom `full_clean` method.
-
+        model (Type[models.Model]): The Django model class for which to construct the `full_clean` method.
+    
     Returns:
-        Callable[..., None]: A `full_clean` method that can be assigned to the model class.
+        Callable[..., None]: A `full_clean(self, *args, **kwargs)` function suitable for assignment to the model class; it raises `ValidationError` when validation or rule checks fail.
     """
 
     def full_clean(self: models.Model, *args: Any, **kwargs: Any) -> None:
@@ -58,7 +58,12 @@ class ActiveManager(models.Manager):
     """Manager returning only rows marked as active."""
 
     def get_queryset(self) -> models.QuerySet[Any]:
-        """Return queryset limited to active objects."""
+        """
+        Retrieve a queryset filtered to objects where `is_active` is True.
+        
+        Returns:
+            QuerySet[Any]: A queryset containing only active objects (is_active == True).
+        """
         return super().get_queryset().filter(is_active=True)
 
 

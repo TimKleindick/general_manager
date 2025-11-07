@@ -178,19 +178,19 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         **kwargs: Any,
     ) -> Self:
         """
-        Update the managed object and return a fresh manager representing the new state.
-
+        Update the managed object and return a new manager reflecting its updated state.
+        
         Parameters:
             creator_id (int | None): Optional identifier of the user performing the update.
-            history_comment (str | None): Audit comment recorded with the update.
-            ignore_permission (bool): When True, skip permission validation.
+            history_comment (str | None): Optional audit comment recorded with the update.
+            ignore_permission (bool): If True, skip permission validation.
             **kwargs (Any): Field updates forwarded to the interface.
-
+        
         Returns:
             Self: Manager instance reflecting the updated object.
-
+        
         Raises:
-            PermissionError: Propagated if the permission check fails.
+            PermissionError: If the permission check fails when `ignore_permission` is False.
         """
         if not ignore_permission:
             self.Permission.check_update_permission(kwargs, self, creator_id)
@@ -219,15 +219,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ignore_permission: bool = False,
     ) -> None:
         """
-        Delete the managed object. Performs a soft delete when the underlying interface is configured accordingly.
-
+        Delete the managed object; performs a soft delete when the underlying interface is configured accordingly.
+        
         Parameters:
             creator_id (int | None): Optional identifier of the user performing the action.
             history_comment (str | None): Audit comment recorded with the deletion.
             ignore_permission (bool): When True, skip permission validation.
-
+        
         Raises:
-            PermissionError: Propagated if the permission check fails.
+            PermissionError: If permission validation fails.
         """
         if not ignore_permission:
             self.Permission.check_delete_permission(self, creator_id)
@@ -249,7 +249,11 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         ignore_permission: bool = False,
     ) -> Self | None:
         """
-        Deprecated compatibility wrapper for `delete`.
+        Compatibility wrapper for the deprecated deactivate API.
+        
+        Emits a DeprecationWarning and performs object deletion using the provided
+        creator_id, history_comment, and ignore_permission parameters. This function
+        is deprecated and will be removed in a future release.
         """
         warnings.warn(
             "deactivate() is deprecated; use delete() instead.",
@@ -265,13 +269,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     @classmethod
     def filter(cls, **kwargs: Any) -> Bucket[Self]:
         """
-        Return a bucket containing managers that satisfy the provided lookups.
-
+        Get a Bucket of managers matching the provided lookup expressions.
+        
+        Lookup expressions may include GeneralManager instances (or iterables of them), which are substituted with their identification mappings before being forwarded to the Interface for filtering.
+        
         Parameters:
-            **kwargs (Any): Django-style filter expressions forwarded to the interface.
-
+            **kwargs (Any): Lookup expressions (Django-style) used to filter managers.
+        
         Returns:
-            Bucket[Self]: Bucket of matching manager instances.
+            Bucket[Self]: Bucket containing manager instances that match the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
         DependencyTracker.track(cls.__name__, "filter", repr(identifier_map))
