@@ -67,6 +67,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     database: ClassVar[str | None] = None
     _active_manager: ClassVar[models.Manager[models.Model] | None] = None
     _field_descriptors: ClassVar[dict[str, FieldDescriptor] | None] = None
+    historical_lookup_buffer_seconds: ClassVar[int] = 5
     _search_date: datetime | None
 
     @classmethod
@@ -161,6 +162,9 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     def get_data(self) -> HistoryModelT:
         """
         Return the model instance backing this interface; if `search_date` is provided, return the most recent historical record at or before that timestamp.
+        Historical lookups only run when `search_date` trails the current time by
+        at least `historical_lookup_buffer_seconds` (default: 5 seconds) to avoid
+        racing with in-flight updates.
 
         Returns:
             HistoryModelT: The current model instance, or the historical instance at or before `search_date` if one is found.
@@ -177,7 +181,9 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
             instance = None
             missing_error = error
         if self._search_date is not None:
-            if self._search_date <= timezone.now() - timedelta(seconds=5):
+            if self._search_date <= timezone.now() - timedelta(
+                seconds=self.__class__.historical_lookup_buffer_seconds
+            ):
                 historical: HistoryModelT | None
                 if instance is not None:
                     historical = self.get_historical_record(instance, self._search_date)
