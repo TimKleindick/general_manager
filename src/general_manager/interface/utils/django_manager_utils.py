@@ -45,7 +45,7 @@ class DjangoManagerSelector(Generic[HistoryModelT]):
 
     def _soft_delete_active_manager(self) -> models.Manager[HistoryModelT]:
         if hasattr(self.model, "all_objects"):
-            return cast(models.Manager[HistoryModelT], self.model.all_objects)  # type: ignore[attr-defined]
+            return cast(models.Manager[HistoryModelT], self.model._default_manager)
         if self.cached_active is None:
             base_manager = self.model._default_manager
 
