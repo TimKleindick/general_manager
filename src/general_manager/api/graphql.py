@@ -1777,7 +1777,7 @@ class GraphQL:
         """
         Generates a GraphQL mutation class for deleting an instance of a GeneralManager subclass.
 
-        The generated mutation accepts input fields defined by the manager's interface, deletes the specified instance using its ID, and returns a dictionary containing a success status and the deleted instance (when available) keyed by the class name. Returns None if the manager class does not define an interface.
+        The generated mutation accepts input fields defined by the manager's interface, deletes the specified instance using its ID, and returns a dictionary containing only a success status (the manager-specific field is always `None`). Returns None if the manager class does not define an interface.
 
         Returns:
             The generated Graphene mutation class, or None if no interface is defined.
@@ -1797,7 +1797,7 @@ class GraphQL:
             Deletes the identified GeneralManager instance.
 
             Returns:
-                dict: `success` key with `True` if deletion succeeded, `False` otherwise. On success, includes an additional key equal to the manager class name containing the deleted instance when available.
+                dict: Contains `success` (`True` when deletion succeeds, `False` otherwise). The manager-specific field is always `None` because the underlying delete operation does not return an instance.
             """
             manager_id = kwargs.pop("id", None)
             if manager_id is None:
