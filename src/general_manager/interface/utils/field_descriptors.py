@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
 
@@ -38,7 +38,7 @@ TRANSLATION: dict[type[models.Field], type] = {
     models.BooleanField: bool,
     models.IntegerField: int,
     models.FloatField: float,
-    models.DateField: datetime,
+    models.DateField: date,
     models.DateTimeField: datetime,
     MeasurementField: Measurement,
     models.DecimalField: Decimal,
@@ -46,7 +46,7 @@ TRANSLATION: dict[type[models.Field], type] = {
     models.FileField: str,
     models.ImageField: str,
     models.URLField: str,
-    models.TimeField: datetime,
+    models.TimeField: time,
 }
 
 
