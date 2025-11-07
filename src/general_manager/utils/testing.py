@@ -51,12 +51,9 @@ def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | No
 
 def _default_graphql_url_clear() -> None:
     """
-    Remove the default GraphQL URL pattern from Django's root URL configuration.
-
-    The lookup searches for the first URL pattern whose view class is `GraphQLView` and removes it from the URL list.
-
-    Returns:
-        None
+    Remove the first root URLconf pattern whose view class is named "GraphQLView".
+    
+    Searches the project's ROOT_URLCONF urlpatterns and removes the first pattern whose callback exposes a `view_class` attribute with the name "GraphQLView". This is used to reset GraphQL URL configuration between tests.
     """
     urlconf = import_module(settings.ROOT_URLCONF)
     for pattern in urlconf.urlpatterns:
@@ -73,7 +70,13 @@ def _get_historical_changes_related_models(
     history_model_class: type[models.Model],
 ) -> list[type[models.Model]]:
     """
-    Return HistoricalChanges-related models attached to a history model via ManyToOne relations.
+    Finds models subclassing `HistoricalChanges` that are related to the given history model via ManyToOne relations.
+    
+    Parameters:
+        history_model_class (type[models.Model]): Django model class for a history model to inspect.
+    
+    Returns:
+        list[type[models.Model]]: List of related model classes that subclass `HistoricalChanges` and are connected to `history_model_class` by a `ManyToOneRel`.
     """
     related_models: list[type[models.Model]] = []
     for rel in history_model_class._meta.get_fields():
@@ -123,12 +126,9 @@ class GMTestCaseMeta(type):
             cls: type["GeneralManagerTransactionTestCase"],
         ) -> None:
             """
-            Prepare the test class environment for GeneralManager GraphQL tests.
-
-            Resets GraphQL and manager registries, optionally installs an app-config fallback, clears the default GraphQL URL pattern, creates any missing database tables for models referenced by the class's `general_manager_classes` (and records those created tables on `cls._gm_created_tables`), initializes GeneralManager classes and read-only interfaces, registers GraphQL types/fields, runs any user-defined `setUpClass`, and finally invokes the base `GraphQLTransactionTestCase.setUpClass`.
-
-            Parameters:
-                cls (type[GeneralManagerTransactionTestCase]): The test class being initialized.
+            Prepare the class-level test environment for GeneralManager GraphQL tests.
+            
+            Resets GraphQL and manager registries, optionally installs an app-config fallback for resolving AppConfig, clears the default GraphQL URL pattern, creates any missing database tables for the test's registered models (including their history models and related models used by HistoricalChanges) and records created table names on `cls._gm_created_tables`, initializes GeneralManager classes, read-only interfaces, and GraphQL registrations, runs any user-defined `setUpClass`, and finally invokes the base `GraphQLTransactionTestCase.setUpClass`.
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
@@ -294,9 +294,15 @@ class GeneralManagerTransactionTestCase(
     @classmethod
     def tearDownClass(cls) -> None:
         """
-        Tear down test-class state by removing dynamically created DB tables, unregistering their models, restoring patched global state, and cleaning metaclass registries.
-
-        This clears the GraphQL URL pattern added during setup; drops database tables created for the test (including auto-created many-to-many through tables and history tables) if they still exist; unregisters those models from Django's app registry and clears the app registry cache; removes the test's GeneralManager classes from metaclass registries; restores the original app-config lookup function; and resets the test-class created-table tracking.
+        Tear down test-class state for GeneralManager tests by removing created database tables, unregistering their models, restoring patched global state, and clearing metaclass registries.
+        
+        Performs the following cleanup actions for the test class:
+        - Removes the GraphQL URL pattern added during setup.
+        - Drops database tables that were created for the test, including automatically created many-to-many through tables, history tables, and history-related models.
+        - Unregisters those models (including through and history models) from Django's app registry and clears the app registry cache.
+        - Removes the test's GeneralManager classes from metaclass registries used for initialization and GraphQL registration.
+        - Restores the original app-config lookup function.
+        - Resets the test-class created-table tracking.
         """
         # remove GraphQL URL pattern added during setUpClass
         _default_graphql_url_clear()

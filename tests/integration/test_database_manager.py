@@ -21,9 +21,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Define and assign GeneralManager model classes for use in integration tests.
-
-        This method creates three nested model classes—TestCountry, TestHuman, and TestFamily—each with associated Django model interfaces and relationships. The classes are assigned to class variables for use in test methods, and lists of all manager classes and read-only classes are maintained.
+        Create and attach nested GeneralManager test models (TestCountry, TestHuman, TestFamily) to the test class.
+        
+        Each nested class defines its Interface, relationships, and seed data as used by the integration tests. The created classes are assigned to class attributes (cls.TestCountry, cls.TestHuman, cls.TestFamily) and collected into cls.general_manager_classes and cls.read_only_classes for test orchestration.
         """
 
         class TestCountry(GeneralManager):
@@ -117,7 +117,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_iter(self):
         """
-        Tests that all TestHuman instances can be retrieved and their attributes match the dictionary representation.
+        Verify retrieval of all TestHuman records and that each instance's `name` and `country` match its dictionary representation.
+        
+        Asserts there are exactly two records and for each record checks `human.name == dict(human)["name"]` and `human.country == dict(human)["country"]`.
         """
         humans = self.TestHuman.all()
         self.assertEqual(len(humans), 2)
@@ -127,9 +129,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_soft_delete_behavior(self):
         """
-        Test the soft-delete behavior of the TestFamily manager.
-
-        Verifies that after soft-deleting a TestFamily instance, it is excluded from standard queries but can be accessed when including soft-deleted records.
+        Verify that soft-deleted TestFamily instances are excluded from default queries but retrievable when including inactive records.
+        
+        Soft-delete the test family, assert it is not present in TestFamily.all(), and assert it is returned by TestFamily.filter(include_inactive=True).
         """
         family_id = self.test_family.identification["id"]
 
@@ -284,7 +286,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_delete_operations(self):
         """
-        Test delete operations and cascade behavior.
+        Verifies that deleting a human removes them from query results and related collections.
+        
+        Creates a human named "Charlie", deletes it, asserts the total human count decreases by one, and asserts the deleted human no longer appears among remaining humans or in any family memberships.
         """
         # Create additional test data for deletion
         test_human3 = self.TestHuman.create(
@@ -332,7 +336,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def test_bucket_operations(self):
         """
-        Test Bucket operations for many-to-many relationships.
+        Verify many-to-many relationship bucket behavior: read bucket contents, add a related item through the bucket update, and confirm the forward and reverse relations reflect the change.
         """
         # Test accessing humans_list bucket
         humans_bucket = self.test_family.humans_list
