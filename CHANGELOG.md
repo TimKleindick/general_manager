@@ -2,6 +2,75 @@
 
 <!-- version list -->
 
+## v0.23.0 (2025-11-07)
+
+### Bug Fixes
+
+- Clarify mutation return values in GraphQL class documentation
+  ([`32ae206`](https://github.com/TimKleindick/general_manager/commit/32ae206fb1679aafb4fc711f2c62c661dd37a960))
+
+- Correct type mapping for DateField and TimeField in TRANSLATION dictionary
+  ([`57ae26b`](https://github.com/TimKleindick/general_manager/commit/57ae26bb2d896d1ae0df27c018c2c45d624c9fbf))
+
+- History comment
+  ([`df41788`](https://github.com/TimKleindick/general_manager/commit/df417880006690329a97cd8dcbee9f719c75ab54))
+
+- Soft-delete functionality in all DBBasedInterface and update related tests
+  ([`d29c47f`](https://github.com/TimKleindick/general_manager/commit/d29c47fa9f075fb8e26b219f1cc690f0b728f60b))
+
+- Update deactivate method to return None instead of Self because of changed delete logic
+  ([`6a026cb`](https://github.com/TimKleindick/general_manager/commit/6a026cbe3c53b141926a2adbe277df0454facf17))
+
+- Update register call to include many-to-many fields for model history tracking
+  ([`03a8b27`](https://github.com/TimKleindick/general_manager/commit/03a8b27c1df839bac0f1acf2725ccb82a3698bca))
+
+### Documentation
+
+- Refactor docstrings and comments for clarity and consistency across various modules
+  ([`9752c87`](https://github.com/TimKleindick/general_manager/commit/9752c87157614f8ecfb8cd567efd176af2219446))
+
+- Update documentation to reflect method renaming from deactivate to delete and clarify soft delete
+  functionality
+  ([`03a1afa`](https://github.com/TimKleindick/general_manager/commit/03a1afa2236a80d0ab9377e3c1168c7c6f44c3ad))
+
+### Features
+
+- Add historical lookup buffer to prevent racing with in-flight updates
+  ([`00f4179`](https://github.com/TimKleindick/general_manager/commit/00f41792f1308be62002ed29d98f0e5b55fe65d8))
+
+- Enhance DBBasedInterface with search date normalization and historical record retrieval
+  ([`c3e1a90`](https://github.com/TimKleindick/general_manager/commit/c3e1a904b3a86fc79dafd8391976341303c1dd80))
+
+- Rename deactivate method to delete, change default behavior from soft to hard delete and implement
+  optional soft delete functionality
+  ([`74c123b`](https://github.com/TimKleindick/general_manager/commit/74c123b2e14e7254f11cfe8d84fd5157efe660da))
+
+### Refactoring
+
+- Extract logic to get historical changes related models into a separate function
+  ([`029f368`](https://github.com/TimKleindick/general_manager/commit/029f368d54bb2e8ec7f167d352081566b7e46582))
+
+- Interface utilities and error handling
+  ([`37a3687`](https://github.com/TimKleindick/general_manager/commit/37a3687286dff167a1045fc22ee3876f3be3d318))
+
+- Remove class_flag from model field collection and set use_soft_delete in Meta class
+  ([`4dd69c5`](https://github.com/TimKleindick/general_manager/commit/4dd69c5d748792cd990bfd92c8aba58386d204be))
+
+- Remove unused search_date parameter from get_data method in interfaces
+  ([`163bd9f`](https://github.com/TimKleindick/general_manager/commit/163bd9f50b6239f9ede01792f7d3d42606178945))
+
+- Rename variables for clarity in GeneralManagerTransactionTestCase
+  ([`3b4c02f`](https://github.com/TimKleindick/general_manager/commit/3b4c02f7e222de9f56f145c188df295d747a3c9e))
+
+### Testing
+
+- Extend unit tests
+  ([`680d950`](https://github.com/TimKleindick/general_manager/commit/680d950209518da8d771795a143273b34ff9c5f7))
+
+- Rename deactivate methods to delete and update related logic for soft delete functionality
+  ([`1f099fa`](https://github.com/TimKleindick/general_manager/commit/1f099facd7fcc1763c7f7a8710fb76912272c77b))
+
+
 ## v0.22.0 (2025-11-02)
 
 ### Bug Fixes
