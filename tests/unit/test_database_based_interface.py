@@ -1312,15 +1312,14 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         self.assertIsNone(saved_instance.changed_by_id)
 
 
-class PayloadNormalizerTestCase(TransactionTestCase):
+class PayloadNormalizerTestCase(WritableDBBasedInterfaceTestCase):
     """
     Comprehensive tests for PayloadNormalizer utility class.
     """
 
     def setUp(self):
         """Set up test models and normalizer."""
-        self.user1 = User.objects.create_user(username="user1", password="pass")
-        self.user2 = User.objects.create_user(username="user2", password="pass")
+        super().setUp()
         self.normalizer = PayloadNormalizer(WritableInterfaceTestModel)
 
     def test_normalize_filter_kwargs_with_plain_values(self):
@@ -1339,16 +1338,19 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         test_instance = WritableInterfaceTestModel.objects.create(
             name="Test", value=10, owner=self.user1, changed_by=self.user1
         )
-        
+
         # Create a mock GeneralManager with the right structure
         mock_manager = MagicMock()
         mock_manager.identification = {"id": test_instance.pk}
         mock_interface = MagicMock()
         mock_interface._instance = test_instance
         mock_manager._interface = mock_interface
-        
+
         # Patch the base class check
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             kwargs = {"owner": mock_manager}
             result = self.normalizer.normalize_filter_kwargs(kwargs)
             self.assertEqual(result["owner"], test_instance)
@@ -1367,8 +1369,11 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         """
         mock_manager = MagicMock()
         mock_manager.identification = {"id": 123}
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             kwargs = {"owner": mock_manager}
             result = self.normalizer.normalize_simple_values(kwargs)
             self.assertEqual(result["owner_id"], 123)
@@ -1380,8 +1385,11 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         """
         mock_manager = MagicMock()
         mock_manager.identification = {"id": 456}
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             kwargs = {"owner_id": mock_manager}
             result = self.normalizer.normalize_simple_values(kwargs)
             self.assertEqual(result["owner_id"], 456)
@@ -1402,8 +1410,11 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager1.identification = {"id": 100}
         mock_manager2 = MagicMock()
         mock_manager2.identification = {"id": 200}
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             kwargs = {"tags_id_list": [mock_manager1, mock_manager2]}
             result = self.normalizer.normalize_many_values(kwargs)
             self.assertEqual(result["tags_id_list"], [100, 200])
@@ -1462,14 +1473,17 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         test_instance = WritableInterfaceTestModel.objects.create(
             name="Test", value=10, owner=self.user1, changed_by=self.user1
         )
-        
+
         mock_manager = MagicMock()
         mock_manager.identification = {"id": test_instance.pk}
         mock_interface = MagicMock()
         mock_interface._instance = test_instance
         mock_manager._interface = mock_interface
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             result = PayloadNormalizer._unwrap_manager(mock_manager)
             self.assertEqual(result, test_instance)
 
@@ -1477,7 +1491,10 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         """
         Test that _maybe_general_manager returns default for non-manager values.
         """
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=False):
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=False,
+        ):
             result = PayloadNormalizer._maybe_general_manager(42, default=None)
             self.assertIsNone(result)
 
@@ -1487,8 +1504,11 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         """
         mock_manager = MagicMock()
         mock_manager.identification = {"id": 999}
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             result = PayloadNormalizer._maybe_general_manager(mock_manager)
             self.assertEqual(result, 999)
 
@@ -1499,14 +1519,17 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         test_instance = WritableInterfaceTestModel.objects.create(
             name="Test", value=10, owner=self.user1, changed_by=self.user1
         )
-        
+
         mock_manager = MagicMock()
         mock_manager.identification = {"id": test_instance.pk}
         mock_interface = MagicMock()
         mock_interface._instance = test_instance
         mock_manager._interface = mock_interface
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             result = PayloadNormalizer._maybe_general_manager(
                 mock_manager, prefer_instance=True
             )
@@ -1519,8 +1542,11 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager = MagicMock()
         mock_manager.identification = {"id": 888}
         mock_manager._interface = None
-        
-        with patch('general_manager.interface.utils.payload_normalizer._is_general_manager_instance', return_value=True):
+
+        with patch(
+            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            return_value=True,
+        ):
             result = PayloadNormalizer._maybe_general_manager(
                 mock_manager, prefer_instance=True
             )
