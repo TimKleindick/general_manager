@@ -162,19 +162,6 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
         self.book.readers.add(self.user)
         self.user_manager = self.UserManager(self.user.pk)
 
-    def test_check_for_invalid_kwargs(self):
-        self.BookInterface._check_for_invalid_kwargs(
-            self.BookModel, {"title": "a", "readers_id_list": []}
-        )
-        with self.assertRaises(ValueError):
-            self.BookInterface._check_for_invalid_kwargs(self.BookModel, {"wrong": 1})
-
-    def test_sort_kwargs(self):
-        kwargs = SafeDict({"title": "b", "readers_id_list": [1]})
-        normal, m2m = self.BookInterface._sort_kwargs(self.BookModel, kwargs)
-        self.assertEqual(normal, {"title": "b"})
-        self.assertEqual(m2m, {"readers_id_list": [1]})
-
     def test_save_with_history(self):
         class Dummy:
             def __init__(self):

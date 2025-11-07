@@ -17,8 +17,14 @@ from general_manager.interface.database_based_interface import (
     DBBasedInterface,
     get_full_clean_methode,
 )
+from general_manager.interface.utils.errors import (
+    InvalidFieldTypeError,
+    InvalidFieldValueError,
+    UnknownFieldError,
+)
 from general_manager.manager.input import Input
 from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.interface.utils.payload_normalizer import PayloadNormalizer
 
 
 class PersonModel(models.Model):
@@ -830,10 +836,6 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that InvalidFieldValueError formats its message correctly.
         """
-        from general_manager.interface.database_based_interface import (
-            InvalidFieldValueError,
-        )
-
         error = InvalidFieldValueError("age", "not_a_number")
         self.assertIn("age", str(error))
         self.assertIn("not_a_number", str(error))
@@ -842,10 +844,6 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Verify InvalidFieldTypeError includes the field name and a descriptive type error in its message.
         """
-        from general_manager.interface.database_based_interface import (
-            InvalidFieldTypeError,
-        )
-
         original_error = TypeError("expected int, got str")
         error = InvalidFieldTypeError("age", original_error)
         self.assertIn("age", str(error))
@@ -855,10 +853,6 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that UnknownFieldError formats its message correctly.
         """
-        from general_manager.interface.database_based_interface import (
-            UnknownFieldError,
-        )
-
         error = UnknownFieldError("nonexistent_field", "PersonModel")
         self.assertIn("nonexistent_field", str(error))
         self.assertIn("PersonModel", str(error))
@@ -1041,8 +1035,6 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that create raises UnknownFieldError for invalid field names.
         """
-        from general_manager.interface.database_based_interface import UnknownFieldError
-
         with self.assertRaises(UnknownFieldError) as context:
             self.interface_cls.create(
                 creator_id=self.user1.pk,
@@ -1132,8 +1124,6 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that update raises UnknownFieldError for invalid fields.
         """
-        from general_manager.interface.database_based_interface import UnknownFieldError
-
         instance = WritableInterfaceTestModel.objects.create(
             name="Item",
             value=5,
@@ -1224,47 +1214,41 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         data = bucket._data.values_list("pk", flat=True)  # type: ignore[attr-defined]
         self.assertCountEqual(list(data), [active.pk, inactive.pk])
 
-    def test_check_for_invalid_kwargs_with_valid_fields(self):
+    def test_payload_normalizer_accepts_valid_fields(self):
         """
-        Tests that _check_for_invalid_kwargs passes for valid field names.
+        PayloadNormalizer.validate_keys passes for valid field names.
         """
+        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
         kwargs = {"name": "Test", "value": 10, "owner": self.user1}
-        # Should not raise
-        self.interface_cls._check_for_invalid_kwargs(WritableInterfaceTestModel, kwargs)
+        normalizer.validate_keys(kwargs)
 
-    def test_check_for_invalid_kwargs_with_id_list_suffix(self):
+    def test_payload_normalizer_accepts_id_list_suffix(self):
         """
-        Tests that _check_for_invalid_kwargs accepts _id_list suffix for m2m fields.
+        PayloadNormalizer.validate_keys accepts _id_list suffix for m2m fields.
         """
-        kwargs = {"tags_id_list": [1, 2, 3]}
-        # Should not raise
-        self.interface_cls._check_for_invalid_kwargs(WritableInterfaceTestModel, kwargs)
+        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
+        normalizer.validate_keys({"tags_id_list": [1, 2, 3]})
 
-    def test_check_for_invalid_kwargs_raises_for_invalid_field(self):
+    def test_payload_normalizer_raises_for_invalid_field(self):
         """
-        Tests that _check_for_invalid_kwargs raises UnknownFieldError for invalid fields.
+        PayloadNormalizer.validate_keys raises UnknownFieldError for invalid fields.
         """
-        from general_manager.interface.database_based_interface import UnknownFieldError
-
-        kwargs = {"nonexistent": "value"}
+        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
         with self.assertRaises(UnknownFieldError) as context:
-            self.interface_cls._check_for_invalid_kwargs(
-                WritableInterfaceTestModel, kwargs
-            )
+            normalizer.validate_keys({"nonexistent": "value"})
         self.assertIn("nonexistent", str(context.exception))
 
-    def test_sort_kwargs_separates_many_to_many(self):
+    def test_split_many_to_many_separates_relations(self):
         """
-        Tests that _sort_kwargs correctly separates m2m from regular fields.
+        PayloadNormalizer.split_many_to_many separates m2m from regular fields.
         """
+        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
         kwargs = {
             "name": "Test",
             "value": 42,
             "tags_id_list": [1, 2, 3],
         }
-        regular, m2m = self.interface_cls._sort_kwargs(
-            WritableInterfaceTestModel, kwargs
-        )
+        regular, m2m = normalizer.split_many_to_many(dict(kwargs))
 
         self.assertIn("name", regular)
         self.assertIn("value", regular)
@@ -1272,14 +1256,13 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         self.assertIn("tags_id_list", m2m)
         self.assertEqual(m2m["tags_id_list"], [1, 2, 3])
 
-    def test_sort_kwargs_handles_no_many_to_many(self):
+    def test_split_many_to_many_handles_no_relations(self):
         """
-        Tests that _sort_kwargs works when no m2m fields are present.
+        PayloadNormalizer.split_many_to_many works when no m2m fields are present.
         """
+        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
         kwargs = {"name": "Test", "value": 42}
-        regular, m2m = self.interface_cls._sort_kwargs(
-            WritableInterfaceTestModel, kwargs
-        )
+        regular, m2m = normalizer.split_many_to_many(dict(kwargs))
 
         self.assertEqual(regular, kwargs)
         self.assertEqual(m2m, {})
