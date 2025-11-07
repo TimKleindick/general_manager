@@ -440,10 +440,9 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     @staticmethod
     def _collect_model_fields(
         interface: interfaceBaseClass,
-    ) -> tuple[dict[str, Any], type | None, bool]:
+    ) -> tuple[dict[str, Any], type | None]:
         model_fields: dict[str, Any] = {}
         meta_class: type | None = None
-        class_flag = bool(getattr(interface, "use_soft_delete", False))
         for attr_name, attr_value in interface.__dict__.items():
             if attr_name.startswith("__"):
                 continue
@@ -451,23 +450,20 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
                 meta_class = attr_value
             elif attr_name == "Factory":
                 continue
-            elif attr_name == "use_soft_delete":
-                class_flag = bool(attr_value)
             else:
                 model_fields[attr_name] = attr_value
-        return model_fields, meta_class, class_flag
+        return model_fields, meta_class
 
     @staticmethod
     def _apply_meta_configuration(
         meta_class: type | None,
-        class_flag: bool,
     ) -> tuple[type | None, bool, list[Any] | None]:
-        use_soft_delete = class_flag
+        use_soft_delete = False
         rules: list[Any] | None = None
         if meta_class is None:
             return None, use_soft_delete, rules
         if hasattr(meta_class, "use_soft_delete"):
-            use_soft_delete = bool(meta_class.use_soft_delete)
+            use_soft_delete = meta_class.use_soft_delete
             delattr(meta_class, "use_soft_delete")
         if hasattr(meta_class, "rules"):
             rules = cast(list[Rule], meta_class.rules)
@@ -541,11 +537,9 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         interface: interfaceBaseClass,
         base_model_class: type[GeneralManagerBasisModel] = GeneralManagerModel,
     ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
-        model_fields, meta_class, class_flag = cls._collect_model_fields(interface)
+        model_fields, meta_class = cls._collect_model_fields(interface)
         model_fields["__module__"] = attrs.get("__module__")
-        meta_class, use_soft_delete, rules = cls._apply_meta_configuration(
-            meta_class, class_flag
-        )
+        meta_class, use_soft_delete, rules = cls._apply_meta_configuration(meta_class)
         if meta_class:
             model_fields["Meta"] = meta_class
         base_classes = cls._determine_model_bases(base_model_class, use_soft_delete)
