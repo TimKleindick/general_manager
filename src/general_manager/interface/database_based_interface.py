@@ -1,16 +1,15 @@
 """Database-backed interface implementation for GeneralManager classes."""
 
 from __future__ import annotations
+
 import warnings
-from typing import Any, Callable, ClassVar, Generic, TYPE_CHECKING, Type, TypeVar, cast
+from datetime import datetime, timedelta
+from typing import Any, Callable, ClassVar, Generic, Type, TypeVar, cast
+
 from django.db import models, transaction
 from django.db.models import NOT_PROVIDED, Subquery
-
-from datetime import datetime, date, time, timedelta
 from django.utils import timezone
-from general_manager.measurement.measurement import Measurement
-from general_manager.measurement.measurement_field import MeasurementField
-from decimal import Decimal
+
 from general_manager.factory.auto_factory import AutoFactory
 from general_manager.interface.base_interface import (
     InterfaceBase,
@@ -30,6 +29,20 @@ from general_manager.interface.database_interface_protocols import (
     SupportsActivation,
     SupportsHistory,
 )
+from general_manager.interface.utils.django_manager_utils import (
+    DjangoManagerSelector,
+)
+from general_manager.interface.utils.errors import (
+    DuplicateFieldNameError,
+    InvalidFieldTypeError,
+    InvalidFieldValueError,
+    MissingActivationSupportError,
+    UnknownFieldError,
+)
+from general_manager.interface.utils.field_descriptors import (
+    FieldDescriptor,
+    build_field_descriptors,
+)
 from general_manager.interface.models import (
     GeneralManagerBasisModel,
     GeneralManagerModel,
@@ -37,70 +50,13 @@ from general_manager.interface.models import (
     SoftDeleteMixin,
     get_full_clean_methode,
 )
-from django.contrib.contenttypes.fields import GenericForeignKey
+from general_manager.interface.utils.payload_normalizer import PayloadNormalizer
 from simple_history.models import HistoricalChanges
 from simple_history.utils import update_change_reason  # type: ignore
-
-if TYPE_CHECKING:
-    from general_manager.rule.rule import Rule
+from general_manager.rule import Rule
 
 HistoryModelT = TypeVar("HistoryModelT", bound=models.Model)
 WritableModelT = TypeVar("WritableModelT", bound=models.Model)
-
-
-class InvalidFieldValueError(ValueError):
-    """Raised when assigning a value incompatible with the model field."""
-
-    def __init__(self, field_name: str, value: object) -> None:
-        """
-        Initialize an InvalidFieldValueError for a specific model field and value.
-
-        Parameters:
-            field_name (str): Name of the field that received an invalid value.
-            value (object): The invalid value provided; included in the exception message.
-
-        """
-        super().__init__(f"Invalid value for {field_name}: {value}.")
-
-
-class InvalidFieldTypeError(TypeError):
-    """Raised when assigning a value with an unexpected type."""
-
-    def __init__(self, field_name: str, error: Exception) -> None:
-        """
-        Create an InvalidFieldTypeError that records the field name and the originating exception.
-
-        Parameters:
-            field_name (str): Name of the model field that received a value of an unexpected type.
-            error (Exception): The original exception encountered for the field.
-        """
-        super().__init__(f"Type error for {field_name}: {error}.")
-
-
-class UnknownFieldError(ValueError):
-    """Raised when keyword arguments reference fields not present on the model."""
-
-    def __init__(self, field_name: str, model_name: str) -> None:
-        """
-        Initialize an UnknownFieldError indicating a field name is not present on a model.
-
-        Parameters:
-            field_name (str): The field name that was not found on the model.
-            model_name (str): The name of the model in which the field was expected.
-        """
-        super().__init__(f"{field_name} does not exist in {model_name}.")
-
-
-class DuplicateFieldNameError(ValueError):
-    """Raised when a dynamically generated field name conflicts with an existing one."""
-
-    def __init__(self) -> None:
-        """
-        Initialize the DuplicateFieldNameError with a default descriptive message.
-
-        This exception indicates a conflict where a dynamically generated field name duplicates an existing name; the default message is "Field name already exists."
-        """
-        super().__init__("Field name already exists.")
 
 
 class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
@@ -110,6 +66,7 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
     database: ClassVar[str | None] = None
     _active_manager: ClassVar[models.Manager[models.Model] | None] = None
+    _field_descriptors: ClassVar[dict[str, FieldDescriptor] | None] = None
     _search_date: datetime | None
 
     @classmethod
@@ -130,38 +87,18 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         Returns:
             manager (django.db.models.Manager[HistoryModelT]): The model manager for the interface's model, using the configured database alias when provided.
         """
-        if getattr(cls, "_use_soft_delete", False):
-            if not only_active and hasattr(cls._model, "all_objects"):
-                manager = cast(models.Manager[HistoryModelT], cls._model.all_objects)  # type: ignore[attr-defined]
-            elif only_active and not hasattr(cls._model, "all_objects"):
-                cached_manager = cast(
-                    models.Manager[HistoryModelT] | None,
-                    getattr(cls, "_active_manager", None),
-                )
-                if cached_manager is None:
-                    base_manager = cls._model._default_manager
-
-                    class _FilteredManager(models.Manager[HistoryModelT]):  # type: ignore[misc]
-                        def get_queryset(self_inner) -> models.QuerySet[HistoryModelT]:
-                            queryset = base_manager.get_queryset()
-                            if self_inner._db:  # type: ignore[attr-defined]
-                                queryset = queryset.using(self_inner._db)  # type: ignore[attr-defined]
-                            return queryset.filter(is_active=True)
-
-                    filtered_manager: models.Manager[HistoryModelT] = _FilteredManager()
-                    filtered_manager.model = cls._model  # type: ignore[attr-defined]
-                    cls._active_manager = filtered_manager  # type: ignore[attr-defined]
-                    manager = filtered_manager
-                else:
-                    manager = cached_manager
-            else:
-                manager = cls._model._default_manager
-        else:
-            manager = cls._model._default_manager
-        database_alias = cls._get_database_alias()
-        if database_alias:
-            manager = manager.db_manager(database_alias)
-        return cast(models.Manager[HistoryModelT], manager)
+        selector = DjangoManagerSelector[HistoryModelT](
+            model=cls._model,
+            database_alias=cls._get_database_alias(),
+            use_soft_delete=getattr(cls, "_use_soft_delete", False),
+            cached_active=cast(
+                models.Manager[HistoryModelT] | None,
+                getattr(cls, "_active_manager", None),
+            ),
+        )
+        manager = selector.active_manager() if only_active else selector.all_manager()
+        cls._active_manager = selector.cached_active  # type: ignore[attr-defined]
+        return manager
 
     @classmethod
     def _get_queryset(cls) -> models.QuerySet[HistoryModelT]:
@@ -173,11 +110,17 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         """
         manager = cls._get_manager(only_active=True)
         queryset: models.QuerySet[HistoryModelT] = manager.all()  # type: ignore[assignment]
-        if getattr(cls, "_use_soft_delete", False) and not hasattr(
-            cls._model, "all_objects"
-        ):
-            queryset = queryset.filter(is_active=True)
         return cast(models.QuerySet[HistoryModelT], queryset)
+
+    @classmethod
+    def _payload_normalizer(cls) -> PayloadNormalizer:
+        return PayloadNormalizer(cast(Type[models.Model], cls._model))
+
+    @classmethod
+    def _get_field_descriptors(cls) -> dict[str, FieldDescriptor]:
+        if cls._field_descriptors is None:
+            cls._field_descriptors = build_field_descriptors(cls)
+        return cls._field_descriptors
 
     def __init__(
         self,
@@ -250,29 +193,6 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
             raise missing_error
         raise model_cls.DoesNotExist  # type: ignore[attr-defined]
 
-    @staticmethod
-    def __parse_kwargs(**kwargs: Any) -> dict[str, Any]:
-        """
-        Convert keyword arguments into ORM-friendly values.
-
-        Parameters:
-            **kwargs (Any): Filter or update arguments potentially containing manager instances.
-
-        Returns:
-            dict[str, Any]: Arguments ready to be passed to Django ORM methods.
-        """
-        from general_manager.manager.general_manager import GeneralManager
-
-        parsed_kwargs: dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if isinstance(value, GeneralManager):
-                parsed_kwargs[key] = getattr(
-                    value._interface, "_instance", value.identification["id"]
-                )
-            else:
-                parsed_kwargs[key] = value
-        return parsed_kwargs
-
     @classmethod
     def filter(cls, **kwargs: Any) -> DatabaseBucket:
         """
@@ -286,16 +206,17 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         """
 
         include_inactive = kwargs.pop("include_inactive", False)
-        kwargs = cls.__parse_kwargs(**kwargs)
+        normalizer = cls._payload_normalizer()
+        normalized_kwargs = normalizer.normalize_filter_kwargs(kwargs)
         queryset_base = cls._get_queryset()
         if include_inactive:
             queryset_base = cls._get_manager(only_active=False).all()
-        queryset = queryset_base.filter(**kwargs)
+        queryset = queryset_base.filter(**normalized_kwargs)
 
         return DatabaseBucket(
             cast(models.QuerySet[models.Model], queryset),
             cls._parent_class,
-            cls.__create_filter_definitions(**kwargs),
+            cls.__create_filter_definitions(**normalized_kwargs),
         )
 
     @classmethod
@@ -310,16 +231,17 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
             DatabaseBucket: Bucket wrapping the queryset after applying the exclusions.
         """
         include_inactive = kwargs.pop("include_inactive", False)
-        kwargs = cls.__parse_kwargs(**kwargs)
+        normalizer = cls._payload_normalizer()
+        normalized_kwargs = normalizer.normalize_filter_kwargs(kwargs)
         queryset_base = cls._get_queryset()
         if include_inactive:
             queryset_base = cls._get_manager(only_active=False).all()
-        queryset = queryset_base.exclude(**kwargs)
+        queryset = queryset_base.exclude(**normalized_kwargs)
 
         return DatabaseBucket(
             cast(models.QuerySet[models.Model], queryset),
             cls._parent_class,
-            cls.__create_filter_definitions(**kwargs),
+            cls.__create_filter_definitions(**normalized_kwargs),
         )
 
     @staticmethod
@@ -405,210 +327,23 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         Raises:
             DuplicateFieldNameError: if a generated attribute name collides with an existing attribute name.
         """
-        TRANSLATION: dict[Type[models.Field[Any, Any]], type] = {
-            models.fields.BigAutoField: int,
-            models.AutoField: int,
-            models.CharField: str,
-            models.TextField: str,
-            models.BooleanField: bool,
-            models.IntegerField: int,
-            models.FloatField: float,
-            models.DateField: datetime,
-            models.DateTimeField: datetime,
-            MeasurementField: Measurement,
-            models.DecimalField: Decimal,
-            models.EmailField: str,
-            models.FileField: str,
-            models.ImageField: str,
-            models.URLField: str,
-            models.TimeField: datetime,
-        }
-        fields: dict[str, AttributeTypedDict] = {}
-        field_name_list, to_ignore_list = cls.handle_custom_fields(cls._model)
-        for field_name in field_name_list:
-            field = cast(models.Field, getattr(cls._model, field_name))
-            fields[field_name] = {
-                "type": type(field),
-                "is_derived": False,
-                "is_required": not field.null,
-                "is_editable": field.editable,
-                "default": field.default,
-            }
-
-        for field_name in cls.__get_model_fields():
-            if field_name not in to_ignore_list:
-                field = cast(models.Field, getattr(cls._model, field_name).field)
-                fields[field_name] = {
-                    "type": type(field),
-                    "is_derived": False,
-                    "is_required": not field.null
-                    and field.default is models.NOT_PROVIDED,
-                    "is_editable": field.editable,
-                    "default": field.default,
-                }
-
-        for field_name in cls.__get_foreign_key_fields():
-            field = cls._model._meta.get_field(field_name)
-            if isinstance(field, GenericForeignKey):
-                continue
-            related_model = field.related_model
-            if related_model == "self":
-                related_model = cls._model
-            if related_model and hasattr(
-                related_model,
-                "_general_manager_class",
-            ):
-                related_model = related_model._general_manager_class  # type: ignore
-
-            if related_model is not None:
-                default = None
-                if hasattr(field, "default"):
-                    default = field.default  # type: ignore
-                fields[field_name] = {
-                    "type": cast(type, related_model),
-                    "is_derived": False,
-                    "is_required": not field.null,
-                    "is_editable": field.editable,
-                    "default": default,
-                }
-
-        for field_name, field_call in [
-            *cls.__get_many_to_many_fields(),
-            *cls.__get_reverse_relations(),
-        ]:
-            if field_name in fields:
-                if field_call not in fields:
-                    field_name = field_call
-                else:
-                    raise DuplicateFieldNameError()
-            field = cls._model._meta.get_field(field_name)
-            related_model = cls._model._meta.get_field(field_name).related_model
-            if related_model == "self":
-                related_model = cls._model
-            if isinstance(field, GenericForeignKey):
-                continue
-
-            if related_model and hasattr(
-                related_model,
-                "_general_manager_class",
-            ):
-                related_model = related_model._general_manager_class  # type: ignore
-
-            if related_model is not None:
-                fields[f"{field_name}_list"] = {
-                    "type": cast(type, related_model),
-                    "is_required": False,
-                    "is_derived": not bool(field.many_to_many),
-                    "is_editable": bool(field.many_to_many and field.editable),
-                    "default": None,
-                }
-
-        return {
-            field_name: {**field, "type": TRANSLATION.get(field["type"], field["type"])}
-            for field_name, field in fields.items()
-        }
+        descriptors = cls._get_field_descriptors()
+        return {name: descriptor.metadata for name, descriptor in descriptors.items()}
 
     @classmethod
     def get_attributes(cls) -> dict[str, Callable[[DBBasedInterface], Any]]:
         """
         Builds a mapping of attribute names to accessor callables for a DBBasedInterface instance.
 
-        Includes accessors for custom fields, standard model fields, foreign-key relations, many-to-many relations, and reverse relations. For relations whose related model exposes a _general_manager_class, the accessor yields the corresponding GeneralManager instance (for single relations) or a filtered manager/queryset (for multi-relations); otherwise the accessor yields the related model instance or a queryset directly.
+        Includes accessors for custom fields, standard model fields, foreign-key relations, many-to-many relations, and reverse relations. Descriptors shared with `get_attribute_types` ensure attribute metadata and resolver logic stay in sync.
 
         Returns:
             dict[str, Callable[[DBBasedInterface], Any]]: Mapping from attribute name to a callable that accepts a DBBasedInterface and returns that attribute's value.
-
-        Raises:
-            DuplicateFieldNameError: If a generated attribute name conflicts with an existing attribute name.
         """
-        from general_manager.manager.general_manager import GeneralManager
+        descriptors = cls._get_field_descriptors()
+        return {name: descriptor.accessor for name, descriptor in descriptors.items()}
 
-        field_values: dict[str, Any] = {}
-
-        field_name_list, to_ignore_list = cls.handle_custom_fields(cls._model)
-        for field_name in field_name_list:
-            field_values[field_name] = lambda self, field_name=field_name: getattr(
-                self._instance, field_name
-            )
-
-        for field_name in cls.__get_model_fields():
-            if field_name not in to_ignore_list:
-                field_values[field_name] = lambda self, field_name=field_name: getattr(
-                    self._instance, field_name
-                )
-
-        for field_name in cls.__get_foreign_key_fields():
-            related_model = cls._model._meta.get_field(field_name).related_model
-            if related_model and hasattr(
-                related_model,
-                "_general_manager_class",
-            ):
-                generalManagerClass = cast(
-                    Type[GeneralManager], related_model._general_manager_class
-                )
-                field_values[f"{field_name}"] = (
-                    lambda self,
-                    field_name=field_name,
-                    manager_class=generalManagerClass: (
-                        manager_class(getattr(self._instance, field_name).pk)
-                        if getattr(self._instance, field_name)
-                        else None
-                    )
-                )
-            else:
-                field_values[f"{field_name}"] = (
-                    lambda self, field_name=field_name: getattr(
-                        self._instance, field_name
-                    )
-                )
-
-        for field_name, field_call in [
-            *cls.__get_many_to_many_fields(),
-            *cls.__get_reverse_relations(),
-        ]:
-            if field_name in field_values:
-                if field_call not in field_values:
-                    field_name = field_call
-                else:
-                    raise DuplicateFieldNameError()
-            if hasattr(
-                cls._model._meta.get_field(field_name).related_model,
-                "_general_manager_class",
-            ):
-                related_model = cast(
-                    Type[models.Model],
-                    cls._model._meta.get_field(field_name).related_model,
-                )
-                related_fields = [
-                    f
-                    for f in related_model._meta.get_fields()
-                    if f.related_model == cls._model
-                ]
-
-                field_values[f"{field_name}_list"] = (
-                    lambda self,
-                    field_name=field_name,
-                    related_fields=related_fields: self._instance._meta.get_field(
-                        field_name
-                    ).related_model._general_manager_class.filter(
-                        **{
-                            related_field.name: self.pk
-                            for related_field in related_fields
-                        }
-                    )
-                )
-            else:
-                field_values[f"{field_name}_list"] = (
-                    lambda self,
-                    field_call=field_call,
-                    field_name=field_name: cls.__resolve_many_to_many(
-                        self, field_call, field_name
-                    )
-                )
-
-        return field_values
-
-    def __resolve_many_to_many(
+    def _resolve_many_to_many(
         self: DBBasedInterface, field_call: str, field_name: str
     ) -> models.QuerySet[Any]:
         """
@@ -677,14 +412,13 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         Returns:
             tuple[list[str], list[str]]: Names of custom fields and associated helper fields to ignore.
         """
-        field_name_list: list[str] = []
-        to_ignore_list: list[str] = []
+        field_names: list[str] = []
+        ignore: list[str] = []
         for field_name in DBBasedInterface._get_custom_fields(model):
-            to_ignore_list.append(f"{field_name}_value")
-            to_ignore_list.append(f"{field_name}_unit")
-            field_name_list.append(field_name)
-
-        return field_name_list, to_ignore_list
+            ignore.append(f"{field_name}_value")
+            ignore.append(f"{field_name}_unit")
+            field_names.append(field_name)
+        return field_names, ignore
 
     @staticmethod
     def _get_custom_fields(model: Type[models.Model] | models.Model) -> list[str]:
@@ -703,123 +437,89 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
             if isinstance(field, models.Field)
         ]
 
-    @classmethod
-    def __get_model_fields(cls) -> list[str]:
-        """Return names of non-relational fields defined on the model."""
-        return [
-            field.name
-            for field in cls._model._meta.get_fields()
-            if not field.many_to_many and not field.related_model
-        ]
-
-    @classmethod
-    def __get_foreign_key_fields(cls) -> list[str]:
-        """Return names of foreign-key and one-to-one relations on the model."""
-        return [
-            field.name
-            for field in cls._model._meta.get_fields()
-            if field.is_relation and (field.many_to_one or field.one_to_one)
-        ]
-
-    @classmethod
-    def __get_many_to_many_fields(cls) -> list[tuple[str, str]]:
-        """Return (field_name, accessor_name) tuples for many-to-many fields."""
-        return [
-            (field.name, field.name)
-            for field in cls._model._meta.get_fields()
-            if field.is_relation and field.many_to_many
-        ]
-
-    @classmethod
-    def __get_reverse_relations(cls) -> list[tuple[str, str]]:
-        """Return (field_name, accessor_name) tuples for reverse one-to-many relations."""
-        return [
-            (field.name, f"{field.name}_set")
-            for field in cls._model._meta.get_fields()
-            if field.is_relation and field.one_to_many
-        ]
+    @staticmethod
+    def _collect_model_fields(
+        interface: interfaceBaseClass,
+    ) -> tuple[dict[str, Any], type | None]:
+        model_fields: dict[str, Any] = {}
+        meta_class: type | None = None
+        for attr_name, attr_value in interface.__dict__.items():
+            if attr_name.startswith("__"):
+                continue
+            if attr_name == "Meta" and isinstance(attr_value, type):
+                meta_class = attr_value
+            elif attr_name == "Factory":
+                continue
+            else:
+                model_fields[attr_name] = attr_value
+        return model_fields, meta_class
 
     @staticmethod
-    def _pre_create(
-        name: generalManagerClassName,
-        attrs: attributes,
-        interface: interfaceBaseClass,
-        base_model_class: type[GeneralManagerBasisModel] = GeneralManagerModel,
-    ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
-        # Collect fields defined directly on the interface class
-        """
-        Generate a concrete Django model class, a corresponding Interface subclass, and an AutoFactory from an Interface definition.
-
-        Parameters:
-                name (str): Name for the generated Django model class.
-                attrs (dict): Attribute dictionary to be updated with the generated Interface and Factory entries.
-                interface (type): Interface base class used to derive the model and Interface subclass.
-                base_model_class (type): Base Django model class to inherit from for the generated model (defaults to GeneralManagerModel).
-
-        Returns:
-                tuple: (updated_attrs, interface_cls, model) where `updated_attrs` is the input attrs dict updated with "Interface" and "Factory" keys, `interface_cls` is the created Interface subclass, and `model` is the generated Django model class.
-        """
-        model_fields: dict[str, Any] = {}
-        meta_class = None
+    def _apply_meta_configuration(
+        meta_class: type | None,
+    ) -> tuple[type | None, bool, list[Any] | None]:
         use_soft_delete = False
-        for attr_name, attr_value in interface.__dict__.items():
-            if not attr_name.startswith("__"):
-                if attr_name == "Meta" and isinstance(attr_value, type):
-                    # Store the Meta class definition for later use
-                    meta_class = attr_value
-                elif attr_name == "Factory":
-                    # Do not register the factory on the model
-                    pass
-                else:
-                    model_fields[attr_name] = attr_value
-        model_fields["__module__"] = attrs.get("__module__")
-        # Attach the Meta class or create a default one
-        rules: list[Rule] | None = None
-        if meta_class:
-            if hasattr(meta_class, "use_soft_delete"):
-                use_soft_delete = bool(meta_class.use_soft_delete)
-                delattr(meta_class, "use_soft_delete")
-            model_fields["Meta"] = meta_class
-            if hasattr(meta_class, "rules"):
-                rules = meta_class.rules
-                delattr(meta_class, "rules")
+        rules: list[Any] | None = None
+        if meta_class is None:
+            return None, use_soft_delete, rules
+        if hasattr(meta_class, "use_soft_delete"):
+            use_soft_delete = meta_class.use_soft_delete
+            delattr(meta_class, "use_soft_delete")
+        if hasattr(meta_class, "rules"):
+            rules = cast(list[Rule], meta_class.rules)
+            delattr(meta_class, "rules")
+        return meta_class, use_soft_delete, rules
 
-        # Create the concrete Django model dynamically
-        if use_soft_delete:
-            if (
-                base_model_class is GeneralManagerModel
-                or base_model_class is GeneralManagerBasisModel
-            ) and issubclass(SoftDeleteGeneralManagerModel, base_model_class):
-                base_classes: tuple[type[GeneralManagerBasisModel], ...] = (
-                    SoftDeleteGeneralManagerModel,
-                )
-            elif issubclass(base_model_class, SoftDeleteMixin):
-                base_classes = (base_model_class,)
-            else:
-                base_classes = (SoftDeleteMixin, base_model_class)  # type: ignore
-        else:
-            base_classes = (base_model_class,)
+    @staticmethod
+    def _determine_model_bases(
+        base_model_class: type[GeneralManagerBasisModel],
+        use_soft_delete: bool,
+    ) -> tuple[type[models.Model], ...]:
+        if not use_soft_delete:
+            return (base_model_class,)
+        if (
+            base_model_class is GeneralManagerModel
+            or base_model_class is GeneralManagerBasisModel
+        ) and issubclass(SoftDeleteGeneralManagerModel, base_model_class):
+            return (SoftDeleteGeneralManagerModel,)
+        if issubclass(base_model_class, SoftDeleteMixin):
+            return (base_model_class,)
+        return (cast(type[models.Model], SoftDeleteMixin), base_model_class)
 
-        model = cast(
-            type[GeneralManagerBasisModel],
-            type(name, base_classes, model_fields),
-        )
+    @staticmethod
+    def _finalize_model_class(
+        model: type[GeneralManagerBasisModel],
+        *,
+        meta_class: type | None,
+        use_soft_delete: bool,
+        rules: list[Any] | None,
+    ) -> None:
         if meta_class and rules:
             model._meta.rules = rules  # type: ignore[attr-defined]
-            # add full_clean method
             model.full_clean = get_full_clean_methode(model)  # type: ignore[assignment]
         if meta_class and use_soft_delete:
             model._meta.use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
-        # Determine interface type
-        attrs["_interface_type"] = interface._interface_type
+
+    @staticmethod
+    def _build_interface_class(
+        interface: interfaceBaseClass,
+        model: type[GeneralManagerBasisModel],
+        use_soft_delete: bool,
+    ) -> newlyCreatedInterfaceClass:
         interface_cls = type(interface.__name__, (interface,), {})
         interface_cls._model = model  # type: ignore[attr-defined]
         interface_cls._use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
-        attrs["Interface"] = interface_cls
+        interface_cls._field_descriptors = None  # type: ignore[attr-defined]
+        return interface_cls
 
-        # Build the associated factory class
-        manager_factory = cast(type | None, attrs.pop("Factory", None))
-        factory_definition = manager_factory or getattr(interface, "Factory", None)
+    @staticmethod
+    def _build_factory_class(
+        *,
+        name: str,
+        factory_definition: type | None,
+        interface_cls: newlyCreatedInterfaceClass,
+        model: type[GeneralManagerBasisModel],
+    ) -> type[AutoFactory]:
         factory_attributes: dict[str, Any] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
@@ -827,9 +527,45 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
                     factory_attributes[attr_name] = attr_value
         factory_attributes["interface"] = interface_cls
         factory_attributes["Meta"] = type("Meta", (), {"model": model})
-        factory_class = type(f"{name}Factory", (AutoFactory,), factory_attributes)
-        # factory_class._meta.model = model
-        attrs["Factory"] = factory_class
+        return type(f"{name}Factory", (AutoFactory,), factory_attributes)
+
+    @classmethod
+    def _pre_create(
+        cls,
+        name: generalManagerClassName,
+        attrs: attributes,
+        interface: interfaceBaseClass,
+        base_model_class: type[GeneralManagerBasisModel] = GeneralManagerModel,
+    ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
+        model_fields, meta_class = cls._collect_model_fields(interface)
+        model_fields["__module__"] = attrs.get("__module__")
+        meta_class, use_soft_delete, rules = cls._apply_meta_configuration(meta_class)
+        if meta_class:
+            model_fields["Meta"] = meta_class
+        base_classes = cls._determine_model_bases(base_model_class, use_soft_delete)
+        model = cast(
+            type[GeneralManagerBasisModel],
+            type(name, base_classes, model_fields),
+        )
+        cls._finalize_model_class(
+            model,
+            meta_class=meta_class,
+            use_soft_delete=use_soft_delete,
+            rules=rules,
+        )
+        attrs["_interface_type"] = interface._interface_type
+        interface_cls = cls._build_interface_class(interface, model, use_soft_delete)
+        attrs["Interface"] = interface_cls
+
+        # Build the associated factory class
+        manager_factory = cast(type | None, attrs.pop("Factory", None))
+        factory_definition = manager_factory or getattr(interface, "Factory", None)
+        attrs["Factory"] = cls._build_factory_class(
+            name=name,
+            factory_definition=factory_definition,
+            interface_cls=interface_cls,
+            model=model,
+        )
 
         return attrs, interface_cls, model
 
@@ -898,19 +634,6 @@ class DBBasedInterface(InterfaceBase, Generic[HistoryModelT]):
         return type(field)
 
 
-class MissingActivationSupportError(TypeError):
-    """Raised when a model does not provide activation support."""
-
-    def __init__(self, model_name: str) -> None:
-        """
-        Initialize the exception indicating a model lacks activation support.
-
-        Parameters:
-            model_name (str): The name of the model missing an `is_active` attribute. The exception message will include this name.
-        """
-        super().__init__(f"{model_name} must define an 'is_active' attribute.")
-
-
 class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
     """DB-based interface with write capabilities for models supporting persistence."""
 
@@ -935,18 +658,15 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         Raises:
             UnknownFieldError: If kwargs contain names that do not correspond to model fields.
         """
-        model_cls = cls._model
-        cls._check_for_invalid_kwargs(
-            cast(Type[models.Model], model_cls), kwargs=kwargs
-        )
-        kwargs, many_to_many_kwargs = cls._sort_kwargs(
-            cast(Type[models.Model], model_cls), kwargs
-        )
-        instance = cls.__set_attr_for_write(model_cls(), kwargs)
+        normalizer = cls._payload_normalizer()
+        payload = dict(kwargs)
+        normalizer.validate_keys(payload)
+        simple_kwargs, many_to_many_kwargs = normalizer.split_many_to_many(payload)
+        normalized_simple = normalizer.normalize_simple_values(simple_kwargs)
+        normalized_many = normalizer.normalize_many_values(many_to_many_kwargs)
+        instance = cls._assign_simple_attributes(cls._model(), normalized_simple)
         pk = cls._save_with_history(instance, creator_id, history_comment)
-        cls.__set_many_to_many_attributes(
-            instance, many_to_many_kwargs, history_comment
-        )
+        cls._apply_many_to_many(instance, normalized_many, history_comment)
         return {"id": pk}
 
     def update(
@@ -966,19 +686,18 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         Raises:
             UnknownFieldError: If any provided kwarg does not correspond to a model field.
         """
-        model_cls = self._model
-        self._check_for_invalid_kwargs(
-            cast(Type[models.Model], model_cls), kwargs=kwargs
-        )
-        kwargs, many_to_many_kwargs = self._sort_kwargs(
-            cast(Type[models.Model], model_cls), kwargs
-        )
+        normalizer = self._payload_normalizer()
+        payload = dict(kwargs)
+        normalizer.validate_keys(payload)
+        simple_kwargs, many_to_many_kwargs = normalizer.split_many_to_many(payload)
+        normalized_simple = normalizer.normalize_simple_values(simple_kwargs)
+        normalized_many = normalizer.normalize_many_values(many_to_many_kwargs)
         manager = self.__class__._get_manager(only_active=False)
-        instance = self.__set_attr_for_write(manager.get(pk=self.pk), kwargs)
-        pk = self._save_with_history(instance, creator_id, history_comment)
-        self.__set_many_to_many_attributes(
-            instance, many_to_many_kwargs, history_comment
+        instance = self._assign_simple_attributes(
+            manager.get(pk=self.pk), normalized_simple
         )
+        pk = self._save_with_history(instance, creator_id, history_comment)
+        self._apply_many_to_many(instance, normalized_many, history_comment)
         return {"id": pk}
 
     def delete(
@@ -1040,7 +759,7 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         return self.delete(creator_id=creator_id, history_comment=history_comment)
 
     @staticmethod
-    def __set_many_to_many_attributes(
+    def _apply_many_to_many(
         instance: WritableModelT,
         many_to_many_kwargs: dict[str, list[Any]],
         history_comment: str | None,
@@ -1048,41 +767,30 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
         """
         Apply many-to-many relation values to a model instance.
 
-        Keys in many_to_many_kwargs are expected to end with the suffix "_id_list"; the suffix is removed to obtain the relation attribute name. Values that are lists of GeneralManager instances are converted to their underlying ids (uses identification["id"] when present). Entries with value None or NOT_PROVIDED are ignored. Each relation is applied via the relation manager's set() method.
+        Keys in many_to_many_kwargs are expected to end with the suffix "_id_list"; the suffix is removed to obtain the relation attribute name. Each relation is applied via the relation manager's set() method. A change reason is recorded when provided.
 
         Parameters:
             instance (WritableModelT): The model instance to update.
-            many_to_many_kwargs (dict[str, list[Any]]): Mapping from relation keys (with "_id_list" suffix) to lists of related ids or GeneralManager instances.
+            many_to_many_kwargs (dict[str, list[Any]]): Mapping from relation keys (with "_id_list" suffix) to lists of related ids.
 
         Returns:
             WritableModelT: The same instance with updated many-to-many relations.
         """
-        from general_manager.manager.general_manager import GeneralManager
-
         for key, value in many_to_many_kwargs.items():
-            if value is None or value is NOT_PROVIDED:
-                continue
             field_name = key.removesuffix("_id_list")
-            if isinstance(value, list) and all(
-                isinstance(v, GeneralManager) for v in value
-            ):
-                value = [
-                    v.identification["id"] if hasattr(v, "identification") else v
-                    for v in value
-                ]
             getattr(instance, field_name).set(value)
         update_change_reason(instance, history_comment)
         return instance
 
     @staticmethod
-    def __set_attr_for_write(
+    def _assign_simple_attributes(
         instance: WritableModelT,
         kwargs: dict[str, Any],
     ) -> WritableModelT:
         """
-        Set non-relational writable fields on an instance, converting manager references to primary keys.
+        Set non-relational writable fields on an instance.
 
-        Converts any GeneralManager value to its underlying `id` and uses `<field>_id` as the attribute name, skips values equal to `NOT_PROVIDED`, assigns each remaining value on the given instance, and translates assignment `ValueError`/`TypeError` into `InvalidFieldValueError` and `InvalidFieldTypeError`.
+        Skips values equal to `NOT_PROVIDED`, assigns each remaining value on the given instance, and translates assignment `ValueError`/`TypeError` into `InvalidFieldValueError` and `InvalidFieldTypeError`.
 
         Parameters:
             instance (WritableModelT): The model instance to modify.
@@ -1095,12 +803,7 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
             InvalidFieldValueError: If setting an attribute raises a `ValueError`.
             InvalidFieldTypeError: If setting an attribute raises a `TypeError`.
         """
-        from general_manager.manager.general_manager import GeneralManager
-
         for key, value in kwargs.items():
-            if isinstance(value, GeneralManager):
-                value = value.identification["id"]
-                key = f"{key}_id"
             if value is NOT_PROVIDED:
                 continue
             try:
@@ -1110,51 +813,6 @@ class WritableDBBasedInterface(DBBasedInterface[WritableModelT]):
             except TypeError as error:
                 raise InvalidFieldTypeError(key, error) from error
         return instance
-
-    @staticmethod
-    def _check_for_invalid_kwargs(
-        model: Type[models.Model], kwargs: dict[str, Any]
-    ) -> None:
-        """
-        Validate that each key in `kwargs` corresponds to an attribute or field on `model`.
-
-        Parameters:
-            model (type[models.Model]): The Django model class to validate against.
-            kwargs (dict[str, Any]): Mapping of keyword names to values; keys ending with `_id_list` are validated after stripping that suffix.
-
-        Raises:
-            UnknownFieldError: If any provided key (after removing a trailing `_id_list`) does not match a model attribute or field name.
-        """
-        attributes = vars(model)
-        field_names = {f.name for f in model._meta.get_fields()}
-        for key in kwargs:
-            temp_key = key.split("_id_list")[0]  # Remove '_id_list' suffix
-            if temp_key not in attributes and temp_key not in field_names:
-                raise UnknownFieldError(key, model.__name__)
-
-    @staticmethod
-    def _sort_kwargs(
-        model: Type[models.Model], kwargs: dict[Any, Any]
-    ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
-        """
-        Separate provided kwargs into simple model-field arguments and many-to-many relation arguments.
-
-        This function removes keys targeting many-to-many relations from the input kwargs and returns them separately. A many-to-many key is identified by the suffix "_id_list" whose base name matches a many-to-many field on the given model.
-
-        Parameters:
-            model (Type[models.Model]): Django model whose many-to-many field names are inspected.
-            kwargs (dict[Any, Any]): Mapping of keyword arguments to partition; keys matching many-to-many relations are removed in-place.
-
-        Returns:
-            tuple[dict[str, Any], dict[str, list[Any]]]: A tuple where the first element is the original kwargs dict with many-to-many keys removed, and the second element maps the removed many-to-many keys to their values.
-        """
-        many_to_many_fields = [field.name for field in model._meta.many_to_many]
-        many_to_many_kwargs: dict[Any, Any] = {}
-        for key, _value in list(kwargs.items()):
-            many_to_many_key = key.split("_id_list")[0]
-            if many_to_many_key in many_to_many_fields:
-                many_to_many_kwargs[key] = kwargs.pop(key)
-        return kwargs, many_to_many_kwargs
 
     @classmethod
     def _save_with_history(

@@ -17,6 +17,12 @@ from general_manager.interface.database_based_interface import (
     generalManagerClassName,
     interfaceBaseClass,
 )
+from general_manager.interface.utils.errors import (
+    InvalidReadOnlyDataFormatError,
+    InvalidReadOnlyDataTypeError,
+    MissingReadOnlyDataError,
+    MissingUniqueFieldError,
+)
 from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
@@ -24,60 +30,6 @@ if TYPE_CHECKING:
 
 
 logger = get_logger("interface.read_only")
-
-
-class MissingReadOnlyDataError(ValueError):
-    """Raised when a ReadOnlyInterface lacks the required `_data` attribute."""
-
-    def __init__(self, interface_name: str) -> None:
-        """
-        Exception raised when a ReadOnlyInterface is missing the required `_data` attribute.
-
-        Parameters:
-            interface_name (str): Name of the interface class; used to construct the exception message.
-        """
-        super().__init__(
-            f"ReadOnlyInterface '{interface_name}' must define a '_data' attribute."
-        )
-
-
-class MissingUniqueFieldError(ValueError):
-    """Raised when a ReadOnlyInterface has no unique fields defined."""
-
-    def __init__(self, interface_name: str) -> None:
-        """
-        Initialize an error for a read-only interface that defines no unique fields.
-
-        Parameters:
-            interface_name (str): Name of the interface class missing at least one unique field; this name is included in the exception message.
-        """
-        super().__init__(
-            f"ReadOnlyInterface '{interface_name}' must declare at least one unique field."
-        )
-
-
-class InvalidReadOnlyDataFormatError(TypeError):
-    """Raised when the `_data` JSON does not decode to a list of dictionaries."""
-
-    def __init__(self) -> None:
-        """
-        Exception raised when the `_data` JSON does not decode to a list of dictionaries.
-
-        Initializes the exception with the message "_data JSON must decode to a list of dictionaries."
-        """
-        super().__init__("_data JSON must decode to a list of dictionaries.")
-
-
-class InvalidReadOnlyDataTypeError(TypeError):
-    """Raised when the `_data` attribute is neither JSON string nor list."""
-
-    def __init__(self) -> None:
-        """
-        Initialize the InvalidReadOnlyDataTypeError with a standard error message.
-
-        Raises a TypeError indicating that the `_data` attribute must be either a JSON string or a list of dictionaries.
-        """
-        super().__init__("_data must be a JSON string or a list of dictionaries.")
 
 
 class ReadOnlyInterface(DBBasedInterface[GeneralManagerBasisModel]):

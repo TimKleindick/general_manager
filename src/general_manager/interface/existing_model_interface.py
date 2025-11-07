@@ -27,34 +27,12 @@ from general_manager.interface.models import (
     GeneralManagerBasisModel,
     get_full_clean_methode,
 )
+from general_manager.interface.utils.errors import (
+    InvalidModelReferenceError,
+    MissingModelConfigurationError,
+)
 
 ExistingModelT = TypeVar("ExistingModelT", bound=models.Model)
-
-
-class MissingModelConfigurationError(ValueError):
-    """Raised when an ExistingModelInterface does not define a model to manage."""
-
-    def __init__(self, interface_name: str) -> None:
-        """
-        Initialize the MissingModelConfigurationError for a specific interface that did not define a required `model` attribute.
-
-        Parameters:
-            interface_name (str): The name of the interface used to construct the error message.
-        """
-        super().__init__(f"{interface_name} must define a 'model' attribute.")
-
-
-class InvalidModelReferenceError(TypeError):
-    """Raised when the model attribute is neither a Django model class nor a resolvable label."""
-
-    def __init__(self, reference: object) -> None:
-        """
-        Initialize the InvalidModelReferenceError with the offending model reference.
-
-        Parameters:
-            reference (object): The model reference that could not be resolved; used in the error message.
-        """
-        super().__init__(f"Invalid model reference '{reference}'.")
 
 
 class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
