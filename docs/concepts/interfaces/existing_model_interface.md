@@ -1,6 +1,6 @@
 # Existing Model Interfaces
 
-`ExistingModelInterface` (`general_manager.interface.existing_model_interface.ExistingModelInterface`) lets a manager wrap an existing Django model without generating new tables. It keeps the GeneralManager API intact—`create`, `update`, `delete`, factories, and history tracking all work the same—while pointing at the tables you already manage elsewhere. When the legacy model exposes an `is_active` column the interface enables soft delete automatically (`delete()` toggles the flag and the deprecated `deactivate()` alias forwards to it).
+`ExistingModelInterface` (`general_manager.interface.ExistingModelInterface`) lets a manager wrap an existing Django model without generating new tables. It keeps the GeneralManager API intact—`create`, `update`, `delete`, factories, and history tracking all work the same—while pointing at the tables you already manage elsewhere. When the legacy model exposes an `is_active` column the interface enables soft delete automatically (`delete()` toggles the flag and the deprecated `deactivate()` alias forwards to it).
 
 ## When to use it
 
@@ -17,7 +17,7 @@ Reference the model with either an import or an app label string. Annotate the m
 ```python
 from django.contrib.auth import get_user_model
 
-from general_manager.interface.existing_model_interface import ExistingModelInterface
+from general_manager.interface import ExistingModelInterface
 from general_manager.manager import GeneralManager
 
 

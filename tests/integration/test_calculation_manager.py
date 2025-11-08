@@ -4,8 +4,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import CharField
 from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface.database_interface import DatabaseInterface
-from general_manager.interface.calculation_interface import CalculationInterface
+from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.manager.input import Input

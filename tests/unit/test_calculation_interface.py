@@ -2,7 +2,7 @@ from typing import ClassVar
 
 from django.test import TestCase
 from general_manager.bucket.calculation_bucket import CalculationBucket
-from general_manager.interface.calculation_interface import CalculationInterface
+from general_manager.interface import CalculationInterface
 from general_manager.manager.input import Input
 
 

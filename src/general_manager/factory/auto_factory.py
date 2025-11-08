@@ -21,7 +21,9 @@ from general_manager.factory.factories import (
 from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
-    from general_manager.interface.database_based_interface import DBBasedInterface
+    from general_manager.interface.backends.database.database_based_interface import (
+        DBBasedInterface,
+    )
     from general_manager.manager.general_manager import GeneralManager
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)

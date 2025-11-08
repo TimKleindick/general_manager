@@ -19,14 +19,22 @@ __all__ = [
     "register_permission",
 ]
 
-from general_manager.interface.calculation_interface import CalculationInterface
-from general_manager.interface.database_interface import DatabaseInterface
-from general_manager.interface.existing_model_interface import ExistingModelInterface
+from general_manager.interface.backends.calculation.calculation_interface import (
+    CalculationInterface,
+)
+from general_manager.interface.backends.database.database_interface import (
+    DatabaseInterface,
+)
+from general_manager.interface.backends.existing_model.existing_model_interface import (
+    ExistingModelInterface,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.input import Input
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
-from general_manager.interface.read_only_interface import ReadOnlyInterface
+from general_manager.interface.backends.read_only.read_only_interface import (
+    ReadOnlyInterface,
+)
 from general_manager.rule.rule import Rule
 from general_manager.logging import get_logger
 from general_manager.api.mutation import graph_ql_mutation

@@ -20,7 +20,7 @@ from general_manager.interface.base_interface import (
     newlyCreatedInterfaceClass,
     relatedClass,
 )
-from general_manager.interface.database_based_interface import (
+from general_manager.interface.backends.database.database_based_interface import (
     WritableDBBasedInterface,
 )
 from general_manager.interface.models import (

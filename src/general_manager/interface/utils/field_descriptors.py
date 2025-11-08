@@ -16,7 +16,9 @@ from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurement_field import MeasurementField
 
 if TYPE_CHECKING:
-    from general_manager.interface.database_based_interface import DBBasedInterface
+    from general_manager.interface.backends.database.database_based_interface import (
+        DBBasedInterface,
+    )
 
 DescriptorAccessor = Callable[["DBBasedInterface"], Any]
 

@@ -47,7 +47,9 @@ class InvalidPermissionClassError(TypeError):
 
 
 if TYPE_CHECKING:
-    from general_manager.interface.read_only_interface import ReadOnlyInterface
+    from general_manager.interface.backends.read_only.read_only_interface import (
+        ReadOnlyInterface,
+    )
 
 logger = get_logger("apps")
 
@@ -82,7 +84,9 @@ class GeneralmanagerConfig(AppConfig):
             read_only_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose Interface implements a ReadOnlyInterface; each class will have its read-only data synchronized before management commands and a Django system check registered to verify the Interface schema is up to date.
         """
         GeneralmanagerConfig.patch_read_only_interface_sync(read_only_classes)
-        from general_manager.interface.read_only_interface import ReadOnlyInterface
+        from general_manager.interface.backends.read_only.read_only_interface import (
+            ReadOnlyInterface,
+        )
 
         logger.debug(
             "registering read-only schema checks",
@@ -141,7 +145,9 @@ class GeneralmanagerConfig(AppConfig):
         Returns:
             The result returned by the original `BaseCommand.run_from_argv` call.
         """
-        from general_manager.interface.read_only_interface import ReadOnlyInterface
+        from general_manager.interface.backends.read_only.read_only_interface import (
+            ReadOnlyInterface,
+        )
 
         original_run_from_argv = BaseCommand.run_from_argv
 

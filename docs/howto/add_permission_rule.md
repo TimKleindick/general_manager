@@ -5,7 +5,7 @@ This guide adds attribute-based permissions and validation rules to a manager.
 ## Step 1: Add permission class
 
 ```python
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 

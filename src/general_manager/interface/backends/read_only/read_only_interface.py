@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 from django.core.checks import Warning
 from django.db import connection, models, transaction, IntegrityError
 
-from general_manager.interface.database_based_interface import (
+from general_manager.interface.backends.database.database_based_interface import (
     DBBasedInterface,
     GeneralManagerBasisModel,
     attributes,

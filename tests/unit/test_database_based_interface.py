@@ -13,10 +13,8 @@ from django.core.exceptions import ValidationError, FieldDoesNotExist
 from django.apps import apps
 
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface.database_based_interface import (
-    DBBasedInterface,
-    get_full_clean_methode,
-)
+from general_manager.interface import DBBasedInterface
+from general_manager.interface.models import get_full_clean_methode
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
     InvalidFieldValueError,
@@ -957,7 +955,7 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
-        from general_manager.interface.database_based_interface import (
+        from general_manager.interface.backends.database.database_based_interface import (
             WritableDBBasedInterface,
         )
 

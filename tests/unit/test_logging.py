@@ -292,7 +292,7 @@ def test_apps_logging_when_asgi_missing() -> None:
 
 
 def test_read_only_interface_schema_warning_logs() -> None:
-    from general_manager.interface.read_only_interface import ReadOnlyInterface
+    from general_manager.interface import ReadOnlyInterface
 
     FakeModel = type("FakeModel", (), {"__name__": "FakeModel"})
     FakeParent = type("FakeParent", (), {"__name__": "FakeParent"})
@@ -303,7 +303,9 @@ def test_read_only_interface_schema_warning_logs() -> None:
 
     with (
         patch.object(TrivialReadOnly, "ensure_schema_is_up_to_date", return_value=True),
-        patch("general_manager.interface.read_only_interface.logger") as mock_logger,
+        patch(
+            "general_manager.interface.backends.read_only.read_only_interface.logger"
+        ) as mock_logger,
     ):
         TrivialReadOnly.sync_data()
 

@@ -39,7 +39,7 @@ Define a manager in `core/managers.py`:
 
 ```python
 from django.db.models import CharField
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 
 class Customer(GeneralManager):
