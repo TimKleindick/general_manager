@@ -10,7 +10,7 @@ from typing import ClassVar
 
 from tests.testing_asgi import application
 from general_manager.api.graphql import GraphQL
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 
 # NOTE: Circular import is fine in tests.
 from general_manager.manager.general_manager import GeneralManager

@@ -10,7 +10,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
-from general_manager.interface.existing_model_interface import ExistingModelInterface
+from general_manager.interface import ExistingModelInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 

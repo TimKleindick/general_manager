@@ -5,8 +5,7 @@ from general_manager.manager import GeneralManager, Input
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from typing import ClassVar
 from general_manager.measurement import MeasurementField, Measurement
-from general_manager.interface.database_interface import DatabaseInterface
-from general_manager.interface.calculation_interface import CalculationInterface
+from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.api.property import graph_ql_property
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 

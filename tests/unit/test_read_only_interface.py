@@ -6,10 +6,8 @@ from django.core.checks import Warning
 from django.db import connection
 from unittest import mock
 
-from general_manager.interface.read_only_interface import (
-    ReadOnlyInterface,
-    GeneralManagerBasisModel,
-)
+from general_manager.interface import ReadOnlyInterface
+from general_manager.interface.models import GeneralManagerBasisModel
 
 from django.db import models
 
@@ -343,7 +341,7 @@ class SyncDataTests(SimpleTestCase):
             return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.read_only_interface.transaction.atomic",
+            "general_manager.interface.backends.read_only.read_only_interface.transaction.atomic",
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
@@ -359,7 +357,7 @@ class SyncDataTests(SimpleTestCase):
         self.es_patch.start()
         # Capture log output
         self.log_patcher = mock.patch(
-            "general_manager.interface.read_only_interface.logger"
+            "general_manager.interface.backends.read_only.read_only_interface.logger"
         )
         self.logger = self.log_patcher.start()
 

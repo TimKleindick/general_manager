@@ -9,8 +9,8 @@ from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.test import TransactionTestCase
 
-from general_manager.interface.existing_model_interface import (
-    ExistingModelInterface,
+from general_manager.interface import ExistingModelInterface
+from general_manager.interface.utils.errors import (
     InvalidModelReferenceError,
     MissingModelConfigurationError,
 )

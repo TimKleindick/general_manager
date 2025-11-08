@@ -6,7 +6,7 @@ from django.db import models, connection
 from django.test import TransactionTestCase
 from django.apps import apps
 
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 
@@ -185,7 +185,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
 
         inst = Dummy()
         with patch(
-            "general_manager.interface.database_based_interface.update_change_reason"
+            "general_manager.interface.backends.database.database_based_interface.update_change_reason"
         ) as mock_update:
             pk = self.BookInterface._save_with_history(inst, 7, "comment")
         self.assertEqual(pk, 5)
@@ -221,7 +221,7 @@ class DatabaseInterfaceTestCase(TransactionTestCase):
                 side_effect=fake_save,
             ),
             patch(
-                "general_manager.interface.database_based_interface.update_change_reason"
+                "general_manager.interface.backends.database.database_based_interface.update_change_reason"
             ) as mock_change_reason,
         ):
             pk = self.BookInterface.create(

@@ -10,7 +10,7 @@ from factory import LazyFunction, LazyAttribute
 from django.db import models
 
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 

@@ -18,7 +18,7 @@ Create a manager that describes the fields you want to expose. Each manager defi
 # apps/materials/managers.py
 from django.db.models import CharField, TextField
 
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 
 class Material(GeneralManager):

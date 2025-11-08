@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from general_manager.interface.database_based_interface import (
+from general_manager.interface.backends.database.database_based_interface import (
     GeneralManagerModel,
     WritableDBBasedInterface,
 )

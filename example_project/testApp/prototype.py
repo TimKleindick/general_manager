@@ -15,8 +15,7 @@ from django.db.models import (
 )
 from django.core.validators import RegexValidator
 
-from general_manager.interface.calculation_interface import CalculationInterface
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.manager import GeneralManager, graph_ql_property, Input
 from general_manager.permission import ManagerBasedPermission
@@ -32,7 +31,7 @@ from general_manager.factory import (
 )
 from general_manager.utils import none_to_zero
 from general_manager.api.mutation import graph_ql_mutation
-from general_manager.interface.read_only_interface import ReadOnlyInterface
+from general_manager.interface import ReadOnlyInterface
 
 
 class ProjectType(GeneralManager):
