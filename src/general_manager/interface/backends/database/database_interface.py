@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from general_manager.interface.backends.database.database_based_interface import (
     GeneralManagerModel,
-    WritableDBBasedInterface,
+    OrmWritableInterface,
 )
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 
-class DatabaseInterface(WritableDBBasedInterface[GeneralManagerModel]):
+class DatabaseInterface(OrmWritableInterface[GeneralManagerModel]):
     """CRUD-capable interface backed by a dynamically generated Django model."""
 
     pass

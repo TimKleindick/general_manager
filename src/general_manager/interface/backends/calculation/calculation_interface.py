@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from general_manager.interface.base_interface import (
     InterfaceBase,
     classPostCreationMethod,
@@ -17,6 +17,12 @@ from general_manager.interface.base_interface import (
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.interface.capabilities.base import CapabilityName, Capability
+from general_manager.interface.capabilities.calculation import (
+    CalculationLifecycleCapability,
+    CalculationQueryCapability,
+    CalculationReadCapability,
+)
 
 
 class CalculationInterface(InterfaceBase):
@@ -25,14 +31,16 @@ class CalculationInterface(InterfaceBase):
     _interface_type: ClassVar[str] = "calculation"
     input_fields: ClassVar[dict[str, Input]]
 
-    def get_data(self) -> Any:
-        """
-        Indicates that calculation interfaces do not provide stored data and always raise a NotImplementedError.
+    capability_overrides: ClassVar[dict[CapabilityName, type["Capability"]]] = {
+        "calculation_lifecycle": CalculationLifecycleCapability,
+        "read": CalculationReadCapability,
+        "query": CalculationQueryCapability,
+    }
+    lifecycle_capability_name: ClassVar[CapabilityName | None] = "calculation_lifecycle"
 
-        Raises:
-            NotImplementedError: Always raised with the message "Calculations do not store data."
-        """
-        raise NotImplementedError("Calculations do not store data.")
+    def get_data(self) -> Any:
+        """Delegate to the base implementation so capabilities can respond."""
+        return super().get_data()
 
     @classmethod
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
@@ -65,21 +73,33 @@ class CalculationInterface(InterfaceBase):
     @classmethod
     def filter(cls, **kwargs: Any) -> CalculationBucket:
         """Return a calculation bucket filtered by the given parameters."""
+        handler = cls.get_capability_handler("query")
+        if handler is not None and hasattr(handler, "filter"):
+            return handler.filter(cls, **kwargs)  # type: ignore[return-value]
         return CalculationBucket(cls._parent_class).filter(**kwargs)
 
     @classmethod
     def exclude(cls, **kwargs: Any) -> CalculationBucket:
         """Return a calculation bucket excluding items matching the parameters."""
+        handler = cls.get_capability_handler("query")
+        if handler is not None and hasattr(handler, "exclude"):
+            return handler.exclude(cls, **kwargs)  # type: ignore[return-value]
         return CalculationBucket(cls._parent_class).exclude(**kwargs)
 
     @classmethod
     def all(cls) -> CalculationBucket:
         """Return a calculation bucket containing all combinations."""
+        handler = cls.get_capability_handler("query")
+        if handler is not None and hasattr(handler, "all"):
+            return handler.all(cls)  # type: ignore[return-value]
         return CalculationBucket(cls._parent_class).all()
 
-    @staticmethod
+    @classmethod
     def _pre_create(
-        _name: generalManagerClassName, attrs: attributes, interface: interfaceBaseClass
+        cls,
+        _name: generalManagerClassName,
+        attrs: attributes,
+        interface: interfaceBaseClass,
     ) -> tuple[attributes, interfaceBaseClass, None]:
         """
         Prepare and attach a generated Interface subclass into the attributes for a GeneralManager class before its creation.
@@ -92,49 +112,28 @@ class CalculationInterface(InterfaceBase):
         Returns:
             tuple[attributes, interfaceBaseClass, None]: The updated attributes dict, the newly created Interface subclass, and None for the related model.
         """
-        input_fields: dict[str, Input[Any]] = {}
-        for key, value in vars(interface).items():
-            if key.startswith("__"):
-                continue
-            if isinstance(value, Input):
-                input_fields[key] = value
-
-        attrs["_interface_type"] = interface._interface_type
-        interface_cls = type(
-            interface.__name__, (interface,), {"input_fields": input_fields}
+        capability = cls._calculation_lifecycle_capability()
+        typed_interface = cast(type["CalculationInterface"], interface)
+        return capability.pre_create(
+            name=_name,
+            attrs=attrs,
+            interface=typed_interface,
         )
-        attrs["Interface"] = interface_cls
 
-        return attrs, interface_cls, None
-
-    @staticmethod
+    @classmethod
     def _post_create(
+        cls,
         new_class: newlyCreatedGeneralManagerClass,
         interface_class: newlyCreatedInterfaceClass,
         _model: relatedClass,
     ) -> None:
-        """
-        Link the generated interface class to its manager class after creation.
-
-        Parameters:
-            new_class: The newly created GeneralManager class to attach.
-            interface_class: The generated interface class that will reference the manager.
-            _model: Unused placeholder for the related model class; ignored.
-
-        Description:
-            Sets `interface_class._parent_class` to `new_class` so the interface knows its owning manager.
-        """
-        interface_class._parent_class = new_class
-
-    @classmethod
-    def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
-        """
-        Return the pre- and post-creation hooks used by ``GeneralManagerMeta``.
-
-        Returns:
-            tuple[classPreCreationMethod, classPostCreationMethod]: Hook functions invoked around manager creation.
-        """
-        return cls._pre_create, cls._post_create
+        capability = cls._calculation_lifecycle_capability()
+        typed_interface = cast(type["CalculationInterface"], interface_class)
+        capability.post_create(
+            new_class=new_class,
+            interface_class=typed_interface,
+            model=None,
+        )
 
     @classmethod
     def get_field_type(cls, field_name: str) -> type:
@@ -151,3 +150,10 @@ class CalculationInterface(InterfaceBase):
         if field is None:
             raise KeyError(field_name)
         return field.type
+
+    @classmethod
+    def _calculation_lifecycle_capability(cls) -> CalculationLifecycleCapability:
+        handler = cls.get_capability_handler("calculation_lifecycle")
+        if isinstance(handler, CalculationLifecycleCapability):
+            return handler
+        return CalculationLifecycleCapability()

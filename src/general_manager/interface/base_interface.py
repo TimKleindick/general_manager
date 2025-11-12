@@ -3,6 +3,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 import warnings
+import inspect
 from typing import (
     Type,
     TYPE_CHECKING,
@@ -20,11 +21,18 @@ from django.db.models import Model
 
 from general_manager.utils.args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
+from general_manager.interface.capabilities.base import CapabilityName
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.bucket.base_bucket import Bucket
+    from general_manager.interface.builders.capability_models import CapabilitySelection
+    from general_manager.interface.capabilities.base import Capability
+    from general_manager.interface.models import GeneralManagerBasisModel
+    from general_manager.interface.builders.capability_builder import (
+        ManifestCapabilityBuilder,
+    )
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
@@ -150,6 +158,19 @@ class InterfaceBase(ABC):
     _interface_type: ClassVar[str]
     _use_soft_delete: ClassVar[bool]
     input_fields: ClassVar[dict[str, "Input"]]
+    lifecycle_capability_name: ClassVar[CapabilityName | None] = None
+    _capabilities: ClassVar[frozenset[CapabilityName]] = frozenset()
+    _capability_selection: ClassVar["CapabilitySelection | None"] = None
+    _capability_handlers: ClassVar[dict[CapabilityName, "Capability"]] = {}
+    capability_overrides: ClassVar[dict[CapabilityName, type["Capability"]]] = {}
+    _automatic_capability_builder: ClassVar["ManifestCapabilityBuilder | None"] = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls._capabilities = frozenset()
+        cls._capability_selection = None
+        cls._capability_handlers = {}
+        cls.capability_overrides = dict(getattr(cls, "capability_overrides", {}))
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
@@ -163,6 +184,80 @@ class InterfaceBase(ABC):
         """
         identification = self.parse_input_fields_to_identification(*args, **kwargs)
         self.identification = self.format_identification(identification)
+
+    @classmethod
+    def set_capability_selection(cls, selection: "CapabilitySelection") -> None:
+        """Attach the resolved capability selection to the interface."""
+        cls._capability_selection = selection
+        cls._capabilities = selection.all
+
+    @classmethod
+    def get_capabilities(cls) -> frozenset[CapabilityName]:
+        """Return the capability names attached to this interface class."""
+        cls._ensure_capabilities_initialized()
+        return cls._capabilities
+
+    @classmethod
+    def get_capability_handler(cls, name: CapabilityName) -> "Capability | None":
+        """Return the capability instance registered for the provided name, if any."""
+        cls._ensure_capabilities_initialized()
+        return cls._capability_handlers.get(name)
+
+    @classmethod
+    def require_capability(
+        cls,
+        name: CapabilityName,
+        *,
+        expected_type: type["Capability"] | None = None,
+    ) -> "Capability":
+        handler = cls.get_capability_handler(name)
+        if handler is None:
+            raise NotImplementedError(
+                f"{cls.__name__} does not have the '{name}' capability configured."
+            )
+        if expected_type is not None and not isinstance(handler, expected_type):
+            message = (
+                f"Capability '{name}' on {cls.__name__} must be an instance of "
+                f"{expected_type.__name__}."
+            )
+            raise TypeError(message)
+        return handler
+
+    def _require_capability(
+        self,
+        name: CapabilityName,
+        *,
+        expected_type: type["Capability"] | None = None,
+    ) -> "Capability":
+        return self.__class__.require_capability(
+            name,
+            expected_type=expected_type,
+        )
+
+    @classmethod
+    def capability_selection(cls) -> "CapabilitySelection | None":
+        """Expose the capability selection metadata assigned to this interface."""
+        cls._ensure_capabilities_initialized()
+        return cls._capability_selection
+
+    @classmethod
+    def _lifecycle_capability(cls) -> "Capability | None":
+        name = getattr(cls, "lifecycle_capability_name", None)
+        if not name:
+            return None
+        return cls.get_capability_handler(name)
+
+    @classmethod
+    def _ensure_capabilities_initialized(cls) -> None:
+        if cls._capability_selection is not None:
+            return
+        from general_manager.interface.builders import ManifestCapabilityBuilder
+
+        builder = cls._automatic_capability_builder
+        if builder is None:
+            builder = ManifestCapabilityBuilder()
+            cls._automatic_capability_builder = builder
+        builder.build(cls)
 
     def parse_input_fields_to_identification(
         self,
@@ -315,7 +410,22 @@ class InterfaceBase(ABC):
         Returns:
             The created record or a manager-specific representation of the newly created entity.
         """
-        raise NotImplementedError
+        observer = cls.get_capability_handler("observability")
+
+        def _invoke() -> dict[str, Any]:
+            handler = cls.require_capability("create")
+            if hasattr(handler, "create"):
+                create_handler = handler.create
+                return create_handler(cls, *args, **kwargs)
+            raise NotImplementedError(f"{cls.__name__} does not support create.")
+
+        return cls._execute_with_observability(
+            target=cls,
+            operation="create",
+            payload={"args": args, "kwargs": kwargs},
+            func=_invoke,
+            observer=observer,
+        )
 
     def update(self, *args: Any, **kwargs: Any) -> Any:
         """
@@ -324,7 +434,24 @@ class InterfaceBase(ABC):
         Returns:
             The updated record or a manager-specific result.
         """
-        raise NotImplementedError
+        observer = self.get_capability_handler("observability")
+
+        def _invoke() -> Any:
+            handler = self._require_capability("update")
+            if hasattr(handler, "update"):
+                update_handler = handler.update
+                return update_handler(self, *args, **kwargs)
+            raise NotImplementedError(
+                f"{self.__class__.__name__} does not support update."
+            )
+
+        return self._execute_with_observability(
+            target=self,
+            operation="update",
+            payload={"args": args, "kwargs": kwargs},
+            func=_invoke,
+            observer=observer,
+        )
 
     def delete(self, *args: Any, **kwargs: Any) -> Any:
         """
@@ -333,7 +460,24 @@ class InterfaceBase(ABC):
         Returns:
             The result of the deletion operation as defined by the concrete implementation.
         """
-        raise NotImplementedError
+        observer = self.get_capability_handler("observability")
+
+        def _invoke() -> Any:
+            handler = self._require_capability("delete")
+            if hasattr(handler, "delete"):
+                delete_handler = handler.delete
+                return delete_handler(self, *args, **kwargs)
+            raise NotImplementedError(
+                f"{self.__class__.__name__} does not support delete."
+            )
+
+        return self._execute_with_observability(
+            target=self,
+            operation="delete",
+            payload={"args": args, "kwargs": kwargs},
+            func=_invoke,
+            observer=observer,
+        )
 
     def deactivate(self, *args: Any, **kwargs: Any) -> Any:
         """
@@ -353,7 +497,6 @@ class InterfaceBase(ABC):
         )
         return self.delete(*args, **kwargs)
 
-    @abstractmethod
     def get_data(self) -> Any:
         """
         Return materialized data for the manager object.
@@ -366,7 +509,24 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: if the method is not implemented by the subclass.
         """
-        raise NotImplementedError
+        observer = self.get_capability_handler("observability")
+
+        def _invoke() -> Any:
+            handler = self._require_capability("read")
+            if hasattr(handler, "get_data"):
+                read_handler = handler.get_data
+                return read_handler(self)
+            raise NotImplementedError(
+                f"{self.__class__.__name__} does not support read."
+            )
+
+        return self._execute_with_observability(
+            target=self,
+            operation="read",
+            payload={"identification": getattr(self, "identification", None)},
+            func=_invoke,
+            observer=observer,
+        )
 
     @classmethod
     @abstractmethod
@@ -392,33 +552,120 @@ class InterfaceBase(ABC):
         }
 
     @classmethod
-    @abstractmethod
     def filter(cls, **kwargs: Any) -> Bucket[Any]:
         """Return a bucket filtered by the provided lookup expressions."""
+        handler = cls.require_capability("query")
+        if hasattr(handler, "filter"):
+            return handler.filter(cls, **kwargs)
         raise NotImplementedError
 
     @classmethod
-    @abstractmethod
     def exclude(cls, **kwargs: Any) -> Bucket[Any]:
         """Return a bucket excluding records that match the provided lookup expressions."""
+        handler = cls.require_capability("query")
+        if hasattr(handler, "exclude"):
+            return handler.exclude(cls, **kwargs)
         raise NotImplementedError
 
+    @staticmethod
+    def _execute_with_observability(
+        *,
+        target: object,
+        operation: str,
+        payload: dict[str, Any],
+        func: Callable[[], Any],
+        observer: "Capability | None",
+    ) -> Any:
+        if observer is not None and hasattr(observer, "before_operation"):
+            observer.before_operation(
+                operation=operation,
+                target=target,
+                payload=payload,
+            )
+        try:
+            result = func()
+        except Exception as error:
+            if observer is not None and hasattr(observer, "on_error"):
+                observer.on_error(
+                    operation=operation,
+                    target=target,
+                    payload=payload,
+                    error=error,
+                )
+            raise
+        if observer is not None and hasattr(observer, "after_operation"):
+            observer.after_operation(
+                operation=operation,
+                target=target,
+                payload=payload,
+                result=result,
+            )
+        return result
+
+    @staticmethod
+    def _invoke_lifecycle_callable(
+        lifecycle_callable: Callable[..., Any],
+        **kwargs: Any,
+    ) -> Any:
+        signature = inspect.signature(lifecycle_callable)
+        allowed = {
+            name: kwargs[name] for name in signature.parameters.keys() if name in kwargs
+        }
+        return lifecycle_callable(**allowed)
+
+    @staticmethod
+    def _default_base_model_class() -> type["GeneralManagerBasisModel"]:
+        from general_manager.interface.models import GeneralManagerBasisModel
+
+        return GeneralManagerBasisModel
+
     @classmethod
-    @abstractmethod
     def handle_interface(
         cls,
     ) -> tuple[
         classPreCreationMethod,
         classPostCreationMethod,
     ]:
-        """
-        Return hooks executed around GeneralManager class creation.
+        """Return hooks executed around GeneralManager class creation."""
+        lifecycle = cls._lifecycle_capability()
+        if lifecycle is not None:
+            pre = getattr(lifecycle, "pre_create", None)
+            post = getattr(lifecycle, "post_create", None)
+            if callable(pre) and callable(post):
 
-        Returns:
-            tuple[classPreCreationMethod, classPostCreationMethod]:
-                Callables executed before and after the manager class is created.
-        """
-        raise NotImplementedError
+                def pre_wrapper(
+                    name: generalManagerClassName,
+                    attrs: attributes,
+                    interface: interfaceBaseClass,
+                    base_model_class: type["GeneralManagerBasisModel"] | None = None,
+                ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
+                    if base_model_class is None:
+                        base_model_class = cls._default_base_model_class()
+                    return cls._invoke_lifecycle_callable(
+                        pre,
+                        name=name,
+                        attrs=attrs,
+                        interface=interface,
+                        base_model_class=base_model_class,
+                    )
+
+                def post_wrapper(
+                    new_class: newlyCreatedGeneralManagerClass,
+                    interface_class: newlyCreatedInterfaceClass,
+                    model: relatedClass,
+                ) -> None:
+                    cls._invoke_lifecycle_callable(
+                        post,
+                        new_class=new_class,
+                        interface_class=interface_class,
+                        model=model,
+                    )
+
+                return pre_wrapper, post_wrapper
+
+        raise NotImplementedError(
+            f"{cls.__name__} must override handle_interface or declare a lifecycle capability."
+        )
 
     @classmethod
     @abstractmethod

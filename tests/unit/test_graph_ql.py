@@ -270,6 +270,10 @@ class TestGrapQlMutation(TestCase):
                 input_fields: ClassVar[dict] = {}
 
                 @classmethod
+                def get_capabilities(cls):
+                    return frozenset({"create", "update", "delete"})
+
+                @classmethod
                 def create(cls, *_args, **kwargs):
                     pass
 
@@ -358,6 +362,10 @@ class TestGrapQlMutation(TestCase):
                         The type of the specified field, or None if not implemented.
                     """
                     pass
+
+                @classmethod
+                def get_capabilities(cls):
+                    return frozenset()
 
         self.manager = DummyManager
         self.manager2 = DummyManager2

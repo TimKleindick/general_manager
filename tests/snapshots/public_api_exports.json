@@ -218,9 +218,21 @@
       "general_manager.interface.base_interface",
       "InterfaceBase"
     ],
+    "OrmPersistenceInterface": [
+      "general_manager.interface.backends.database.database_based_interface",
+      "OrmPersistenceInterface"
+    ],
+    "OrmWritableInterface": [
+      "general_manager.interface.backends.database.database_based_interface",
+      "OrmWritableInterface"
+    ],
     "ReadOnlyInterface": [
       "general_manager.interface.backends.read_only.read_only_interface",
       "ReadOnlyInterface"
+    ],
+    "WritableDBBasedInterface": [
+      "general_manager.interface.backends.database.database_based_interface",
+      "WritableDBBasedInterface"
     ]
   },
   "general_manager.manager": {
