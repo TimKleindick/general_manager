@@ -22,7 +22,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 
 if TYPE_CHECKING:
     from general_manager.interface.backends.database.database_based_interface import (
-        DBBasedInterface,
+        OrmPersistenceInterface,
     )
     from general_manager.manager.general_manager import GeneralManager
 
@@ -92,7 +92,7 @@ class MissingIdentificationFieldError(AttributeError):
 class AutoFactory(DjangoModelFactory[modelsModel]):
     """Factory that auto-populates model fields based on interface metadata."""
 
-    interface: Type[DBBasedInterface]
+    interface: Type[OrmPersistenceInterface]
     _adjustmentMethod: (
         Callable[..., Union[dict[str, Any], list[dict[str, Any]]]] | None
     ) = None

@@ -8,14 +8,20 @@ __all__ = [
     "DatabaseInterface",
     "ExistingModelInterface",
     "InterfaceBase",
+    "OrmPersistenceInterface",
+    "OrmWritableInterface",
     "ReadOnlyInterface",
+    "WritableDBBasedInterface",
 ]
 
 from general_manager.interface.backends.calculation.calculation_interface import (
     CalculationInterface,
 )
 from general_manager.interface.backends.database.database_based_interface import (
+    OrmPersistenceInterface,
+    OrmWritableInterface,
     DBBasedInterface,
+    WritableDBBasedInterface,
 )
 from general_manager.interface.backends.database.database_interface import (
     DatabaseInterface,

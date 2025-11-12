@@ -6,9 +6,6 @@ from typing import Any, ClassVar, TypeVar, cast
 
 from django.apps import apps
 from django.db import models
-
-from simple_history import register  # type: ignore
-
 from general_manager.factory.auto_factory import AutoFactory
 from general_manager.interface.base_interface import (
     attributes,
@@ -21,12 +18,13 @@ from general_manager.interface.base_interface import (
     relatedClass,
 )
 from general_manager.interface.backends.database.database_based_interface import (
-    WritableDBBasedInterface,
+    OrmWritableInterface,
 )
-from general_manager.interface.models import (
-    GeneralManagerBasisModel,
-    get_full_clean_methode,
+from general_manager.interface.capabilities.base import CapabilityName
+from general_manager.interface.capabilities.existing_model import (
+    ExistingModelResolutionCapability,
 )
+from general_manager.interface.models import GeneralManagerBasisModel
 from general_manager.interface.utils.errors import (
     InvalidModelReferenceError,
     MissingModelConfigurationError,
@@ -35,83 +33,17 @@ from general_manager.interface.utils.errors import (
 ExistingModelT = TypeVar("ExistingModelT", bound=models.Model)
 
 
-class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
+class ExistingModelInterface(OrmWritableInterface[ExistingModelT]):
     """Interface that reuses an existing Django model instead of generating a new one."""
 
     _interface_type: ClassVar[str] = "existing"
     model: ClassVar[type[models.Model] | str | None] = None
 
-    @classmethod
-    def _resolve_model_class(cls) -> type[models.Model]:
-        """
-        Resolve the configured `model` attribute to a concrete Django model class.
-
-        If `cls.model` is a string, attempt to resolve it via Django's app registry; if it is already a Django model class, use it directly. The resolved class is cached on `cls._model` and `cls.model`.
-
-        Returns:
-            type[~django.db.models.Model]: The resolved Django model class.
-
-        Raises:
-            MissingModelConfigurationError: If the interface did not define a `model` attribute.
-            InvalidModelReferenceError: If `model` is neither a Django model class nor a resolvable app label.
-        """
-        model_reference = getattr(cls, "model", None)
-        # if model_reference is None:
-        #     model_reference = getattr(cls, "_model", None)
-        if model_reference is None:
-            raise MissingModelConfigurationError(cls.__name__)
-        if isinstance(model_reference, str):
-            try:
-                model = apps.get_model(model_reference)
-            except LookupError as error:
-                raise InvalidModelReferenceError(model_reference) from error
-        elif isinstance(model_reference, type) and issubclass(
-            model_reference, models.Model
-        ):
-            model = model_reference
-        else:
-            raise InvalidModelReferenceError(model_reference)
-        cls._model = cast(type[ExistingModelT], model)
-        cls.model = model
-        return cast(type[models.Model], model)
-
-    @staticmethod
-    def _ensure_history(model: type[models.Model]) -> None:
-        """
-        Attach django-simple-history tracking to the given Django model if it is not already registered.
-
-        This registers the model with simple-history and includes the model's local many-to-many fields for history tracking.
-        If the model is already registered (indicated by a `simple_history_manager_attribute` on its `_meta`), the function does nothing.
-
-        Parameters:
-            model (type[models.Model]): The Django model class to enable history tracking for.
-        """
-        if hasattr(model._meta, "simple_history_manager_attribute"):
-            return
-        m2m_fields = [field.name for field in model._meta.local_many_to_many]
-        register(model, m2m_fields=m2m_fields)
-
-    @classmethod
-    def _apply_rules_to_model(cls, model: type[models.Model]) -> None:
-        """
-        Attach validation rules defined on the interface's Meta to the given Django model and replace its `full_clean` with a validating implementation.
-
-        If `Meta.rules` exists on the interface class, its entries are appended to `model._meta.rules` (preserving any existing rules) and `model.full_clean` is replaced with a generated validating method. If no rules are defined on the interface, the model is left unchanged.
-
-        Parameters:
-            model (type[models.Model]): The Django model class to modify.
-        """
-        meta_class = getattr(cls, "Meta", None)
-        rules = getattr(meta_class, "rules", None) if meta_class else None
-        if not rules:
-            return
-        combined_rules: list[Any] = []
-        existing_rules = getattr(model._meta, "rules", None)
-        if existing_rules:
-            combined_rules.extend(existing_rules)
-        combined_rules.extend(rules)
-        model._meta.rules = combined_rules  # type: ignore[attr-defined]
-        model.full_clean = get_full_clean_methode(model)  # type: ignore[assignment]
+    capability_overrides = OrmWritableInterface.capability_overrides.copy()
+    capability_overrides.update(
+        {"existing_model_resolution": ExistingModelResolutionCapability}
+    )
+    lifecycle_capability_name: ClassVar[CapabilityName | None] = None
 
     @classmethod
     def _build_factory(
@@ -133,18 +65,17 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
         Returns:
             type[AutoFactory]: A dynamically created AutoFactory subclass bound to `model`, with copied attributes, an `interface` attribute set to `interface_cls`, and an inner `Meta` class referencing `model`.
         """
-        factory_definition = factory_definition or getattr(cls, "Factory", None)
-        factory_attributes: dict[str, Any] = {}
-        if factory_definition:
-            for attr_name, attr_value in factory_definition.__dict__.items():
-                if not attr_name.startswith("__"):
-                    factory_attributes[attr_name] = attr_value
-        factory_attributes["interface"] = interface_cls
-        factory_attributes["Meta"] = type("Meta", (), {"model": model})
-        return type(f"{name}Factory", (AutoFactory,), factory_attributes)
+        capability = cls._existing_model_capability()
+        return capability.build_factory(
+            name=name,
+            interface_cls=interface_cls,
+            model=model,
+            factory_definition=factory_definition,
+        )
 
-    @staticmethod
+    @classmethod
     def _pre_create(
+        cls,
         name: generalManagerClassName,
         attrs: attributes,
         interface: interfaceBaseClass,
@@ -166,27 +97,12 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
                 - model: the resolved Django model class.
         """
         _ = base_model_class
-        interface_cls = cast(type["ExistingModelInterface"], interface)
-        model = interface_cls._resolve_model_class()
-        interface_cls._ensure_history(model)
-        interface_cls._apply_rules_to_model(model)
-
-        concrete_interface = cast(
-            type["ExistingModelInterface"],
-            type(interface.__name__, (interface,), {}),
+        capability = cls._existing_model_capability()
+        return capability.pre_create(
+            name=name,
+            attrs=attrs,
+            interface=cast(type["ExistingModelInterface"], interface),
         )
-        concrete_interface._model = cast(type[ExistingModelT], model)
-        concrete_interface.model = model
-        concrete_interface._use_soft_delete = hasattr(model, "is_active")
-
-        manager_factory = cast(type | None, attrs.pop("Factory", None))
-        attrs["_interface_type"] = interface_cls._interface_type
-        attrs["Interface"] = concrete_interface
-        attrs["Factory"] = interface_cls._build_factory(
-            name, concrete_interface, model, manager_factory
-        )
-
-        return attrs, concrete_interface, model
 
     @staticmethod
     def _post_create(
@@ -204,37 +120,12 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
             interface_class: The interface class that should reference `new_class` as its parent.
             model: The Django model class managed by the interface; if provided, its `_general_manager_class` may be set.
         """
-        interface_class._parent_class = new_class
-        if model is not None:
-            model._general_manager_class = new_class  # type: ignore[attr-defined]
-        try:
-            new_class.objects = interface_class._get_manager()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-        if (
-            getattr(interface_class, "_use_soft_delete", False)
-            and model is not None
-            and hasattr(model, "all_objects")
-        ):
-            new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
-                only_active=False
-            )
-        elif getattr(interface_class, "_use_soft_delete", False) and model is not None:
-            if not hasattr(model, "all_objects"):
-                model.all_objects = model._default_manager  # type: ignore[attr-defined]
-            new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
-                only_active=False
-            )
-
-    @classmethod
-    def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
-        """
-        Get the pre- and post-creation hooks used by GeneralManagerMeta.
-
-        Returns:
-            tuple[classPreCreationMethod, classPostCreationMethod]: A tuple whose first element is the pre-creation hook (called before class creation) and whose second element is the post-creation hook (called after class creation).
-        """
-        return cls._pre_create, cls._post_create
+        capability = interface_class._existing_model_capability()  # type: ignore[attr-defined]
+        capability.post_create(
+            new_class=new_class,
+            interface_class=interface_class,
+            model=model,
+        )
 
     @classmethod
     def get_field_type(cls, field_name: str) -> type:
@@ -248,5 +139,58 @@ class ExistingModelInterface(WritableDBBasedInterface[ExistingModelT]):
             type: The Python type corresponding to the specified model field.
         """
         if not hasattr(cls, "_model"):
-            cls._resolve_model_class()
+            resolver = cls.get_capability_handler("existing_model_resolution")
+            if resolver is None or not hasattr(resolver, "resolve_model"):
+                cls._fallback_model_setup()
+            else:
+                resolver.resolve_model(cls)
         return super().get_field_type(field_name)
+
+    @classmethod
+    def _fallback_model_setup(cls) -> type[models.Model]:
+        model_reference = getattr(cls, "model", None)
+        if model_reference is None:
+            raise MissingModelConfigurationError(cls.__name__)
+        if isinstance(model_reference, str):
+            try:
+                model = apps.get_model(model_reference)
+            except LookupError as error:
+                raise InvalidModelReferenceError(model_reference) from error
+        elif isinstance(model_reference, type) and issubclass(
+            model_reference, models.Model
+        ):
+            model = model_reference
+        else:
+            raise InvalidModelReferenceError(model_reference)
+        cls._model = model  # type: ignore[assignment]
+        cls.model = model
+        cls._use_soft_delete = hasattr(model, "is_active")
+        return model
+
+    @classmethod
+    def _resolve_model_class(cls) -> type[models.Model]:
+        resolver = cls.get_capability_handler("existing_model_resolution")
+        if resolver is None or not hasattr(resolver, "resolve_model"):
+            return cls._fallback_model_setup()
+        return resolver.resolve_model(cls)
+
+    @classmethod
+    def _ensure_history(cls, model: type[models.Model]) -> None:
+        capability = cls._existing_model_capability()
+        capability.ensure_history(model, cls)
+
+    @classmethod
+    def _apply_rules_to_model(cls, model: type[models.Model]) -> None:
+        capability = cls._existing_model_capability()
+        capability.apply_rules(cls, model)
+
+    @classmethod
+    def handle_interface(cls) -> tuple[classPreCreationMethod, classPostCreationMethod]:
+        return cls._pre_create, cls._post_create
+
+    @classmethod
+    def _existing_model_capability(cls) -> ExistingModelResolutionCapability:
+        handler = cls.get_capability_handler("existing_model_resolution")
+        if isinstance(handler, ExistingModelResolutionCapability):
+            return handler
+        return ExistingModelResolutionCapability()

@@ -74,7 +74,10 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         model_key = cls.model._meta.model_name
         if model_key not in apps.all_models["general_manager"]:
             apps.register_model("general_manager", ExistingUnitCustomer)
-        ExistingModelInterface._ensure_history(cls.model)
+        resolver = ExistingModelInterface.capability_overrides[
+            "existing_model_resolution"
+        ]()
+        resolver.ensure_history(cls.model)
         with connection.schema_editor() as schema:
             schema.create_model(cls.model)
             schema.create_model(cls.model.history.model)  # type: ignore[attr-defined]
@@ -211,8 +214,11 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         # Model already has history from setUpClass
         self.assertTrue(hasattr(self.model, "history"))
 
-        # Should not raise an error
-        ExistingModelInterface._ensure_history(self.model)
+        resolver_cls = ExistingModelInterface.capability_overrides[
+            "existing_model_resolution"
+        ]
+        resolver = resolver_cls()
+        resolver.ensure_history(self.model)
 
         # Still should have history
         self.assertTrue(hasattr(self.model, "history"))
@@ -234,8 +240,11 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
             hasattr(UnhistoredModel._meta, "simple_history_manager_attribute")
         )
 
-        # Register history
-        ExistingModelInterface._ensure_history(UnhistoredModel)
+        resolver_cls = ExistingModelInterface.capability_overrides[
+            "existing_model_resolution"
+        ]
+        resolver = resolver_cls()
+        resolver.ensure_history(UnhistoredModel)
 
         # Now should have history
         self.assertTrue(hasattr(UnhistoredModel, "history"))
@@ -248,8 +257,11 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         class NoRulesInterface(ExistingModelInterface):
             model = self.model
 
-        # Should not raise
-        NoRulesInterface._apply_rules_to_model(self.model)
+        resolver_cls = ExistingModelInterface.capability_overrides[
+            "existing_model_resolution"
+        ]
+        resolver = resolver_cls()
+        resolver.apply_rules(NoRulesInterface, self.model)
 
     def test_apply_rules_to_model_with_existing_model_rules(self) -> None:
         """
@@ -291,7 +303,11 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
             class Meta:
                 rules: ClassVar[list[AlwaysFailRule]] = [new_rule]
 
-        CombinedRulesInterface._apply_rules_to_model(self.model)
+        resolver_cls = ExistingModelInterface.capability_overrides[
+            "existing_model_resolution"
+        ]
+        resolver = resolver_cls()
+        resolver.apply_rules(CombinedRulesInterface, self.model)
 
         # Should have both rules
         self.assertEqual(len(self.model._meta.rules), 2)  # type: ignore[attr-defined]
@@ -316,7 +332,11 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         # Store original full_clean
         original_full_clean = self.model.full_clean
 
-        RuledInterface._apply_rules_to_model(self.model)
+        resolver_cls = ExistingModelInterface.capability_overrides[
+            "existing_model_resolution"
+        ]
+        resolver = resolver_cls()
+        resolver.apply_rules(RuledInterface, self.model)
 
         # Should have replaced full_clean
         self.assertIsNotNone(self.model.full_clean)

@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError, FieldDoesNotExist
 from django.apps import apps
 
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface import DBBasedInterface
+from general_manager.interface import OrmPersistenceInterface
 from general_manager.interface.models import get_full_clean_methode
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
@@ -39,7 +39,7 @@ class PersonModel(models.Model):
         app_label = "general_manager"
 
 
-class PersonInterface(DBBasedInterface):
+class PersonInterface(OrmPersistenceInterface):
     _model = PersonModel
     _parent_class = None
     _interface_type = "test"
@@ -80,7 +80,7 @@ class DummyManager(GeneralManager):
 PersonInterface._parent_class = DummyManager
 
 
-class DBBasedInterfaceTestCase(TransactionTestCase):
+class OrmPersistenceInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
@@ -310,13 +310,13 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields(self):
         """
-        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a DBBasedInterface subclass.
+        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a OrmPersistenceInterface subclass.
         """
 
-        class CustomInterface(DBBasedInterface):
+        class CustomInterface(OrmPersistenceInterface):
             sample = models.CharField(max_length=5)
 
-        fields, ignore = DBBasedInterface.handle_custom_fields(CustomInterface)
+        fields, ignore = OrmPersistenceInterface.handle_custom_fields(CustomInterface)
         self.assertIn(None, fields)
         self.assertIn("None_value", ignore)
         self.assertIn("None_unit", ignore)
@@ -668,12 +668,14 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests handle_custom_fields with multiple custom fields defined.
         """
 
-        class MultiCustomInterface(DBBasedInterface):
+        class MultiCustomInterface(OrmPersistenceInterface):
             field1 = models.CharField(max_length=10)
             field2 = models.IntegerField()
             field3 = models.BooleanField()
 
-        fields, ignore = DBBasedInterface.handle_custom_fields(MultiCustomInterface)
+        fields, ignore = OrmPersistenceInterface.handle_custom_fields(
+            MultiCustomInterface
+        )
 
         # Should have None for each custom field
         expected_none_count = 3  # field1, field2, field3
@@ -691,10 +693,10 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests handle_custom_fields with no custom fields defined.
         """
 
-        class NoCustomInterface(DBBasedInterface):
+        class NoCustomInterface(OrmPersistenceInterface):
             pass
 
-        fields, ignore = DBBasedInterface.handle_custom_fields(NoCustomInterface)
+        fields, ignore = OrmPersistenceInterface.handle_custom_fields(NoCustomInterface)
 
         # Should have empty or minimal results
         self.assertIsInstance(fields, (list, tuple))
@@ -705,7 +707,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests behavior when interface is configured with invalid model.
         """
 
-        class InvalidInterface(DBBasedInterface):
+        class InvalidInterface(OrmPersistenceInterface):
             _model = None
             _parent_class = None
             _interface_type = "test"
@@ -808,7 +810,7 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests that _get_database_alias returns the configured database alias.
         """
 
-        class CustomInterface(DBBasedInterface):
+        class CustomInterface(OrmPersistenceInterface):
             _model = PersonModel
             database = "custom_db"
 
@@ -905,7 +907,7 @@ class WritableInterfaceTestModel(models.Model):
         app_label = "general_manager"
 
 
-class WritableDBBasedInterfaceTestCase(TransactionTestCase):
+class OrmWritableInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
@@ -956,13 +958,13 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
         from general_manager.interface.backends.database.database_based_interface import (
-            WritableDBBasedInterface,
+            OrmWritableInterface,
         )
 
         self.user1 = User.objects.create(username="creator")
         self.user2 = User.objects.create(username="modifier")
 
-        class TestWritableInterface(WritableDBBasedInterface):
+        class TestWritableInterface(OrmWritableInterface):
             _model = WritableInterfaceTestModel
             _parent_class = None
             _interface_type = "writable_test"

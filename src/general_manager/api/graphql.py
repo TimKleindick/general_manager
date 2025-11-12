@@ -344,7 +344,15 @@ class GraphQL:
                 lambda: GraphQL.graphql_type_registry[generalManagerClass.__name__]
             ),
         }
-        if InterfaceBase.create.__code__ != interface_cls.create.__code__:
+        capabilities = interface_cls.get_capabilities()
+
+        def _supports(op_name: str, method_name: str) -> bool:
+            method = getattr(interface_cls, method_name)
+            base_method = getattr(InterfaceBase, method_name)
+            method_overridden = base_method.__code__ != method.__code__
+            return method_overridden or op_name in capabilities
+
+        if _supports("create", "create"):
             create_name = f"create{generalManagerClass.__name__}"
             cls._mutations[create_name] = cls.generate_create_mutation_class(
                 generalManagerClass, default_return_values
@@ -357,7 +365,7 @@ class GraphQL:
                 },
             )
 
-        if InterfaceBase.update.__code__ != interface_cls.update.__code__:
+        if _supports("update", "update"):
             update_name = f"update{generalManagerClass.__name__}"
             cls._mutations[update_name] = cls.generate_update_mutation_class(
                 generalManagerClass, default_return_values
@@ -370,7 +378,7 @@ class GraphQL:
                 },
             )
 
-        if InterfaceBase.delete.__code__ != interface_cls.delete.__code__:
+        if _supports("delete", "delete"):
             delete_name = f"delete{generalManagerClass.__name__}"
             cls._mutations[delete_name] = cls.generate_delete_mutation_class(
                 generalManagerClass, default_return_values

@@ -10,6 +10,7 @@ from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
+    from general_manager.interface.builders import ManifestCapabilityBuilder
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
@@ -119,6 +120,8 @@ class GeneralManagerMeta(type):
             attrs, interface_cls, model = pre_creation(name, attrs, interface)
             new_class = create_new_general_manager_class(mcs, name, bases, attrs)
             post_creation(new_class, interface_cls, model)
+            selection = _capability_builder().build(interface_cls)
+            interface_cls.set_capability_selection(selection)
             mcs.pending_attribute_initialization.append(new_class)
             mcs.all_classes.append(new_class)
             logger.debug(
@@ -239,3 +242,15 @@ class GeneralManagerMeta(type):
 
         for attr_name in attributes:
             setattr(new_class, attr_name, descriptor_method(attr_name, new_class))
+
+
+_CAPABILITY_BUILDER: "ManifestCapabilityBuilder | None" = None
+
+
+def _capability_builder() -> "ManifestCapabilityBuilder":
+    global _CAPABILITY_BUILDER
+    if _CAPABILITY_BUILDER is None:
+        from general_manager.interface.builders import ManifestCapabilityBuilder
+
+        _CAPABILITY_BUILDER = ManifestCapabilityBuilder()
+    return _CAPABILITY_BUILDER
