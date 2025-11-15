@@ -21,14 +21,19 @@ from django.db.models import Model
 
 from general_manager.utils.args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
-from general_manager.interface.capabilities.base import CapabilityName
+from general_manager.interface.capabilities.base import Capability, CapabilityName
+from general_manager.interface.capabilities.configuration import (
+    CapabilityConfigEntry,
+    InterfaceCapabilityConfig,
+    iter_capability_entries,
+)
+from general_manager.interface.capabilities.factory import CapabilityOverride
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.bucket.base_bucket import Bucket
     from general_manager.interface.builders.capability_models import CapabilitySelection
-    from general_manager.interface.capabilities.base import Capability
     from general_manager.interface.models import GeneralManagerBasisModel
     from general_manager.interface.builders.capability_builder import (
         ManifestCapabilityBuilder,
@@ -156,13 +161,14 @@ class InterfaceBase(ABC):
 
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
-    _use_soft_delete: ClassVar[bool]
     input_fields: ClassVar[dict[str, "Input"]]
     lifecycle_capability_name: ClassVar[CapabilityName | None] = None
     _capabilities: ClassVar[frozenset[CapabilityName]] = frozenset()
     _capability_selection: ClassVar["CapabilitySelection | None"] = None
     _capability_handlers: ClassVar[dict[CapabilityName, "Capability"]] = {}
-    capability_overrides: ClassVar[dict[CapabilityName, type["Capability"]]] = {}
+    capability_overrides: ClassVar[dict[CapabilityName, CapabilityOverride]] = {}
+    configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]] = tuple()
+    _configured_capabilities_applied: ClassVar[bool] = False
     _automatic_capability_builder: ClassVar["ManifestCapabilityBuilder | None"] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -171,6 +177,13 @@ class InterfaceBase(ABC):
         cls._capability_selection = None
         cls._capability_handlers = {}
         cls.capability_overrides = dict(getattr(cls, "capability_overrides", {}))
+        cls.configured_capabilities = tuple(
+            getattr(cls, "configured_capabilities", tuple()),
+        )
+        configured_overrides = cls._build_configured_capability_overrides()
+        for name, override in configured_overrides.items():
+            cls.capability_overrides.setdefault(name, override)
+        cls._configured_capabilities_applied = False
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
@@ -202,6 +215,11 @@ class InterfaceBase(ABC):
         """Return the capability instance registered for the provided name, if any."""
         cls._ensure_capabilities_initialized()
         return cls._capability_handlers.get(name)
+
+    @classmethod
+    def iter_capability_configs(cls) -> Iterable[InterfaceCapabilityConfig]:
+        """Yield configured capability entries declared on the interface."""
+        return iter_capability_entries(cls.configured_capabilities)
 
     @classmethod
     def require_capability(
@@ -249,15 +267,89 @@ class InterfaceBase(ABC):
 
     @classmethod
     def _ensure_capabilities_initialized(cls) -> None:
-        if cls._capability_selection is not None:
-            return
-        from general_manager.interface.builders import ManifestCapabilityBuilder
+        if cls._capability_selection is None:
+            from general_manager.interface.builders import ManifestCapabilityBuilder
 
-        builder = cls._automatic_capability_builder
-        if builder is None:
-            builder = ManifestCapabilityBuilder()
-            cls._automatic_capability_builder = builder
-        builder.build(cls)
+            builder = cls._automatic_capability_builder
+            if builder is None:
+                builder = ManifestCapabilityBuilder()
+                cls._automatic_capability_builder = builder
+            builder.build(cls)
+        cls._apply_configured_capabilities()
+
+    @classmethod
+    def _apply_configured_capabilities(cls) -> None:
+        if cls._configured_capabilities_applied:
+            return
+        configs = tuple(cls.iter_capability_configs())
+        if not configs:
+            cls._configured_capabilities_applied = True
+            return
+        for config in configs:
+            handler = cls._instantiate_configured_capability(config)
+            cls._bind_capability_handler(handler)
+        cls._configured_capabilities_applied = True
+
+    @classmethod
+    def _build_configured_capability_overrides(
+        cls,
+    ) -> dict[CapabilityName, CapabilityOverride]:
+        overrides: dict[CapabilityName, CapabilityOverride] = {}
+        for config in iter_capability_entries(cls.configured_capabilities):
+            handler_cls = config.handler
+            name = getattr(handler_cls, "name", None)
+            if name is None:
+                continue
+            if config.options:
+                overrides[name] = cls._make_capability_factory(
+                    handler_cls,
+                    dict(config.options),
+                )
+            else:
+                overrides[name] = handler_cls
+        return overrides
+
+    @staticmethod
+    def _make_capability_factory(
+        handler_cls: type[Capability],
+        options: dict[str, Any],
+    ) -> CapabilityOverride:
+        def _factory(
+            handler_cls: type[Capability] = handler_cls,
+            options: dict[str, Any] = options,
+        ) -> Capability:
+            return handler_cls(**dict(options))
+
+        return _factory
+
+    @classmethod
+    def _instantiate_configured_capability(
+        cls, config: InterfaceCapabilityConfig
+    ) -> Capability:
+        handler = config.instantiate()
+        if not hasattr(handler, "setup"):
+            message = (
+                "Configured capability "
+                f"{handler!r} does not implement the Capability protocol."
+            )
+            raise TypeError(message)
+        return handler
+
+    @classmethod
+    def _bind_capability_handler(cls, handler: Capability) -> None:
+        name = getattr(handler, "name", None)
+        if name is None:
+            message = (
+                f"Capability instance {handler!r} does not expose a name attribute."
+            )
+            raise AttributeError(message)
+        existing = cls._capability_handlers.get(name)
+        if existing is handler:
+            return
+        if existing is not None:
+            existing.teardown(cls)
+        handler.setup(cls)
+        cls._capabilities = frozenset({*cls._capabilities, name})
 
     def parse_input_fields_to_identification(
         self,
@@ -529,16 +621,24 @@ class InterfaceBase(ABC):
         )
 
     @classmethod
-    @abstractmethod
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         """Return metadata describing each attribute exposed on the manager."""
-        raise NotImplementedError
+        handler = cls.get_capability_handler("read")
+        if handler is not None and hasattr(handler, "get_attribute_types"):
+            return handler.get_attribute_types(cls)  # type: ignore[return-value]
+        raise NotImplementedError(
+            f"{cls.__name__} must provide a read capability implementing get_attribute_types."
+        )
 
     @classmethod
-    @abstractmethod
     def get_attributes(cls) -> dict[str, Any]:
         """Return attribute values exposed via the interface."""
-        raise NotImplementedError
+        handler = cls.get_capability_handler("read")
+        if handler is not None and hasattr(handler, "get_attributes"):
+            return handler.get_attributes(cls)  # type: ignore[return-value]
+        raise NotImplementedError(
+            f"{cls.__name__} must provide a read capability implementing get_attributes."
+        )
 
     @classmethod
     def get_graph_ql_properties(cls) -> dict[str, GraphQLProperty]:
@@ -565,6 +665,14 @@ class InterfaceBase(ABC):
         handler = cls.require_capability("query")
         if hasattr(handler, "exclude"):
             return handler.exclude(cls, **kwargs)
+        raise NotImplementedError
+
+    @classmethod
+    def all(cls) -> Bucket[Any]:
+        """Return a bucket containing all records for this interface."""
+        handler = cls.require_capability("query")
+        if hasattr(handler, "all"):
+            return handler.all(cls)
         raise NotImplementedError
 
     @staticmethod
@@ -668,7 +776,6 @@ class InterfaceBase(ABC):
         )
 
     @classmethod
-    @abstractmethod
     def get_field_type(cls, field_name: str) -> type:
         """
         Return the declared Python type for an input field.
@@ -680,6 +787,12 @@ class InterfaceBase(ABC):
             type: Python type associated with the field.
 
         Raises:
-            NotImplementedError: This method must be implemented by subclasses.
+            KeyError: If the field is not defined.
         """
-        raise NotImplementedError
+        handler = cls.get_capability_handler("read")
+        if handler is not None and hasattr(handler, "get_field_type"):
+            return handler.get_field_type(cls, field_name)  # type: ignore[return-value]
+        field = cls.input_fields.get(field_name)
+        if field is None:
+            raise KeyError(field_name)
+        return field.type

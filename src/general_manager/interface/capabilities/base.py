@@ -22,6 +22,7 @@ CapabilityName = Literal[
     "observability",
     "existing_model_resolution",
     "read_only_management",
+    "soft_delete",
 ]
 """Enumeration of supported capability identifiers."""
 

@@ -54,6 +54,7 @@ TRANSLATION: dict[type[models.Field], type] = {
 
 def build_field_descriptors(
     interface_cls: type["OrmPersistenceInterface"],
+    resolve_many: Callable[["OrmPersistenceInterface", str, str], Any] | None = None,
 ) -> dict[str, FieldDescriptor]:
     """
     Construct field descriptors for the given DB-based interface class.
@@ -64,12 +65,20 @@ def build_field_descriptors(
     Returns:
         dict[str, FieldDescriptor]: Mapping from attribute name to its FieldDescriptor containing metadata and an accessor.
     """
-    builder = _FieldDescriptorBuilder(interface_cls)
+    builder = _FieldDescriptorBuilder(
+        interface_cls,
+        resolve_many=resolve_many or _fallback_resolve_many,
+    )
     return builder.build()
 
 
 class _FieldDescriptorBuilder:
-    def __init__(self, interface_cls: type["OrmPersistenceInterface"]) -> None:
+    def __init__(
+        self,
+        interface_cls: type["OrmPersistenceInterface"],
+        *,
+        resolve_many: Callable[["OrmPersistenceInterface", str, str], Any],
+    ) -> None:
         """
         Initialize a builder for constructing field descriptors for a OrmPersistenceInterface subclass.
 
@@ -80,6 +89,7 @@ class _FieldDescriptorBuilder:
         self.model = interface_cls._model  # type: ignore[attr-defined]
         self._descriptors: dict[str, FieldDescriptor] = {}
         self._custom_fields, self._ignored_helpers = _collect_custom_fields(self.model)
+        self._resolve_many = resolve_many
 
     def build(self) -> dict[str, FieldDescriptor]:
         """
@@ -224,7 +234,11 @@ class _FieldDescriptorBuilder:
             )
             relation_type = cast(type, general_manager_class)
         else:
-            accessor = _direct_many_accessor(accessor_name, field_base)
+            accessor = _direct_many_accessor(
+                self._resolve_many,
+                accessor_name,
+                field_base,
+            )
             relation_type = cast(type, related_model)
 
         self._register(
@@ -497,7 +511,11 @@ def _general_manager_many_accessor(
     return getter
 
 
-def _direct_many_accessor(field_call: str, field_name: str) -> DescriptorAccessor:
+def _direct_many_accessor(
+    resolver: Callable[["OrmPersistenceInterface", str, str], Any],
+    field_call: str,
+    field_name: str,
+) -> DescriptorAccessor:
     """
     Create an accessor that resolves a direct many-to-many relationship value from a OrmPersistenceInterface instance.
 
@@ -510,6 +528,17 @@ def _direct_many_accessor(field_call: str, field_name: str) -> DescriptorAccesso
     """
 
     def getter(self: "OrmPersistenceInterface") -> Any:  # type: ignore[name-defined]
-        return self._resolve_many_to_many(field_call=field_call, field_name=field_name)
+        return resolver(self, field_call, field_name)
 
     return getter
+
+
+def _fallback_resolve_many(
+    interface_instance: "OrmPersistenceInterface",
+    field_call: str,
+    field_name: str,
+) -> Any:
+    return interface_instance._resolve_many_to_many(  # type: ignore[attr-defined]
+        field_call=field_call,
+        field_name=field_name,
+    )

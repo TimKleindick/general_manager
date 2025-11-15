@@ -25,6 +25,42 @@ class CalculationReadCapability(BaseCapability):
     def get_data(self, interface_instance: "CalculationInterface") -> Any:
         raise NotImplementedError("Calculations do not store data.")
 
+    def get_attribute_types(
+        self,
+        interface_cls: type["CalculationInterface"],
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            name: {
+                "type": field.type,
+                "default": None,
+                "is_editable": False,
+                "is_required": True,
+                "is_derived": False,
+            }
+            for name, field in interface_cls.input_fields.items()
+        }
+
+    def get_attributes(
+        self,
+        interface_cls: type["CalculationInterface"],
+    ) -> dict[str, Any]:
+        return {
+            name: lambda self, name=name: interface_cls.input_fields[name].cast(
+                self.identification.get(name)
+            )
+            for name in interface_cls.input_fields.keys()
+        }
+
+    def get_field_type(
+        self,
+        interface_cls: type["CalculationInterface"],
+        field_name: str,
+    ) -> type:
+        field = interface_cls.input_fields.get(field_name)
+        if field is None:
+            raise KeyError(field_name)
+        return field.type
+
 
 class CalculationQueryCapability(BaseCapability):
     """Expose CalculationBucket helpers via the generic query capability."""

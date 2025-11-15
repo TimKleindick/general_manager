@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Type, cast, Callable, ClassVar
+from typing import TYPE_CHECKING, Any, Type, cast, ClassVar
 
 from django.core.checks import Warning
 from django.db import (
@@ -13,12 +13,9 @@ from django.db import (
     transaction as django_transaction,
 )
 
-from general_manager.interface.base_interface import (
-    generalManagerClassName,
-    attributes,
-    interfaceBaseClass,
-)
+from general_manager.interface.base_interface import interfaceBaseClass
 from general_manager.interface.models import GeneralManagerBasisModel
+from general_manager.interface.capabilities.orm import OrmLifecycleCapability
 from general_manager.interface.utils.errors import (
     InvalidReadOnlyDataFormatError,
     InvalidReadOnlyDataTypeError,
@@ -34,6 +31,9 @@ from .utils import with_observability
 logger = get_logger("interface.read_only")
 
 if TYPE_CHECKING:  # pragma: no cover
+    from general_manager.interface.backends.database.database_based_interface import (
+        OrmPersistenceInterface,
+    )
     from general_manager.interface.backends.read_only.read_only_interface import (
         ReadOnlyInterface,
     )
@@ -357,35 +357,49 @@ class ReadOnlyManagementCapability(BaseCapability):
             func=_perform,
         )
 
-    def wrap_pre_create(self, func: Callable[..., Any]) -> Callable[..., Any]:
-        def wrapper(
-            name: generalManagerClassName,
-            attrs: attributes,
-            interface: interfaceBaseClass,
-            base_model_class: type[
-                "GeneralManagerBasisModel"
-            ] = GeneralManagerBasisModel,
-        ) -> tuple[
-            attributes, interfaceBaseClass, type["GeneralManagerBasisModel"] | None
-        ]:
-            meta = getattr(interface, "Meta", None)
-            if meta is None:
-                meta = type("Meta", (), {})
-                interface.Meta = meta  # type: ignore[attr-defined]
-            meta.use_soft_delete = True  # type: ignore[union-attr]
-            return func(name, attrs, interface, base_model_class)
 
-        return wrapper
+class ReadOnlyLifecycleCapability(OrmLifecycleCapability):
+    """Ensure read-only interfaces enforce soft-delete and registration."""
 
-    def wrap_post_create(self, func: Callable[..., Any]) -> Callable[..., Any]:
-        def wrapper(
-            new_class: Type["GeneralManager"],
-            interface_cls: Type["ReadOnlyInterface"],
-            model: Type["GeneralManagerBasisModel"],
-        ) -> None:
-            func(new_class, interface_cls, model)
-            from general_manager.manager.meta import GeneralManagerMeta
+    name: ClassVar[CapabilityName] = OrmLifecycleCapability.name
 
+    def pre_create(
+        self,
+        *,
+        name: str,
+        attrs: dict[str, Any],
+        interface: type["OrmPersistenceInterface[Any]"],
+        base_model_class: type[GeneralManagerBasisModel],
+    ) -> tuple[
+        dict[str, Any],
+        type["OrmPersistenceInterface[Any]"],
+        type[GeneralManagerBasisModel],
+    ]:
+        meta = getattr(interface, "Meta", None)
+        if meta is None:
+            meta = type("Meta", (), {})
+            interface.Meta = meta  # type: ignore[attr-defined]
+        meta.use_soft_delete = True  # type: ignore[union-attr]
+        return super().pre_create(
+            name=name,
+            attrs=attrs,
+            interface=interface,
+            base_model_class=GeneralManagerBasisModel,
+        )
+
+    def post_create(
+        self,
+        *,
+        new_class: Type["GeneralManager"],
+        interface_class: type["OrmPersistenceInterface[Any]"],
+        model: Type["GeneralManagerBasisModel"] | None,
+    ) -> None:
+        super().post_create(
+            new_class=new_class,
+            interface_class=interface_class,
+            model=model,
+        )
+        from general_manager.manager.meta import GeneralManagerMeta
+
+        if new_class not in GeneralManagerMeta.read_only_classes:
             GeneralManagerMeta.read_only_classes.append(new_class)
-
-        return wrapper

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, Type, cast, ClassVar
+from typing import Any, TYPE_CHECKING, Type, Callable, cast, ClassVar
 
 from datetime import datetime, timedelta
 
 from django.db import models, transaction
-from django.db.models import NOT_PROVIDED
+from django.db.models import NOT_PROVIDED, Subquery
 from django.utils import timezone
 
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.factory.auto_factory import AutoFactory
+from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.database_interface_protocols import (
     SupportsActivation,
     SupportsHistory,
@@ -35,6 +36,7 @@ from general_manager.interface.utils.field_descriptors import (
 )
 from general_manager.interface.utils.payload_normalizer import PayloadNormalizer
 from general_manager.rule import Rule
+from simple_history.models import HistoricalChanges
 from simple_history.utils import update_change_reason
 
 from .builtin import BaseCapability
@@ -62,10 +64,11 @@ class OrmPersistenceSupportCapability(BaseCapability):
         *,
         only_active: bool = True,
     ) -> models.Manager:
+        soft_delete = _is_soft_delete_enabled(interface_cls)
         selector = DjangoManagerSelector(
             model=interface_cls._model,
             database_alias=self.get_database_alias(interface_cls),
-            use_soft_delete=getattr(interface_cls, "_use_soft_delete", False),
+            use_soft_delete=soft_delete,
             cached_active=getattr(interface_cls, "_active_manager", None),
         )
         manager = selector.active_manager() if only_active else selector.all_manager()
@@ -89,9 +92,59 @@ class OrmPersistenceSupportCapability(BaseCapability):
     ) -> dict[str, FieldDescriptor]:
         descriptors = getattr(interface_cls, "_field_descriptors", None)
         if descriptors is None:
-            descriptors = build_field_descriptors(interface_cls)
+            descriptors = build_field_descriptors(
+                interface_cls,
+                resolve_many=self.resolve_many_to_many,
+            )
             interface_cls._field_descriptors = descriptors  # type: ignore[attr-defined]
         return descriptors
+
+    def resolve_many_to_many(
+        self,
+        interface_instance: "OrmPersistenceInterface",
+        field_call: str,
+        field_name: str,
+    ) -> models.QuerySet[Any]:
+        manager = getattr(interface_instance._instance, field_call)
+        queryset = manager.all()
+        model_cls = getattr(queryset, "model", None)
+        interface_cls = interface_instance.__class__
+        if isinstance(model_cls, type) and issubclass(model_cls, HistoricalChanges):
+            target_field = interface_cls._model._meta.get_field(field_name)  # type: ignore[attr-defined]
+            target_model = getattr(target_field, "related_model", None)
+            if target_model is None:
+                return manager.none()
+            target_model = cast(Type[models.Model], target_model)
+            related_attr = None
+            for rel_field in model_cls._meta.get_fields():  # type: ignore[attr-defined]
+                related_model = getattr(rel_field, "related_model", None)
+                if related_model == target_model:
+                    related_attr = rel_field.name
+                    break
+            if related_attr is None:
+                return target_model._default_manager.none()
+            related_id_field = f"{related_attr}_id"
+            related_ids_query = queryset.values_list(related_id_field, flat=True)
+            if (
+                not hasattr(target_model, "history")
+                or interface_instance._search_date is None  # type: ignore[attr-defined]
+            ):
+                return target_model._default_manager.filter(
+                    pk__in=Subquery(related_ids_query)
+                )
+            target_model = cast(Type[SupportsHistory], target_model)
+
+            related_ids = list(related_ids_query)
+            if not related_ids:
+                return target_model._default_manager.none()  # type: ignore[return-value]
+            return cast(
+                models.QuerySet[Any],
+                target_model.history.as_of(interface_instance._search_date).filter(  # type: ignore[attr-defined]
+                    pk__in=related_ids
+                ),
+            )
+
+        return queryset
 
 
 class OrmLifecycleCapability(BaseCapability):
@@ -149,15 +202,12 @@ class OrmLifecycleCapability(BaseCapability):
             return
         interface_class._parent_class = new_class  # type: ignore[attr-defined]
         model._general_manager_class = new_class  # type: ignore[attr-defined]
-        try:
-            new_class.objects = interface_class._get_manager()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-        if getattr(interface_class, "_use_soft_delete", False) and hasattr(
-            model, "all_objects"
-        ):
-            new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
-                only_active=False
+        support = _support_capability_for(interface_class)
+        new_class.objects = support.get_manager(interface_class)  # type: ignore[attr-defined]
+        if _is_soft_delete_enabled(interface_class):
+            new_class.all_objects = support.get_manager(  # type: ignore[attr-defined]
+                interface_class,
+                only_active=False,
             )
 
     def _collect_model_fields(
@@ -193,6 +243,20 @@ class OrmLifecycleCapability(BaseCapability):
                 ignore.append(f"{attr_value.name}_value")
                 ignore.append(f"{attr_value.name}_unit")
                 field_names[attr_name] = attr_value
+        return field_names, ignore
+
+    def describe_custom_fields(
+        self,
+        model: type[models.Model] | models.Model,
+    ) -> tuple[list[str], list[str]]:
+        field_names: list[str] = []
+        ignore: list[str] = []
+        for attr_name, attr_value in model.__dict__.items():
+            if isinstance(attr_value, models.Field):
+                recorded_name = getattr(attr_value, "name", attr_name)
+                field_names.append(recorded_name)
+                ignore.append(f"{recorded_name}_value")
+                ignore.append(f"{recorded_name}_unit")
         return field_names, ignore
 
     def _apply_meta_configuration(
@@ -249,7 +313,7 @@ class OrmLifecycleCapability(BaseCapability):
     ) -> type["OrmPersistenceInterface"]:
         interface_cls = type(interface.__name__, (interface,), {})
         interface_cls._model = model  # type: ignore[attr-defined]
-        interface_cls._use_soft_delete = use_soft_delete  # type: ignore[attr-defined]
+        interface_cls._soft_delete_default = use_soft_delete  # type: ignore[attr-defined]
         interface_cls._field_descriptors = None  # type: ignore[attr-defined]
         return interface_cls
 
@@ -316,7 +380,8 @@ class OrmMutationCapability(BaseCapability):
         }
 
         def _perform() -> int:
-            database_alias = interface_cls._get_database_alias()
+            support = _support_capability_for(interface_cls)
+            database_alias = support.get_database_alias(interface_cls)
             if database_alias:
                 instance._state.db = database_alias  # type: ignore[attr-defined]
             atomic_context = (
@@ -383,8 +448,11 @@ class OrmReadCapability(BaseCapability):
     def get_data(self, interface_instance: "OrmPersistenceInterface") -> Any:
         def _perform() -> Any:
             interface_cls = interface_instance.__class__
-            manager = interface_cls._get_manager(
-                only_active=not getattr(interface_cls, "_use_soft_delete", False)
+            support = _support_capability_for(interface_cls)
+            only_active = not _is_soft_delete_enabled(interface_cls)
+            manager = support.get_manager(
+                interface_cls,
+                only_active=only_active,
             )
             model_cls = interface_cls._model
             pk = interface_instance.pk
@@ -402,12 +470,18 @@ class OrmReadCapability(BaseCapability):
                 ):
                     historical: Any | None
                     if instance is not None:
-                        historical = interface_cls.get_historical_record(
-                            instance, search_date
+                        history_handler = _history_capability_for(interface_cls)
+                        historical = history_handler.get_historical_record(
+                            interface_cls,
+                            instance,
+                            search_date,
                         )
                     else:
-                        historical = interface_cls._get_historical_record_by_pk(
-                            pk, search_date
+                        history_handler = _history_capability_for(interface_cls)
+                        historical = history_handler.get_historical_record_by_pk(
+                            interface_cls,
+                            pk,
+                            search_date,
                         )
                     if historical is not None:
                         return historical
@@ -423,6 +497,40 @@ class OrmReadCapability(BaseCapability):
             payload={"pk": interface_instance.pk},
             func=_perform,
         )
+
+    def get_attribute_types(
+        self,
+        interface_cls: type["OrmPersistenceInterface"],
+    ) -> dict[str, dict[str, Any]]:
+        descriptors = _support_capability_for(interface_cls).get_field_descriptors(
+            interface_cls
+        )
+        return {
+            name: dict(descriptor.metadata) for name, descriptor in descriptors.items()
+        }
+
+    def get_attributes(
+        self,
+        interface_cls: type["OrmPersistenceInterface"],
+    ) -> dict[str, Callable[[Any], Any]]:
+        descriptors = _support_capability_for(interface_cls).get_field_descriptors(
+            interface_cls
+        )
+        return {name: descriptor.accessor for name, descriptor in descriptors.items()}
+
+    def get_field_type(
+        self,
+        interface_cls: type["OrmPersistenceInterface"],
+        field_name: str,
+    ) -> type:
+        field = interface_cls._model._meta.get_field(field_name)
+        if (
+            field.is_relation
+            and field.related_model
+            and hasattr(field.related_model, "_general_manager_class")
+        ):
+            return field.related_model._general_manager_class  # type: ignore[attr-defined]
+        return type(field)
 
 
 class OrmCreateCapability(BaseCapability):
@@ -491,7 +599,11 @@ class OrmUpdateCapability(BaseCapability):
             normalized_simple, normalized_many = _normalize_payload(
                 interface_instance.__class__, local_kwargs
             )
-            manager = interface_instance.__class__._get_manager(only_active=False)
+            support = _support_capability_for(interface_instance.__class__)
+            manager = support.get_manager(
+                interface_instance.__class__,
+                only_active=False,
+            )
             instance = manager.get(pk=interface_instance.pk)
             mutation = _mutation_capability_for(interface_instance.__class__)
             instance = mutation.assign_simple_attributes(
@@ -536,10 +648,14 @@ class OrmDeleteCapability(BaseCapability):
             local_kwargs = dict(kwargs)
             creator_id = local_kwargs.pop("creator_id", None)
             history_comment = local_kwargs.pop("history_comment", None)
-            manager = interface_instance.__class__._get_manager(only_active=False)
+            support = _support_capability_for(interface_instance.__class__)
+            manager = support.get_manager(
+                interface_instance.__class__,
+                only_active=False,
+            )
             instance = manager.get(pk=interface_instance.pk)
             mutation = _mutation_capability_for(interface_instance.__class__)
-            if getattr(interface_instance.__class__, "_use_soft_delete", False):
+            if _is_soft_delete_enabled(interface_instance.__class__):
                 if not isinstance(instance, SupportsActivation):
                     raise MissingActivationSupportError(instance.__class__.__name__)
                 instance.is_active = False
@@ -565,7 +681,7 @@ class OrmDeleteCapability(BaseCapability):
             except AttributeError:
                 pass
             update_change_reason(instance, history_comment_local)
-            database_alias = interface_instance.__class__._get_database_alias()
+            database_alias = support.get_database_alias(interface_instance.__class__)
             atomic_context = (
                 transaction.atomic(using=database_alias)
                 if database_alias
@@ -598,7 +714,9 @@ class OrmHistoryCapability(BaseCapability):
         if not isinstance(instance, SupportsHistory):
             return None
         history_manager = cast(SupportsHistory, instance).history
-        database_alias = interface_cls._get_database_alias()
+        database_alias = _support_capability_for(interface_cls).get_database_alias(
+            interface_cls
+        )
         if database_alias:
             history_manager = history_manager.using(database_alias)
         historical = (
@@ -617,7 +735,9 @@ class OrmHistoryCapability(BaseCapability):
         if search_date is None or not hasattr(interface_cls._model, "history"):
             return None
         history_manager = interface_cls._model.history  # type: ignore[attr-defined]
-        database_alias = interface_cls._get_database_alias()
+        database_alias = _support_capability_for(interface_cls).get_database_alias(
+            interface_cls
+        )
         if database_alias:
             history_manager = history_manager.using(database_alias)
         historical = (
@@ -630,7 +750,6 @@ class OrmHistoryCapability(BaseCapability):
 
 class OrmValidationCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "validation"
-    required_attributes: ClassVar[tuple[str, ...]] = ("_payload_normalizer",)
 
     def normalize_payload(
         self,
@@ -641,7 +760,8 @@ class OrmValidationCapability(BaseCapability):
         payload_snapshot = {"keys": sorted(payload.keys())}
 
         def _perform() -> tuple[dict[str, Any], dict[str, list[Any]]]:
-            normalizer = interface_cls._payload_normalizer()
+            support = _support_capability_for(interface_cls)
+            normalizer = support.get_payload_normalizer(interface_cls)
             payload_copy = dict(payload)
             normalizer.validate_keys(payload_copy)
             simple_kwargs, many_to_many_kwargs = normalizer.split_many_to_many(
@@ -661,10 +781,6 @@ class OrmValidationCapability(BaseCapability):
 
 class OrmQueryCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "query"
-    required_attributes: ClassVar[tuple[str, ...]] = (
-        "_payload_normalizer",
-        "_get_queryset",
-    )
 
     def filter(
         self,
@@ -718,7 +834,8 @@ class OrmQueryCapability(BaseCapability):
     ) -> tuple[bool, dict[str, Any]]:
         payload = dict(kwargs)
         include_inactive = bool(payload.pop("include_inactive", False))
-        normalizer = interface_cls._payload_normalizer()
+        support = _support_capability_for(interface_cls)
+        normalizer = support.get_payload_normalizer(interface_cls)
         normalized_kwargs = normalizer.normalize_filter_kwargs(payload)
         return include_inactive, normalized_kwargs
 
@@ -730,9 +847,13 @@ class OrmQueryCapability(BaseCapability):
         normalized_kwargs: dict[str, Any],
         exclude: bool = False,
     ) -> DatabaseBucket:
-        queryset_base = interface_cls._get_queryset()
+        support = _support_capability_for(interface_cls)
+        queryset_base = support.get_queryset(interface_cls)
         if include_inactive:
-            queryset_base = interface_cls._get_manager(only_active=False).all()
+            queryset_base = support.get_manager(
+                interface_cls,
+                only_active=False,
+            ).all()
         queryset = (
             queryset_base.exclude(**normalized_kwargs)
             if exclude
@@ -752,7 +873,8 @@ def _normalize_payload(
     handler = interface_cls.get_capability_handler("validation")
     if handler is not None and hasattr(handler, "normalize_payload"):
         return handler.normalize_payload(interface_cls, payload=dict(payload))
-    normalizer = interface_cls._payload_normalizer()
+    support = _support_capability_for(interface_cls)
+    normalizer = support.get_payload_normalizer(interface_cls)
     payload_copy = dict(payload)
     normalizer.validate_keys(payload_copy)
     simple_kwargs, many_to_many_kwargs = normalizer.split_many_to_many(payload_copy)
@@ -764,7 +886,73 @@ def _normalize_payload(
 def _mutation_capability_for(
     interface_cls: type["OrmWritableInterface"],
 ) -> OrmMutationCapability:
-    handler = interface_cls.get_capability_handler("orm_mutation")
-    if isinstance(handler, OrmMutationCapability):
-        return handler
-    return OrmMutationCapability()
+    return interface_cls.require_capability(  # type: ignore[return-value]
+        "orm_mutation",
+        expected_type=OrmMutationCapability,
+    )
+
+
+def _soft_delete_capability_for(
+    interface_cls: type["OrmPersistenceInterface"],
+) -> SoftDeleteCapability:
+    return interface_cls.require_capability(  # type: ignore[return-value]
+        "soft_delete",
+        expected_type=SoftDeleteCapability,
+    )
+
+
+def _is_soft_delete_enabled(interface_cls: type["OrmPersistenceInterface"]) -> bool:
+    handler = interface_cls.get_capability_handler("soft_delete")
+    if isinstance(handler, SoftDeleteCapability):
+        return handler.is_enabled()
+    model = getattr(interface_cls, "_model", None)
+    if model is not None:
+        meta = getattr(model, "_meta", None)
+        if meta is not None:
+            return bool(getattr(meta, "use_soft_delete", False))
+    return bool(getattr(interface_cls, "_soft_delete_default", False))
+
+
+def _support_capability_for(
+    interface_cls: type["OrmPersistenceInterface"],
+) -> OrmPersistenceSupportCapability:
+    return interface_cls.require_capability(  # type: ignore[return-value]
+        "orm_support",
+        expected_type=OrmPersistenceSupportCapability,
+    )
+
+
+def _history_capability_for(
+    interface_cls: type["OrmPersistenceInterface"],
+) -> OrmHistoryCapability:
+    return interface_cls.require_capability(  # type: ignore[return-value]
+        "history",
+        expected_type=OrmHistoryCapability,
+    )
+
+
+class SoftDeleteCapability(BaseCapability):
+    """Track whether soft delete behavior should be applied."""
+
+    name: ClassVar[CapabilityName] = "soft_delete"
+
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = enabled
+
+    def setup(self, interface_cls: type[InterfaceBase]) -> None:
+        default_marker = object()
+        default = getattr(interface_cls, "_soft_delete_default", default_marker)
+        if default is default_marker:
+            model = getattr(interface_cls, "_model", None)
+            meta = getattr(model, "_meta", None) if model is not None else None
+            default = (
+                getattr(meta, "use_soft_delete", self.enabled) if meta else self.enabled
+            )
+        self.enabled = bool(default)
+        super().setup(interface_cls)
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+    def set_state(self, enabled: bool) -> None:
+        self.enabled = enabled
