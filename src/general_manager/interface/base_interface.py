@@ -28,6 +28,8 @@ from general_manager.interface.capabilities.configuration import (
     iter_capability_entries,
 )
 from general_manager.interface.capabilities.factory import CapabilityOverride
+from general_manager.interface.startup_hooks import register_startup_hook
+from general_manager.interface.system_checks import register_system_check
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input
@@ -350,6 +352,36 @@ class InterfaceBase(ABC):
             existing.teardown(cls)
         handler.setup(cls)
         cls._capabilities = frozenset({*cls._capabilities, name})
+        cls._register_startup_hooks(handler)
+        cls._register_system_checks(handler)
+
+    @classmethod
+    def _register_startup_hooks(cls, handler: Capability) -> None:
+        hooks: Iterable[Callable[[], None]] | None = None
+        get_hooks = getattr(handler, "get_startup_hooks", None)
+        if callable(get_hooks):
+            hooks = get_hooks(cls)
+        elif hasattr(handler, "startup_hooks"):
+            hooks = handler.startup_hooks
+        if not hooks:
+            return
+        for hook in hooks:
+            if callable(hook):
+                register_startup_hook(cls, hook)
+
+    @classmethod
+    def _register_system_checks(cls, handler: Capability) -> None:
+        hooks = None
+        get_checks = getattr(handler, "get_system_checks", None)
+        if callable(get_checks):
+            hooks = get_checks(cls)
+        elif hasattr(handler, "system_checks"):
+            hooks = handler.system_checks
+        if not hooks:
+            return
+        for hook in hooks:
+            if callable(hook):
+                register_system_check(cls, hook)
 
     def parse_input_fields_to_identification(
         self,

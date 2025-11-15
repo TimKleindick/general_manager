@@ -11,9 +11,20 @@ from typing import ClassVar
 from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
+from general_manager.interface.capabilities.read_only import (
+    ReadOnlyManagementCapability,
+)
 from general_manager.bucket.base_bucket import Bucket
 
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+
+def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
+    capability = interface_cls.require_capability(
+        "read_only_management",
+        expected_type=ReadOnlyManagementCapability,
+    )
+    capability.sync_data(interface_cls)
 
 
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
@@ -22,7 +33,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         """
         Create and attach nested GeneralManager test models (TestCountry, TestHuman, TestFamily) to the test class.
 
-        Each nested class defines its Interface, relationships, and seed data as used by the integration tests. The created classes are assigned to class attributes (cls.TestCountry, cls.TestHuman, cls.TestFamily) and collected into cls.general_manager_classes and cls.read_only_classes for test orchestration.
+        Each nested class defines its Interface, relationships, and seed data as used by the integration tests. The created classes are assigned to class attributes (cls.TestCountry, cls.TestHuman, cls.TestFamily) and collected into cls.general_manager_classes for test orchestration.
         """
 
         class TestCountry(GeneralManager):
@@ -71,16 +82,14 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.TestHuman = TestHuman
         cls.TestFamily = TestFamily
         cls.general_manager_classes = [TestCountry, TestHuman, TestFamily]
-        cls.read_only_classes = [TestCountry]
 
     def setUp(self):
         """
         Set up test data by synchronizing countries and creating a user, two humans, and a family linking them.
 
-        Synchronizes TestCountry data, creates a User, creates two TestHuman instances (one linked to the US country and one without a country), and creates a TestFamily that includes both humans. Records are created with permission checks ignored for test purposes.
+        Creates a User, creates two TestHuman instances (one linked to the US country and one without a country), and creates a TestFamily that includes both humans. Records are created with permission checks ignored for test purposes.
         """
         super().setUp()
-        self.TestCountry.Interface.sync_data()  # type: ignore
         self.User1 = User.objects.create(username="human-owner-1")
 
         self.test_human1 = self.TestHuman.create(
@@ -396,7 +405,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         # Clear existing data and resync
         self.TestCountry.Interface._model._meta.model.objects.all().delete()
-        self.TestCountry.Interface.sync_data()
+        sync_read_only_interface(self.TestCountry.Interface)
 
         countries_after_sync = self.TestCountry.all()
         self.assertEqual(len(countries_after_sync), 2)

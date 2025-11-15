@@ -20,6 +20,8 @@ from general_manager.apps import GeneralmanagerConfig
 from general_manager.cache.cache_decorator import _SENTINEL
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.startup_hooks import iter_interface_startup_hooks
 
 _original_get_app: Callable[[str], AppConfig | None] = (
     global_apps.get_containing_app_config
@@ -200,7 +202,8 @@ class GMTestCaseMeta(type):
             GeneralmanagerConfig.initialize_general_manager_classes(
                 cls.general_manager_classes, cls.general_manager_classes
             )
-            GeneralmanagerConfig.handle_read_only_interface(cls.read_only_classes)
+            GeneralmanagerConfig.install_startup_hook_runner()
+            GeneralmanagerConfig.register_system_checks()
             GeneralmanagerConfig.handle_graph_ql(cls.general_manager_classes)
             # 5) GraphQLTransactionTestCase.setUpClass
             base_setup.__func__(cls)
@@ -277,7 +280,6 @@ class GeneralManagerTransactionTestCase(
 ):
     GRAPHQL_URL = "/graphql/"
     general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
-    read_only_classes: ClassVar[list[type[GeneralManager]]] = []
     fallback_app: str | None = "general_manager"
     _gm_created_tables: ClassVar[set[str]] = set()
 
@@ -290,6 +292,7 @@ class GeneralManagerTransactionTestCase(
         super().setUp()
         caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
         self.__reset_cache_counter()
+        self._run_registered_startup_hooks()
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -420,6 +423,23 @@ class GeneralManagerTransactionTestCase(
         )
 
         super().tearDownClass()
+
+    @classmethod
+    def _run_registered_startup_hooks(cls) -> None:
+        interfaces: set[type[InterfaceBase]] = set()
+        for manager_class in cls.general_manager_classes:
+            interface_cls = getattr(manager_class, "Interface", None)
+            if isinstance(interface_cls, type) and issubclass(
+                interface_cls, InterfaceBase
+            ):
+                interfaces.add(interface_cls)
+        if not interfaces:
+            return
+        for interface_cls in interfaces:
+            interface_cls.get_capabilities()
+        for interface_cls, hook in iter_interface_startup_hooks():
+            if interface_cls in interfaces:
+                hook()
 
     #
     def assert_cache_miss(self) -> None:

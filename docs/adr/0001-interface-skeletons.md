@@ -135,14 +135,6 @@ class ExistingModelInterface(OrmWritableInterface[ExistingModelT]):
 class ReadOnlyInterface(OrmInterfaceBase[GeneralManagerBasisModel]):
     _interface_type = "readonly"
     configured_capabilities = (READ_ONLY_CAPABILITIES,)
-
-    @classmethod
-    def sync_data(cls) -> None:
-        handler = cls.require_capability(
-            "read_only_management",
-            expected_type=ReadOnlyManagementCapability,
-        )
-        handler.sync_data(cls)
 ```
 
 ### `CalculationInterface`

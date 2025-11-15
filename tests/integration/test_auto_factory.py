@@ -20,7 +20,7 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
         """
         Register GeneralManager-backed test models on the test class for AutoFactory integration tests.
 
-        Defines four nested GeneralManager classes (Manufacturer, CarOption, Car, Fleet), each with a DatabaseInterface and Factory configuration used by the integration tests, and assigns them to class attributes (Manufacturer, CarOption, Car, Fleet). Also sets `general_manager_classes` to the list of those managers and initializes `read_only_classes` as an empty list.
+        Defines four nested GeneralManager classes (Manufacturer, CarOption, Car, Fleet), each with a DatabaseInterface and Factory configuration used by the integration tests, and assigns them to class attributes (Manufacturer, CarOption, Car, Fleet). Also sets `general_manager_classes` to the list of those managers.
         """
 
         class Manufacturer(GeneralManager):
@@ -113,7 +113,6 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
         cls.Car = Car
         cls.Fleet = Fleet
         cls.general_manager_classes = [Manufacturer, CarOption, Car, Fleet]
-        cls.read_only_classes: list[type[GeneralManager]] = []
 
     def setUp(self) -> None:
         """
