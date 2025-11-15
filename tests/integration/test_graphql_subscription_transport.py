@@ -30,8 +30,7 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
 
         Defines an inner GeneralManager named `Project` with a `name` CharField and a permissive
         ManagerBasedPermission (all CRUD allowed for `"public"`), assigns it to
-        `cls.general_manager_classes`, `cls.read_only_classes`, and `cls.Project`, and then
-        invokes the superclass `setUpClass`.
+        `cls.general_manager_classes` and `cls.Project`, and then invokes the superclass `setUpClass`.
         """
 
         class Project(GeneralManager):
@@ -45,7 +44,6 @@ class TestGraphQLSubscriptionTransport(GeneralManagerTransactionTestCase):
                 __delete__: ClassVar[list[str]] = ["public"]
 
         cls.general_manager_classes = [Project]
-        cls.read_only_classes = []
         cls.Project = Project
         super().setUpClass()
 

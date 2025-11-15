@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Type, cast, ClassVar
+from typing import TYPE_CHECKING, Any, Callable, Type, cast, ClassVar
 
 from django.core.checks import Warning
 from django.db import (
@@ -85,7 +85,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def ensure_schema_is_up_to_date(
         self,
-        interface_cls: type["ReadOnlyInterface"],
+        interface_cls: type["OrmPersistenceInterface[Any]"],
         manager_cls: Type["GeneralManager"],
         model: Type[models.Model],
         *,
@@ -183,7 +183,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def sync_data(
         self,
-        interface_cls: type["ReadOnlyInterface"],
+        interface_cls: type["OrmPersistenceInterface[Any]"],
         *,
         connection=None,
         transaction=None,
@@ -326,17 +326,18 @@ class ReadOnlyManagementCapability(BaseCapability):
                         changes["created" if is_created else "updated"].append(instance)
 
                 existing_instances = model.objects.filter(is_active=True)
-                for instance in existing_instances:
+                for existing_instance in existing_instances:
                     lookup = {
-                        field: getattr(instance, field) for field in unique_field_order
+                        field: getattr(existing_instance, field)
+                        for field in unique_field_order
                     }
                     unique_identifier = tuple(
                         lookup[field] for field in unique_field_order
                     )
                     if unique_identifier not in json_unique_values:
-                        instance.is_active = False  # type: ignore[attr-defined]
-                        instance.save()
-                        changes["deactivated"].append(instance)
+                        existing_instance.is_active = False  # type: ignore[attr-defined]
+                        existing_instance.save()
+                        changes["deactivated"].append(existing_instance)
 
             if any(changes.values()):
                 active_logger.info(
@@ -356,6 +357,36 @@ class ReadOnlyManagementCapability(BaseCapability):
             payload=payload_snapshot,
             func=_perform,
         )
+
+    def get_startup_hooks(
+        self,
+        interface_cls: type["OrmPersistenceInterface[Any]"],
+    ) -> tuple[Callable[[], None], ...]:
+        """Expose a startup hook that synchronizes read-only data."""
+
+        def _sync() -> None:
+            self.sync_data(interface_cls)
+
+        return (_sync,)
+
+    def get_system_checks(
+        self,
+        interface_cls: type["OrmPersistenceInterface[Any]"],
+    ) -> tuple[Callable[[], list[Warning]], ...]:
+        """Expose a system check ensuring the read-only schema is current."""
+
+        def _check() -> list[Warning]:
+            manager_cls = getattr(interface_cls, "_parent_class", None)
+            model = getattr(interface_cls, "_model", None)
+            if manager_cls is None or model is None:
+                return []
+            return self.ensure_schema_is_up_to_date(
+                interface_cls,
+                manager_cls,
+                model,
+            )
+
+        return (_check,)
 
 
 class ReadOnlyLifecycleCapability(OrmLifecycleCapability):

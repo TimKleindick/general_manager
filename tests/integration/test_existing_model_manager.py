@@ -63,8 +63,7 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
 
         Assigns the created classes to class attributes on `cls`:
         - cls.LegacyCustomer, cls.CustomerInterface, cls.CustomerManager,
-        - cls.general_manager_classes (list containing CustomerManager),
-        - cls.read_only_classes (empty list).
+        - cls.general_manager_classes (list containing CustomerManager).
 
         Parameters:
             cls: The test class on which the model, interface, and manager are attached.
@@ -103,7 +102,6 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
         cls.CustomerInterface = CustomerInterface
         cls.CustomerManager = CustomerManager
         cls.general_manager_classes = [CustomerManager]
-        cls.read_only_classes: list[type[GeneralManager]] = []
         super().setUpClass()
 
     def setUp(self) -> None:

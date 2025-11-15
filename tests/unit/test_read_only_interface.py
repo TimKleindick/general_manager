@@ -202,7 +202,8 @@ class GetUniqueFieldsTests(SimpleTestCase):
         class M:
             _meta = fake_meta
 
-        result = ReadOnlyInterface.get_unique_fields(M)
+        capability = ReadOnlyManagementCapability()
+        result = capability.get_unique_fields(M)
         # id is ignored; email (unique); username (via unique_together);
         # other (unique_together); other_field (constraint); extra (UniqueConstraint)
         self.assertSetEqual(result, {"email", "username", "other", "extra"})
@@ -246,8 +247,11 @@ class EnsureSchemaTests(TestCase):
             return []
 
         connection.introspection.table_names = table_names  # type: ignore[assignment]
-        warnings = ReadOnlyInterface.ensure_schema_is_up_to_date(
-            DummyManager, DummyModel
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface,
+            DummyManager,
+            DummyModel,
         )
         self.assertEqual(len(warnings), 1)
         self.assertIsInstance(warnings[0], Warning)
@@ -301,7 +305,10 @@ class EnsureSchemaTests(TestCase):
                     SimpleNamespace(column="col2"),
                 ]
 
-        warnings = ReadOnlyInterface.ensure_schema_is_up_to_date(DummyManager, M)
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface, DummyManager, M
+        )
         self.assertEqual(warnings, [])
 
 
@@ -312,9 +319,9 @@ class SyncDataTests(SimpleTestCase):
     def setUp(self):
         # Reset manager instances
         """
-        Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and interface methods, and capturing logs.
+        Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and capability methods, and capturing logs.
 
-        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyInterface.get_unique_fields to return {'name'} and ReadOnlyInterface.ensure_schema_is_up_to_date to return an empty list, and starts a logger patch that captures log calls.
+        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, and starts a logger patch that captures log calls.
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
@@ -367,6 +374,7 @@ class SyncDataTests(SimpleTestCase):
             "general_manager.interface.capabilities.read_only.logger"
         )
         self.logger = self.log_patcher.start()
+        self.capability = ReadOnlyManagementCapability()
 
     def tearDown(self):
         """
@@ -387,7 +395,7 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyManager._data = None
         with self.assertRaises(ValueError) as cm:
-            DummyInterface.sync_data()
+            self.capability.sync_data(DummyInterface)
         self.assertIn("must define a '_data'", str(cm.exception))
 
     def test_invalid_data_type_raises(self):
@@ -396,7 +404,7 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyManager._data = 123  # weder str noch list
         with self.assertRaises(TypeError) as cm:
-            DummyInterface.sync_data()
+            self.capability.sync_data(DummyInterface)
         self.assertIn("_data must be a JSON string or a list", str(cm.exception))
 
     def test_no_unique_fields_raises(self):
@@ -406,11 +414,11 @@ class SyncDataTests(SimpleTestCase):
         """
         self.gu_patch.stop()
         with mock.patch.object(
-            ReadOnlyInterface, "get_unique_fields", return_value=set()
+            ReadOnlyManagementCapability, "get_unique_fields", return_value=set()
         ):
             DummyManager._data = []
             with self.assertRaises(ValueError) as cm:
-                DummyInterface.sync_data()
+                self.capability.sync_data(DummyInterface)
             self.assertIn("must declare at least one unique field", str(cm.exception))
 
     def test_ensure_schema_not_up_to_date_logs_and_exits(self):
@@ -425,7 +433,7 @@ class SyncDataTests(SimpleTestCase):
             return_value=[Warning("x", "y", obj=None)],
         ):
             DummyManager._data = "[]"
-            DummyInterface.sync_data()
+            self.capability.sync_data(DummyInterface)
             self.logger.warning.assert_called_once()
             # Verify no additional save() calls occurred
             self.assertEqual(DummyModel.objects._instances, [])
@@ -444,7 +452,7 @@ class SyncDataTests(SimpleTestCase):
         # New JSON data: `a` changes, `b` is new
         DummyManager._data = [{"name": "a", "other": 2}, {"name": "b", "other": 3}]
         # Run sync_data
-        DummyInterface.sync_data()
+        self.capability.sync_data(DummyInterface)
         # Verify `a` was updated
         inst_a = next(i for i in DummyModel.objects._instances if i.name == "a")
         self.assertEqual(inst_a.other, 2)
@@ -459,6 +467,25 @@ class SyncDataTests(SimpleTestCase):
         self.assertEqual(msg["created"], 1)
         self.assertEqual(msg["updated"], 1)
         self.assertEqual(msg["deactivated"], 0)
+
+
+class SystemCheckHookTests(SimpleTestCase):
+    def test_get_system_checks_invokes_capability(self):
+        capability = ReadOnlyManagementCapability()
+        DummyInterface._parent_class = DummyManager
+        hooks = capability.get_system_checks(DummyInterface)
+        with mock.patch.object(
+            ReadOnlyManagementCapability,
+            "ensure_schema_is_up_to_date",
+            return_value=[Warning("warn", obj=None)],
+        ) as mock_check:
+            results = [hook() for hook in hooks]
+        mock_check.assert_called_once_with(
+            DummyInterface,
+            DummyManager,
+            DummyInterface._model,
+        )
+        self.assertEqual(results, [[Warning("warn", obj=None)]])
 
 
 # ------------------------------------------------------------
