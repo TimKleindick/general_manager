@@ -72,7 +72,7 @@ class GeneralManagerTestCase(TestCase):
         """
         Prepare the test environment before each test.
 
-        Initializes GeneralManager attributes and collaborators for testing: assigns a DummyInterface and ManagerBasedPermission, enables soft-delete on the interface, and creates a test user. Installs temporary pre- and post-data-change signal receivers that capture each signal's keyword arguments into `self.pre_list` and `self.post_list`.
+        Initializes GeneralManager attributes and collaborators for testing and creates a test user. Installs temporary pre- and post-data-change signal receivers that capture each signal's keyword arguments into `self.pre_list` and `self.post_list`.
         """
         self.manager = GeneralManager
         self.manager._attributes = {
@@ -82,7 +82,6 @@ class GeneralManagerTestCase(TestCase):
             "id": "dummy_id",
         }
         self.manager.Interface = DummyInterface  # type: ignore
-        DummyInterface._use_soft_delete = True
         self.manager.Permission = ManagerBasedPermission  # type: ignore
 
         self.post_list = []
@@ -305,15 +304,11 @@ class GeneralManagerTestCase(TestCase):
             self.assertIsNone(result)
 
     def test_delete_returns_none_when_hard_delete(self):
-        """Hard deletes should return None from the manager API."""
+        """Deletes should return None from the manager API even when the interface returns identifiers."""
         manager_obj = self.manager()
-        DummyInterface._use_soft_delete = False
-        try:
-            with patch.object(
-                DummyInterface, "delete", return_value={"id": "new_id"}
-            ) as mock_delete:
-                result = manager_obj.delete(creator_id=1)
-                mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
-                self.assertIsNone(result)
-        finally:
-            DummyInterface._use_soft_delete = True
+        with patch.object(
+            DummyInterface, "delete", return_value={"id": "new_id"}
+        ) as mock_delete:
+            result = manager_obj.delete(creator_id=1)
+            mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
+            self.assertIsNone(result)

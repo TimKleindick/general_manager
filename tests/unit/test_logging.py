@@ -303,9 +303,7 @@ def test_read_only_interface_schema_warning_logs() -> None:
 
     with (
         patch.object(TrivialReadOnly, "ensure_schema_is_up_to_date", return_value=True),
-        patch(
-            "general_manager.interface.backends.read_only.read_only_interface.logger"
-        ) as mock_logger,
+        patch("general_manager.interface.capabilities.read_only.logger") as mock_logger,
     ):
         TrivialReadOnly.sync_data()
 

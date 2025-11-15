@@ -640,13 +640,12 @@ class TestGrapQlMutation(TestCase):
         class DummyManager:
             def __init__(self, *_, **kwargs):
                 """
-                Initialize the instance, set the `field1` attribute from kwargs if present, and enable soft-delete behavior.
+                Initialize the instance and set the `field1` attribute from kwargs if present.
 
                 Parameters:
                     field1: Optional value provided via keyword argument used to initialize `self.field1`.
                 """
                 self.field1 = kwargs.get("field1")
-                self._use_soft_delete = True
 
             class Interface(InterfaceBase):
                 input_fields: ClassVar[dict] = {"id": None}
