@@ -25,7 +25,7 @@ The interface layer is being simplified so each interface class merely declares 
 ## Rollout
 
 - **CalculationInterface** already ships as a pure configuration shell that composes `CALCULATION_CORE_CAPABILITIES`.
-- **OrmPersistenceInterface / OrmWritableInterface** now depend on `ORM_PERSISTENCE_CAPABILITIES` and `ORM_WRITABLE_CAPABILITIES`; they no longer hard-code capability overrides.
+- **OrmInterfaceBase** remains the single ORM base; concrete interfaces (DatabaseInterface, ExistingModelInterface, ReadOnlyInterface) point their `configured_capabilities` at the appropriate bundles instead of relying on inheritance layers.
 - **OrmInterfaceBase** hosts only the minimal initialization/search-date plumbing and delegates `_pre_create/_post_create` plus metadata lookups to capabilities, keeping both persistence and writable variants thin configuration shells.
 - **ExistingModelInterface** consumes the writable bundle plus `ExistingModelResolutionCapability`, and its lifecycle is declared via `lifecycle_capability_name = "existing_model_resolution"`.
 - **ReadOnlyInterface** composes `READ_ONLY_CAPABILITIES`, letting the read-only management capability provide schema syncing and lifecycle decorations.

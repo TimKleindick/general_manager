@@ -2,9 +2,7 @@
 
 ::: general_manager.interface.base_interface.InterfaceBase
 
-::: general_manager.interface.OrmPersistenceInterface
-
-::: general_manager.interface.OrmWritableInterface
+::: general_manager.interface.OrmInterfaceBase
 
 ::: general_manager.interface.DatabaseInterface
 

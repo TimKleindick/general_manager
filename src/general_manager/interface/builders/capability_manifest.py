@@ -11,8 +11,7 @@ from general_manager.interface.backends.calculation.calculation_interface import
     CalculationInterface,
 )
 from general_manager.interface.backends.database.database_based_interface import (
-    OrmPersistenceInterface,
-    OrmWritableInterface,
+    OrmInterfaceBase,
 )
 from general_manager.interface.backends.database.database_interface import (
     DatabaseInterface,
@@ -86,31 +85,13 @@ def _plan(
 CAPABILITY_MANIFEST = CapabilityManifest(
     plans={
         InterfaceBase: _plan(required=()),
-        OrmPersistenceInterface: _plan(
+        OrmInterfaceBase: _plan(
             required=names(
                 "orm_support",
                 "orm_lifecycle",
                 "soft_delete",
                 "read",
                 "validation",
-                "query",
-                "observability",
-            ),
-            optional=names("notification", "scheduling", "access_control"),
-            flags=DEFAULT_FLAG_MAPPING,
-        ),
-        OrmWritableInterface: _plan(
-            required=names(
-                "orm_support",
-                "orm_mutation",
-                "orm_lifecycle",
-                "soft_delete",
-                "read",
-                "validation",
-                "create",
-                "update",
-                "delete",
-                "history",
                 "query",
                 "observability",
             ),
@@ -118,23 +99,34 @@ CAPABILITY_MANIFEST = CapabilityManifest(
             flags=DEFAULT_FLAG_MAPPING,
         ),
         DatabaseInterface: _plan(
-            required=names(),
+            required=names(
+                "orm_mutation",
+                "create",
+                "update",
+                "delete",
+                "history",
+            ),
             optional=names(
                 "notification", "scheduling", "access_control", "observability"
             ),
             flags=DEFAULT_FLAG_MAPPING,
         ),
         ExistingModelInterface: _plan(
-            required=names("existing_model_resolution"),
+            required=names(
+                "orm_mutation",
+                "create",
+                "update",
+                "delete",
+                "history",
+                "existing_model_resolution",
+            ),
             optional=names(
                 "notification", "scheduling", "access_control", "observability"
             ),
             flags=DEFAULT_FLAG_MAPPING,
         ),
         ReadOnlyInterface: _plan(
-            required=names(
-                "read", "validation", "observability", "query", "read_only_management"
-            ),
+            required=names("read_only_management"),
             optional=names("notification", "access_control"),
             flags={"notifications": "notification", "access_control": "access_control"},
         ),

@@ -45,22 +45,19 @@ from .utils import with_observability
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.backends.database.database_based_interface import (
-        OrmPersistenceInterface,
-        OrmWritableInterface,
+        OrmInterfaceBase,
     )
 
 
 class OrmPersistenceSupportCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "orm_support"
 
-    def get_database_alias(
-        self, interface_cls: type["OrmPersistenceInterface"]
-    ) -> str | None:
+    def get_database_alias(self, interface_cls: type["OrmInterfaceBase"]) -> str | None:
         return getattr(interface_cls, "database", None)
 
     def get_manager(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         *,
         only_active: bool = True,
     ) -> models.Manager:
@@ -75,20 +72,18 @@ class OrmPersistenceSupportCapability(BaseCapability):
         interface_cls._active_manager = selector.cached_active  # type: ignore[attr-defined]
         return manager
 
-    def get_queryset(
-        self, interface_cls: type["OrmPersistenceInterface"]
-    ) -> models.QuerySet:
+    def get_queryset(self, interface_cls: type["OrmInterfaceBase"]) -> models.QuerySet:
         manager = self.get_manager(interface_cls, only_active=True)
         queryset: models.QuerySet = manager.all()  # type: ignore[assignment]
         return queryset
 
     def get_payload_normalizer(
-        self, interface_cls: type["OrmPersistenceInterface"]
+        self, interface_cls: type["OrmInterfaceBase"]
     ) -> PayloadNormalizer:
         return PayloadNormalizer(cast(Type[models.Model], interface_cls._model))
 
     def get_field_descriptors(
-        self, interface_cls: type["OrmPersistenceInterface"]
+        self, interface_cls: type["OrmInterfaceBase"]
     ) -> dict[str, FieldDescriptor]:
         descriptors = getattr(interface_cls, "_field_descriptors", None)
         if descriptors is None:
@@ -101,7 +96,7 @@ class OrmPersistenceSupportCapability(BaseCapability):
 
     def resolve_many_to_many(
         self,
-        interface_instance: "OrmPersistenceInterface",
+        interface_instance: "OrmInterfaceBase",
         field_call: str,
         field_name: str,
     ) -> models.QuerySet[Any]:
@@ -155,10 +150,10 @@ class OrmLifecycleCapability(BaseCapability):
         *,
         name: str,
         attrs: dict[str, Any],
-        interface: type["OrmPersistenceInterface"],
+        interface: type["OrmInterfaceBase"],
         base_model_class: type[GeneralManagerBasisModel],
     ) -> tuple[
-        dict[str, Any], type["OrmPersistenceInterface"], type[GeneralManagerBasisModel]
+        dict[str, Any], type["OrmInterfaceBase"], type[GeneralManagerBasisModel]
     ]:
         model_fields, meta_class = self._collect_model_fields(interface)
         model_fields["__module__"] = attrs.get("__module__")
@@ -195,7 +190,7 @@ class OrmLifecycleCapability(BaseCapability):
         self,
         *,
         new_class: type,
-        interface_class: type["OrmPersistenceInterface"],
+        interface_class: type["OrmInterfaceBase"],
         model: type[GeneralManagerBasisModel] | None,
     ) -> None:
         if model is None:
@@ -212,7 +207,7 @@ class OrmLifecycleCapability(BaseCapability):
 
     def _collect_model_fields(
         self,
-        interface: type["OrmPersistenceInterface"],
+        interface: type["OrmInterfaceBase"],
     ) -> tuple[dict[str, Any], type | None]:
         custom_fields, ignore_fields = self._handle_custom_fields(interface)
         model_fields: dict[str, Any] = {}
@@ -233,7 +228,7 @@ class OrmLifecycleCapability(BaseCapability):
 
     def _handle_custom_fields(
         self,
-        interface: type["OrmPersistenceInterface"],
+        interface: type["OrmInterfaceBase"],
     ) -> tuple[dict[str, Any], list[str]]:
         model = getattr(interface, "_model", None) or interface
         field_names: dict[str, models.Field] = {}
@@ -307,10 +302,10 @@ class OrmLifecycleCapability(BaseCapability):
 
     def _build_interface_class(
         self,
-        interface: type["OrmPersistenceInterface"],
+        interface: type["OrmInterfaceBase"],
         model: type[GeneralManagerBasisModel],
         use_soft_delete: bool,
-    ) -> type["OrmPersistenceInterface"]:
+    ) -> type["OrmInterfaceBase"]:
         interface_cls = type(interface.__name__, (interface,), {})
         interface_cls._model = model  # type: ignore[attr-defined]
         interface_cls._soft_delete_default = use_soft_delete  # type: ignore[attr-defined]
@@ -322,7 +317,7 @@ class OrmLifecycleCapability(BaseCapability):
         *,
         name: str,
         factory_definition: type | None,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         model: type[GeneralManagerBasisModel],
     ) -> type[AutoFactory]:
         factory_attributes: dict[str, Any] = {}
@@ -340,7 +335,7 @@ class OrmMutationCapability(BaseCapability):
 
     def assign_simple_attributes(
         self,
-        interface_cls: type["OrmWritableInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         instance: models.Model,
         kwargs: dict[str, Any],
     ) -> models.Model:
@@ -367,7 +362,7 @@ class OrmMutationCapability(BaseCapability):
 
     def save_with_history(
         self,
-        interface_cls: type["OrmWritableInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         instance: models.Model,
         *,
         creator_id: int | None,
@@ -413,7 +408,7 @@ class OrmMutationCapability(BaseCapability):
 
     def apply_many_to_many(
         self,
-        interface_cls: type["OrmWritableInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         instance: models.Model,
         *,
         many_to_many_kwargs: dict[str, list[int]],
@@ -445,7 +440,7 @@ class OrmMutationCapability(BaseCapability):
 class OrmReadCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "read"
 
-    def get_data(self, interface_instance: "OrmPersistenceInterface") -> Any:
+    def get_data(self, interface_instance: "OrmInterfaceBase") -> Any:
         def _perform() -> Any:
             interface_cls = interface_instance.__class__
             support = _support_capability_for(interface_cls)
@@ -500,7 +495,7 @@ class OrmReadCapability(BaseCapability):
 
     def get_attribute_types(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
     ) -> dict[str, dict[str, Any]]:
         descriptors = _support_capability_for(interface_cls).get_field_descriptors(
             interface_cls
@@ -511,7 +506,7 @@ class OrmReadCapability(BaseCapability):
 
     def get_attributes(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
     ) -> dict[str, Callable[[Any], Any]]:
         descriptors = _support_capability_for(interface_cls).get_field_descriptors(
             interface_cls
@@ -520,7 +515,7 @@ class OrmReadCapability(BaseCapability):
 
     def get_field_type(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         field_name: str,
     ) -> type:
         field = interface_cls._model._meta.get_field(field_name)
@@ -539,7 +534,7 @@ class OrmCreateCapability(BaseCapability):
 
     def create(
         self,
-        interface_cls: type["OrmWritableInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         *args: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -585,7 +580,7 @@ class OrmUpdateCapability(BaseCapability):
 
     def update(
         self,
-        interface_instance: "OrmWritableInterface",
+        interface_instance: "OrmInterfaceBase",
         *args: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -637,7 +632,7 @@ class OrmDeleteCapability(BaseCapability):
 
     def delete(
         self,
-        interface_instance: "OrmWritableInterface",
+        interface_instance: "OrmInterfaceBase",
         *args: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -707,7 +702,7 @@ class OrmHistoryCapability(BaseCapability):
 
     def get_historical_record(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         instance: Any,
         search_date: datetime | None = None,
     ) -> Any | None:
@@ -728,7 +723,7 @@ class OrmHistoryCapability(BaseCapability):
 
     def get_historical_record_by_pk(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         pk: Any,
         search_date: datetime | None,
     ) -> Any | None:
@@ -753,7 +748,7 @@ class OrmValidationCapability(BaseCapability):
 
     def normalize_payload(
         self,
-        interface_cls: type["OrmWritableInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         *,
         payload: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
@@ -784,7 +779,7 @@ class OrmQueryCapability(BaseCapability):
 
     def filter(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         **kwargs: Any,
     ) -> DatabaseBucket:
         payload_snapshot = {"kwargs": dict(kwargs)}
@@ -806,7 +801,7 @@ class OrmQueryCapability(BaseCapability):
 
     def exclude(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         **kwargs: Any,
     ) -> DatabaseBucket:
         payload_snapshot = {"kwargs": dict(kwargs)}
@@ -829,7 +824,7 @@ class OrmQueryCapability(BaseCapability):
 
     def _normalize_kwargs(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         kwargs: dict[str, Any],
     ) -> tuple[bool, dict[str, Any]]:
         payload = dict(kwargs)
@@ -841,7 +836,7 @@ class OrmQueryCapability(BaseCapability):
 
     def _build_bucket(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         *,
         include_inactive: bool,
         normalized_kwargs: dict[str, Any],
@@ -867,7 +862,7 @@ class OrmQueryCapability(BaseCapability):
 
 
 def _normalize_payload(
-    interface_cls: type["OrmWritableInterface"],
+    interface_cls: type["OrmInterfaceBase"],
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
     handler = interface_cls.get_capability_handler("validation")
@@ -884,7 +879,7 @@ def _normalize_payload(
 
 
 def _mutation_capability_for(
-    interface_cls: type["OrmWritableInterface"],
+    interface_cls: type["OrmInterfaceBase"],
 ) -> OrmMutationCapability:
     return interface_cls.require_capability(  # type: ignore[return-value]
         "orm_mutation",
@@ -893,7 +888,7 @@ def _mutation_capability_for(
 
 
 def _soft_delete_capability_for(
-    interface_cls: type["OrmPersistenceInterface"],
+    interface_cls: type["OrmInterfaceBase"],
 ) -> SoftDeleteCapability:
     return interface_cls.require_capability(  # type: ignore[return-value]
         "soft_delete",
@@ -901,7 +896,7 @@ def _soft_delete_capability_for(
     )
 
 
-def _is_soft_delete_enabled(interface_cls: type["OrmPersistenceInterface"]) -> bool:
+def _is_soft_delete_enabled(interface_cls: type["OrmInterfaceBase"]) -> bool:
     handler = interface_cls.get_capability_handler("soft_delete")
     if isinstance(handler, SoftDeleteCapability):
         return handler.is_enabled()
@@ -914,7 +909,7 @@ def _is_soft_delete_enabled(interface_cls: type["OrmPersistenceInterface"]) -> b
 
 
 def _support_capability_for(
-    interface_cls: type["OrmPersistenceInterface"],
+    interface_cls: type["OrmInterfaceBase"],
 ) -> OrmPersistenceSupportCapability:
     return interface_cls.require_capability(  # type: ignore[return-value]
         "orm_support",
@@ -923,7 +918,7 @@ def _support_capability_for(
 
 
 def _history_capability_for(
-    interface_cls: type["OrmPersistenceInterface"],
+    interface_cls: type["OrmInterfaceBase"],
 ) -> OrmHistoryCapability:
     return interface_cls.require_capability(  # type: ignore[return-value]
         "history",
