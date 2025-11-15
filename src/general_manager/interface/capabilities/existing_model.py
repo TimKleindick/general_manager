@@ -18,6 +18,7 @@ from general_manager.interface.models import get_full_clean_methode
 
 from .base import CapabilityName
 from .builtin import BaseCapability
+from .orm import OrmPersistenceSupportCapability, SoftDeleteCapability
 from .utils import with_observability
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -55,7 +56,12 @@ class ExistingModelResolutionCapability(BaseCapability):
                 raise InvalidModelReferenceError(model_reference)
             interface_cls._model = model  # type: ignore[assignment]
             interface_cls.model = model
-            interface_cls._use_soft_delete = hasattr(model, "is_active")
+            default_state = hasattr(model, "is_active")
+            handler = interface_cls.get_capability_handler("soft_delete")
+            if isinstance(handler, SoftDeleteCapability):
+                handler.set_state(enabled=default_state)
+            else:
+                interface_cls._soft_delete_default = default_state  # type: ignore[attr-defined]
             return model
 
         return with_observability(
@@ -144,7 +150,7 @@ class ExistingModelResolutionCapability(BaseCapability):
             )
             concrete_interface._model = model  # type: ignore[attr-defined]
             concrete_interface.model = model
-            concrete_interface._use_soft_delete = hasattr(model, "is_active")
+            concrete_interface._soft_delete_default = hasattr(model, "is_active")  # type: ignore[attr-defined]
             concrete_interface._field_descriptors = None  # type: ignore[attr-defined]
             attrs["_interface_type"] = interface_cls._interface_type
             attrs["Interface"] = concrete_interface
@@ -184,20 +190,22 @@ class ExistingModelResolutionCapability(BaseCapability):
                 return
             interface_class._parent_class = new_class  # type: ignore[attr-defined]
             model._general_manager_class = new_class  # type: ignore[attr-defined]
-            try:
-                new_class.objects = interface_class._get_manager()  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
-            if getattr(interface_class, "_use_soft_delete", False):
-                if hasattr(model, "all_objects"):
-                    new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
-                        only_active=False
-                    )
-                else:
+            support = interface_class.require_capability(  # type: ignore[assignment]
+                "orm_support",
+                expected_type=OrmPersistenceSupportCapability,
+            )
+            new_class.objects = support.get_manager(interface_class)  # type: ignore[attr-defined]
+            soft_delete = interface_class.get_capability_handler("soft_delete")
+            if (
+                isinstance(soft_delete, SoftDeleteCapability)
+                and soft_delete.is_enabled()
+            ):
+                if not hasattr(model, "all_objects"):
                     model.all_objects = model._default_manager  # type: ignore[attr-defined]
-                    new_class.all_objects = interface_class._get_manager(  # type: ignore[attr-defined]
-                        only_active=False
-                    )
+                new_class.all_objects = support.get_manager(  # type: ignore[attr-defined]
+                    interface_class,
+                    only_active=False,
+                )
 
         return with_observability(
             interface_class,

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
-from typing import Mapping
+from collections.abc import Callable
+from typing import Iterable, Mapping
 
 from .base import Capability, CapabilityName
 from .builtin import (
@@ -35,15 +34,25 @@ CAPABILITY_CLASS_MAP: dict[CapabilityName, type[Capability]] = {
 }
 
 
+CapabilityOverride = Callable[[], Capability] | type[Capability]
+
+
 def build_capabilities(
     interface_cls: type,
     names: Iterable[CapabilityName],
-    overrides: Mapping[CapabilityName, type[Capability]],
+    overrides: Mapping[CapabilityName, CapabilityOverride],
 ) -> list[Capability]:
     """Instantiate capability objects for the provided names."""
     instances: list[Capability] = []
     for name in names:
-        capability_cls = overrides.get(name) or CAPABILITY_CLASS_MAP.get(name)
+        override = overrides.get(name)
+        if override is not None:
+            if isinstance(override, type):
+                instances.append(override())
+            else:
+                instances.append(override())
+            continue
+        capability_cls = CAPABILITY_CLASS_MAP.get(name)
         if capability_cls is None:
             message = f"Unknown capability '{name}'"
             raise KeyError(message)

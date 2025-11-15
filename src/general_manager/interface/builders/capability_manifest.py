@@ -90,6 +90,7 @@ CAPABILITY_MANIFEST = CapabilityManifest(
             required=names(
                 "orm_support",
                 "orm_lifecycle",
+                "soft_delete",
                 "read",
                 "validation",
                 "query",
@@ -103,6 +104,9 @@ CAPABILITY_MANIFEST = CapabilityManifest(
                 "orm_support",
                 "orm_mutation",
                 "orm_lifecycle",
+                "soft_delete",
+                "read",
+                "validation",
                 "create",
                 "update",
                 "delete",
