@@ -14,7 +14,11 @@ from django.apps import apps
 from simple_history.models import HistoricalRecords
 
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface import OrmPersistenceInterface
+from general_manager.interface import OrmInterfaceBase
+from general_manager.interface.backends.database.capability_sets import (
+    ORM_PERSISTENCE_CAPABILITIES,
+    ORM_WRITABLE_CAPABILITIES,
+)
 from general_manager.interface.models import get_full_clean_methode
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
@@ -45,11 +49,12 @@ class PersonModel(models.Model):
         app_label = "general_manager"
 
 
-class PersonInterface(OrmPersistenceInterface):
+class PersonInterface(OrmInterfaceBase):
     _model = PersonModel
     _parent_class = None
     _interface_type = "test"
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+    configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
     class Meta:
         app_label = "general_manager"
@@ -80,7 +85,7 @@ PersonInterface.__module__ = (
 )
 
 
-class OrmPersistenceInterfaceTestCase(TransactionTestCase):
+class OrmInterfaceBaseTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
@@ -312,13 +317,14 @@ class OrmPersistenceInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields(self):
         """
-        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a OrmPersistenceInterface subclass.
+        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a OrmInterfaceBase subclass.
         """
 
-        class CustomInterface(OrmPersistenceInterface):
+        class CustomInterface(OrmInterfaceBase):
             sample = models.CharField(max_length=5)
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        fields, ignore = OrmPersistenceInterface.handle_custom_fields(CustomInterface)
+        fields, ignore = CustomInterface.handle_custom_fields(CustomInterface)
         self.assertIn(None, fields)
         self.assertIn("None_value", ignore)
         self.assertIn("None_unit", ignore)
@@ -678,14 +684,13 @@ class OrmPersistenceInterfaceTestCase(TransactionTestCase):
         Tests handle_custom_fields with multiple custom fields defined.
         """
 
-        class MultiCustomInterface(OrmPersistenceInterface):
+        class MultiCustomInterface(OrmInterfaceBase):
             field1 = models.CharField(max_length=10)
             field2 = models.IntegerField()
             field3 = models.BooleanField()
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        fields, ignore = OrmPersistenceInterface.handle_custom_fields(
-            MultiCustomInterface
-        )
+        fields, ignore = MultiCustomInterface.handle_custom_fields(MultiCustomInterface)
 
         # Should have None for each custom field
         expected_none_count = 3  # field1, field2, field3
@@ -703,10 +708,11 @@ class OrmPersistenceInterfaceTestCase(TransactionTestCase):
         Tests handle_custom_fields with no custom fields defined.
         """
 
-        class NoCustomInterface(OrmPersistenceInterface):
+        class NoCustomInterface(OrmInterfaceBase):
             pass
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        fields, ignore = OrmPersistenceInterface.handle_custom_fields(NoCustomInterface)
+        fields, ignore = NoCustomInterface.handle_custom_fields(NoCustomInterface)
 
         # Should have empty or minimal results
         self.assertIsInstance(fields, (list, tuple))
@@ -717,10 +723,11 @@ class OrmPersistenceInterfaceTestCase(TransactionTestCase):
         Tests behavior when interface is configured with invalid model.
         """
 
-        class InvalidInterface(OrmPersistenceInterface):
+        class InvalidInterface(OrmInterfaceBase):
             _model = None
             _parent_class = None
             _interface_type = "test"
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
         # Should handle gracefully or raise appropriate error
         with self.assertRaises((AttributeError, TypeError)):
@@ -826,9 +833,10 @@ class OrmPersistenceInterfaceTestCase(TransactionTestCase):
         Tests that _get_database_alias returns the configured database alias.
         """
 
-        class CustomInterface(OrmPersistenceInterface):
+        class CustomInterface(OrmInterfaceBase):
             _model = PersonModel
             database = "custom_db"
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
         support = CustomInterface.require_capability(
             "orm_support",
@@ -986,18 +994,19 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
         from general_manager.interface.backends.database.database_based_interface import (
-            OrmWritableInterface,
+            OrmInterfaceBase,
         )
 
         self.user1 = User.objects.create(username="creator")
         self.user2 = User.objects.create(username="modifier")
 
-        class TestWritableInterface(OrmWritableInterface):
+        class TestWritableInterface(OrmInterfaceBase):
             _model = WritableInterfaceTestModel
             _parent_class = None
             _interface_type = "writable_test"
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
             _soft_delete_default = True
+            configured_capabilities: ClassVar[tuple] = (ORM_WRITABLE_CAPABILITIES,)
 
             class Meta:
                 use_soft_delete = True

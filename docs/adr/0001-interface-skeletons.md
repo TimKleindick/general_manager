@@ -61,10 +61,10 @@ class InterfaceBase(ABC):
     # create / update / delete follow the same delegation pattern
 ```
 
-### `OrmPersistenceInterface`
+### `OrmInterfaceBase`
 
 ```python
-class OrmPersistenceInterface(InterfaceBase, Generic[HistoryModelT]):
+class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     _interface_type = "database"
     input_fields = {"id": Input(int)}
     database: ClassVar[str | None] = None
@@ -99,34 +99,13 @@ class OrmPersistenceInterface(InterfaceBase, Generic[HistoryModelT]):
         )
 ```
 
-### `OrmWritableInterface`
-
-```python
-class OrmWritableInterface(OrmPersistenceInterface[WritableModelT]):
-    capability_overrides = OrmPersistenceInterface.capability_overrides | {
-        "orm_mutation": OrmMutationCapability,
-        "create": OrmCreateCapability,
-        "update": OrmUpdateCapability,
-        "delete": OrmDeleteCapability,
-    }
-
-    def update(...):
-        handler = self.get_capability_handler("update")
-        if handler is None:
-            raise NotImplementedError
-        return handler.update(self, ...)
-```
-
 ### `ExistingModelInterface`
 
 ```python
-class ExistingModelInterface(OrmWritableInterface[ExistingModelT]):
+class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
     _interface_type = "existing"
     model: ClassVar[type[models.Model] | str | None] = None
-    capability_overrides = OrmWritableInterface.capability_overrides | {
-        "existing_model_resolution": ExistingModelResolutionCapability,
-        # planned: "existing_model_lifecycle"
-    }
+    configured_capabilities = (EXISTING_MODEL_CAPABILITIES,)
 ```
 
 ### `ReadOnlyInterface`

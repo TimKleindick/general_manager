@@ -4,24 +4,18 @@ from __future__ import annotations
 
 __all__ = [
     "CalculationInterface",
-    "DBBasedInterface",
     "DatabaseInterface",
     "ExistingModelInterface",
     "InterfaceBase",
-    "OrmPersistenceInterface",
-    "OrmWritableInterface",
+    "OrmInterfaceBase",
     "ReadOnlyInterface",
-    "WritableDBBasedInterface",
 ]
 
 from general_manager.interface.backends.calculation.calculation_interface import (
     CalculationInterface,
 )
 from general_manager.interface.backends.database.database_based_interface import (
-    OrmPersistenceInterface,
-    OrmWritableInterface,
-    DBBasedInterface,
-    WritableDBBasedInterface,
+    OrmInterfaceBase,
 )
 from general_manager.interface.backends.database.database_interface import (
     DatabaseInterface,

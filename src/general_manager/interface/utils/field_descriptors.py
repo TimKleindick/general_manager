@@ -17,10 +17,10 @@ from general_manager.measurement.measurement_field import MeasurementField
 
 if TYPE_CHECKING:
     from general_manager.interface.backends.database.database_based_interface import (
-        OrmPersistenceInterface,
+        OrmInterfaceBase,
     )
 
-DescriptorAccessor = Callable[["OrmPersistenceInterface"], Any]
+DescriptorAccessor = Callable[["OrmInterfaceBase"], Any]
 
 
 @dataclass(frozen=True)
@@ -53,14 +53,14 @@ TRANSLATION: dict[type[models.Field], type] = {
 
 
 def build_field_descriptors(
-    interface_cls: type["OrmPersistenceInterface"],
-    resolve_many: Callable[["OrmPersistenceInterface", str, str], Any] | None = None,
+    interface_cls: type["OrmInterfaceBase"],
+    resolve_many: Callable[["OrmInterfaceBase", str, str], Any] | None = None,
 ) -> dict[str, FieldDescriptor]:
     """
     Construct field descriptors for the given DB-based interface class.
 
     Parameters:
-        interface_cls (type[OrmPersistenceInterface]): A subclass of OrmPersistenceInterface whose associated model will be inspected.
+        interface_cls (type[OrmInterfaceBase]): A subclass of OrmInterfaceBase whose associated model will be inspected.
 
     Returns:
         dict[str, FieldDescriptor]: Mapping from attribute name to its FieldDescriptor containing metadata and an accessor.
@@ -75,15 +75,15 @@ def build_field_descriptors(
 class _FieldDescriptorBuilder:
     def __init__(
         self,
-        interface_cls: type["OrmPersistenceInterface"],
+        interface_cls: type["OrmInterfaceBase"],
         *,
-        resolve_many: Callable[["OrmPersistenceInterface", str, str], Any],
+        resolve_many: Callable[["OrmInterfaceBase", str, str], Any],
     ) -> None:
         """
-        Initialize a builder for constructing field descriptors for a OrmPersistenceInterface subclass.
+        Initialize a builder for constructing field descriptors for a OrmInterfaceBase subclass.
 
         Parameters:
-                interface_cls (type[OrmPersistenceInterface]): The interface class whose associated Django model will be inspected to build field descriptors. The builder initializes its internal state (model reference, empty descriptor mapping) and collects custom model fields and helper names to ignore.
+                interface_cls (type[OrmInterfaceBase]): The interface class whose associated Django model will be inspected to build field descriptors. The builder initializes its internal state (model reference, empty descriptor mapping) and collects custom model fields and helper names to ignore.
         """
         self.interface_cls = interface_cls
         self.model = interface_cls._model  # type: ignore[attr-defined]
@@ -292,7 +292,7 @@ class _FieldDescriptorBuilder:
                 is_editable (bool): Whether the attribute is editable.
                 default (Any): The attribute's default value to record in metadata.
                 is_derived (bool): Whether the attribute value is derived rather than stored directly.
-                accessor (DescriptorAccessor): Callable that resolves the attribute value from a OrmPersistenceInterface instance.
+                accessor (DescriptorAccessor): Callable that resolves the attribute value from a OrmInterfaceBase instance.
 
         Raises:
                 DuplicateFieldNameError: If `attribute_name` is already registered.
@@ -432,16 +432,16 @@ def _iter_reverse_relations(
 
 def _instance_attribute_accessor(field_name: str) -> DescriptorAccessor:
     """
-    Create an accessor that reads a named attribute from a OrmPersistenceInterface's underlying model instance.
+    Create an accessor that reads a named attribute from a OrmInterfaceBase's underlying model instance.
 
     Parameters:
         field_name (str): The model attribute name to read from the interface's `_instance`.
 
     Returns:
-        accessor (Callable[["OrmPersistenceInterface"], Any]): A function that, given a OrmPersistenceInterface, returns the value of the specified attribute on its `_instance`.
+        accessor (Callable[["OrmInterfaceBase"], Any]): A function that, given a OrmInterfaceBase, returns the value of the specified attribute on its `_instance`.
     """
 
-    def getter(self: "OrmPersistenceInterface") -> Any:  # type: ignore[name-defined]
+    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
         return getattr(self._instance, field_name)
 
     return getter
@@ -451,17 +451,17 @@ def _general_manager_accessor(
     field_name: str, manager_class: type
 ) -> DescriptorAccessor:
     """
-    Create an accessor that resolves a related object's manager instance from a OrmPersistenceInterface.
+    Create an accessor that resolves a related object's manager instance from a OrmInterfaceBase.
 
     Parameters:
         field_name (str): Name of the attribute on the underlying model that holds the related object.
         manager_class (type): Class to instantiate with the related object's primary key to obtain its manager.
 
     Returns:
-        DescriptorAccessor: A callable that, given a OrmPersistenceInterface, returns the manager instance for the related object, or `None` if the related attribute is `None`.
+        DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager instance for the related object, or `None` if the related attribute is `None`.
     """
 
-    def getter(self: "OrmPersistenceInterface") -> Any:  # type: ignore[name-defined]
+    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
         related = getattr(self._instance, field_name)
         if related is None:
             return None
@@ -480,7 +480,7 @@ def _general_manager_many_accessor(
     """
     Create a descriptor accessor that returns the provided general manager filtered to objects related to the given source model instance.
 
-    The returned callable accepts a OrmPersistenceInterface instance and calls the provided general manager's `filter` with keyword arguments mapping each field (on the related model) that points to the source model to the interface instance's primary key.
+    The returned callable accepts a OrmInterfaceBase instance and calls the provided general manager's `filter` with keyword arguments mapping each field (on the related model) that points to the source model to the interface instance's primary key.
 
     Parameters:
         accessor_name (str): Logical name of the accessor (used for naming only).
@@ -489,7 +489,7 @@ def _general_manager_many_accessor(
         source_model (type[models.Model]): Model class of the source instance whose primary key is used for filtering.
 
     Returns:
-        DescriptorAccessor: A callable that, given a OrmPersistenceInterface, returns the manager filtered to related objects whose foreign key to `source_model` equals the instance's primary key.
+        DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager filtered to related objects whose foreign key to `source_model` equals the instance's primary key.
     """
     related_fields = [
         rel
@@ -497,7 +497,7 @@ def _general_manager_many_accessor(
         if getattr(rel, "related_model", None) == source_model
     ]
 
-    def getter(self: "OrmPersistenceInterface") -> Any:  # type: ignore[name-defined]
+    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
         """
         Retrieve related objects from the general manager filtered to this interface instance.
 
@@ -512,29 +512,29 @@ def _general_manager_many_accessor(
 
 
 def _direct_many_accessor(
-    resolver: Callable[["OrmPersistenceInterface", str, str], Any],
+    resolver: Callable[["OrmInterfaceBase", str, str], Any],
     field_call: str,
     field_name: str,
 ) -> DescriptorAccessor:
     """
-    Create an accessor that resolves a direct many-to-many relationship value from a OrmPersistenceInterface instance.
+    Create an accessor that resolves a direct many-to-many relationship value from a OrmInterfaceBase instance.
 
     Parameters:
         field_call (str): The attribute or call expression used to access the related manager or relation on the underlying model.
         field_name (str): The base field name used to identify the relation when resolving many-to-many values.
 
     Returns:
-        DescriptorAccessor: A callable that accepts a OrmPersistenceInterface instance and returns the resolved collection for the specified many-to-many relation.
+        DescriptorAccessor: A callable that accepts a OrmInterfaceBase instance and returns the resolved collection for the specified many-to-many relation.
     """
 
-    def getter(self: "OrmPersistenceInterface") -> Any:  # type: ignore[name-defined]
+    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
         return resolver(self, field_call, field_name)
 
     return getter
 
 
 def _fallback_resolve_many(
-    interface_instance: "OrmPersistenceInterface",
+    interface_instance: "OrmInterfaceBase",
     field_call: str,
     field_name: str,
 ) -> Any:

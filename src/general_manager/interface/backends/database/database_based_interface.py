@@ -15,10 +15,6 @@ from general_manager.interface.capabilities.orm import (
     OrmHistoryCapability,
     OrmLifecycleCapability,
 )
-from general_manager.interface.backends.database.capability_sets import (
-    ORM_PERSISTENCE_CAPABILITIES,
-    ORM_WRITABLE_CAPABILITIES,
-)
 from general_manager.interface.models import (
     GeneralManagerBasisModel,
     GeneralManagerModel,
@@ -27,7 +23,6 @@ from general_manager.interface.utils.field_descriptors import FieldDescriptor
 from general_manager.manager.input import Input
 
 HistoryModelT = TypeVar("HistoryModelT", bound=models.Model)
-WritableModelT = TypeVar("WritableModelT", bound=models.Model)
 
 
 class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
@@ -83,24 +78,3 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
             ),
         )
         return lifecycle.describe_custom_fields(model)
-
-
-class OrmPersistenceInterface(OrmInterfaceBase[HistoryModelT]):
-    """Read-only ORM interface configured via capability bundles."""
-
-    configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]] = (
-        ORM_PERSISTENCE_CAPABILITIES,
-    )
-
-
-class OrmWritableInterface(OrmPersistenceInterface[WritableModelT]):
-    """Writable ORM interface configured via capability bundles."""
-
-    configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]] = (
-        ORM_WRITABLE_CAPABILITIES,
-    )
-
-
-# Backwards compatibility aliases (deprecated)
-DBBasedInterface = OrmPersistenceInterface
-WritableDBBasedInterface = OrmWritableInterface

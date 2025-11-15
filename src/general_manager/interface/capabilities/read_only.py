@@ -32,7 +32,7 @@ logger = get_logger("interface.read_only")
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.backends.database.database_based_interface import (
-        OrmPersistenceInterface,
+        OrmInterfaceBase,
     )
     from general_manager.interface.backends.read_only.read_only_interface import (
         ReadOnlyInterface,
@@ -85,7 +85,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def ensure_schema_is_up_to_date(
         self,
-        interface_cls: type["OrmPersistenceInterface[Any]"],
+        interface_cls: type["OrmInterfaceBase[Any]"],
         manager_cls: Type["GeneralManager"],
         model: Type[models.Model],
         *,
@@ -183,7 +183,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def sync_data(
         self,
-        interface_cls: type["OrmPersistenceInterface[Any]"],
+        interface_cls: type["OrmInterfaceBase[Any]"],
         *,
         connection=None,
         transaction=None,
@@ -360,7 +360,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def get_startup_hooks(
         self,
-        interface_cls: type["OrmPersistenceInterface[Any]"],
+        interface_cls: type["OrmInterfaceBase[Any]"],
     ) -> tuple[Callable[[], None], ...]:
         """Expose a startup hook that synchronizes read-only data."""
 
@@ -371,7 +371,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def get_system_checks(
         self,
-        interface_cls: type["OrmPersistenceInterface[Any]"],
+        interface_cls: type["OrmInterfaceBase[Any]"],
     ) -> tuple[Callable[[], list[Warning]], ...]:
         """Expose a system check ensuring the read-only schema is current."""
 
@@ -399,11 +399,11 @@ class ReadOnlyLifecycleCapability(OrmLifecycleCapability):
         *,
         name: str,
         attrs: dict[str, Any],
-        interface: type["OrmPersistenceInterface[Any]"],
+        interface: type["OrmInterfaceBase[Any]"],
         base_model_class: type[GeneralManagerBasisModel],
     ) -> tuple[
         dict[str, Any],
-        type["OrmPersistenceInterface[Any]"],
+        type["OrmInterfaceBase[Any]"],
         type[GeneralManagerBasisModel],
     ]:
         meta = getattr(interface, "Meta", None)
@@ -422,7 +422,7 @@ class ReadOnlyLifecycleCapability(OrmLifecycleCapability):
         self,
         *,
         new_class: Type["GeneralManager"],
-        interface_class: type["OrmPersistenceInterface[Any]"],
+        interface_class: type["OrmInterfaceBase[Any]"],
         model: Type["GeneralManagerBasisModel"] | None,
     ) -> None:
         super().post_create(

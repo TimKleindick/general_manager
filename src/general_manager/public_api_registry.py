@@ -170,10 +170,7 @@ PERMISSION_EXPORTS: LazyExportMap = {
 
 INTERFACE_EXPORTS: LazyExportMap = {
     "InterfaceBase": "general_manager.interface.base_interface",
-    "OrmPersistenceInterface": "general_manager.interface.backends.database.database_based_interface",
-    "OrmWritableInterface": "general_manager.interface.backends.database.database_based_interface",
-    "DBBasedInterface": "general_manager.interface.backends.database.database_based_interface",
-    "WritableDBBasedInterface": "general_manager.interface.backends.database.database_based_interface",
+    "OrmInterfaceBase": "general_manager.interface.backends.database.database_based_interface",
     "DatabaseInterface": "general_manager.interface.backends.database.database_interface",
     "ExistingModelInterface": "general_manager.interface.backends.existing_model.existing_model_interface",
     "ReadOnlyInterface": "general_manager.interface.backends.read_only.read_only_interface",
