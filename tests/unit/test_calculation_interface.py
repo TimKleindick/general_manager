@@ -3,6 +3,12 @@ from typing import ClassVar
 from django.test import TestCase
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface import CalculationInterface
+from general_manager.interface.capabilities.calculation import (
+    CalculationQueryCapability,
+)
+from general_manager.interface.capabilities.configuration import (
+    InterfaceCapabilityConfig,
+)
 from general_manager.manager.input import Input
 
 
@@ -18,6 +24,22 @@ class DummyGeneralManager:
 
 
 DummyCalculationInterface._parent_class = DummyGeneralManager
+
+
+class CustomQueryCapability(CalculationQueryCapability):
+    def __init__(self, label: str):
+        super().__init__()
+        self.label = label
+
+
+class CustomCalculationInterface(DummyCalculationInterface):
+    configured_capabilities: ClassVar[tuple] = (
+        *DummyCalculationInterface.configured_capabilities,
+        InterfaceCapabilityConfig(CustomQueryCapability, {"label": "custom"}),
+    )
+
+
+CustomCalculationInterface._parent_class = DummyGeneralManager
 
 
 class TestCalculationInterface(TestCase):
@@ -86,7 +108,8 @@ class TestCalculationInterface(TestCase):
 
         Verifies that the returned attributes dictionary contains the provided field values, the correct interface type, and a reference to the interface class. Also checks that the initialized interface is a subclass of DummyCalculationInterface.
         """
-        attr, initialized_interface, _ = DummyCalculationInterface._pre_create(
+        pre, _post = DummyCalculationInterface.handle_interface()
+        attr, initialized_interface, _ = pre(
             "test",
             {"field1": "value1", "field2": 42},
             DummyCalculationInterface,
@@ -124,3 +147,12 @@ class TestCalculationInterface(TestCase):
 
         with self.assertRaises(KeyError):
             DummyCalculationInterface.get_field_type("non_existent_field")
+
+    def test_configured_capability_override(self):
+        """
+        Tests that configured capabilities declared on the interface replace default handlers.
+        """
+        handler = CustomCalculationInterface.get_capability_handler("query")
+        self.assertIsNotNone(handler)
+        self.assertIsInstance(handler, CustomQueryCapability)
+        self.assertEqual(handler.label, "custom")

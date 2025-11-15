@@ -33,6 +33,7 @@ def test_database_interface_default_capabilities() -> None:
             "orm_support",
             "orm_mutation",
             "orm_lifecycle",
+            "soft_delete",
             "read",
             "history",
             "validation",

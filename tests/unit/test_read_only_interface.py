@@ -7,6 +7,11 @@ from django.db import connection
 from unittest import mock
 
 from general_manager.interface import ReadOnlyInterface
+from general_manager.interface.capabilities.orm import OrmLifecycleCapability
+from general_manager.interface.capabilities.read_only import (
+    ReadOnlyLifecycleCapability,
+    ReadOnlyManagementCapability,
+)
 from general_manager.interface.models import GeneralManagerBasisModel
 
 from django.db import models
@@ -341,23 +346,25 @@ class SyncDataTests(SimpleTestCase):
             return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.backends.read_only.read_only_interface.transaction.atomic",
+            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
         # Stub get_unique_fields to return {'name'}
         self.gu_patch = mock.patch.object(
-            ReadOnlyInterface, "get_unique_fields", return_value={"name"}
+            ReadOnlyManagementCapability, "get_unique_fields", return_value={"name"}
         )
         self.gu_patch.start()
         # Stub ensure_schema_is_up_to_date to always return an empty list
         self.es_patch = mock.patch.object(
-            ReadOnlyInterface, "ensure_schema_is_up_to_date", return_value=[]
+            ReadOnlyManagementCapability,
+            "ensure_schema_is_up_to_date",
+            return_value=[],
         )
         self.es_patch.start()
         # Capture log output
         self.log_patcher = mock.patch(
-            "general_manager.interface.backends.read_only.read_only_interface.logger"
+            "general_manager.interface.capabilities.read_only.logger"
         )
         self.logger = self.log_patcher.start()
 
@@ -413,7 +420,7 @@ class SyncDataTests(SimpleTestCase):
         """
         self.es_patch.stop()
         with mock.patch.object(
-            ReadOnlyInterface,
+            ReadOnlyManagementCapability,
             "ensure_schema_is_up_to_date",
             return_value=[Warning("x", "y", obj=None)],
         ):
@@ -457,67 +464,60 @@ class SyncDataTests(SimpleTestCase):
 # ------------------------------------------------------------
 # Tests for decorators and handle_interface
 # ------------------------------------------------------------
-class DecoratorTests(SimpleTestCase):
-    def test_read_only_post_create_appends_class(self):
-        # Reset tracked classes
-        """
-        Tests that the read_only_post_create decorator appends the class to the read_only_classes list and calls the decorated hook.
-        """
+class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
+    def setUp(self) -> None:
         from general_manager.manager.meta import GeneralManagerMeta
 
+        self.capability = ReadOnlyLifecycleCapability()
+        self._original = list(GeneralManagerMeta.read_only_classes)
         GeneralManagerMeta.read_only_classes = []
 
-        # Dummy function
-        @ReadOnlyInterface.read_only_post_create
-        def post_hook(new_cls, interface_cls, model):
-            # Mark the class when the hook executes
-            """
-            Marks the given class to indicate that the post hook has been called.
+    def tearDown(self) -> None:
+        from general_manager.manager.meta import GeneralManagerMeta
 
-            Parameters:
-                new_cls: The class to be marked.
-                interface_cls: The interface class associated with the hook.
-                model: The model associated with the hook.
-            """
-            new_cls._hook_called = True
+        GeneralManagerMeta.read_only_classes = self._original
 
-        class C:
+    def test_pre_create_enforces_soft_delete_and_base_model(self):
+        class DummyInterface(ReadOnlyInterface):
             pass
 
-        post_hook(C, ReadOnlyInterface, DummyModel)
-        self.assertTrue(hasattr(C, "_hook_called"))
-        self.assertIn(C, GeneralManagerMeta.read_only_classes)
+        if hasattr(DummyInterface, "Meta"):
+            delattr(DummyInterface, "Meta")
 
-    def test_read_only_pre_create_delegates_and_sets_base_model(self):
-        """
-        Tests that the read_only_pre_create decorator delegates to the original function and sets the base model class to ReadOnlyModel.
-        """
+        with mock.patch.object(
+            OrmLifecycleCapability,
+            "pre_create",
+            return_value=({}, DummyInterface, GeneralManagerBasisModel),
+        ) as mock_parent:
+            self.capability.pre_create(
+                name="Test",
+                attrs={},
+                interface=DummyInterface,
+                base_model_class=GeneralManagerBasisModel,
+            )
 
-        def pre_hook(name, attrs, interface, base_model_class=None):
-            """
-            Package the pre-create hook inputs into a 4-tuple.
+        self.assertTrue(hasattr(DummyInterface, "Meta"))
+        self.assertTrue(DummyInterface.Meta.use_soft_delete)
+        self.assertIs(
+            mock_parent.call_args.kwargs["base_model_class"], GeneralManagerBasisModel
+        )
 
-            Parameters:
-                name (str): The proposed name for the model/class.
-                attrs (dict): Attribute dictionary for the model definition.
-                interface (type): The interface class associated with the model.
-                base_model_class (type or None): Optional base model class to be set as the model's parent.
+    def test_post_create_registers_read_only_class(self):
+        from general_manager.manager.meta import GeneralManagerMeta
 
-            Returns:
-                tuple: A tuple (name, attrs, interface, base_model_class) containing the provided inputs.
-            """
-            return (name, attrs, interface, base_model_class)
+        class DummyManager:
+            pass
 
-        wrapper = ReadOnlyInterface.read_only_pre_create(pre_hook)
-        iface = type("iface", (), {})  # just to have an interface class
-        result = wrapper("MyName", {"a": 1}, iface)
-        # The last parameter must be GeneralManagerBasisModel
-        self.assertEqual(result, ("MyName", {"a": 1}, iface, GeneralManagerBasisModel))
+        with mock.patch.object(
+            OrmLifecycleCapability,
+            "post_create",
+            return_value=None,
+        ) as mock_parent:
+            self.capability.post_create(
+                new_class=DummyManager,
+                interface_class=ReadOnlyInterface,
+                model=None,
+            )
 
-    def test_handle_interface_returns_two_callables(self):
-        """
-        Test that handle_interface returns two callable objects for pre- and post-processing hooks.
-        """
-        pre, post = ReadOnlyInterface.handle_interface()
-        self.assertTrue(callable(pre))
-        self.assertTrue(callable(post))
+        mock_parent.assert_called_once()
+        self.assertIn(DummyManager, GeneralManagerMeta.read_only_classes)
