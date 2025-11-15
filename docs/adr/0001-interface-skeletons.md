@@ -39,7 +39,6 @@ These skeletons show the slimmed-down interface classes. Any omitted behavior li
 class InterfaceBase(ABC):
     _parent_class: ClassVar[Type["GeneralManager"]]
     _interface_type: ClassVar[str]
-    _use_soft_delete: ClassVar[bool]
     input_fields: ClassVar[dict[str, Input]]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -133,16 +132,17 @@ class ExistingModelInterface(OrmWritableInterface[ExistingModelT]):
 ### `ReadOnlyInterface`
 
 ```python
-class ReadOnlyInterface(OrmPersistenceInterface[GeneralManagerBasisModel]):
+class ReadOnlyInterface(OrmInterfaceBase[GeneralManagerBasisModel]):
     _interface_type = "readonly"
-    capability_overrides = OrmPersistenceInterface.capability_overrides | {
-        "read_only_management": ReadOnlyManagementCapability,
-    }
+    configured_capabilities = (READ_ONLY_CAPABILITIES,)
 
     @classmethod
     def sync_data(cls) -> None:
-        handler = cls.get_capability_handler("read_only_management")
-        handler.sync_data(cls, ...)
+        handler = cls.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+        handler.sync_data(cls)
 ```
 
 ### `CalculationInterface`
