@@ -19,6 +19,7 @@ from general_manager.interface.utils.errors import (
     InvalidReadOnlyDataFormatError,
     InvalidReadOnlyDataTypeError,
     MissingReadOnlyDataError,
+    MissingReadOnlyBindingError,
     MissingUniqueFieldError,
 )
 from general_manager.logging import get_logger
@@ -200,9 +201,16 @@ class ReadOnlyManagementCapability(BaseCapability):
         unique_fields: set[str] | None = None,
         schema_validated: bool = False,
     ) -> None:
+        parent_class = getattr(interface_cls, "_parent_class", None)
+        model = getattr(interface_cls, "_model", None)
+        if parent_class is None or model is None:
+            raise MissingReadOnlyBindingError(
+                getattr(interface_cls, "__name__", str(interface_cls))
+            )
+
         payload_snapshot = {
-            "manager": getattr(interface_cls._parent_class, "__name__", None),
-            "model": getattr(interface_cls._model, "__name__", None),
+            "manager": getattr(parent_class, "__name__", None),
+            "model": getattr(model, "__name__", None),
             "schema_validated": schema_validated,
         }
 
@@ -215,22 +223,20 @@ class ReadOnlyManagementCapability(BaseCapability):
             if not schema_validated:
                 warnings = self.ensure_schema_is_up_to_date(
                     interface_cls,
-                    interface_cls._parent_class,
-                    interface_cls._model,
+                    parent_class,
+                    model,
                     connection=db_connection,
                 )
                 if warnings:
                     _resolve_logger().warning(
                         "readonly schema out of date",
                         context={
-                            "manager": interface_cls._parent_class.__name__,
-                            "model": interface_cls._model.__name__,
+                            "manager": parent_class.__name__,
+                            "model": model.__name__,
                         },
                     )
                     return
 
-            model = interface_cls._model
-            parent_class = interface_cls._parent_class
             json_data = getattr(parent_class, "_data", None)
             if json_data is None:
                 raise MissingReadOnlyDataError(parent_class.__name__)
@@ -372,7 +378,32 @@ class ReadOnlyManagementCapability(BaseCapability):
         """Expose a startup hook that synchronizes read-only data."""
 
         def _sync() -> None:
+            manager_cls = getattr(interface_cls, "_parent_class", None)
+            model = getattr(interface_cls, "_model", None)
+            if manager_cls is None or model is None:
+                _resolve_logger().debug(
+                    "read-only startup hook unavailable",
+                    context={
+                        "interface": getattr(interface_cls, "__name__", None),
+                        "has_parent": manager_cls is not None,
+                        "has_model": model is not None,
+                    },
+                )
+                return
             self.sync_data(interface_cls)
+
+        manager_cls = getattr(interface_cls, "_parent_class", None)
+        model = getattr(interface_cls, "_model", None)
+        if manager_cls is None or model is None:
+            _resolve_logger().debug(
+                "read-only startup hook registration skipped",
+                context={
+                    "interface": getattr(interface_cls, "__name__", None),
+                    "has_parent": manager_cls is not None,
+                    "has_model": model is not None,
+                },
+            )
+            return tuple()
 
         return (_sync,)
 
