@@ -1,6 +1,6 @@
 # ADR 0003: Configurable Interface Capabilities via Django Settings
 
-- Status: Proposed
+- Status: Deferred
 - Date: 2025-11-12
 
 ## Context
@@ -76,3 +76,9 @@ The manifest remains critical for several reasons:
 - Tests must cover the settings-driven toggles (e.g., ensure disabling required capability
   still raises, enabling optional capability via settings works, custom capability classes
   can be injected).
+
+## Status
+
+This ADR is deferred until we provide the Django settings surface. The manifest + builder
+already enforce required/optional capability names, so once the override loader is written
+we can flip the status to implemented.

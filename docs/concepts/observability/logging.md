@@ -15,7 +15,7 @@ All loggers live under the `general_manager` namespace so they can be targeted c
 | --- | --- | --- |
 | Root | `general_manager` | Package-wide fallbacks and custom app code. |
 | App bootstrap | `general_manager.apps` | Startup sync, GraphQL wiring, ASGI integration, deferred checks. |
-| Read-only interface | `general_manager.interface.read_only` | Schema drift warnings and sync summaries. |
+| Read-only interface | `general_manager.interface.capabilities.read_only` | Schema drift warnings and sync summaries. |
 | Permissions | `general_manager.permission.base` | CRUD permission evaluation flow. |
 | Cache dependency index | `general_manager.cache.dependency_index` | Cache invalidation + signals. |
 | Manager lifecycle | `general_manager.manager.general` | Create/update/delete actions and queryset queries. |
@@ -94,7 +94,7 @@ Couple the adapter with existing middleware, such as [`django-request-id`](https
 ## Emitted events per component
 
 - **`general_manager.apps`**: emits `DEBUG` summaries when syncing read-only data during startup, registering schema checks, wiring GraphQL HTTP endpoints, and integrating Channels subscriptions. Warnings surface misconfigured ASGI modules or missing dependencies.
-- **`general_manager.interface.read_only`**: warns when schema drift is detected and reports totals for created/updated/deactivated rows after each sync (`created`, `updated`, `deactivated` keys).
+- **`general_manager.interface.capabilities.read_only`**: warns when schema drift is detected and reports totals for created/updated/deactivated rows after each sync (`created`, `updated`, `deactivated` keys).
 - **`general_manager.manager.general`**: records lifecycle actions (`manager created/updated/deleted`) with IDs, user IDs, and touched fields, plus `DEBUG` entries for filters, excludes, and `all()` queries.
 - **`general_manager.permission.base`**: logs permission denials at `INFO`, identifying the manager, CRUD action, field, and affected user ID so you can correlate with API failures or audits.
 - **`general_manager.cache.decorator` / `general_manager.cache.dependency_index`**: traces cache hits and misses (including dependency counts), and logs structured invalidation metadata (`key`, `lookup`, `action`, `value`) when dependency-based invalidations fire.
