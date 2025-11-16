@@ -1,6 +1,6 @@
 # ADR 0001: Capability-Driven Interface Skeletons
 
-- Status: In Progress
+- Status: Implemented
 - Date: 2025-11-12
 
 ## Context
@@ -134,3 +134,9 @@ class CalculationInterface(InterfaceBase):
 - **Single source of truth** – The manifest documents which capabilities belong to each interface family and enables tooling/testing to enforce that contract.
 - **Composable interfaces** – Adding a new interface is primarily a matter of subclassing `InterfaceBase`, declaring `_interface_type`, and listing the desired capabilities. All heavy behavior lives in reusable capability modules.
 - **Incremental migration** – ORM interfaces already rely purely on capabilities for persistence, mutation, and lifecycle logic. Existing-model, read-only, and calculation interfaces retain a few bespoke helpers, and the table above records the remaining work to extract them.
+
+## Implementation Notes
+
+- Concrete interface classes now live under `general_manager.interface.interfaces` (and remain re-exported through `general_manager.interface` for compatibility).
+- Capability bundles reside in `general_manager.interface.bundles`, while the manifests + builder pipeline moved to `general_manager.interface.manifests`.
+- Shared capability families were split into focused modules inside `general_manager.interface.capabilities` (e.g. `orm/`, `read_only/`, `calculation/`), and cross-cutting helpers live under `general_manager.interface.utils`.

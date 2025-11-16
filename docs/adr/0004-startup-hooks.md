@@ -1,6 +1,6 @@
 # ADR 0004: Capability-Driven Startup Hooks
 
-- Status: Proposed
+- Status: Implemented
 - Date: 2025-11-12
 
 ## Context
@@ -48,3 +48,9 @@ Introduce capability-driven registries for startup hooks and system checks:
 6. Update ADR 0001/0002 and developer docs once the new API lands.
 
 This ADR documents the target state so that we can incrementally implement the registry while keeping the current behavior working. Once the hooks infrastructure exists, new interfaces gain startup extensibility “for free”.
+
+## Status Notes
+
+- Startup hooks now live under `general_manager.interface.infrastructure.startup_hooks` and system checks under `infrastructure/system_checks.py`.
+- `ReadOnlyManagementCapability` exposes both data sync and schema-check hooks, and `InterfaceBase` registers them as capabilities bind to interfaces.
+- `apps.py` runs every registered hook at startup, so future capabilities get bootstrap behavior without editing the app config again.

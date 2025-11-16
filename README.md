@@ -42,7 +42,7 @@ from typing import Optional
 from django.db.models import CharField, DateField
 
 from general_manager import GeneralManager
-from general_manager.interface.database import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission import ManagerBasedPermission
 

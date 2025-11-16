@@ -1,6 +1,6 @@
 # ADR 0002: Declarative Capability Configuration
 
-- Status: Proposed
+- Status: Implemented
 - Date: 2025-11-12
 
 ## Context
@@ -36,6 +36,11 @@ The interface layer is being simplified so each interface class merely declares 
 - Capability instances can be parameterized per interface using `InterfaceCapabilityConfig(options=...)`.
 - Tests must exercise capability configuration rather than interface overrides (e.g., verifying custom bundles result in custom handlers).
 - Lifecycle flexibility is preserved: interfaces can mix different lifecycle capabilities and explicitly choose which one powers manager creation by pointing `lifecycle_capability_name` at the desired capability name.
+
+## Implementation Notes
+
+- Every shipped interface now sets `configured_capabilities` to bundles from `general_manager.interface.bundles.*`, and the manifest/builder lives under `general_manager.interface.manifests`.
+- Interfaces remain declarative shells; behavior is swapped by editing capability configs (or, in the future, via the settings override described by ADR-0003).
 
 ## Alternatives Considered
 
