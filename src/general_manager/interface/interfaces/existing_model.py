@@ -1,0 +1,67 @@
+"""Interface for integrating existing Django models with GeneralManager."""
+
+from __future__ import annotations
+
+from typing import ClassVar, TypeVar
+
+from django.db import models
+from general_manager.interface.orm_interface import (
+    OrmInterfaceBase,
+)
+from general_manager.interface.bundles.database import EXISTING_MODEL_CAPABILITIES
+from general_manager.interface.capabilities.base import CapabilityName
+from general_manager.interface.capabilities.configuration import CapabilityConfigEntry
+from general_manager.interface.capabilities.existing_model import (
+    ExistingModelResolutionCapability,
+)
+
+ExistingModelT = TypeVar("ExistingModelT", bound=models.Model)
+
+
+class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
+    """Interface that reuses an existing Django model instead of generating a new one."""
+
+    _interface_type: ClassVar[str] = "existing"
+    model: ClassVar[type[models.Model] | str | None] = None
+
+    configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]] = (
+        EXISTING_MODEL_CAPABILITIES,
+    )
+    lifecycle_capability_name: ClassVar[CapabilityName | None] = (
+        "existing_model_resolution"
+    )
+
+    @classmethod
+    def get_field_type(cls, field_name: str) -> type:
+        """
+        Get the Python type for a field on the wrapped model, resolving the configured model first if not already resolved.
+
+        Parameters:
+            field_name (str): Name of the field on the underlying Django model.
+
+        Returns:
+            type: The Python type corresponding to the specified model field.
+        """
+        cls._ensure_model_loaded()
+        return super().get_field_type(field_name)
+
+    @classmethod
+    def _resolve_model_class(cls) -> type[models.Model]:
+        resolver = cls._resolution_capability()
+        return resolver.resolve_model(cls)
+
+    @classmethod
+    def _resolution_capability(cls) -> ExistingModelResolutionCapability:
+        return cls.require_capability(  # type: ignore[return-value]
+            "existing_model_resolution",
+            expected_type=ExistingModelResolutionCapability,
+        )
+
+    @classmethod
+    def _ensure_model_loaded(cls) -> type[models.Model]:
+        if not hasattr(cls, "_model"):
+            resolver = cls._resolution_capability()
+            model = resolver.resolve_model(cls)
+            cls._model = model  # type: ignore[assignment]
+            cls.model = model
+        return cls._model

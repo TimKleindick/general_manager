@@ -21,8 +21,12 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.audit import configure_audit_logger_from_settings
-from general_manager.interface.startup_hooks import iter_interface_startup_hooks
-from general_manager.interface.system_checks import iter_interface_system_checks
+from general_manager.interface.infrastructure.startup_hooks import (
+    iter_interface_startup_hooks,
+)
+from general_manager.interface.infrastructure.system_checks import (
+    iter_interface_system_checks,
+)
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -49,7 +53,7 @@ class InvalidPermissionClassError(TypeError):
 
 
 if TYPE_CHECKING:
-    from general_manager.interface.backends.read_only.read_only_interface import (
+    from general_manager.interface.interfaces.read_only import (
         ReadOnlyInterface,
     )
     from general_manager.interface.base_interface import InterfaceBase

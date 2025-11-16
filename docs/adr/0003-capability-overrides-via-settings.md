@@ -26,7 +26,7 @@ dict keyed by fully qualified interface class names:
 
 ```python
 GENERAL_MANAGER_CAPABILITIES = {
-    "general_manager.interface.backends.database.database_interface.DatabaseInterface": {
+    "general_manager.interface.interfaces.database.DatabaseInterface": {
         "enabled": {"notification"},
         "disabled": set(),
         "flags": {"access_control": True},

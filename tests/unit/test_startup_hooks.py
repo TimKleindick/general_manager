@@ -8,7 +8,7 @@ from django.core.management.base import BaseCommand
 
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.interface.backends.read_only.read_only_interface import (
+from general_manager.interface.interfaces.read_only import (
     ReadOnlyInterface,
 )
 from general_manager.interface.capabilities.configuration import (
@@ -18,12 +18,12 @@ from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.read_only import (
     ReadOnlyManagementCapability,
 )
-from general_manager.interface.startup_hooks import (
+from general_manager.interface.infrastructure.startup_hooks import (
     clear_startup_hooks,
     register_startup_hook,
     registered_startup_hooks,
 )
-from general_manager.interface.system_checks import (
+from general_manager.interface.infrastructure.system_checks import (
     clear_system_checks,
     register_system_check,
     registered_system_checks,

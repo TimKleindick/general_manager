@@ -164,7 +164,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Raises:
             InvalidCalculationInterfaceError: If the manager_class.Interface does not inherit from CalculationInterface.
         """
-        from general_manager.interface.backends.calculation.calculation_interface import (
+        from general_manager.interface.interfaces.calculation import (
             CalculationInterface,
         )
 

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from general_manager.interface.builders import (
+from general_manager.interface.manifests import (
     CapabilityConfig,
     ManifestCapabilityBuilder,
 )
-from general_manager.interface.backends.calculation.calculation_interface import (
+from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
 )
-from general_manager.interface.backends.database.database_interface import (
+from general_manager.interface.interfaces.database import (
     DatabaseInterface,
 )
 from general_manager.interface.capabilities.orm import (
@@ -19,7 +19,7 @@ from general_manager.interface.capabilities.orm import (
     OrmQueryCapability,
     OrmValidationCapability,
 )
-from general_manager.interface.capabilities.observability import (
+from general_manager.interface.capabilities.core.observability import (
     LoggingObservabilityCapability,
 )
 
