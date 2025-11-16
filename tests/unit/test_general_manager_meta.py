@@ -4,7 +4,7 @@ from django.test import SimpleTestCase, override_settings
 
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.interface.backends.calculation.calculation_interface import (
+from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
 )
 from general_manager.manager.input import Input as GMInput

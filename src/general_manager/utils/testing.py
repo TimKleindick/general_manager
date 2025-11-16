@@ -21,7 +21,9 @@ from general_manager.cache.cache_decorator import _SENTINEL
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.interface.startup_hooks import iter_interface_startup_hooks
+from general_manager.interface.infrastructure.startup_hooks import (
+    iter_interface_startup_hooks,
+)
 
 _original_get_app: Callable[[str], AppConfig | None] = (
     global_apps.get_containing_app_config

@@ -15,11 +15,11 @@ from simple_history.models import HistoricalRecords
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import OrmInterfaceBase
-from general_manager.interface.backends.database.capability_sets import (
+from general_manager.interface.bundles.database import (
     ORM_PERSISTENCE_CAPABILITIES,
     ORM_WRITABLE_CAPABILITIES,
 )
-from general_manager.interface.models import get_full_clean_methode
+from general_manager.interface.utils.models import get_full_clean_methode
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
     InvalidFieldValueError,
@@ -27,7 +27,9 @@ from general_manager.interface.utils.errors import (
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.database_bucket import DatabaseBucket
-from general_manager.interface.utils.payload_normalizer import PayloadNormalizer
+from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+    PayloadNormalizer,
+)
 from general_manager.interface.capabilities.orm import (
     OrmHistoryCapability,
     OrmMutationCapability,
@@ -80,9 +82,7 @@ class DummyManager(GeneralManager):
 
 
 PersonInterface._parent_class = DummyManager
-PersonInterface.__module__ = (
-    "general_manager.interface.backends.database.database_based_interface"
-)
+PersonInterface.__module__ = "general_manager.interface.orm_interface"
 
 
 class OrmInterfaceBaseTestCase(TransactionTestCase):
@@ -245,9 +245,7 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         """
         Tests that lifecycle hooks configure interface classes correctly.
         """
-        module_name = (
-            "general_manager.interface.backends.database.database_based_interface"
-        )
+        module_name = "general_manager.interface.orm_interface"
         pre, post = PersonInterface.handle_interface()
         new_attrs, interface_cls, model = pre(
             "TemporaryManager",
@@ -993,7 +991,7 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
 
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
-        from general_manager.interface.backends.database.database_based_interface import (
+        from general_manager.interface.orm_interface import (
             OrmInterfaceBase,
         )
 
@@ -1471,7 +1469,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
 
         # Patch the base class check
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"owner": mock_manager}
@@ -1494,7 +1492,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager.identification = {"id": 123}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"owner": mock_manager}
@@ -1510,7 +1508,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager.identification = {"id": 456}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"owner_id": mock_manager}
@@ -1535,7 +1533,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager2.identification = {"id": 200}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"tags_id_list": [mock_manager1, mock_manager2]}
@@ -1604,7 +1602,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager._interface = mock_interface
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._unwrap_manager(mock_manager)
@@ -1615,7 +1613,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         Test that _maybe_general_manager returns default for non-manager values.
         """
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=False,
         ):
             result = PayloadNormalizer._maybe_general_manager(42, default=None)
@@ -1629,7 +1627,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager.identification = {"id": 999}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._maybe_general_manager(mock_manager)
@@ -1650,7 +1648,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager._interface = mock_interface
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._maybe_general_manager(
@@ -1667,7 +1665,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager._interface = None
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._maybe_general_manager(

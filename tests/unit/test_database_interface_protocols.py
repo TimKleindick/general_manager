@@ -8,7 +8,7 @@ from django.db import connection, models
 from django.test import TransactionTestCase
 from django.apps import apps
 
-from general_manager.interface.database_interface_protocols import (
+from general_manager.interface.utils.database_interface_protocols import (
     SupportsActivation,
     SupportsHistory,
     SupportsWrite,

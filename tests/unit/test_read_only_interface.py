@@ -12,7 +12,7 @@ from general_manager.interface.capabilities.read_only import (
     ReadOnlyLifecycleCapability,
     ReadOnlyManagementCapability,
 )
-from general_manager.interface.models import GeneralManagerBasisModel
+from general_manager.interface.utils.models import GeneralManagerBasisModel
 
 from django.db import models
 

@@ -4,10 +4,10 @@ from unittest import mock
 
 import pytest
 
-from general_manager.interface.capabilities.observability import (
+from general_manager.interface.capabilities.core.observability import (
     LoggingObservabilityCapability,
 )
-from general_manager.interface.capabilities.utils import with_observability
+from general_manager.interface.capabilities.core.utils import with_observability
 
 
 class DummyTarget:
@@ -25,7 +25,7 @@ class DummyTarget:
 def test_with_observability_logs_before_and_after():
     fake_logger = mock.MagicMock()
     with mock.patch(
-        "general_manager.interface.capabilities.observability.get_logger",
+        "general_manager.interface.capabilities.core.observability.get_logger",
         return_value=fake_logger,
     ):
         capability = LoggingObservabilityCapability()
@@ -60,7 +60,7 @@ def test_with_observability_logs_before_and_after():
 def test_with_observability_logs_errors_and_propagates():
     fake_logger = mock.MagicMock()
     with mock.patch(
-        "general_manager.interface.capabilities.observability.get_logger",
+        "general_manager.interface.capabilities.core.observability.get_logger",
         return_value=fake_logger,
     ):
         capability = LoggingObservabilityCapability()

@@ -10,7 +10,7 @@ from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
-    from general_manager.interface.builders import ManifestCapabilityBuilder
+    from general_manager.interface.manifests import ManifestCapabilityBuilder
 
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
@@ -250,7 +250,7 @@ _CAPABILITY_BUILDER: "ManifestCapabilityBuilder | None" = None
 def _capability_builder() -> "ManifestCapabilityBuilder":
     global _CAPABILITY_BUILDER
     if _CAPABILITY_BUILDER is None:
-        from general_manager.interface.builders import ManifestCapabilityBuilder
+        from general_manager.interface.manifests import ManifestCapabilityBuilder
 
         _CAPABILITY_BUILDER = ManifestCapabilityBuilder()
     return _CAPABILITY_BUILDER

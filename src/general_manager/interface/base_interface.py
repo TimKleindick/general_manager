@@ -28,16 +28,18 @@ from general_manager.interface.capabilities.configuration import (
     iter_capability_entries,
 )
 from general_manager.interface.capabilities.factory import CapabilityOverride
-from general_manager.interface.startup_hooks import register_startup_hook
-from general_manager.interface.system_checks import register_system_check
+from general_manager.interface.infrastructure.startup_hooks import register_startup_hook
+from general_manager.interface.infrastructure.system_checks import register_system_check
 
 if TYPE_CHECKING:
     from general_manager.manager.input import Input
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.bucket.base_bucket import Bucket
-    from general_manager.interface.builders.capability_models import CapabilitySelection
-    from general_manager.interface.models import GeneralManagerBasisModel
-    from general_manager.interface.builders.capability_builder import (
+    from general_manager.interface.manifests.capability_models import (
+        CapabilitySelection,
+    )
+    from general_manager.interface.utils.models import GeneralManagerBasisModel
+    from general_manager.interface.manifests.capability_builder import (
         ManifestCapabilityBuilder,
     )
 
@@ -270,7 +272,7 @@ class InterfaceBase(ABC):
     @classmethod
     def _ensure_capabilities_initialized(cls) -> None:
         if cls._capability_selection is None:
-            from general_manager.interface.builders import ManifestCapabilityBuilder
+            from general_manager.interface.manifests import ManifestCapabilityBuilder
 
             builder = cls._automatic_capability_builder
             if builder is None:
@@ -755,7 +757,7 @@ class InterfaceBase(ABC):
 
     @staticmethod
     def _default_base_model_class() -> type["GeneralManagerBasisModel"]:
-        from general_manager.interface.models import GeneralManagerBasisModel
+        from general_manager.interface.utils.models import GeneralManagerBasisModel
 
         return GeneralManagerBasisModel
 
