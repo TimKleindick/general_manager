@@ -11,6 +11,7 @@ __all__ = [
     "InvalidReadOnlyDataTypeError",
     "MissingActivationSupportError",
     "MissingModelConfigurationError",
+    "MissingReadOnlyBindingError",
     "MissingReadOnlyDataError",
     "MissingUniqueFieldError",
     "UnknownFieldError",
@@ -136,6 +137,21 @@ class InvalidReadOnlyDataTypeError(TypeError):
         Initializes the exception with the message: "_data must be a JSON string or a list of dictionaries."
         """
         super().__init__("_data must be a JSON string or a list of dictionaries.")
+
+
+class MissingReadOnlyBindingError(RuntimeError):
+    """Raised when a read-only interface is invoked before lifecycle wiring completes."""
+
+    def __init__(self, interface_name: str) -> None:
+        """
+        Initialize the exception with the interface missing `_parent_class` or `_model`.
+
+        Parameters:
+            interface_name (str): Name of the interface that has not been bound yet.
+        """
+        super().__init__(
+            f"ReadOnlyInterface '{interface_name}' must be bound to a manager and model before syncing."
+        )
 
 
 class MissingModelConfigurationError(ValueError):

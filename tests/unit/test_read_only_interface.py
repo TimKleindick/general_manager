@@ -13,6 +13,7 @@ from general_manager.interface.capabilities.read_only import (
     ReadOnlyManagementCapability,
 )
 from general_manager.interface.utils.models import GeneralManagerBasisModel
+from general_manager.interface.utils.errors import MissingReadOnlyBindingError
 
 from django.db import models
 
@@ -467,6 +468,16 @@ class SyncDataTests(SimpleTestCase):
         self.assertEqual(msg["created"], 1)
         self.assertEqual(msg["updated"], 1)
         self.assertEqual(msg["deactivated"], 0)
+
+
+class SyncDataMetadataValidationTests(SimpleTestCase):
+    def test_missing_binding_raises(self):
+        class IncompleteInterface(ReadOnlyInterface):
+            pass
+
+        capability = ReadOnlyManagementCapability()
+        with self.assertRaises(MissingReadOnlyBindingError):
+            capability.sync_data(IncompleteInterface)
 
 
 class SystemCheckHookTests(SimpleTestCase):
