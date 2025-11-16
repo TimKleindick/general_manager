@@ -488,6 +488,39 @@ class SystemCheckHookTests(SimpleTestCase):
         self.assertEqual(results, [[Warning("warn", obj=None)]])
 
 
+class ReadOnlyStartupHookTests(SimpleTestCase):
+    def test_hook_not_registered_without_metadata(self):
+        """
+        Ensure get_startup_hooks returns no hooks when the interface lacks required metadata.
+        """
+
+        class MissingMetadataInterface(ReadOnlyInterface):
+            pass
+
+        capability = ReadOnlyManagementCapability()
+        hooks = capability.get_startup_hooks(MissingMetadataInterface)
+        self.assertEqual(hooks, tuple())
+
+    def test_hook_available_when_metadata_present(self):
+        """
+        Ensure get_startup_hooks returns a callable once the interface exposes manager and model metadata.
+        """
+
+        class ReadyInterface(ReadOnlyInterface):
+            pass
+
+        ReadyInterface._parent_class = DummyManager
+        ReadyInterface._model = DummyModel
+
+        capability = ReadOnlyManagementCapability()
+        hooks = capability.get_startup_hooks(ReadyInterface)
+        self.assertEqual(len(hooks), 1)
+        DummyManager._data = []
+        with mock.patch.object(ReadOnlyManagementCapability, "sync_data") as mock_sync:
+            hooks[0]()
+        mock_sync.assert_called_once_with(ReadyInterface)
+
+
 # ------------------------------------------------------------
 # Tests for decorators and handle_interface
 # ------------------------------------------------------------
