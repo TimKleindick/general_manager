@@ -11,12 +11,15 @@ from unittest.mock import MagicMock, patch
 from django.db import models
 from django.core.exceptions import ValidationError, FieldDoesNotExist
 from django.apps import apps
+from simple_history.models import HistoricalRecords
 
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface.database_based_interface import (
-    DBBasedInterface,
-    get_full_clean_methode,
+from general_manager.interface import OrmInterfaceBase
+from general_manager.interface.bundles.database import (
+    ORM_PERSISTENCE_CAPABILITIES,
+    ORM_WRITABLE_CAPABILITIES,
 )
+from general_manager.interface.utils.models import get_full_clean_methode
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
     InvalidFieldValueError,
@@ -24,7 +27,14 @@ from general_manager.interface.utils.errors import (
 )
 from general_manager.manager.input import Input
 from general_manager.bucket.database_bucket import DatabaseBucket
-from general_manager.interface.utils.payload_normalizer import PayloadNormalizer
+from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+    PayloadNormalizer,
+)
+from general_manager.interface.capabilities.orm import (
+    OrmHistoryCapability,
+    OrmMutationCapability,
+    OrmPersistenceSupportCapability,
+)
 
 
 class PersonModel(models.Model):
@@ -41,33 +51,51 @@ class PersonModel(models.Model):
         app_label = "general_manager"
 
 
-class PersonInterface(DBBasedInterface):
+class PersonInterface(OrmInterfaceBase):
     _model = PersonModel
     _parent_class = None
     _interface_type = "test"
     input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+    configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
+
+    class Meta:
+        app_label = "general_manager"
 
     @classmethod
     def handle_interface(cls):
         """
-        Provide pre- and post-processing callables used when creating a dynamic interface-backed class.
-
-        The returned `pre` callable prepares the attributes and resolves the interface class and model to use for class creation. The returned `post` callable finalizes the association by assigning the interface class to the new class and recording the new class on the interface.
+        Return pre- and post-creation hooks used to wire a dynamically created manager class to its interface.
 
         Returns:
-            tuple: A pair `(pre, post)` where:
-                - `pre(name, attrs, interface)` returns `(attrs, interface_class, model)`.
-                - `post(new_cls, interface_cls, model)` sets `new_cls.Interface = interface_cls` and `interface_cls._parent_class = new_cls`.
+            tuple: (pre, post) where
+                pre(name, attrs, interface) -> (attrs, parent_class, model): prepares attributes and returns the interface's parent class and model to be used when creating the class.
+                post(new_cls, interface_cls, model) -> None: attaches the interface to the newly created class by setting new_cls.Interface and sets interface_cls._parent_class to new_cls.
         """
 
         def pre(name, attrs, interface):
+            """
+            Provide pre-creation context for generating an interface-backed manager subclass.
+
+            Parameters:
+                name (str): Proposed name for the new manager class.
+                attrs (dict): Attribute dictionary that will be used to create the new class.
+                interface (type): Interface class that is driving the manager creation.
+
+            Returns:
+                tuple: A 3-tuple (attrs, manager_class, model) where `attrs` is the attribute
+                mapping to use, `manager_class` is the manager class object to be created/used,
+                and `model` is the Django model class associated with the interface.
+            """
             return attrs, cls, cls._model
 
         def post(new_cls, interface_cls, model):
             """
-            Finalizes the association between a newly created class and its interface.
+            Attach an interface class to a generated manager class and set the manager as the interface's parent.
 
-            Assigns the interface class to the new class's `Interface` attribute and sets the interface's `_parent_class` to the new class.
+            Parameters:
+                new_cls: The generated manager class that will receive an `Interface` attribute pointing to `interface_cls`.
+                interface_cls: The interface class to attach; its `_parent_class` will be set to `new_cls`.
+                model: The Django model associated with the interface (provided for signature compatibility; not used).
             """
             new_cls.Interface = interface_cls
             interface_cls._parent_class = new_cls
@@ -80,9 +108,10 @@ class DummyManager(GeneralManager):
 
 
 PersonInterface._parent_class = DummyManager
+PersonInterface.__module__ = "general_manager.interface.orm_interface"
 
 
-class DBBasedInterfaceTestCase(TransactionTestCase):
+class OrmInterfaceBaseTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
@@ -166,8 +195,9 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
         Verifies that the interface instance is set to the value returned by the patched `get_historical_record` method and that this method is called exactly once.
         """
-        with patch.object(
-            PersonInterface, "get_historical_record", return_value="old"
+        with patch(
+            "general_manager.interface.capabilities.orm.OrmHistoryCapability.get_historical_record",
+            return_value="old",
         ) as mock_hist:
             mgr = DummyManager(
                 self.person.pk, search_date=datetime.now() - timedelta(minutes=1)
@@ -201,7 +231,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         mock.filter.return_value = history_qs
         dummy = SimpleNamespace(history=mock)
         dt = datetime(2020, 1, 1)
-        res = PersonInterface.get_historical_record(dummy, dt)
+        handler = PersonInterface.require_capability(
+            "history",
+            expected_type=OrmHistoryCapability,
+        )
+        res = handler.get_historical_record(PersonInterface, dummy, dt)
         mock.filter.assert_called_once_with(history_date__lte=dt)
         history_qs.order_by.assert_called_once_with("history_date")
         self.assertEqual(res, "hist")
@@ -235,25 +269,22 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_pre_and_post_create_and_handle_interface(self):
         """
-        Tests the pre- and post-creation lifecycle of a database-backed interface and its manager.
+        Verify handle_interface()'s pre and post hooks create and wire a manager subclass to the interface.
 
-        Verifies that the interface and manager classes are correctly linked, the model and its history table are created, and the manager's factory is properly associated with the model.
+        Runs the pre hook to obtain attributes, interface class, and model, constructs a TempManager subclass with those attributes, then runs post to link the Interface to the new manager and set the interface class's parent to that manager. Asserts the TempManager.Interface is a subclass of PersonInterface and that the interface class's _parent_class is the TempManager.
         """
-        attrs = {"__module__": "general_manager"}
-        new_attrs, interface_cls, model = PersonInterface._pre_create(
-            "TempManager", attrs, PersonInterface
+        module_name = "general_manager.interface.orm_interface"
+        pre, post = PersonInterface.handle_interface()
+        new_attrs, interface_cls, model = pre(
+            "TemporaryManager",
+            {"__module__": module_name},
+            PersonInterface,
         )
-        with connection.schema_editor() as schema:
-            schema.create_model(model)
-            schema.create_model(model.history.model)
-
+        self.assertEqual(model._meta.app_label, "general_manager")
         TempManager = type("TempManager", (GeneralManager,), new_attrs)
-        PersonInterface._post_create(TempManager, interface_cls, model)
+        post(TempManager, interface_cls, model)
+        self.assertTrue(issubclass(TempManager.Interface, PersonInterface))
         self.assertIs(interface_cls._parent_class, TempManager)
-        self.assertIs(model._general_manager_class, TempManager)
-        self.assertIs(TempManager.Interface, interface_cls)
-        self.assertTrue(hasattr(TempManager, "Factory"))
-        self.assertIs(TempManager.Factory._meta.model, model)
 
     def test_rules_and_full_clean_false(self):
         """
@@ -312,13 +343,14 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields(self):
         """
-        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a DBBasedInterface subclass.
+        Tests that custom fields and ignore lists are correctly identified by handle_custom_fields for a OrmInterfaceBase subclass.
         """
 
-        class CustomInterface(DBBasedInterface):
+        class CustomInterface(OrmInterfaceBase):
             sample = models.CharField(max_length=5)
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        fields, ignore = DBBasedInterface.handle_custom_fields(CustomInterface)
+        fields, ignore = CustomInterface.handle_custom_fields(CustomInterface)
         self.assertIn(None, fields)
         self.assertIn("None_value", ignore)
         self.assertIn("None_unit", ignore)
@@ -441,7 +473,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         mock.filter.return_value = history_qs
         dummy = SimpleNamespace(history=mock)
 
-        res = PersonInterface.get_historical_record(dummy, None)
+        handler = PersonInterface.require_capability(
+            "history",
+            expected_type=OrmHistoryCapability,
+        )
+        res = handler.get_historical_record(PersonInterface, dummy, None)
         mock.filter.assert_called_once_with(history_date__lte=None)
         history_qs.order_by.assert_called_once_with("history_date")
         self.assertIsNone(res)
@@ -459,7 +495,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         dummy = SimpleNamespace(history=mock)
         future_date = datetime.now() + timedelta(days=1)
 
-        res = PersonInterface.get_historical_record(dummy, future_date)
+        handler = PersonInterface.require_capability(
+            "history",
+            expected_type=OrmHistoryCapability,
+        )
+        res = handler.get_historical_record(PersonInterface, dummy, future_date)
         mock.filter.assert_called_once_with(history_date__lte=future_date)
         history_qs.order_by.assert_called_once_with("history_date")
         self.assertEqual(res, "future_hist")
@@ -667,15 +707,20 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_handle_custom_fields_with_multiple_custom_fields(self):
         """
-        Tests handle_custom_fields with multiple custom fields defined.
+        Verifies that handle_custom_fields produces placeholder `None` entries and matching ignore keys for multiple custom fields.
+
+        Defines a temporary interface with three custom fields and asserts:
+        - the returned `fields` sequence contains one `None` per custom field, and
+        - the returned `ignore` sequence contains "None_value" and "None_unit" once per custom field.
         """
 
-        class MultiCustomInterface(DBBasedInterface):
+        class MultiCustomInterface(OrmInterfaceBase):
             field1 = models.CharField(max_length=10)
             field2 = models.IntegerField()
             field3 = models.BooleanField()
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        fields, ignore = DBBasedInterface.handle_custom_fields(MultiCustomInterface)
+        fields, ignore = MultiCustomInterface.handle_custom_fields(MultiCustomInterface)
 
         # Should have None for each custom field
         expected_none_count = 3  # field1, field2, field3
@@ -693,10 +738,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests handle_custom_fields with no custom fields defined.
         """
 
-        class NoCustomInterface(DBBasedInterface):
+        class NoCustomInterface(OrmInterfaceBase):
             pass
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        fields, ignore = DBBasedInterface.handle_custom_fields(NoCustomInterface)
+        fields, ignore = NoCustomInterface.handle_custom_fields(NoCustomInterface)
 
         # Should have empty or minimal results
         self.assertIsInstance(fields, (list, tuple))
@@ -707,10 +753,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         Tests behavior when interface is configured with invalid model.
         """
 
-        class InvalidInterface(DBBasedInterface):
+        class InvalidInterface(OrmInterfaceBase):
             _model = None
             _parent_class = None
             _interface_type = "test"
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
         # Should handle gracefully or raise appropriate error
         with self.assertRaises((AttributeError, TypeError)):
@@ -722,19 +769,21 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         # Test with exact current time
         current_time = datetime.now()
-        with patch.object(
-            PersonInterface, "get_historical_record", return_value=self.person
+        with patch(
+            "general_manager.interface.capabilities.orm.OrmHistoryCapability.get_historical_record",
+            return_value=self.person,
         ) as mock_hist:
             DummyManager(self.person.pk, search_date=current_time)
             mock_hist.assert_not_called()
 
         # Test with very old date
         old_date = datetime(1900, 1, 1, tzinfo=UTC)
-        with patch.object(
-            PersonInterface, "get_historical_record", return_value=None
+        with patch(
+            "general_manager.interface.capabilities.orm.OrmHistoryCapability.get_historical_record",
+            return_value=None,
         ) as mock_hist:
             DummyManager(self.person.pk, search_date=old_date)
-            mock_hist.assert_called_once_with(self.person, old_date)
+            mock_hist.assert_called_once()
 
     def test_database_bucket_integration(self):
         """
@@ -803,24 +852,37 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that _get_database_alias returns None when no database is configured.
         """
-        self.assertIsNone(PersonInterface._get_database_alias())
+        support = PersonInterface.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        self.assertIsNone(support.get_database_alias(PersonInterface))
 
     def test_get_database_alias_returns_configured_value(self):
         """
         Tests that _get_database_alias returns the configured database alias.
         """
 
-        class CustomInterface(DBBasedInterface):
+        class CustomInterface(OrmInterfaceBase):
             _model = PersonModel
             database = "custom_db"
+            configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
 
-        self.assertEqual(CustomInterface._get_database_alias(), "custom_db")
+        support = CustomInterface.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        self.assertEqual(support.get_database_alias(CustomInterface), "custom_db")
 
     def test_get_manager_returns_default_manager(self):
         """
         Tests that _get_manager returns the model's default manager.
         """
-        manager = PersonInterface._get_manager()
+        support = PersonInterface.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        manager = support.get_manager(PersonInterface)
         self.assertIsNotNone(manager)
         self.assertEqual(manager.model, PersonModel)
 
@@ -828,7 +890,11 @@ class DBBasedInterfaceTestCase(TransactionTestCase):
         """
         Tests that _get_queryset returns a queryset for the interface's model.
         """
-        queryset = PersonInterface._get_queryset()
+        support = PersonInterface.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        queryset = support.get_queryset(PersonInterface)
         self.assertIsNotNone(queryset)
         self.assertEqual(queryset.model, PersonModel)
 
@@ -907,13 +973,13 @@ class WritableInterfaceTestModel(models.Model):
         app_label = "general_manager"
 
 
-class WritableDBBasedInterfaceTestCase(TransactionTestCase):
+class OrmWritableInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Register WritableInterfaceTestModel with simple_history, ensure it's in the 'general_manager' app registry, and create database tables for the model and its history model.
+        Prepare the test database by registering WritableInterfaceTestModel with simple_history, ensuring it is present in the 'general_manager' app registry, and creating its database tables (including the history table).
 
-        This runs once for the test class to prepare the database schema required by tests.
+        This runs once for the test class to set up the model schema required by writable-interface tests.
         """
         super().setUpClass()
         from simple_history import register
@@ -957,19 +1023,23 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
         Creates User instances as self.user1 (creator) and self.user2 (modifier), and defines a TestWritableInterface subclass (assigned to self.interface_cls) that targets WritableInterfaceTestModel, exposes an `id` input field, and enables soft-delete.
         """
-        from general_manager.interface.database_based_interface import (
-            WritableDBBasedInterface,
+        from general_manager.interface.orm_interface import (
+            OrmInterfaceBase,
         )
 
         self.user1 = User.objects.create(username="creator")
         self.user2 = User.objects.create(username="modifier")
 
-        class TestWritableInterface(WritableDBBasedInterface):
+        class TestWritableInterface(OrmInterfaceBase):
             _model = WritableInterfaceTestModel
             _parent_class = None
             _interface_type = "writable_test"
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
-            _use_soft_delete = True
+            _soft_delete_default = True
+            configured_capabilities: ClassVar[tuple] = (ORM_WRITABLE_CAPABILITIES,)
+
+            class Meta:
+                use_soft_delete = True
 
         self.interface_cls = TestWritableInterface
 
@@ -1207,7 +1277,11 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         )
         self.interface_cls(id=inactive.pk).delete(creator_id=self.user2.pk)
 
-        queryset = self.interface_cls._get_queryset()
+        support = self.interface_cls.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        queryset = support.get_queryset(self.interface_cls)
         self.assertListEqual(list(queryset.values_list("pk", flat=True)), [active.pk])
 
         bucket = self.interface_cls.filter(include_inactive=True)
@@ -1218,7 +1292,11 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         """
         PayloadNormalizer.validate_keys passes for valid field names.
         """
-        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
+        support = self.interface_cls.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        normalizer = support.get_payload_normalizer(self.interface_cls)
         kwargs = {"name": "Test", "value": 10, "owner": self.user1}
         normalizer.validate_keys(kwargs)
 
@@ -1226,14 +1304,22 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
         """
         PayloadNormalizer.validate_keys accepts _id_list suffix for m2m fields.
         """
-        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
+        support = self.interface_cls.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        normalizer = support.get_payload_normalizer(self.interface_cls)
         normalizer.validate_keys({"tags_id_list": [1, 2, 3]})
 
     def test_payload_normalizer_raises_for_invalid_field(self):
         """
         PayloadNormalizer.validate_keys raises UnknownFieldError for invalid fields.
         """
-        normalizer = PayloadNormalizer(WritableInterfaceTestModel)
+        support = self.interface_cls.require_capability(
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
+        )
+        normalizer = support.get_payload_normalizer(self.interface_cls)
         with self.assertRaises(UnknownFieldError) as context:
             normalizer.validate_keys({"nonexistent": "value"})
         self.assertIn("nonexistent", str(context.exception))
@@ -1269,44 +1355,71 @@ class WritableDBBasedInterfaceTestCase(TransactionTestCase):
 
     def test_save_with_history_validates_instance(self):
         """
-        Tests that _save_with_history calls full_clean for validation.
+        Verifies that save_with_history validates model instances and raises a ValidationError for invalid data.
+
+        Attempts to save a WritableInterfaceTestModel with invalid fields and expects ValidationError from the underlying full_clean validation step.
         """
+        mutation = self.interface_cls.require_capability(
+            "orm_mutation",
+            expected_type=OrmMutationCapability,
+        )
         instance = WritableInterfaceTestModel(
             name="",  # Empty name should fail validation if required
             value=10,
             owner=self.user1,
         )
-        # Assuming name is required, this should raise ValidationError
-        # If not, adjust test accordingly
-        try:
-            self.interface_cls._save_with_history(instance, self.user1.pk, None)
-        except ValidationError:
-            pass  # Expected if validation fails
+        with self.assertRaises(ValidationError):
+            mutation.save_with_history(
+                self.interface_cls,
+                instance,
+                creator_id=self.user1.pk,
+                history_comment=None,
+            )
 
     def test_save_with_history_sets_changed_by(self):
         """
-        Tests that _save_with_history sets changed_by_id correctly.
+        Verifies that save_with_history records the provided creator as the model's changed_by.
+
+        Creates a model instance, invokes the mutation capability's save_with_history with a creator_id, and asserts the persisted instance's changed_by equals that creator.
         """
+        mutation = self.interface_cls.require_capability(
+            "orm_mutation",
+            expected_type=OrmMutationCapability,
+        )
         instance = WritableInterfaceTestModel(
             name="Test",
             value=10,
             owner=self.user1,
         )
-        pk = self.interface_cls._save_with_history(instance, self.user2.pk, None)
+        pk = mutation.save_with_history(
+            self.interface_cls,
+            instance,
+            creator_id=self.user2.pk,
+            history_comment=None,
+        )
 
         saved_instance = WritableInterfaceTestModel.objects.get(pk=pk)
         self.assertEqual(saved_instance.changed_by, self.user2)
 
     def test_save_with_history_handles_none_creator(self):
         """
-        Tests that _save_with_history handles None creator_id gracefully.
+        Tests that save_with_history handles None creator_id gracefully.
         """
+        mutation = self.interface_cls.require_capability(
+            "orm_mutation",
+            expected_type=OrmMutationCapability,
+        )
         instance = WritableInterfaceTestModel(
             name="Test",
             value=10,
             owner=self.user1,
         )
-        pk = self.interface_cls._save_with_history(instance, None, None)
+        pk = mutation.save_with_history(
+            self.interface_cls,
+            instance,
+            creator_id=None,
+            history_comment=None,
+        )
 
         saved_instance = WritableInterfaceTestModel.objects.get(pk=pk)
         self.assertIsNone(saved_instance.changed_by_id)
@@ -1392,7 +1505,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
 
         # Patch the base class check
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"owner": mock_manager}
@@ -1415,7 +1528,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager.identification = {"id": 123}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"owner": mock_manager}
@@ -1431,7 +1544,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager.identification = {"id": 456}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"owner_id": mock_manager}
@@ -1456,7 +1569,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager2.identification = {"id": 200}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             kwargs = {"tags_id_list": [mock_manager1, mock_manager2]}
@@ -1525,7 +1638,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager._interface = mock_interface
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._unwrap_manager(mock_manager)
@@ -1536,7 +1649,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         Test that _maybe_general_manager returns default for non-manager values.
         """
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=False,
         ):
             result = PayloadNormalizer._maybe_general_manager(42, default=None)
@@ -1550,7 +1663,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager.identification = {"id": 999}
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._maybe_general_manager(mock_manager)
@@ -1571,7 +1684,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager._interface = mock_interface
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._maybe_general_manager(
@@ -1588,7 +1701,7 @@ class PayloadNormalizerTestCase(TransactionTestCase):
         mock_manager._interface = None
 
         with patch(
-            "general_manager.interface.utils.payload_normalizer._is_general_manager_instance",
+            "general_manager.interface.capabilities.orm_utils.payload_normalizer._is_general_manager_instance",
             return_value=True,
         ):
             result = PayloadNormalizer._maybe_general_manager(

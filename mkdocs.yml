@@ -93,6 +93,7 @@ nav:
           - concepts/permission/object_level.md
       - Interfaces:
           - concepts/interfaces/index.md
+          - concepts/interfaces/capability-first.md
           - concepts/interfaces/db_based_interface.md
           - concepts/interfaces/existing_model_interface.md
           - concepts/interfaces/computed_data_interfaces.md
@@ -120,6 +121,8 @@ nav:
       - howto/expose_via_graphql.md
       - howto/cache_dependent_calculation.md
       - howto/write_custom_interface.md
+      - howto/create_custom_interface_type.md
+      - howto/create_custom_capability.md
       - howto/factory_bulk_generate.md
       - howto/testing_guides.md
       - howto/audit_logger_analysis.md
@@ -133,8 +136,15 @@ nav:
       - examples/permission_cookbook.md
       - examples/audit_logger_custom.md
       - examples/existing_model_interface.md
+      - examples/custom_capability_examples.md
   - API-Reference:
       - api/core.md
       - api/measurement.md
       - api/interface.md
       - api/permission.md
+  - Architecture Decisions:
+      - adr/index.md
+      - adr/0001-interface-skeletons.md
+      - adr/0002-capability-configuration.md
+      - adr/0003-capability-overrides-via-settings.md
+      - adr/0004-startup-hooks.md

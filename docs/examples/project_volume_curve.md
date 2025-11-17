@@ -8,7 +8,7 @@ from datetime import date
 from django.db.models import DateField, ForeignKey
 
 from core.managers import Derivative, Project
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement, MeasurementField
 

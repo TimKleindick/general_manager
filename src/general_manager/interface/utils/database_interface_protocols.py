@@ -5,30 +5,44 @@ from __future__ import annotations
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 
-class _SupportsHistoryQuery(Protocol):
+class SupportsHistoryQuery(Protocol):
     """Protocol for the query object returned by django-simple-history managers."""
 
-    def using(self, alias: str) -> "_SupportsHistoryQuery":
+    def as_of(self, search_date: Any | None) -> "SupportsHistoryQuery":
         """
-        Return a history query scoped to the given database alias.
+        Scope the history query to the state at a given date.
 
         Parameters:
-            alias (str): Database/router alias to use for the returned query.
+            search_date (Any | None): The date or timestamp to scope the history
+                to; if `None`, the returned query covers the full history.
 
         Returns:
-            _SupportsHistoryQuery: A query object that will operate against the specified alias.
+            SupportsHistoryQuery: A history query limited to the specified
+                `search_date`, or the full history when `search_date` is `None`.
         """
         ...
 
-    def filter(self, **kwargs: Any) -> "_SupportsHistoryQuery":
+    def using(self, alias: str) -> "SupportsHistoryQuery":
         """
-        Return a history query filtered by the provided lookup parameters.
+        Return a history query scoped to the given database/router alias.
 
         Parameters:
-            **kwargs: Lookup expressions used to filter history records (e.g., field=value).
+            alias (str): Database/router alias to target for the returned query.
 
         Returns:
-            A `_SupportsHistoryQuery` representing the filtered history query.
+            A history query object configured to operate against the specified alias.
+        """
+        ...
+
+    def filter(self, **kwargs: Any) -> "SupportsHistoryQuery":
+        """
+        Filter the history query using the provided lookup expressions.
+
+        Parameters:
+            **kwargs: Lookup expressions to filter history records (for example, field=value).
+
+        Returns:
+            A `SupportsHistoryQuery` representing the filtered history results.
         """
         ...
 
@@ -46,7 +60,7 @@ class _SupportsHistoryQuery(Protocol):
 class SupportsHistory(Protocol):
     """Protocol for models exposing a django-simple-history manager."""
 
-    history: _SupportsHistoryQuery
+    history: SupportsHistoryQuery
 
 
 @runtime_checkable
@@ -60,7 +74,7 @@ class SupportsActivation(Protocol):
 class SupportsWrite(Protocol):
     """Protocol for models supporting full_clean/save operations."""
 
-    history: _SupportsHistoryQuery
+    history: SupportsHistoryQuery
     pk: Any
 
     def full_clean(self, *args: Any, **kwargs: Any) -> None:

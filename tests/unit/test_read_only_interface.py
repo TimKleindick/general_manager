@@ -6,10 +6,14 @@ from django.core.checks import Warning
 from django.db import connection
 from unittest import mock
 
-from general_manager.interface.read_only_interface import (
-    ReadOnlyInterface,
-    GeneralManagerBasisModel,
+from general_manager.interface import ReadOnlyInterface
+from general_manager.interface.capabilities.orm import OrmLifecycleCapability
+from general_manager.interface.capabilities.read_only import (
+    ReadOnlyLifecycleCapability,
+    ReadOnlyManagementCapability,
 )
+from general_manager.interface.utils.models import GeneralManagerBasisModel
+from general_manager.interface.utils.errors import MissingReadOnlyBindingError
 
 from django.db import models
 
@@ -199,7 +203,8 @@ class GetUniqueFieldsTests(SimpleTestCase):
         class M:
             _meta = fake_meta
 
-        result = ReadOnlyInterface.get_unique_fields(M)
+        capability = ReadOnlyManagementCapability()
+        result = capability.get_unique_fields(M)
         # id is ignored; email (unique); username (via unique_together);
         # other (unique_together); other_field (constraint); extra (UniqueConstraint)
         self.assertSetEqual(result, {"email", "username", "other", "extra"})
@@ -243,8 +248,11 @@ class EnsureSchemaTests(TestCase):
             return []
 
         connection.introspection.table_names = table_names  # type: ignore[assignment]
-        warnings = ReadOnlyInterface.ensure_schema_is_up_to_date(
-            DummyManager, DummyModel
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface,
+            DummyManager,
+            DummyModel,
         )
         self.assertEqual(len(warnings), 1)
         self.assertIsInstance(warnings[0], Warning)
@@ -298,7 +306,10 @@ class EnsureSchemaTests(TestCase):
                     SimpleNamespace(column="col2"),
                 ]
 
-        warnings = ReadOnlyInterface.ensure_schema_is_up_to_date(DummyManager, M)
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface, DummyManager, M
+        )
         self.assertEqual(warnings, [])
 
 
@@ -309,9 +320,9 @@ class SyncDataTests(SimpleTestCase):
     def setUp(self):
         # Reset manager instances
         """
-        Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and interface methods, and capturing logs.
+        Prepare the test environment for SyncDataTests by resetting model manager state, stubbing database transaction and capability methods, and capturing logs.
 
-        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyInterface.get_unique_fields to return {'name'} and ReadOnlyInterface.ensure_schema_is_up_to_date to return an empty list, and starts a logger patch that captures log calls.
+        Resets DummyModel.objects and DummyManager._data, replaces DummyModel._meta.local_fields with test fields, patches the transaction.atomic context manager to a no-op, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, and starts a logger patch to capture log calls for assertions.
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
@@ -336,36 +347,41 @@ class SyncDataTests(SimpleTestCase):
 
         def _atomic_exit(*_: object) -> None:
             """
-            No-op context manager exit callable that accepts any arguments and does nothing.
+            A no-op context manager exit callable that accepts any arguments and does nothing.
 
-            Ignores all passed-in values and returns None, suitable as a dummy `__exit__` for stubbing context managers.
+            Intended for use as a dummy `__exit__` implementation; it ignores all positional and keyword arguments and performs no action.
             """
             return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.read_only_interface.transaction.atomic",
+            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
         # Stub get_unique_fields to return {'name'}
         self.gu_patch = mock.patch.object(
-            ReadOnlyInterface, "get_unique_fields", return_value={"name"}
+            ReadOnlyManagementCapability, "get_unique_fields", return_value={"name"}
         )
         self.gu_patch.start()
         # Stub ensure_schema_is_up_to_date to always return an empty list
         self.es_patch = mock.patch.object(
-            ReadOnlyInterface, "ensure_schema_is_up_to_date", return_value=[]
+            ReadOnlyManagementCapability,
+            "ensure_schema_is_up_to_date",
+            return_value=[],
         )
         self.es_patch.start()
         # Capture log output
         self.log_patcher = mock.patch(
-            "general_manager.interface.read_only_interface.logger"
+            "general_manager.interface.capabilities.read_only.logger"
         )
         self.logger = self.log_patcher.start()
+        self.capability = ReadOnlyManagementCapability()
 
     def tearDown(self):
         """
-        Stops all active patches and restores original behaviors after each test.
+        Restore DummyModel._meta.local_fields to its original state and stop all active test patches.
+
+        If the original local_fields was None, the attribute is removed; otherwise the saved value is restored. Stops the patched atomic context manager, get_unique_fields, ensure_schema_is_up_to_date, and logger patchers used in the test.
         """
         if self._orig_local_fields is None:
             delattr(DummyModel._meta, "local_fields")
@@ -382,7 +398,7 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyManager._data = None
         with self.assertRaises(ValueError) as cm:
-            DummyInterface.sync_data()
+            self.capability.sync_data(DummyInterface)
         self.assertIn("must define a '_data'", str(cm.exception))
 
     def test_invalid_data_type_raises(self):
@@ -391,7 +407,7 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyManager._data = 123  # weder str noch list
         with self.assertRaises(TypeError) as cm:
-            DummyInterface.sync_data()
+            self.capability.sync_data(DummyInterface)
         self.assertIn("_data must be a JSON string or a list", str(cm.exception))
 
     def test_no_unique_fields_raises(self):
@@ -401,11 +417,11 @@ class SyncDataTests(SimpleTestCase):
         """
         self.gu_patch.stop()
         with mock.patch.object(
-            ReadOnlyInterface, "get_unique_fields", return_value=set()
+            ReadOnlyManagementCapability, "get_unique_fields", return_value=set()
         ):
             DummyManager._data = []
             with self.assertRaises(ValueError) as cm:
-                DummyInterface.sync_data()
+                self.capability.sync_data(DummyInterface)
             self.assertIn("must declare at least one unique field", str(cm.exception))
 
     def test_ensure_schema_not_up_to_date_logs_and_exits(self):
@@ -415,12 +431,12 @@ class SyncDataTests(SimpleTestCase):
         """
         self.es_patch.stop()
         with mock.patch.object(
-            ReadOnlyInterface,
+            ReadOnlyManagementCapability,
             "ensure_schema_is_up_to_date",
             return_value=[Warning("x", "y", obj=None)],
         ):
             DummyManager._data = "[]"
-            DummyInterface.sync_data()
+            self.capability.sync_data(DummyInterface)
             self.logger.warning.assert_called_once()
             # Verify no additional save() calls occurred
             self.assertEqual(DummyModel.objects._instances, [])
@@ -439,7 +455,7 @@ class SyncDataTests(SimpleTestCase):
         # New JSON data: `a` changes, `b` is new
         DummyManager._data = [{"name": "a", "other": 2}, {"name": "b", "other": 3}]
         # Run sync_data
-        DummyInterface.sync_data()
+        self.capability.sync_data(DummyInterface)
         # Verify `a` was updated
         inst_a = next(i for i in DummyModel.objects._instances if i.name == "a")
         self.assertEqual(inst_a.other, 2)
@@ -456,70 +472,135 @@ class SyncDataTests(SimpleTestCase):
         self.assertEqual(msg["deactivated"], 0)
 
 
+class SyncDataMetadataValidationTests(SimpleTestCase):
+    def test_missing_binding_raises(self):
+        class IncompleteInterface(ReadOnlyInterface):
+            pass
+
+        capability = ReadOnlyManagementCapability()
+        with self.assertRaises(MissingReadOnlyBindingError):
+            capability.sync_data(IncompleteInterface)
+
+
+class SystemCheckHookTests(SimpleTestCase):
+    def test_get_system_checks_invokes_capability(self):
+        capability = ReadOnlyManagementCapability()
+        DummyInterface._parent_class = DummyManager
+        hooks = capability.get_system_checks(DummyInterface)
+        with mock.patch.object(
+            ReadOnlyManagementCapability,
+            "ensure_schema_is_up_to_date",
+            return_value=[Warning("warn", obj=None)],
+        ) as mock_check:
+            results = [hook() for hook in hooks]
+        mock_check.assert_called_once_with(
+            DummyInterface,
+            DummyManager,
+            DummyInterface._model,
+        )
+        self.assertEqual(results, [[Warning("warn", obj=None)]])
+
+
+class ReadOnlyStartupHookTests(SimpleTestCase):
+    def test_hook_not_registered_without_metadata(self):
+        """
+        Ensure get_startup_hooks returns no hooks when the interface lacks required metadata.
+        """
+
+        class MissingMetadataInterface(ReadOnlyInterface):
+            pass
+
+        capability = ReadOnlyManagementCapability()
+        hooks = capability.get_startup_hooks(MissingMetadataInterface)
+        self.assertEqual(hooks, tuple())
+
+    def test_hook_available_when_metadata_present(self):
+        """
+        Ensure get_startup_hooks returns a callable once the interface exposes manager and model metadata.
+        """
+
+        class ReadyInterface(ReadOnlyInterface):
+            pass
+
+        ReadyInterface._parent_class = DummyManager
+        ReadyInterface._model = DummyModel
+
+        capability = ReadOnlyManagementCapability()
+        hooks = capability.get_startup_hooks(ReadyInterface)
+        self.assertEqual(len(hooks), 1)
+        DummyManager._data = []
+        with mock.patch.object(ReadOnlyManagementCapability, "sync_data") as mock_sync:
+            hooks[0]()
+        mock_sync.assert_called_once_with(ReadyInterface)
+
+
 # ------------------------------------------------------------
 # Tests for decorators and handle_interface
 # ------------------------------------------------------------
-class DecoratorTests(SimpleTestCase):
-    def test_read_only_post_create_appends_class(self):
-        # Reset tracked classes
+class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
+    def setUp(self) -> None:
         """
-        Tests that the read_only_post_create decorator appends the class to the read_only_classes list and calls the decorated hook.
+        Prepare the test fixture by creating a ReadOnlyLifecycleCapability and isolating read-only class registry.
+
+        Saves the current GeneralManagerMeta.read_only_classes to self._original and replaces it with an empty list, and stores a new ReadOnlyLifecycleCapability instance on self.capability for use by tests.
         """
         from general_manager.manager.meta import GeneralManagerMeta
 
+        self.capability = ReadOnlyLifecycleCapability()
+        self._original = list(GeneralManagerMeta.read_only_classes)
         GeneralManagerMeta.read_only_classes = []
 
-        # Dummy function
-        @ReadOnlyInterface.read_only_post_create
-        def post_hook(new_cls, interface_cls, model):
-            # Mark the class when the hook executes
-            """
-            Marks the given class to indicate that the post hook has been called.
+    def tearDown(self) -> None:
+        """
+        Restore GeneralManagerMeta.read_only_classes to its original value saved during setUp.
 
-            Parameters:
-                new_cls: The class to be marked.
-                interface_cls: The interface class associated with the hook.
-                model: The model associated with the hook.
-            """
-            new_cls._hook_called = True
+        This resets the global registry of read-only manager classes modified by the test to avoid side effects on other tests.
+        """
+        from general_manager.manager.meta import GeneralManagerMeta
 
-        class C:
+        GeneralManagerMeta.read_only_classes = self._original
+
+    def test_pre_create_enforces_soft_delete_and_base_model(self):
+        class DummyInterface(ReadOnlyInterface):
             pass
 
-        post_hook(C, ReadOnlyInterface, DummyModel)
-        self.assertTrue(hasattr(C, "_hook_called"))
-        self.assertIn(C, GeneralManagerMeta.read_only_classes)
+        if hasattr(DummyInterface, "Meta"):
+            delattr(DummyInterface, "Meta")
 
-    def test_read_only_pre_create_delegates_and_sets_base_model(self):
-        """
-        Tests that the read_only_pre_create decorator delegates to the original function and sets the base model class to ReadOnlyModel.
-        """
+        with mock.patch.object(
+            OrmLifecycleCapability,
+            "pre_create",
+            return_value=({}, DummyInterface, GeneralManagerBasisModel),
+        ) as mock_parent:
+            self.capability.pre_create(
+                name="Test",
+                attrs={},
+                interface=DummyInterface,
+                base_model_class=GeneralManagerBasisModel,
+            )
 
-        def pre_hook(name, attrs, interface, base_model_class=None):
-            """
-            Package the pre-create hook inputs into a 4-tuple.
+        self.assertTrue(hasattr(DummyInterface, "Meta"))
+        self.assertTrue(DummyInterface.Meta.use_soft_delete)
+        self.assertIs(
+            mock_parent.call_args.kwargs["base_model_class"], GeneralManagerBasisModel
+        )
 
-            Parameters:
-                name (str): The proposed name for the model/class.
-                attrs (dict): Attribute dictionary for the model definition.
-                interface (type): The interface class associated with the model.
-                base_model_class (type or None): Optional base model class to be set as the model's parent.
+    def test_post_create_registers_read_only_class(self):
+        from general_manager.manager.meta import GeneralManagerMeta
 
-            Returns:
-                tuple: A tuple (name, attrs, interface, base_model_class) containing the provided inputs.
-            """
-            return (name, attrs, interface, base_model_class)
+        class DummyManager:
+            pass
 
-        wrapper = ReadOnlyInterface.read_only_pre_create(pre_hook)
-        iface = type("iface", (), {})  # just to have an interface class
-        result = wrapper("MyName", {"a": 1}, iface)
-        # The last parameter must be GeneralManagerBasisModel
-        self.assertEqual(result, ("MyName", {"a": 1}, iface, GeneralManagerBasisModel))
+        with mock.patch.object(
+            OrmLifecycleCapability,
+            "post_create",
+            return_value=None,
+        ) as mock_parent:
+            self.capability.post_create(
+                new_class=DummyManager,
+                interface_class=ReadOnlyInterface,
+                model=None,
+            )
 
-    def test_handle_interface_returns_two_callables(self):
-        """
-        Test that handle_interface returns two callable objects for pre- and post-processing hooks.
-        """
-        pre, post = ReadOnlyInterface.handle_interface()
-        self.assertTrue(callable(pre))
-        self.assertTrue(callable(post))
+        mock_parent.assert_called_once()
+        self.assertIn(DummyManager, GeneralManagerMeta.read_only_classes)

@@ -9,7 +9,7 @@ The default Django auth model already includes history and activation-compatible
 ```python
 from django.contrib.auth import get_user_model
 
-from general_manager.interface.existing_model_interface import ExistingModelInterface
+from general_manager.interface import ExistingModelInterface
 from general_manager.manager import GeneralManager, graph_ql_property
 
 
@@ -43,7 +43,7 @@ Combine existing business rules with new ones by declaring `Meta.rules`. The int
 ```python
 from django.db import models
 
-from general_manager.interface.existing_model_interface import ExistingModelInterface
+from general_manager.interface import ExistingModelInterface
 from general_manager.manager import GeneralManager
 from general_manager.rule import Rule
 

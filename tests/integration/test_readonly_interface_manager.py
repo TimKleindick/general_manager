@@ -1,8 +1,25 @@
 from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
 from typing import ClassVar, Any
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface.read_only_interface import ReadOnlyInterface
+from general_manager.interface import ReadOnlyInterface
+from general_manager.interface.capabilities.read_only import (
+    ReadOnlyManagementCapability,
+)
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+
+def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
+    """
+    Synchronize the provided ReadOnlyInterface's configured seed data into the database.
+
+    Parameters:
+        interface_cls (type[ReadOnlyInterface]): The ReadOnlyInterface class whose data should be synchronized into persistent storage.
+    """
+    capability = interface_cls.require_capability(
+        "read_only_management",
+        expected_type=ReadOnlyManagementCapability,
+    )
+    capability.sync_data(interface_cls)
 
 
 class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
@@ -11,7 +28,7 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
         """
         Define a TestCountry GeneralManager subclass with a read-only Interface and register it on the test class.
 
-        Creates an inner TestCountry class that exposes two seeded records (codes "US" and "DE") via a class-level `_data` list, defines `code` and `name` fields, and provides a read-only `Interface` with corresponding CharField definitions. Assigns this class to `cls.TestCountry` and adds it to `cls.general_manager_classes` and `cls.read_only_classes` for use by the tests.
+        Creates an inner TestCountry class that exposes two seeded records (codes "US" and "DE") via a class-level `_data` list, defines `code` and `name` fields, and provides a read-only `Interface` with corresponding CharField definitions. Assigns this class to `cls.TestCountry` and adds it to `cls.general_manager_classes` for use by the tests.
         """
 
         class TestCountry(GeneralManager):
@@ -31,11 +48,6 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
 
         cls.TestCountry = TestCountry
         cls.general_manager_classes = [TestCountry]
-        cls.read_only_classes = [TestCountry]
-
-    def setUp(self):
-        super().setUp()
-        self.TestCountry.Interface.sync_data()  # type: ignore
 
     def test_sync_populates_database(self):
         countries = self.TestCountry.all()
@@ -62,6 +74,12 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
 class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """
+        Create and register a Milestone GeneralManager subclass with seeded records and a ReadOnlyInterface for integration tests.
+
+        This class-level setup defines a Milestone model with fields customer_name, name, description, and step, provides initial `_data` seed records, exposes a nested ReadOnlyInterface describing the public fields, and assigns the created class to `cls.Milestone` and `cls.general_manager_classes` for use by tests.
+        """
+
         class Milestone(GeneralManager):
             customer_name: str
             name: str
@@ -92,13 +110,9 @@ class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):
 
         cls.Milestone = Milestone
         cls.general_manager_classes = [Milestone]
-        cls.read_only_classes = [Milestone]
-
-    def setUp(self):
-        super().setUp()
 
     def test_sync_populates_database(self):
-        self.Milestone.Interface.sync_data()  # type: ignore
+        sync_read_only_interface(self.Milestone.Interface)
         milestones = self.Milestone.all()
         self.assertEqual(milestones.count(), 2)
         names = {m.name for m in milestones}

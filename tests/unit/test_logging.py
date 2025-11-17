@@ -23,6 +23,10 @@ from general_manager.permission.base_permission import (
     BasePermission,
     PermissionCheckError,
 )
+from general_manager.interface import ReadOnlyInterface
+from general_manager.interface.capabilities.read_only import (
+    ReadOnlyManagementCapability,
+)
 from general_manager.utils.public_api import MissingExportError, resolve_export
 
 
@@ -292,8 +296,11 @@ def test_apps_logging_when_asgi_missing() -> None:
 
 
 def test_read_only_interface_schema_warning_logs() -> None:
-    from general_manager.interface.read_only_interface import ReadOnlyInterface
+    """
+    Verifies that synchronizing a read-only interface logs a "readonly schema out of date" warning that includes the parent manager name.
 
+    Patches ReadOnlyManagementCapability.ensure_schema_is_up_to_date to simulate a stale schema and asserts that ReadOnlyManagementCapability.sync_data emits a warning with context["manager"] set to the read-only interface's parent class name.
+    """
     FakeModel = type("FakeModel", (), {"__name__": "FakeModel"})
     FakeParent = type("FakeParent", (), {"__name__": "FakeParent"})
 
@@ -302,10 +309,15 @@ def test_read_only_interface_schema_warning_logs() -> None:
         _parent_class = FakeParent  # type: ignore[assignment]
 
     with (
-        patch.object(TrivialReadOnly, "ensure_schema_is_up_to_date", return_value=True),
-        patch("general_manager.interface.read_only_interface.logger") as mock_logger,
+        patch.object(
+            ReadOnlyManagementCapability,
+            "ensure_schema_is_up_to_date",
+            return_value=True,
+        ),
+        patch("general_manager.interface.capabilities.read_only.logger") as mock_logger,
     ):
-        TrivialReadOnly.sync_data()
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(TrivialReadOnly)
 
     warning_call = mock_logger.warning.call_args_list[0]
     assert warning_call.args[0] == "readonly schema out of date"

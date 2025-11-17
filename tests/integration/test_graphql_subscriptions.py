@@ -12,8 +12,7 @@ from typing import ClassVar
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.property import graph_ql_property
-from general_manager.interface.calculation_interface import CalculationInterface
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.measurement import Measurement, MeasurementField

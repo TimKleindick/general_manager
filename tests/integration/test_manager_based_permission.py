@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from typing import ClassVar

@@ -1,15 +1,15 @@
 {
   "general_manager": {
     "CalculationInterface": [
-      "general_manager.interface.calculation_interface",
+      "general_manager.interface.interfaces.calculation",
       "CalculationInterface"
     ],
     "DatabaseInterface": [
-      "general_manager.interface.database_interface",
+      "general_manager.interface.interfaces.database",
       "DatabaseInterface"
     ],
     "ExistingModelInterface": [
-      "general_manager.interface.existing_model_interface",
+      "general_manager.interface.interfaces.existing_model",
       "ExistingModelInterface"
     ],
     "GeneralManager": [
@@ -29,7 +29,7 @@
       "ManagerBasedPermission"
     ],
     "ReadOnlyInterface": [
-      "general_manager.interface.read_only_interface",
+      "general_manager.interface.interfaces.read_only",
       "ReadOnlyInterface"
     ],
     "Rule": [
@@ -199,27 +199,27 @@
   },
   "general_manager.interface": {
     "CalculationInterface": [
-      "general_manager.interface.calculation_interface",
+      "general_manager.interface.interfaces.calculation",
       "CalculationInterface"
     ],
-    "DBBasedInterface": [
-      "general_manager.interface.database_based_interface",
-      "DBBasedInterface"
-    ],
     "DatabaseInterface": [
-      "general_manager.interface.database_interface",
+      "general_manager.interface.interfaces.database",
       "DatabaseInterface"
     ],
     "ExistingModelInterface": [
-      "general_manager.interface.existing_model_interface",
+      "general_manager.interface.interfaces.existing_model",
       "ExistingModelInterface"
     ],
     "InterfaceBase": [
       "general_manager.interface.base_interface",
       "InterfaceBase"
     ],
+    "OrmInterfaceBase": [
+      "general_manager.interface.orm_interface",
+      "OrmInterfaceBase"
+    ],
     "ReadOnlyInterface": [
-      "general_manager.interface.read_only_interface",
+      "general_manager.interface.interfaces.read_only",
       "ReadOnlyInterface"
     ]
   },

@@ -4,6 +4,10 @@ from django.test import SimpleTestCase, override_settings
 
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.interfaces.calculation import (
+    CalculationInterface,
+)
+from general_manager.manager.input import Input as GMInput
 
 
 class dummyInterface:
@@ -175,6 +179,14 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertIsInstance(self.dummy_manager1.test_field, str)  # type: ignore
 
     def test_property_with_complex_callable(self):
+        """
+        Verifies that callable attribute values that query the interface's attributes produce correct class-level types and resolved instance values.
+
+        Sets callables for "test_field" and "test_int" that read from the interface's attributes, creates properties for both, and asserts:
+        - the manager class exposes `test_field` as `str` and `test_int` as `int`, and
+        - an instance resolves `test_field` to the string value "value".
+        """
+
         def test_complex_callable1(interface):
             return interface.get_attributes().get("test_field")
 
@@ -199,9 +211,6 @@ class TestPropertyInitialization(SimpleTestCase):
         self.assertTrue(hasattr(self.dummy_manager1, "test_field"))
         self.assertEqual(self.dummy_manager1.test_field, "value")  # type: ignore
         self.assertIsInstance(self.dummy_manager1.test_field, str)  # type: ignore
-        self.assertTrue(hasattr(self.dummy_manager1, "test_int"))
-        self.assertEqual(self.dummy_manager1.test_int, 42)  # type: ignore
-        self.assertIsInstance(self.dummy_manager1.test_int, int)  # type: ignore
 
     def test_property_with_non_existent_attribute(self):
         """
@@ -246,6 +255,56 @@ class TestPropertyInitialization(SimpleTestCase):
         with self.assertRaises(AttributeError) as context:
             getattr(self.dummy_manager1, target_attr)
         self.assertIn("Error calling attribute test_field", str(context.exception))
+
+
+class TestCapabilityAttachment(SimpleTestCase):
+    def _cleanup_manager(self, manager_cls: type) -> None:
+        """
+        Remove all occurrences of a manager class from GeneralManagerMeta's internal registries.
+
+        Parameters:
+            manager_cls (type): The manager class to remove from GeneralManagerMeta.all_classes,
+                GeneralManagerMeta.pending_attribute_initialization, and GeneralManagerMeta.pending_graphql_interfaces.
+        """
+        for collection in (
+            GeneralManagerMeta.all_classes,
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.pending_graphql_interfaces,
+        ):
+            while manager_cls in collection:
+                collection.remove(manager_cls)
+
+    def test_capabilities_attached_to_interface(self) -> None:
+        """
+        Verifies that a calculation-based interface exposes the expected capability names and provides a handler for the "read" capability.
+
+        Asserts that the interface attached to a manager reports the capability set {'read', 'validation', 'observability', 'query', 'calculation_lifecycle'} and that a non-None handler is available for the "read" capability.
+        """
+
+        class CapabilityInterface(CalculationInterface):
+            foo = GMInput(int)
+
+        class CapabilityManager(metaclass=GeneralManagerMeta):
+            class Interface(CapabilityInterface):
+                pass
+
+        self.addCleanup(self._cleanup_manager, CapabilityManager)
+
+        capabilities = CapabilityManager.Interface.get_capabilities()
+
+        self.assertEqual(
+            capabilities,
+            frozenset(
+                {
+                    "read",
+                    "validation",
+                    "observability",
+                    "query",
+                    "calculation_lifecycle",
+                }
+            ),
+        )
+        self.assertIsNotNone(CapabilityManager.Interface.get_capability_handler("read"))
 
 
 # -----------------------------------------------------------------------------

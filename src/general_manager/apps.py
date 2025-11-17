@@ -21,6 +21,12 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.audit import configure_audit_logger_from_settings
+from general_manager.interface.infrastructure.startup_hooks import (
+    iter_interface_startup_hooks,
+)
+from general_manager.interface.infrastructure.system_checks import (
+    iter_interface_system_checks,
+)
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -47,7 +53,10 @@ class InvalidPermissionClassError(TypeError):
 
 
 if TYPE_CHECKING:
-    from general_manager.interface.read_only_interface import ReadOnlyInterface
+    from general_manager.interface.interfaces.read_only import (
+        ReadOnlyInterface,
+    )
+    from general_manager.interface.base_interface import InterfaceBase
 
 logger = get_logger("apps")
 
@@ -58,11 +67,12 @@ class GeneralmanagerConfig(AppConfig):
 
     def ready(self) -> None:
         """
-        Performs initialization tasks for the general_manager app when Django starts.
+        Initialize the general_manager app on Django startup.
 
-        Sets up synchronization and schema validation for read-only interfaces, initializes attributes and property accessors for general manager classes, and configures the GraphQL schema and endpoint if enabled in settings.
+        Installs the startup hook runner, registers capability system checks, initializes pending GeneralManager class attributes and property accessors, configures the audit logger from settings, and, if AUTOCREATE_GRAPHQL is true, builds and registers the GraphQL schema and endpoint.
         """
-        self.handle_read_only_interface(GeneralManagerMeta.read_only_classes)
+        self.install_startup_hook_runner()
+        self.register_system_checks()
         self.initialize_general_manager_classes(
             GeneralManagerMeta.pending_attribute_initialization,
             GeneralManagerMeta.all_classes,
@@ -72,122 +82,110 @@ class GeneralmanagerConfig(AppConfig):
             self.handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
 
     @staticmethod
-    def handle_read_only_interface(
-        read_only_classes: list[Type[GeneralManager]],
-    ) -> None:
+    def register_system_checks() -> None:
         """
-        Configure synchronization and register schema checks for read-only GeneralManager classes.
+        Register capability-provided system checks with Django's checks framework under the "general_manager" tag.
 
-        Parameters:
-            read_only_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose Interface implements a ReadOnlyInterface; each class will have its read-only data synchronized before management commands and a Django system check registered to verify the Interface schema is up to date.
+        Discovers system check hooks via iter_interface_system_checks() and registers each hook (wrapped to isolate exceptions) so they run as Django system checks; does nothing if no hooks are found.
         """
-        GeneralmanagerConfig.patch_read_only_interface_sync(read_only_classes)
-        from general_manager.interface.read_only_interface import ReadOnlyInterface
 
+        hooks = list(iter_interface_system_checks())
+        if not hooks:
+            return
         logger.debug(
-            "registering read-only schema checks",
-            context={"count": len(read_only_classes)},
+            "registering capability system checks",
+            context={"count": len(hooks)},
         )
 
-        def _build_schema_check(
-            manager_cls: Type[GeneralManager], model: Any
-        ) -> Callable[..., list[Any]]:
-            """
-            Builds a Django system check callable that verifies the read-only interface schema for a manager against a model is current.
-
-            Parameters:
-                manager_cls (Type[GeneralManager]): The GeneralManager class whose ReadOnlyInterface schema will be validated.
-                model (Any): The model (or model-like descriptor) to check the schema against.
-
-            Returns:
-                Callable[..., list[Any]]: A callable suitable for Django's system checks framework that returns a list of check messages.
-            """
-
-            def schema_check(*_: Any, **__: Any) -> list[Any]:
-                return ReadOnlyInterface.ensure_schema_is_up_to_date(manager_cls, model)
-
-            return schema_check
-
-        for general_manager_class in read_only_classes:
-            read_only_interface = cast(
-                Type[ReadOnlyInterface], general_manager_class.Interface
-            )
-
+        for interface_cls, hook in hooks:
             register("general_manager")(
-                _build_schema_check(
-                    general_manager_class,
-                    read_only_interface._model,
-                )
+                GeneralmanagerConfig._wrap_system_check(interface_cls, hook)
             )
 
     @staticmethod
-    def patch_read_only_interface_sync(
-        general_manager_classes: list[Type[GeneralManager]],
-    ) -> None:
+    def _wrap_system_check(
+        interface_cls: Type[Any],
+        hook: Callable[[], list[Any]],
+    ) -> Callable[..., list[Any]]:
         """
-        Ensure the provided GeneralManager classes' ReadOnlyInterfaces synchronize their data before any Django management command is executed.
+        Create a wrapper for an interface-specific system check hook that logs exceptions and returns no checks on failure.
 
-        For each class in `general_manager_classes`, calls the class's `Interface.sync_data()` to keep read-only data consistent. Skips synchronization when running the autoreload subprocess of `runserver`.
         Parameters:
-            general_manager_classes (list[Type[GeneralManager]]): GeneralManager subclasses whose `Interface` implements `sync_data`.
-        """
-        """
-        Wrap BaseCommand.run_from_argv to call `sync_data()` on registered ReadOnlyInterfaces before executing the original command.
+            interface_cls (Type[Any]): Interface class whose name is included in error logging.
+            hook (Callable[[], list[Any]]): Callable that performs system checks and returns a list of check messages.
 
-        Skips synchronization when the command is `runserver` and the process is the autoreload subprocess.
-        Parameters:
-            self (BaseCommand): The management command instance.
-            argv (list[str]): Command-line arguments for the management command.
         Returns:
-            The result returned by the original `BaseCommand.run_from_argv` call.
+            list[Any]: The hook's list of system checks, or an empty list if the hook raises an exception.
         """
-        from general_manager.interface.read_only_interface import ReadOnlyInterface
+
+        def _check(*_: Any, **__: Any) -> list[Any]:
+            try:
+                return hook()
+            except Exception:
+                logger.exception(
+                    "system check hook failed",
+                    context={"interface": interface_cls.__name__},
+                )
+                return []
+
+        return _check
+
+    @staticmethod
+    def install_startup_hook_runner() -> None:
+        """
+        Ensure registered startup hooks run before Django management commands execute.
+
+        Installs a wrapper around BaseCommand.run_from_argv that collects and executes
+        startup hooks (via iter_interface_startup_hooks) before delegating to the original
+        run_from_argv. Hooks are executed for all commands except that for the "runserver"
+        command they run only when the process is the autoreload main process (RUN_MAIN == "true").
+        The installation is idempotent: if already installed the function returns immediately.
+        The original run_from_argv is preserved on BaseCommand._gm_original_run_from_argv and
+        an installation flag is set on BaseCommand._gm_startup_hooks_runner_installed.
+        """
+
+        if getattr(BaseCommand, "_gm_startup_hooks_runner_installed", False):
+            return
 
         original_run_from_argv = BaseCommand.run_from_argv
 
-        def run_from_argv_with_sync(
+        def run_from_argv_with_startup_hooks(
             self: BaseCommand,
             argv: list[str],
         ) -> None:
-            # Ensure sync_data is only called at real run of runserver
             """
-            Synchronizes all registered ReadOnlyInterface data before running a Django management command, except when running the autoreload subprocess of `runserver`.
+            Run a Django management command after executing registered startup hooks when appropriate.
 
-            Parameters:
-                argv (list[str]): The management command `argv`, including the program name and command.
-
-            Returns:
-                The value returned by the original `BaseCommand.run_from_argv` invocation.
+            Executes startup hooks collected from iter_interface_startup_hooks() before delegating to the original BaseCommand.run_from_argv. Hooks are skipped for the runserver autoreload child process (determined by RUN_MAIN) but run for the initial runserver process and for other commands. Delegates to the preserved original_run_from_argv and returns its result.
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
             command = argv[1] if len(argv) > 1 else None
-            if command != "runserver" or run_main:
+            should_run_hooks = command != "runserver" or run_main
+            hooks = list(iter_interface_startup_hooks()) if should_run_hooks else []
+            if hooks:
                 logger.debug(
-                    "syncing read-only interfaces",
+                    "running startup hooks",
                     context={
                         "command": command,
+                        "count": len(hooks),
                         "autoreload": not run_main if command == "runserver" else False,
-                        "count": len(general_manager_classes),
                     },
                 )
-                for general_manager_class in general_manager_classes:
-                    read_only_interface = cast(
-                        Type[ReadOnlyInterface], general_manager_class.Interface
-                    )
-                    read_only_interface.sync_data()
-
+                for _, hook in hooks:
+                    hook()
                 logger.debug(
-                    "finished syncing read-only interfaces",
+                    "finished startup hooks",
                     context={
                         "command": command,
-                        "count": len(general_manager_classes),
+                        "count": len(hooks),
                     },
                 )
-
             result = original_run_from_argv(self, argv)
             return result
 
-        BaseCommand.run_from_argv = run_from_argv_with_sync  # type: ignore[assignment]
+        BaseCommand.run_from_argv = run_from_argv_with_startup_hooks  # type: ignore[assignment]
+        BaseCommand._gm_startup_hooks_runner_installed = True  # type: ignore[attr-defined]
+        BaseCommand._gm_original_run_from_argv = original_run_from_argv  # type: ignore[attr-defined]
 
     @staticmethod
     def initialize_general_manager_classes(
@@ -195,12 +193,12 @@ class GeneralmanagerConfig(AppConfig):
         all_classes: list[Type[GeneralManager]],
     ) -> None:
         """
-        Initialize GeneralManager classes' interface attributes, create attribute-based accessors, wire GraphQL connection properties between related managers, and validate each class's permission configuration.
+        Initialize GeneralManager interface attributes, create attribute-based accessors, wire GraphQL connection properties between related managers, and validate each class's permission configuration.
 
-        For each class in `pending_attribute_initialization` this assigns the class's Interface attributes to its internal `_attributes` and creates property accessors for those attributes. For each class in `all_classes` this scans its Interface `input_fields` for inputs whose type is another GeneralManager subclass and adds a GraphQL property on the connected manager that resolves related objects filtered by the input attribute. Finally, validate and normalize the Permission attribute on every class via GeneralmanagerConfig.check_permission_class.
+        For each class in `pending_attribute_initialization`, assign its Interface attributes to the class's `_attributes` and create attribute property accessors. For each class in `all_classes`, inspect Interface `input_fields` and, when an input field's type is another GeneralManager subclass, add a GraphQL property on the connected manager that resolves related objects filtered by that input attribute. Finally, validate or normalize each class's `Permission` attribute via GeneralmanagerConfig.check_permission_class.
 
         Parameters:
-            pending_attribute_initialization (list[type[GeneralManager]]): GeneralManager classes whose Interface attributes need to be initialized and whose attribute properties should be created.
+            pending_attribute_initialization (list[type[GeneralManager]]): GeneralManager classes whose Interface attributes must be initialized and for which attribute properties should be created.
             all_classes (list[type[GeneralManager]]): All registered GeneralManager classes to inspect for input-field connections and to validate permissions.
         """
         logger.debug(

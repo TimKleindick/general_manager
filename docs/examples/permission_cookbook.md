@@ -61,7 +61,7 @@ Mutation classes can reuse permission checks for fine-grained control. The examp
 
 ```python
 from django.db.models import AutoField, CharField, TextField
-from general_manager.interface.database_interface import DatabaseInterface
+from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 
 

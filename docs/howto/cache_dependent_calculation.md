@@ -11,7 +11,7 @@ import graphene
 
 from core.managers import DerivativeVolume, Project
 from general_manager.api.graphql import GraphQL
-from general_manager.interface.calculation_interface import CalculationInterface
+from general_manager.interface import CalculationInterface
 from general_manager.manager import GeneralManager, Input, graph_ql_property
 
 class ProjectSummary(GeneralManager):

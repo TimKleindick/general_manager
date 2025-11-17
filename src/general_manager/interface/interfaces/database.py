@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from general_manager.interface.database_based_interface import (
+from typing import ClassVar
+
+from general_manager.interface.bundles.database import ORM_WRITABLE_CAPABILITIES
+from general_manager.interface.orm_interface import (
     GeneralManagerModel,
-    WritableDBBasedInterface,
+    OrmInterfaceBase,
 )
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
@@ -20,7 +23,7 @@ __all__ = [
 ]
 
 
-class DatabaseInterface(WritableDBBasedInterface[GeneralManagerModel]):
+class DatabaseInterface(OrmInterfaceBase[GeneralManagerModel]):
     """CRUD-capable interface backed by a dynamically generated Django model."""
 
-    pass
+    configured_capabilities: ClassVar[tuple] = (ORM_WRITABLE_CAPABILITIES,)
