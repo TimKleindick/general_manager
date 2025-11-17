@@ -7,7 +7,10 @@ from typing import Any
 
 def call_with_observability(*args: Any, **kwargs: Any) -> Any:
     """
-    Resolve `with_observability` through the package to honor patched targets.
+    Delegate invocation to the package-level `with_observability`, resolving the target at call time so runtime patches are honored.
+    
+    Returns:
+        The result returned by the delegated `with_observability` call.
     """
     from general_manager.interface.capabilities import existing_model as package
 

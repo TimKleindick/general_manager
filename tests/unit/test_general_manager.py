@@ -70,9 +70,9 @@ class GeneralManagerTestCase(TestCase):
     def setUp(self):
         # Set up any necessary data or state before each test
         """
-        Prepare the test environment before each test.
-
-        Initializes GeneralManager attributes and collaborators for testing and creates a test user. Installs temporary pre- and post-data-change signal receivers that capture each signal's keyword arguments into `self.pre_list` and `self.post_list`.
+        Prepare the test environment for each test case.
+        
+        Initializes GeneralManager test configuration (attributes, Interface, Permission), creates a test user, and installs temporary pre- and post-data-change signal receivers that record each signal's keyword arguments into `self.pre_list` and `self.post_list`.
         """
         self.manager = GeneralManager
         self.manager._attributes = {
@@ -291,7 +291,11 @@ class GeneralManagerTestCase(TestCase):
             self.assertIsNone(self.post_list[0]["instance"])
 
     def test_deactivate_alias_emits_warning(self):
-        """Ensure deactivate proxies to delete and warns."""
+        """
+        Verify that calling deactivate on a manager instance invokes the interface's delete method and emits a DeprecationWarning.
+        
+        Asserts that delete is called with creator_id=1 and history_comment=None and that deactivate returns None.
+        """
         manager_obj = self.manager()
         with (
             patch.object(

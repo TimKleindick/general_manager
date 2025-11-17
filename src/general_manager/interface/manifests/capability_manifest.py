@@ -34,7 +34,15 @@ class CapabilityManifest:
     plans: Mapping[type, CapabilityPlan]
 
     def resolve(self, interface_cls: type[InterfaceBase]) -> CapabilityPlan:
-        """Aggregate plans along the class hierarchy."""
+        """
+        Aggregate capability requirements for an interface by folding plans from its class hierarchy.
+        
+        Parameters:
+            interface_cls (type[InterfaceBase]): Interface class whose MRO is traversed from base to derived to collect matching plans.
+        
+        Returns:
+            CapabilityPlan: Consolidated plan where `required` and `optional` are frozensets of capability names and `flags` is the merged flag-to-capability mapping.
+        """
         required: set[CapabilityName] = set()
         optional: set[CapabilityName] = set()
         flags: dict[str, CapabilityName] = {}
@@ -52,7 +60,12 @@ class CapabilityManifest:
         )
 
     def __contains__(self, interface_cls: type[InterfaceBase]) -> bool:
-        """Return True when a concrete plan is stored for the interface."""
+        """
+        Check whether a concrete capability plan is registered for the given interface class.
+        
+        Returns:
+            `true` if a plan is present for the interface class, `false` otherwise.
+        """
         return interface_cls in self.plans
 
 
@@ -65,7 +78,15 @@ DEFAULT_FLAG_MAPPING: dict[str, CapabilityName] = {
 
 
 def names(*values: CapabilityName) -> tuple[CapabilityName, ...]:
-    """Helper ensuring CapabilityName literals are type-checked."""
+    """
+    Collects the provided CapabilityName literals into a tuple.
+    
+    Parameters:
+        values: One or more CapabilityName literals to include in the result.
+    
+    Returns:
+        Tuple of the provided CapabilityName values.
+    """
     return values
 
 
@@ -75,6 +96,17 @@ def _plan(
     optional: Iterable[CapabilityName] = (),
     flags: TypingMapping[str, CapabilityName] | None = None,
 ) -> CapabilityPlan:
+    """
+    Constructs a CapabilityPlan from the given required, optional, and flag capability names.
+    
+    Parameters:
+        required (Iterable[CapabilityName]): Capability names that are required.
+        optional (Iterable[CapabilityName], optional): Capability names that are optional. Defaults to empty.
+        flags (Mapping[str, CapabilityName] | None, optional): Mapping of flag identifiers to capability names. Defaults to None.
+    
+    Returns:
+        CapabilityPlan: A plan containing the provided required and optional capabilities and the flags mapping.
+    """
     return CapabilityPlan(
         required=frozenset(required),
         optional=frozenset(optional),

@@ -320,9 +320,9 @@ class SyncDataTests(SimpleTestCase):
     def setUp(self):
         # Reset manager instances
         """
-        Prepare the test environment for SyncDataTests by resetting model state, stubbing DB transaction and capability methods, and capturing logs.
-
-        Resets DummyModel.objects and DummyManager._data, patches transaction.atomic to a no-op context manager, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, and starts a logger patch that captures log calls.
+        Prepare the test environment for SyncDataTests by resetting model manager state, stubbing database transaction and capability methods, and capturing logs.
+        
+        Resets DummyModel.objects and DummyManager._data, replaces DummyModel._meta.local_fields with test fields, patches the transaction.atomic context manager to a no-op, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, and starts a logger patch to capture log calls for assertions.
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
@@ -347,9 +347,9 @@ class SyncDataTests(SimpleTestCase):
 
         def _atomic_exit(*_: object) -> None:
             """
-            No-op context manager exit callable that accepts any arguments and does nothing.
-
-            Ignores all passed-in values and returns None, suitable as a dummy `__exit__` for stubbing context managers.
+            A no-op context manager exit callable that accepts any arguments and does nothing.
+            
+            Intended for use as a dummy `__exit__` implementation; it ignores all positional and keyword arguments and performs no action.
             """
             return None
 
@@ -379,7 +379,9 @@ class SyncDataTests(SimpleTestCase):
 
     def tearDown(self):
         """
-        Stops all active patches and restores original behaviors after each test.
+        Restore DummyModel._meta.local_fields to its original state and stop all active test patches.
+        
+        If the original local_fields was None, the attribute is removed; otherwise the saved value is restored. Stops the patched atomic context manager, get_unique_fields, ensure_schema_is_up_to_date, and logger patchers used in the test.
         """
         if self._orig_local_fields is None:
             delattr(DummyModel._meta, "local_fields")
@@ -537,6 +539,11 @@ class ReadOnlyStartupHookTests(SimpleTestCase):
 # ------------------------------------------------------------
 class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
     def setUp(self) -> None:
+        """
+        Prepare the test fixture by creating a ReadOnlyLifecycleCapability and isolating read-only class registry.
+        
+        Saves the current GeneralManagerMeta.read_only_classes to self._original and replaces it with an empty list, and stores a new ReadOnlyLifecycleCapability instance on self.capability for use by tests.
+        """
         from general_manager.manager.meta import GeneralManagerMeta
 
         self.capability = ReadOnlyLifecycleCapability()
@@ -544,6 +551,11 @@ class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
         GeneralManagerMeta.read_only_classes = []
 
     def tearDown(self) -> None:
+        """
+        Restore GeneralManagerMeta.read_only_classes to its original value saved during setUp.
+        
+        This resets the global registry of read-only manager classes modified by the test to avoid side effects on other tests.
+        """
         from general_manager.manager.meta import GeneralManagerMeta
 
         GeneralManagerMeta.read_only_classes = self._original

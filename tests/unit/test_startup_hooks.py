@@ -36,12 +36,27 @@ class DummyStartupCapability(BaseCapability):
     check_calls: ClassVar[list[type[InterfaceBase]]] = []
 
     def setup(self, interface_cls: type[InterfaceBase]) -> None:
+        """
+        Register this capability for the given interface class.
+        
+        Parameters:
+            interface_cls (type[InterfaceBase]): The interface class this capability applies to.
+        """
         super().setup(interface_cls)
 
     def get_startup_hooks(
         self,
         interface_cls: type[InterfaceBase],
     ) -> tuple[Callable[[], None], ...]:
+        """
+        Provide startup hook functions for the given interface class.
+        
+        Parameters:
+            interface_cls (type[InterfaceBase]): The interface class for which to create startup hooks.
+        
+        Returns:
+            tuple[Callable[[], None], ...]: A tuple of zero-argument callables that, when invoked, record the provided interface class on DummyStartupCapability.calls.
+        """
         def _hook(
             interface_cls: type[InterfaceBase] = interface_cls,
         ) -> None:
@@ -53,6 +68,16 @@ class DummyStartupCapability(BaseCapability):
         self,
         interface_cls: type[InterfaceBase],
     ) -> tuple[Callable[[], list], ...]:
+        """
+        Provide system check callbacks for the given interface.
+        
+        Parameters:
+            interface_cls (type[InterfaceBase]): The interface class for which system checks are produced.
+        
+        Returns:
+            tuple[Callable[[], list], ...]: A one-tuple containing a checker that appends the provided interface class to
+            `DummyStartupCapability.check_calls` and returns an empty list (indicating no system check errors).
+        """
         def _check(
             interface_cls: type[InterfaceBase] = interface_cls,
         ) -> list:
@@ -71,6 +96,11 @@ class DummyStartupInterface(InterfaceBase):
 
 
 def _reset_dummy_interface_state() -> None:
+    """
+    Reset all cached and configuration-related class state on DummyStartupInterface.
+    
+    This clears the capability cache and handler mappings, clears any selected capability, and marks configured capabilities as not applied.
+    """
     DummyStartupInterface._capabilities = frozenset()
     DummyStartupInterface._capability_handlers = {}
     DummyStartupInterface._capability_selection = None
@@ -79,16 +109,26 @@ def _reset_dummy_interface_state() -> None:
 
 class StartupHookRegistryTests(SimpleTestCase):
     def setUp(self) -> None:
+        """
+        Prepare test fixture by clearing registered startup hooks, resetting DummyStartupCapability call logs,
+        and restoring DummyStartupInterface to its initial (unconfigured) state.
+        """
         clear_startup_hooks()
         DummyStartupCapability.calls = []
         DummyStartupCapability.check_calls = []
         _reset_dummy_interface_state()
 
     def tearDown(self) -> None:
+        """
+        Tear down test state by clearing registered startup hooks and resetting dummy capability check call records.
+        """
         clear_startup_hooks()
         DummyStartupCapability.check_calls = []
 
     def test_capability_registers_startup_hook(self) -> None:
+        """
+        Verifies that DummyStartupCapability registers a startup hook for DummyStartupInterface and that invoking the registered hooks appends DummyStartupInterface to the capability's call log.
+        """
         DummyStartupInterface.get_capabilities()
         hooks = registered_startup_hooks()
         self.assertIn(DummyStartupInterface, hooks)
@@ -101,6 +141,12 @@ class StartupHookRegistryTests(SimpleTestCase):
         calls: list[str] = []
 
         def _sync(interface_cls: type[InterfaceBase]) -> None:
+            """
+            Record the given interface class's name in the surrounding `calls` list.
+            
+            Parameters:
+                interface_cls (type[InterfaceBase]): Interface class whose `__name__` will be appended to `calls`.
+            """
             calls.append(interface_cls.__name__)
 
         capability.sync_data = _sync  # type: ignore[assignment]
@@ -125,6 +171,11 @@ class StartupHookRegistryTests(SimpleTestCase):
 
 class StartupHookRunnerTests(SimpleTestCase):
     def setUp(self) -> None:
+        """
+        Prepare test environment for startup hook runner tests.
+        
+        Clears registered startup hooks, saves the original BaseCommand.run_from_argv method for restoration, and removes any internal runner-related attributes from BaseCommand so tests start with a clean runner state.
+        """
         clear_startup_hooks()
         self._original_run = BaseCommand.run_from_argv
         for attr in (
@@ -135,6 +186,11 @@ class StartupHookRunnerTests(SimpleTestCase):
                 delattr(BaseCommand, attr)
 
     def tearDown(self) -> None:
+        """
+        Restore global state modified by StartupHookRunnerTests by restoring BaseCommand.run_from_argv, clearing registered startup hooks, and removing the RUN_MAIN environment variable.
+        
+        This is executed as test teardown to undo modifications performed during setUp so subsequent tests run with a clean environment.
+        """
         BaseCommand.run_from_argv = self._original_run
         clear_startup_hooks()
         os.environ.pop("RUN_MAIN", None)
@@ -144,6 +200,12 @@ class StartupHookRunnerTests(SimpleTestCase):
         register_startup_hook(DummyStartupInterface, lambda: calls.append("ran"))
 
         def fake_run(self: BaseCommand, argv: list[str]) -> str:
+            """
+            Stub replacement for BaseCommand.run_from_argv used in tests.
+            
+            Returns:
+                'ok' — a constant success marker.
+            """
             return "ok"
 
         BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
@@ -153,10 +215,22 @@ class StartupHookRunnerTests(SimpleTestCase):
         self.assertEqual(calls, ["ran"])
 
     def test_runner_skips_runserver_autoreload(self) -> None:
+        """
+        Verifies that the startup hook runner does not execute registered hooks for the runserver autoreload process.
+        
+        Registers a startup hook for DummyStartupInterface, mocks BaseCommand.run_from_argv to simulate the autoreload invocation for the "runserver" command, installs the startup hook runner, and asserts the hook was not called.
+        """
         calls: list[str] = []
         register_startup_hook(DummyStartupInterface, lambda: calls.append("ran"))
 
         def fake_run(self: BaseCommand, argv: list[str]) -> None:
+            """
+            No-op replacement for BaseCommand.run_from_argv.
+            
+            Parameters:
+                self (BaseCommand): The command instance.
+                argv (list[str]): The argument vector intended for the command runner; ignored by this no-op.
+            """
             return None
 
         BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
@@ -169,6 +243,13 @@ class StartupHookRunnerTests(SimpleTestCase):
         register_startup_hook(DummyStartupInterface, lambda: calls.append("ran"))
 
         def fake_run(self: BaseCommand, argv: list[str]) -> None:
+            """
+            No-op replacement for BaseCommand.run_from_argv.
+            
+            Parameters:
+                self (BaseCommand): The command instance.
+                argv (list[str]): The argument vector intended for the command runner; ignored by this no-op.
+            """
             return None
 
         BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
@@ -180,10 +261,16 @@ class StartupHookRunnerTests(SimpleTestCase):
 
 class SystemCheckRegistryTests(SimpleTestCase):
     def setUp(self) -> None:
+        """
+        Prepare test state by clearing all registered system checks and resetting DummyStartupInterface internal state.
+        """
         clear_system_checks()
         _reset_dummy_interface_state()
 
     def tearDown(self) -> None:
+        """
+        Restore global system check registry to an empty state after each test.
+        """
         clear_system_checks()
 
     def test_capability_registers_system_check(self) -> None:

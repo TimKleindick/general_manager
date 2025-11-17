@@ -132,9 +132,9 @@ class InvalidReadOnlyDataTypeError(TypeError):
 
     def __init__(self) -> None:
         """
-        Error raised when a read-only manager's `_data` is neither a JSON string nor a list of dictionaries.
-
-        Initializes the exception with the message: "_data must be a JSON string or a list of dictionaries."
+        Indicates that a read-only manager's `_data` is neither a JSON string nor a list of dictionaries.
+        
+        The exception's message is "_data must be a JSON string or a list of dictionaries."
         """
         super().__init__("_data must be a JSON string or a list of dictionaries.")
 
@@ -144,10 +144,10 @@ class MissingReadOnlyBindingError(RuntimeError):
 
     def __init__(self, interface_name: str) -> None:
         """
-        Initialize the exception with the interface missing `_parent_class` or `_model`.
-
+        Create an exception indicating a read-only interface was used before being bound to a manager and model.
+        
         Parameters:
-            interface_name (str): Name of the interface that has not been bound yet.
+            interface_name (str): Name of the interface that has not been bound yet; used in the exception message.
         """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must be bound to a manager and model before syncing."
