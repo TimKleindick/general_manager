@@ -6,26 +6,29 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 
 class SupportsHistoryQuery(Protocol):
-    def as_of(self, search_date: Any | None) -> "SupportsHistoryQuery": """
-Scope the history query to the state at a given date.
-
-Parameters:
-    search_date (Any | None): The date or timestamp to scope the history to; if `None`, the returned query covers the full history.
-
-Returns:
-    SupportsHistoryQuery: A history query limited to the specified `search_date`, or the full history when `search_date` is `None`.
-"""
-...
-
     """Protocol for the query object returned by django-simple-history managers."""
+
+    def as_of(self, search_date: Any | None) -> "SupportsHistoryQuery":
+        """
+        Scope the history query to the state at a given date.
+
+        Parameters:
+            search_date (Any | None): The date or timestamp to scope the history
+                to; if `None`, the returned query covers the full history.
+
+        Returns:
+            SupportsHistoryQuery: A history query limited to the specified
+                `search_date`, or the full history when `search_date` is `None`.
+        """
+        ...
 
     def using(self, alias: str) -> "SupportsHistoryQuery":
         """
         Return a history query scoped to the given database/router alias.
-        
+
         Parameters:
             alias (str): Database/router alias to target for the returned query.
-        
+
         Returns:
             A history query object configured to operate against the specified alias.
         """
@@ -34,10 +37,10 @@ Returns:
     def filter(self, **kwargs: Any) -> "SupportsHistoryQuery":
         """
         Filter the history query using the provided lookup expressions.
-        
+
         Parameters:
             **kwargs: Lookup expressions to filter history records (for example, field=value).
-        
+
         Returns:
             A `SupportsHistoryQuery` representing the filtered history results.
         """

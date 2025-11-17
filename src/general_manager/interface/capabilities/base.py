@@ -39,9 +39,9 @@ class Capability(Protocol):
     def setup(self, interface_cls: type["InterfaceBase"]) -> None:
         """
         Attach this capability to the given interface class.
-        
+
         Implementations should modify or extend the provided interface class so that it exposes or enables the capability's behavior (for example by registering methods, attributes, or hooks).
-        
+
         Parameters:
             interface_cls (type[InterfaceBase]): The interface class to which the capability will be attached.
         """
@@ -49,7 +49,7 @@ class Capability(Protocol):
     def teardown(self, interface_cls: type["InterfaceBase"]) -> None:
         """
         Detach this capability from the given interface class.
-        
+
         Parameters:
             interface_cls (type["InterfaceBase"]): The interface class to remove this capability's behavior from.
         """

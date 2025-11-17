@@ -33,7 +33,7 @@ def _assert_observability(
 ) -> None:
     """
     Assert that invoking `target_callable` routes through a patched observability wrapper with the expected target, operation, payload, and callable function.
-    
+
     This helper patches `patch_target` to return a sentinel and calls `target_callable()`, then asserts:
     - the wrapper's return value is propagated,
     - the wrapper was called exactly once,
@@ -41,14 +41,14 @@ def _assert_observability(
     - the `operation` keyword equals `expected_operation`,
     - the `payload` keyword equals `expected_payload`,
     - the `func` keyword is callable.
-    
+
     Parameters:
         patch_target (str): Import path of the observability wrapper to patch (e.g., "module.with_observability").
         target_callable (callable): Zero-argument callable to execute while the wrapper is patched.
         expected_target: The object expected as the first positional argument passed to the wrapper.
         expected_operation (str): Expected operation string passed via the `operation` keyword.
         expected_payload (dict[str, object]): Expected payload passed via the `payload` keyword.
-    
+
     Raises:
         AssertionError: If any of the asserted conditions fail.
     """

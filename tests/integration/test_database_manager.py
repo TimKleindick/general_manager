@@ -22,9 +22,9 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
     """
     Synchronize the authoritative read-only data for a ReadOnlyInterface subclass.
-    
+
     This obtains the interface's read-only management capability and triggers a data synchronization for the provided interface class.
-    
+
     Parameters:
         interface_cls (type[ReadOnlyInterface]): The ReadOnlyInterface subclass whose data should be synchronized.
     """
@@ -40,7 +40,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Create and attach three nested GeneralManager test models to the test class.
-        
+
         Defines TestCountry (read-only interface with seeded country data), TestHuman (database interface with optional foreign-key to TestCountry), and TestFamily (database interface with a many-to-many bucket to TestHuman and soft-delete enabled). Assigns the created classes to cls.TestCountry, cls.TestHuman, cls.TestFamily and collects them in cls.general_manager_classes for use by tests.
         """
 
@@ -94,7 +94,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     def setUp(self):
         """
         Prepare test fixtures by creating a user, two humans, and a family linking them.
-        
+
         Creates a User with username "human-owner-1"; creates two TestHuman instances named "Alice" (linked to the TestCountry with code "US" if present) and "Bob"; and creates a TestFamily named "Smith Family" that includes both humans. All records are created with creator_id set to None and ignore permission checks.
         """
         super().setUp()

@@ -38,7 +38,7 @@ class DummyStartupCapability(BaseCapability):
     def setup(self, interface_cls: type[InterfaceBase]) -> None:
         """
         Register this capability for the given interface class.
-        
+
         Parameters:
             interface_cls (type[InterfaceBase]): The interface class this capability applies to.
         """
@@ -50,13 +50,14 @@ class DummyStartupCapability(BaseCapability):
     ) -> tuple[Callable[[], None], ...]:
         """
         Provide startup hook functions for the given interface class.
-        
+
         Parameters:
             interface_cls (type[InterfaceBase]): The interface class for which to create startup hooks.
-        
+
         Returns:
             tuple[Callable[[], None], ...]: A tuple of zero-argument callables that, when invoked, record the provided interface class on DummyStartupCapability.calls.
         """
+
         def _hook(
             interface_cls: type[InterfaceBase] = interface_cls,
         ) -> None:
@@ -70,14 +71,15 @@ class DummyStartupCapability(BaseCapability):
     ) -> tuple[Callable[[], list], ...]:
         """
         Provide system check callbacks for the given interface.
-        
+
         Parameters:
             interface_cls (type[InterfaceBase]): The interface class for which system checks are produced.
-        
+
         Returns:
             tuple[Callable[[], list], ...]: A one-tuple containing a checker that appends the provided interface class to
             `DummyStartupCapability.check_calls` and returns an empty list (indicating no system check errors).
         """
+
         def _check(
             interface_cls: type[InterfaceBase] = interface_cls,
         ) -> list:
@@ -98,7 +100,7 @@ class DummyStartupInterface(InterfaceBase):
 def _reset_dummy_interface_state() -> None:
     """
     Reset all cached and configuration-related class state on DummyStartupInterface.
-    
+
     This clears the capability cache and handler mappings, clears any selected capability, and marks configured capabilities as not applied.
     """
     DummyStartupInterface._capabilities = frozenset()
@@ -143,7 +145,7 @@ class StartupHookRegistryTests(SimpleTestCase):
         def _sync(interface_cls: type[InterfaceBase]) -> None:
             """
             Record the given interface class's name in the surrounding `calls` list.
-            
+
             Parameters:
                 interface_cls (type[InterfaceBase]): Interface class whose `__name__` will be appended to `calls`.
             """
@@ -173,7 +175,7 @@ class StartupHookRunnerTests(SimpleTestCase):
     def setUp(self) -> None:
         """
         Prepare test environment for startup hook runner tests.
-        
+
         Clears registered startup hooks, saves the original BaseCommand.run_from_argv method for restoration, and removes any internal runner-related attributes from BaseCommand so tests start with a clean runner state.
         """
         clear_startup_hooks()
@@ -188,7 +190,7 @@ class StartupHookRunnerTests(SimpleTestCase):
     def tearDown(self) -> None:
         """
         Restore global state modified by StartupHookRunnerTests by restoring BaseCommand.run_from_argv, clearing registered startup hooks, and removing the RUN_MAIN environment variable.
-        
+
         This is executed as test teardown to undo modifications performed during setUp so subsequent tests run with a clean environment.
         """
         BaseCommand.run_from_argv = self._original_run
@@ -202,7 +204,7 @@ class StartupHookRunnerTests(SimpleTestCase):
         def fake_run(self: BaseCommand, argv: list[str]) -> str:
             """
             Stub replacement for BaseCommand.run_from_argv used in tests.
-            
+
             Returns:
                 'ok' — a constant success marker.
             """
@@ -217,7 +219,7 @@ class StartupHookRunnerTests(SimpleTestCase):
     def test_runner_skips_runserver_autoreload(self) -> None:
         """
         Verifies that the startup hook runner does not execute registered hooks for the runserver autoreload process.
-        
+
         Registers a startup hook for DummyStartupInterface, mocks BaseCommand.run_from_argv to simulate the autoreload invocation for the "runserver" command, installs the startup hook runner, and asserts the hook was not called.
         """
         calls: list[str] = []
@@ -226,7 +228,7 @@ class StartupHookRunnerTests(SimpleTestCase):
         def fake_run(self: BaseCommand, argv: list[str]) -> None:
             """
             No-op replacement for BaseCommand.run_from_argv.
-            
+
             Parameters:
                 self (BaseCommand): The command instance.
                 argv (list[str]): The argument vector intended for the command runner; ignored by this no-op.
@@ -245,7 +247,7 @@ class StartupHookRunnerTests(SimpleTestCase):
         def fake_run(self: BaseCommand, argv: list[str]) -> None:
             """
             No-op replacement for BaseCommand.run_from_argv.
-            
+
             Parameters:
                 self (BaseCommand): The command instance.
                 argv (list[str]): The argument vector intended for the command runner; ignored by this no-op.

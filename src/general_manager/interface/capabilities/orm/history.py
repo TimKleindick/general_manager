@@ -33,12 +33,12 @@ class OrmHistoryCapability(BaseCapability):
     ) -> Any | None:
         """
         Retrieve the model's historical record for the given instance as of the specified date.
-        
+
         Parameters:
             interface_cls (type[OrmInterfaceBase]): The ORM interface class used to resolve capability-specific settings (for example, a database alias).
             instance (Any): The object that must implement SupportsHistory; if it does not, the function returns None.
             search_date (datetime | None): The cutoff date; the function returns the most recent historical record whose `history_date` is less than or equal to this value.
-        
+
         Returns:
             Any | None: The historical model instance that was current at `search_date`, or `None` if no matching historical record exists or the instance does not support history.
         """
@@ -65,12 +65,12 @@ class OrmHistoryCapability(BaseCapability):
     ) -> Any | None:
         """
         Retrieve the most recent historical record for the model identified by `pk` with a history date not later than `search_date`.
-        
+
         Parameters:
             interface_cls (type["OrmInterfaceBase"]): ORM interface whose underlying model provides the historical manager.
             pk (Any): Primary key of the target model record.
             search_date (datetime | None): Cutoff datetime; only history records with `history_date` <= this value are considered. If `None`, the function returns `None`.
-        
+
         Returns:
             Any | None: The historical model instance with the latest `history_date` that is <= `search_date`, or `None` if no such record exists or if the model has no history manager.
         """

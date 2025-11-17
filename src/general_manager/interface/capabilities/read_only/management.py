@@ -34,7 +34,7 @@ logger = get_logger("interface.read_only")
 def _resolve_logger():
     """
     Resolve the logger to use for read-only capability operations.
-    
+
     Returns:
         The logger instance from the `read_only` package if present, otherwise the module-level `logger`.
     """
@@ -62,10 +62,10 @@ class ReadOnlyManagementCapability(BaseCapability):
     def get_unique_fields(self, model: Type[models.Model]) -> set[str]:
         """
         Collect candidate unique field names from a Django model's metadata.
-        
+
         Parameters:
             model (Type[models.Model]): Django model class to inspect.
-        
+
         Returns:
             set[str]: Unique field names discovered from the model's `local_fields` (fields with `unique=True`), `unique_together`, and `UniqueConstraint` definitions. Returns an empty set if the model has no metadata.
         """
@@ -112,16 +112,16 @@ class ReadOnlyManagementCapability(BaseCapability):
     ) -> list[Warning]:
         """
         Verify that the Django model's declared schema matches the actual database table and return any schema-related warnings.
-        
+
         Performs the following checks and returns corresponding Django `Warning` objects when applicable:
         - Model metadata (`_meta`) is missing.
         - `db_table` is not defined on the model meta.
         - The named database table does not exist.
         - The table's columns differ from the model's local field columns (missing or extra columns).
-        
+
         Parameters:
             connection (optional): Database connection to use for introspection. If omitted, the default Django connection is used.
-        
+
         Returns:
             list[Warning]: A list of Django system-check `Warning` objects describing discovered mismatches; returns an empty list when no issues are found.
         """
@@ -133,9 +133,9 @@ class ReadOnlyManagementCapability(BaseCapability):
         def _perform() -> list[Warning]:
             """
             Validate that the given Django model's metadata and database table match, returning any schema-related warnings.
-            
+
             Performs checks for missing model metadata, missing or empty db_table, non-existent database table, and mismatched columns between the model and the actual table; each problem is reported as a Django `Warning` describing the issue and referencing the model.
-            
+
             Returns:
                 list[Warning]: A list of Django `Warning` instances for detected issues; an empty list if no schema problems are found.
             """
@@ -157,7 +157,7 @@ class ReadOnlyManagementCapability(BaseCapability):
             def table_exists(table_name: str) -> bool:
                 """
                 Determine whether a table with the given name exists in the current database connection.
-                
+
                 Returns:
                     `true` if the table exists, `false` otherwise.
                 """
@@ -170,11 +170,11 @@ class ReadOnlyManagementCapability(BaseCapability):
             ) -> tuple[list[str], list[str]]:
                 """
                 Compare a Django model's declared column names to the actual columns of a database table.
-                
+
                 Parameters:
                     model_arg (Type[models.Model]): The Django model class whose local field column names will be compared.
                     table (str): The database table name to compare against.
-                
+
                 Returns:
                     tuple[list[str], list[str]]: A tuple of two lists:
                         - The first list contains column names that are declared on the model but missing from the table.
@@ -255,9 +255,9 @@ class ReadOnlyManagementCapability(BaseCapability):
     ) -> None:
         """
         Synchronize the interface's bound read-only JSON data into the underlying Django model, creating, updating, and deactivating records to match the input.
-        
+
         Parses the read-only payload defined on the interface's parent class, enforces a set of unique identifying fields to match incoming items to existing rows, writes only model-editable fields, marks matched records active, creates missing records, and deactivates previously active records not present in the incoming data. If schema validation is enabled (or performed), aborts when schema warnings are detected.
-        
+
         Parameters:
             interface_cls (type[OrmInterfaceBase[Any]]): Read-only interface class whose parent class must expose `_data` and model binding.
             connection: Optional Django DB connection to use instead of the default.
@@ -284,9 +284,9 @@ class ReadOnlyManagementCapability(BaseCapability):
         def _perform() -> None:
             """
             Perform the core read-only data synchronization for the bound interface.
-            
+
             Parses the interface's bound JSON data, validates or verifies schema state when required, and ensures the model's rows reflect the incoming data by creating new records, updating existing records, and deactivating records absent from the input. Uses the configured unique fields to identify records and only writes model fields that are allowed and editable; records changes are logged when any create/update/deactivate occurs.
-            
+
             Raises:
                 MissingReadOnlyDataError: if the parent interface has no `_data` attribute.
                 InvalidReadOnlyDataTypeError: if the bound data is not a JSON string or a list.
@@ -456,10 +456,10 @@ class ReadOnlyManagementCapability(BaseCapability):
     ) -> tuple[Callable[[], None], ...]:
         """
         Provide a startup hook that triggers read-only data synchronization for the given interface.
-        
+
         Parameters:
             interface_cls (type[OrmInterfaceBase[Any]]): Interface class used to derive the bound manager and model.
-        
+
         Returns:
             tuple[Callable[[], None], ...]: A one-element tuple containing a callable that runs synchronization when invoked,
             or an empty tuple if the interface lacks the necessary manager/model metadata. The callable invokes the capability's
@@ -484,7 +484,7 @@ class ReadOnlyManagementCapability(BaseCapability):
         def _sync() -> None:
             """
             Attempt to synchronize read-only data for the interface during startup.
-            
+
             Calls the capability's sync_data for the captured interface. If the read-only
             binding is not available (raises MissingReadOnlyBindingError), logs a debug
             message and returns without raising.
@@ -509,10 +509,10 @@ class ReadOnlyManagementCapability(BaseCapability):
     ) -> tuple[Callable[[], list[Warning]], ...]:
         """
         Provide a system check function that validates the read-only model schema against the database.
-        
+
         Parameters:
             interface_cls (type[OrmInterfaceBase[Any]]): The read-only interface class whose binding (parent manager and model) will be inspected.
-        
+
         Returns:
             tuple[Callable[[], list[Warning]], ...]: A tuple containing a single callable. When invoked, the callable returns a list of `Warning` objects produced by `ensure_schema_is_up_to_date` if both the parent manager and model are present; otherwise it returns an empty list.
         """
@@ -520,7 +520,7 @@ class ReadOnlyManagementCapability(BaseCapability):
         def _check() -> list[Warning]:
             """
             Run a read-only schema validation for the enclosing interface and return any warnings.
-            
+
             Returns:
                 list[Warning]: A list of Django `Warning` objects describing schema problems; empty if no warnings were produced or if the interface lacks manager or model metadata.
             """

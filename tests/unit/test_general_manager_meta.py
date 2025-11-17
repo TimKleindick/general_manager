@@ -181,11 +181,12 @@ class TestPropertyInitialization(SimpleTestCase):
     def test_property_with_complex_callable(self):
         """
         Verifies that callable attribute values that query the interface's attributes produce correct class-level types and resolved instance values.
-        
+
         Sets callables for "test_field" and "test_int" that read from the interface's attributes, creates properties for both, and asserts:
         - the manager class exposes `test_field` as `str` and `test_int` as `int`, and
         - an instance resolves `test_field` to the string value "value".
         """
+
         def test_complex_callable1(interface):
             return interface.get_attributes().get("test_field")
 
@@ -260,7 +261,7 @@ class TestCapabilityAttachment(SimpleTestCase):
     def _cleanup_manager(self, manager_cls: type) -> None:
         """
         Remove all occurrences of a manager class from GeneralManagerMeta's internal registries.
-        
+
         Parameters:
             manager_cls (type): The manager class to remove from GeneralManagerMeta.all_classes,
                 GeneralManagerMeta.pending_attribute_initialization, and GeneralManagerMeta.pending_graphql_interfaces.
@@ -276,9 +277,10 @@ class TestCapabilityAttachment(SimpleTestCase):
     def test_capabilities_attached_to_interface(self) -> None:
         """
         Verifies that a calculation-based interface exposes the expected capability names and provides a handler for the "read" capability.
-        
+
         Asserts that the interface attached to a manager reports the capability set {'read', 'validation', 'observability', 'query', 'calculation_lifecycle'} and that a non-None handler is available for the "read" capability.
         """
+
         class CapabilityInterface(CalculationInterface):
             foo = GMInput(int)
 
