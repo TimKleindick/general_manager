@@ -7,10 +7,13 @@ from typing import Any
 
 def call_with_observability(*args: Any, **kwargs: Any) -> Any:
     """
-    Delegate to the package-level `with_observability` attribute at runtime.
-
-    Tests patch `general_manager.interface.capabilities.calculation.with_observability`
-    directly, so we resolve the helper through the package each time.
+    Delegate invocation to the package-level `with_observability` function.
+    
+    This resolves the helper through the package on each call (tests patch
+    `general_manager.interface.capabilities.calculation.with_observability` directly).
+    
+    Returns:
+        The value returned by the package-level `with_observability` call.
     """
     from general_manager.interface.capabilities import (
         calculation as calculation_package,

@@ -53,20 +53,17 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """
-        Set up test fixtures by dynamically defining a LegacyCustomer model, an interface, and a manager used by the integration tests.
-
-        Defines:
-        - LegacyCustomer: a Django model with fields `name`, `notes`, `is_active`, `changed_by` (FK to User), and `owners` (M2M to User), with Meta.app_label = "general_manager".
-        - rule: an AlwaysPassRule instance used to track rule evaluation.
-        - CustomerInterface: an ExistingModelInterface bound to LegacyCustomer with the rule in its Meta.rules.
-        - CustomerManager: a GeneralManager using CustomerInterface, exposing a class-level `_rule_tracker` and an inner Factory (name = "Legacy Customer").
-
-        Assigns the created classes to class attributes on `cls`:
-        - cls.LegacyCustomer, cls.CustomerInterface, cls.CustomerManager,
-        - cls.general_manager_classes (list containing CustomerManager).
-
+        Dynamically define and attach a LegacyCustomer Django model, an ExistingModelInterface, and a GeneralManager subclass to the test class for integration tests.
+        
+        This sets up:
+        - LegacyCustomer: a Django model with fields `name`, `notes`, `is_active`, `changed_by` (FK to User), and `owners` (M2M to User) and Meta.app_label = "general_manager".
+        - A single AlwaysPassRule instance used to track rule evaluations.
+        - CustomerInterface: an ExistingModelInterface bound to LegacyCustomer with the rule included in its Meta.rules.
+        - CustomerManager: a GeneralManager using CustomerInterface, exposing a class-level `_rule_tracker` referencing the rule and an inner Factory with name "Legacy Customer".
+        The created classes are attached to the test class as `LegacyCustomer`, `CustomerInterface`, `CustomerManager`, and `general_manager_classes` (list containing CustomerManager).
+        
         Parameters:
-            cls: The test class on which the model, interface, and manager are attached.
+            cls: The test class to which the generated model, interface, and manager are attached.
         """
 
         class LegacyCustomer(models.Model):

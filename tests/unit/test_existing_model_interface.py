@@ -57,8 +57,8 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Prepare test fixtures by defining and registering a temporary Django model and creating its database tables.
-
-        Defines an in-file model class named ExistingUnitCustomer, registers it under the "general_manager" app if not already registered, ensures history tracking is attached, and creates the model and its history table in the test database. Assigns the model class to cls.model as a class-level attribute.
+        
+        Defines a temporary model class ExistingUnitCustomer (app_label "general_manager"), registers it with the app registry if missing, ensures model history tracking is attached, creates the model and its history tables in the test database, and assigns the model class to cls.model.
         """
         super().setUpClass()
 
@@ -89,9 +89,9 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         """
-        Tears down the dynamically created model and its history, removing their database tables and unregistering them from the app registry.
-
-        Deletes the history model and main model tables, removes both models from the "general_manager" app registry and global model caches, clears the apps cache, and then delegates to the superclass tearDownClass for any additional cleanup.
+        Remove the dynamically created model and its history from the database and app registry.
+        
+        Deletes the model and its history tables, unregisters both models from the "general_manager" app registry and global model caches, clears the apps cache, and then calls the superclass tearDownClass for further cleanup.
         """
         with connection.schema_editor() as schema:
             history_model = cls.model.history.model  # type: ignore[attr-defined]
@@ -119,6 +119,21 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
         type[models.Model],
         Callable[[type, type, type[models.Model] | None], None],
     ]:
+        """
+        Invoke an interface's handle_interface pre-hook to prepare attributes, a concrete interface, and its model for creating a temporary manager class.
+        
+        Parameters:
+            interface_cls (type[ExistingModelInterface]): The interface class to handle.
+            name (str): The name to use for the temporary manager class (defaults to "TemporaryManager").
+            attrs (dict[str, object] | None): Initial class attributes for the temporary manager. If None, a default attrs dict with "__module__" set to the current module will be used.
+        
+        Returns:
+            tuple:
+                new_attrs (dict[str, object]): The attributes produced by the pre-hook, suitable for creating the manager class.
+                resolved_interface (type[ExistingModelInterface]): The concrete interface class returned by the pre-hook.
+                model (type[models.Model]): The Django model associated with the interface.
+                post (Callable[[type, type, type[models.Model] | None], None]): A post-hook callable to run after the manager class has been created; it accepts (manager_class, interface_cls, model_or_None).
+        """
         pre, post = interface_cls.handle_interface()
         attrs = {"__module__": __name__} if attrs is None else attrs
         new_attrs, resolved_interface, model = pre(name, attrs, interface_cls)
@@ -128,6 +143,15 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     def _resolution_capability(
         interface_cls: type[ExistingModelInterface],
     ) -> ExistingModelResolutionCapability:
+        """
+        Retrieve the ExistingModelResolutionCapability associated with the given interface class.
+        
+        Parameters:
+            interface_cls (type[ExistingModelInterface]): The interface class requesting the capability.
+        
+        Returns:
+            ExistingModelResolutionCapability: The capability instance used to resolve models, ensure history, build factories, and apply rules for the interface.
+        """
         return interface_cls.require_capability(  # type: ignore[return-value]
             "existing_model_resolution",
             expected_type=ExistingModelResolutionCapability,
@@ -429,7 +453,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
 
     def test_build_factory_creates_meta_with_model(self) -> None:
         """
-        Tests that _build_factory creates Meta class with model.
+        Ensure a factory built for an existing-model interface has its Meta.model set to that interface's model.
         """
 
         class TestInterface(ExistingModelInterface):

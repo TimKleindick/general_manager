@@ -18,6 +18,11 @@ class CapabilityPlan:
     flags: Mapping[str, CapabilityName] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """
+        Normalize and freeze the dataclass fields for immutability.
+        
+        Converts `required` and `optional` to `frozenset` and wraps `flags` in a read-only mapping so that all exposed attributes are immutable after initialization.
+        """
         object.__setattr__(self, "required", frozenset(self.required))
         object.__setattr__(self, "optional", frozenset(self.optional))
         object.__setattr__(self, "flags", MappingProxyType(dict(self.flags)))
@@ -32,7 +37,15 @@ class CapabilityConfig:
     flags: Mapping[str, bool] = field(default_factory=dict)
 
     def is_flag_enabled(self, flag_name: str) -> bool:
-        """Return True when the supplied flag evaluates to truthy."""
+        """
+        Determine if a named flag is enabled.
+        
+        Parameters:
+            flag_name (str): Name of the flag to check.
+        
+        Returns:
+            True if the named flag evaluates to truthy, False otherwise.
+        """
         return bool(self.flags.get(flag_name, False))
 
 
@@ -45,6 +58,11 @@ class CapabilitySelection:
     activated_optional: frozenset[CapabilityName]
 
     def __post_init__(self) -> None:
+        """
+        Normalize the dataclass fields to immutable frozenset instances after initialization.
+        
+        Converts `required`, `optional`, and `activated_optional` attributes to `frozenset` to enforce immutability and consistent types for downstream consumers.
+        """
         object.__setattr__(self, "required", frozenset(self.required))
         object.__setattr__(self, "optional", frozenset(self.optional))
         object.__setattr__(
@@ -53,5 +71,10 @@ class CapabilitySelection:
 
     @property
     def all(self) -> frozenset[CapabilityName]:
-        """Return every capability that should be attached to the interface."""
+        """
+        Combined set of capabilities to attach to the interface.
+        
+        Returns:
+            frozenset[CapabilityName]: The union of `required` and `activated_optional` capabilities.
+        """
         return frozenset((*self.required, *self.activated_optional))

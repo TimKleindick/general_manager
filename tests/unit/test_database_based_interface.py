@@ -64,13 +64,39 @@ class PersonInterface(OrmInterfaceBase):
     @classmethod
     def handle_interface(cls):
         """
-        Provide pre- and post-processing callables used when creating a dynamic interface-backed class.
+        Return pre- and post-creation hooks used to wire a dynamically created manager class to its interface.
+        
+        Returns:
+            tuple: (pre, post) where
+                pre(name, attrs, interface) -> (attrs, parent_class, model): prepares attributes and returns the interface's parent class and model to be used when creating the class.
+                post(new_cls, interface_cls, model) -> None: attaches the interface to the newly created class by setting new_cls.Interface and sets interface_cls._parent_class to new_cls.
         """
 
         def pre(name, attrs, interface):
+            """
+            Provide pre-creation context for generating an interface-backed manager subclass.
+            
+            Parameters:
+                name (str): Proposed name for the new manager class.
+                attrs (dict): Attribute dictionary that will be used to create the new class.
+                interface (type): Interface class that is driving the manager creation.
+            
+            Returns:
+                tuple: A 3-tuple (attrs, manager_class, model) where `attrs` is the attribute
+                mapping to use, `manager_class` is the manager class object to be created/used,
+                and `model` is the Django model class associated with the interface.
+            """
             return attrs, cls, cls._model
 
         def post(new_cls, interface_cls, model):
+            """
+            Attach an interface class to a generated manager class and set the manager as the interface's parent.
+            
+            Parameters:
+                new_cls: The generated manager class that will receive an `Interface` attribute pointing to `interface_cls`.
+                interface_cls: The interface class to attach; its `_parent_class` will be set to `new_cls`.
+                model: The Django model associated with the interface (provided for signature compatibility; not used).
+            """
             new_cls.Interface = interface_cls
             interface_cls._parent_class = new_cls
 
@@ -243,7 +269,9 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
 
     def test_pre_and_post_create_and_handle_interface(self):
         """
-        Tests that lifecycle hooks configure interface classes correctly.
+        Verify handle_interface()'s pre and post hooks create and wire a manager subclass to the interface.
+        
+        Runs the pre hook to obtain attributes, interface class, and model, constructs a TempManager subclass with those attributes, then runs post to link the Interface to the new manager and set the interface class's parent to that manager. Asserts the TempManager.Interface is a subclass of PersonInterface and that the interface class's _parent_class is the TempManager.
         """
         module_name = "general_manager.interface.orm_interface"
         pre, post = PersonInterface.handle_interface()
@@ -679,7 +707,11 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
 
     def test_handle_custom_fields_with_multiple_custom_fields(self):
         """
-        Tests handle_custom_fields with multiple custom fields defined.
+        Verifies that handle_custom_fields produces placeholder `None` entries and matching ignore keys for multiple custom fields.
+        
+        Defines a temporary interface with three custom fields and asserts:
+        - the returned `fields` sequence contains one `None` per custom field, and
+        - the returned `ignore` sequence contains "None_value" and "None_unit" once per custom field.
         """
 
         class MultiCustomInterface(OrmInterfaceBase):
@@ -945,9 +977,9 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Register WritableInterfaceTestModel with simple_history, ensure it's in the 'general_manager' app registry, and create database tables for the model and its history model.
-
-        This runs once for the test class to prepare the database schema required by tests.
+        Prepare the test database by registering WritableInterfaceTestModel with simple_history, ensuring it is present in the 'general_manager' app registry, and creating its database tables (including the history table).
+        
+        This runs once for the test class to set up the model schema required by writable-interface tests.
         """
         super().setUpClass()
         from simple_history import register
@@ -1323,7 +1355,9 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
 
     def test_save_with_history_validates_instance(self):
         """
-        Tests that save_with_history calls full_clean for validation.
+        Verifies that save_with_history validates model instances and raises a ValidationError for invalid data.
+        
+        Attempts to save a WritableInterfaceTestModel with invalid fields and expects ValidationError from the underlying full_clean validation step.
         """
         mutation = self.interface_cls.require_capability(
             "orm_mutation",
@@ -1344,7 +1378,9 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
 
     def test_save_with_history_sets_changed_by(self):
         """
-        Tests that save_with_history sets changed_by_id correctly.
+        Verifies that save_with_history records the provided creator as the model's changed_by.
+        
+        Creates a model instance, invokes the mutation capability's save_with_history with a creator_id, and asserts the persisted instance's changed_by equals that creator.
         """
         mutation = self.interface_cls.require_capability(
             "orm_mutation",

@@ -34,11 +34,11 @@ class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
     @classmethod
     def get_field_type(cls, field_name: str) -> type:
         """
-        Get the Python type for a field on the wrapped model, resolving the configured model first if not already resolved.
-
+        Retrieve the Python type for a named field on the wrapped Django model.
+        
         Parameters:
             field_name (str): Name of the field on the underlying Django model.
-
+        
         Returns:
             type: The Python type corresponding to the specified model field.
         """
@@ -47,11 +47,23 @@ class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
 
     @classmethod
     def _resolve_model_class(cls) -> type[models.Model]:
+        """
+        Resolve and return the Django model class backing this interface.
+        
+        Returns:
+            The Django model class (subclass of django.db.models.Model) used by this interface.
+        """
         resolver = cls._resolution_capability()
         return resolver.resolve_model(cls)
 
     @classmethod
     def _resolution_capability(cls) -> ExistingModelResolutionCapability:
+        """
+        Retrieve the ExistingModelResolutionCapability used to resolve the underlying Django model.
+        
+        Returns:
+            ExistingModelResolutionCapability: The capability instance responsible for resolving the existing model.
+        """
         return cls.require_capability(  # type: ignore[return-value]
             "existing_model_resolution",
             expected_type=ExistingModelResolutionCapability,
@@ -59,6 +71,14 @@ class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
 
     @classmethod
     def _ensure_model_loaded(cls) -> type[models.Model]:
+        """
+        Lazily resolve and cache the underlying Django model class for this interface.
+        
+        If the model has not been resolved yet, obtains the configured resolution capability, resolves the model for this interface, caches it on `cls._model` and updates `cls.model`. Subsequent calls return the cached model.
+        
+        Returns:
+            type[models.Model]: The resolved Django model class.
+        """
         if not hasattr(cls, "_model"):
             resolver = cls._resolution_capability()
             model = resolver.resolve_model(cls)

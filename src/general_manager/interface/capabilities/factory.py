@@ -42,7 +42,20 @@ def build_capabilities(
     names: Iterable[CapabilityName],
     overrides: Mapping[CapabilityName, CapabilityOverride],
 ) -> list[Capability]:
-    """Instantiate capability objects for the provided names."""
+    """
+    Builds capability instances for the given capability names.
+    
+    Parameters:
+    	interface_cls (type): Interface class the capabilities will be associated with (may be unused by built-in factories).
+    	names (Iterable[CapabilityName]): Iterable of capability names to instantiate, in the desired order.
+    	overrides (Mapping[CapabilityName, CapabilityOverride]): Per-name overrides; each value is either a Capability class (instantiated) or a zero-argument callable that returns a Capability.
+    
+    Returns:
+    	list[Capability]: A list of instantiated Capability objects corresponding to `names`, in the same order.
+    
+    Raises:
+    	KeyError: If a name from `names` does not exist in CAPABILITY_CLASS_MAP and no override is provided.
+    """
     instances: list[Capability] = []
     for name in names:
         override = overrides.get(name)

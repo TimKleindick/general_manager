@@ -16,7 +16,12 @@ class InterfaceCapabilityConfig:
     options: Mapping[str, Any] | None = None
 
     def instantiate(self) -> Capability:
-        """Create the configured capability instance."""
+        """
+        Instantiate the configured capability using the stored handler and options.
+        
+        Returns:
+            Capability: An instance produced by calling the configured handler. If `options` is falsy, the handler is called with no arguments; otherwise `options` are passed as keyword arguments.
+        """
         if not self.options:
             return self.handler()
         # Copy options into a mutable dict to avoid mutating caller state.
@@ -31,6 +36,11 @@ class CapabilitySet:
     entries: Tuple[InterfaceCapabilityConfig, ...]
 
     def __post_init__(self) -> None:
+        """
+        Ensure the `entries` field is stored as a tuple.
+        
+        Runs after object initialization to convert `entries` into a tuple, enforcing an immutable sequence of capability configurations.
+        """
         object.__setattr__(self, "entries", tuple(self.entries))
 
 
@@ -40,7 +50,15 @@ CapabilityConfigEntry: TypeAlias = CapabilitySet | InterfaceCapabilityConfig
 def flatten_capability_entries(
     entries: Sequence[CapabilityConfigEntry] | Iterable[CapabilityConfigEntry],
 ) -> tuple[InterfaceCapabilityConfig, ...]:
-    """Return a tuple of concrete capability configs, expanding any bundles."""
+    """
+    Expand capability bundles and return a flat tuple of capability configurations.
+    
+    Parameters:
+        entries: An iterable of CapabilitySet or InterfaceCapabilityConfig; any CapabilitySet encountered is expanded into its contained InterfaceCapabilityConfig entries.
+    
+    Returns:
+        A tuple of InterfaceCapabilityConfig containing all concrete capability configurations with bundles expanded.
+    """
     flattened: list[InterfaceCapabilityConfig] = []
     for entry in entries:
         if isinstance(entry, CapabilitySet):
@@ -53,7 +71,18 @@ def flatten_capability_entries(
 def iter_capability_entries(
     entries: Sequence[CapabilityConfigEntry] | Iterable[CapabilityConfigEntry],
 ) -> Iterator[InterfaceCapabilityConfig]:
-    """Yield capability configs, expanding bundles on the fly."""
+    """
+    Yield capability configurations, expanding any CapabilitySet bundles.
+    
+    Parameters:
+        entries: An iterable or sequence of CapabilityConfigEntry (either an InterfaceCapabilityConfig
+            or a CapabilitySet). If an entry is a CapabilitySet, its contained InterfaceCapabilityConfig
+            items are yielded individually.
+    
+    Returns:
+        Iterator[InterfaceCapabilityConfig]: An iterator that yields InterfaceCapabilityConfig items,
+        with CapabilitySet entries expanded into their contained configurations.
+    """
     for entry in entries:
         if isinstance(entry, CapabilitySet):
             yield from entry.entries

@@ -37,9 +37,34 @@ class ExistingModelResolutionCapability(BaseCapability):
     def resolve_model(
         self, interface_cls: type["ExistingModelInterface"]
     ) -> type[models.Model]:
+        """
+        Resolve and bind the Django model referenced by an ExistingModelInterface subclass.
+        
+        Parameters:
+            interface_cls (type[ExistingModelInterface]): The interface class whose `model` attribute should be resolved and attached.
+        
+        Returns:
+            type[models.Model]: The resolved Django model class.
+        
+        Raises:
+            MissingModelConfigurationError: If the interface has no `model` attribute set.
+            InvalidModelReferenceError: If the `model` attribute is neither a valid model class nor a resolvable app label string.
+        """
         payload_snapshot = {"interface": interface_cls.__name__}
 
         def _perform() -> type[models.Model]:
+            """
+            Resolve the configured Django model for the enclosing interface class and configure the interface's soft-delete default.
+            
+            This sets the resolved model on the interface class (both `_model` and `model`) and either configures the soft-delete capability handler with the model's default active state or stores that default on the interface.
+            
+            Returns:
+                type[models.Model]: The resolved Django model class.
+            
+            Raises:
+                MissingModelConfigurationError: If the interface has no `model` attribute configured.
+                InvalidModelReferenceError: If the `model` attribute is neither a valid app model string nor a Django model class.
+            """
             model_reference = getattr(interface_cls, "model", None)
             if model_reference is None:
                 raise MissingModelConfigurationError(interface_cls.__name__)
@@ -76,12 +101,25 @@ class ExistingModelResolutionCapability(BaseCapability):
         model: type[models.Model],
         interface_cls: type["ExistingModelInterface"] | None = None,
     ) -> None:
+        """
+        Register simple history tracking for the given Django model if it is not already registered.
+        
+        Parameters:
+            model (type[models.Model]): The Django model class to enable history tracking on.
+            interface_cls (type["ExistingModelInterface"] | None): Optional interface class associated with the model; when provided, the registration is attributed to that interface.
+        
+        """
         payload_snapshot = {
             "interface": interface_cls.__name__ if interface_cls else None,
             "model": getattr(model, "__name__", str(model)),
         }
 
         def _perform() -> None:
+            """
+            Register simple history for the captured Django model if history is not already present.
+            
+            If the model's _meta already exposes the simple_history manager attribute, no action is taken. Otherwise, collects the model's local many-to-many field names and registers the model with simple_history including those m2m fields.
+            """
             if hasattr(model._meta, "simple_history_manager_attribute"):
                 return
             m2m_fields = [field.name for field in model._meta.local_many_to_many]
@@ -100,12 +138,26 @@ class ExistingModelResolutionCapability(BaseCapability):
         interface_cls: type["ExistingModelInterface"],
         model: type[models.Model],
     ) -> None:
+        """
+        Apply the interface's Meta.rules to the Django model and wire a compatible full_clean method.
+        
+        If the interface defines a Meta.rules sequence, this function appends those rules to any existing rules on model._meta and assigns the combined list back to model._meta.rules. It then replaces model.full_clean with a full-clean helper appropriate for the model. If no rules are defined on the interface, the model is left unchanged.
+        
+        Parameters:
+            interface_cls (type[ExistingModelInterface]): The interface class whose Meta.rules will be applied.
+            model (type[django.db.models.Model]): The Django model to receive combined rules and a patched full_clean.
+        """
         payload_snapshot = {
             "interface": interface_cls.__name__,
             "model": getattr(model, "__name__", str(model)),
         }
 
         def _perform() -> None:
+            """
+            Merge rules from the interface Meta into the model's _meta.rules and replace the model's full_clean with a rules-aware implementation.
+            
+            If the interface defines no `Meta.rules`, the function returns without changes. When rules exist, it appends them to any existing model._meta.rules and sets model.full_clean to the helper produced by get_full_clean_methode(model).
+            """
             meta_class = getattr(interface_cls, "Meta", None)
             rules = getattr(meta_class, "rules", None) if meta_class else None
             if not rules:
@@ -132,6 +184,17 @@ class ExistingModelResolutionCapability(BaseCapability):
         attrs: dict[str, Any],
         interface: type["ExistingModelInterface"],
     ) -> tuple[dict[str, Any], type["ExistingModelInterface"], type[models.Model]]:
+        """
+        Prepare and return attributes and types needed to create a concrete interface class tied to an existing Django model.
+        
+        Parameters:
+            name (str): The name to use for the generated concrete interface and its factory.
+            attrs (dict[str, Any]): Attribute mapping for the class being created; this mapping will be updated with keys such as "_interface_type", "Interface", and "Factory".
+            interface (type[ExistingModelInterface]): The ExistingModelInterface subclass that defines the model reference and optional Factory to base the concrete interface on.
+        
+        Returns:
+            tuple[dict[str, Any], type[ExistingModelInterface], type[models.Model]]: A tuple containing the (possibly mutated) attrs dict to use when creating the class, the generated concrete interface type (with its model wired), and the resolved Django model class.
+        """
         payload_snapshot = {
             "interface": interface.__name__,
             "name": name,
@@ -140,6 +203,17 @@ class ExistingModelResolutionCapability(BaseCapability):
         def _perform() -> tuple[
             dict[str, Any], type["ExistingModelInterface"], type[models.Model]
         ]:
+            """
+            Prepare and return updated attributes, a concrete interface class, and the resolved Django model for interface creation.
+            
+            Performs model resolution, ensures history and rules are applied, creates a concrete subclass of the provided interface with model wiring, sets the interface wiring values into the passed-in attrs (including a generated Factory), and returns the updated attrs along with the concrete interface type and the model.
+            
+            Returns:
+                tuple: A 3-tuple (attrs, concrete_interface, model) where
+                    - attrs (dict[str, Any]) is the updated attribute mapping to be used for class creation,
+                    - concrete_interface (type[ExistingModelInterface]) is the new concrete interface subclass wired to the resolved model,
+                    - model (type[django.db.models.Model]) is the resolved Django model class.
+            """
             interface_cls = cast(type["ExistingModelInterface"], interface)
             model = self.resolve_model(interface_cls)
             self.ensure_history(model, interface_cls)
@@ -180,12 +254,31 @@ class ExistingModelResolutionCapability(BaseCapability):
         interface_class: type["ExistingModelInterface"],
         model: type[models.Model] | None,
     ) -> None:
+        """
+        Finalize wiring between the newly created concrete class, its interface, and the Django model.
+        
+        Parameters:
+            new_class (type): The newly created concrete manager/class that will be attached to the interface and model.
+            interface_class (type[ExistingModelInterface]): The interface class from which the concrete class was created.
+            model (type[models.Model] | None): The resolved Django model associated with the interface, or `None` if no model is configured.
+        
+        Description:
+            If a model is provided, attaches `new_class` as the interface's `_parent_class` and the model's `_general_manager_class`,
+            assigns `new_class.objects` using the ORM persistence capability for the interface, and if soft-delete support is enabled,
+            ensures the model exposes `all_objects` (falling back to `_default_manager` if missing) and assigns `new_class.all_objects`
+            to a manager that returns both active and inactive records.
+        """
         payload_snapshot = {
             "interface": interface_class.__name__,
             "model": getattr(model, "__name__", None) if model else None,
         }
 
         def _perform() -> None:
+            """
+            Finalize wiring after creating a concrete manager class for an existing-model-based interface.
+            
+            Sets the new concrete class as the interface's parent and the model's general manager, obtains and assigns an ORM manager to the new class, and—if soft-delete is enabled—ensures the model exposes an `all_objects` manager and assigns a non-filtered manager to the new class.
+            """
             if model is None:
                 return
             interface_class._parent_class = new_class  # type: ignore[attr-defined]
@@ -222,6 +315,18 @@ class ExistingModelResolutionCapability(BaseCapability):
         model: type[models.Model],
         factory_definition: type | None = None,
     ) -> type[AutoFactory]:
+        """
+        Create a concrete AutoFactory subclass configured for the given interface and Django model.
+        
+        Parameters:
+            name (str): Base name used to derive the generated factory class name (result will be "{name}Factory").
+            interface_cls (type[ExistingModelInterface]): The interface type the factory will produce instances for.
+            model (type[models.Model]): The Django model that the factory's Meta.model should reference.
+            factory_definition (type | None): Optional prototype class whose public attributes are copied into the generated factory.
+        
+        Returns:
+            type[AutoFactory]: A newly created AutoFactory subclass named "{name}Factory" with its `interface` attribute set to the given interface and a Meta class pointing to the provided model.
+        """
         factory_definition = factory_definition or getattr(
             interface_cls, "Factory", None
         )

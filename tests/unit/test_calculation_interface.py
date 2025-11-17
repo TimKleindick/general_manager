@@ -28,6 +28,12 @@ DummyCalculationInterface._parent_class = DummyGeneralManager
 
 class CustomQueryCapability(CalculationQueryCapability):
     def __init__(self, label: str):
+        """
+        Initialize the capability and store a human-readable label on the instance.
+        
+        Parameters:
+            label (str): Human-readable label assigned to the capability.
+        """
         super().__init__()
         self.label = label
 

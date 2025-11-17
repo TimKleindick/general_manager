@@ -20,6 +20,14 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
 def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
+    """
+    Synchronize the authoritative read-only data for a ReadOnlyInterface subclass.
+    
+    This obtains the interface's read-only management capability and triggers a data synchronization for the provided interface class.
+    
+    Parameters:
+        interface_cls (type[ReadOnlyInterface]): The ReadOnlyInterface subclass whose data should be synchronized.
+    """
     capability = interface_cls.require_capability(
         "read_only_management",
         expected_type=ReadOnlyManagementCapability,
@@ -31,9 +39,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Create and attach nested GeneralManager test models (TestCountry, TestHuman, TestFamily) to the test class.
-
-        Each nested class defines its Interface, relationships, and seed data as used by the integration tests. The created classes are assigned to class attributes (cls.TestCountry, cls.TestHuman, cls.TestFamily) and collected into cls.general_manager_classes for test orchestration.
+        Create and attach three nested GeneralManager test models to the test class.
+        
+        Defines TestCountry (read-only interface with seeded country data), TestHuman (database interface with optional foreign-key to TestCountry), and TestFamily (database interface with a many-to-many bucket to TestHuman and soft-delete enabled). Assigns the created classes to cls.TestCountry, cls.TestHuman, cls.TestFamily and collects them in cls.general_manager_classes for use by tests.
         """
 
         class TestCountry(GeneralManager):
@@ -85,9 +93,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
     def setUp(self):
         """
-        Set up test data by synchronizing countries and creating a user, two humans, and a family linking them.
-
-        Creates a User, creates two TestHuman instances (one linked to the US country and one without a country), and creates a TestFamily that includes both humans. Records are created with permission checks ignored for test purposes.
+        Prepare test fixtures by creating a user, two humans, and a family linking them.
+        
+        Creates a User with username "human-owner-1"; creates two TestHuman instances named "Alice" (linked to the TestCountry with code "US" if present) and "Bob"; and creates a TestFamily named "Smith Family" that includes both humans. All records are created with creator_id set to None and ignore permission checks.
         """
         super().setUp()
         self.User1 = User.objects.create(username="human-owner-1")
