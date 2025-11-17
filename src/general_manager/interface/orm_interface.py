@@ -52,7 +52,7 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     ) -> None:
         """
         Initialize the ORM-backed interface, set the primary key from identification, normalize the optional search date, and load the corresponding history model instance.
-        
+
         Parameters:
             search_date (datetime | None): Optional datetime used to select a historical record; if provided and timezone-naive, it will be converted to a timezone-aware datetime.
         """
@@ -65,10 +65,10 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     def normalize_search_date(search_date: datetime | None) -> datetime | None:
         """
         Ensure the provided search_date is timezone-aware.
-        
+
         Parameters:
             search_date (datetime | None): A datetime to normalize; may be naive or timezone-aware.
-        
+
         Returns:
             datetime | None: The input converted to a timezone-aware datetime if it was naive, the original datetime if already timezone-aware, or None if no date was provided.
         """
@@ -80,7 +80,7 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     def _default_base_model_class() -> type[GeneralManagerBasisModel]:
         """
         Provide the default base Django model class used by ORM-backed interfaces.
-        
+
         Returns:
             type[GeneralManagerBasisModel]: The default base model class, GeneralManagerModel.
         """
@@ -93,10 +93,10 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     ) -> tuple[list[str], list[str]]:
         """
         Retrieve custom-field metadata for the given model from the configured ORM lifecycle capability.
-        
+
         Parameters:
             model (type[models.Model] | models.Model): Model class or model instance to describe.
-        
+
         Returns:
             tuple[list[str], list[str]]: A pair of lists of custom field names as returned by the lifecycle capability.
         """

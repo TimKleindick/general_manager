@@ -131,7 +131,7 @@ class GMTestCaseMeta(type):
         ) -> None:
             """
             Prepare the class-level test environment for GeneralManager GraphQL tests.
-            
+
             Resets GraphQL registries and type/schema state, optionally installs an AppConfig fallback, creates any missing database tables for the test's registered models (including their history models and related models used by HistoricalChanges) and records created table names on cls._gm_created_tables, initializes GeneralManager classes and GraphQL registrations (including installing the startup hook runner and registering system checks), and runs any user-defined setUpClass followed by the base GraphQLTransactionTestCase.setUpClass.
             """
             GraphQL._query_class = None
@@ -288,7 +288,7 @@ class GeneralManagerTransactionTestCase(
     def setUp(self) -> None:
         """
         Install a LoggingCache as the Django default cache for the test and clear its operation log.
-        
+
         Replaces Django's default cache connection with a fresh LoggingCache and resets its recorded operations, then runs any registered startup hooks for the test class.
         """
         super().setUp()
@@ -430,7 +430,7 @@ class GeneralManagerTransactionTestCase(
     def _run_registered_startup_hooks(cls) -> None:
         """
         Collects interfaces declared on the test class's GeneralManager classes, ensures their capabilities are loaded, and executes any registered startup hooks for those interfaces.
-        
+
         For each GM class in `general_manager_classes`, the method looks for an `Interface` attribute that is a subclass of `InterfaceBase`. If any are found, it calls `get_capabilities()` on each interface class and then runs every startup hook registered via `iter_interface_startup_hooks()` whose interface matches one of the collected interfaces.
         """
         interfaces: set[type[InterfaceBase]] = set()
@@ -452,7 +452,7 @@ class GeneralManagerTransactionTestCase(
     def assert_cache_miss(self) -> None:
         """
         Assert that a cache get returned no value and that a subsequent set stored the result.
-        
+
         Checks the default LoggingCache's operation log for a ("get", key, False) entry indicating a miss and a ("set", key) entry indicating the computed value was stored. Clears the cache operation log after performing the assertions.
         """
         cache_backend = cast(LoggingCache, caches["default"])

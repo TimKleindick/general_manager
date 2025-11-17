@@ -71,7 +71,7 @@ class GeneralManagerTestCase(TestCase):
         # Set up any necessary data or state before each test
         """
         Prepare the test environment for each test case.
-        
+
         Initializes GeneralManager test configuration (attributes, Interface, Permission), creates a test user, and installs temporary pre- and post-data-change signal receivers that record each signal's keyword arguments into `self.pre_list` and `self.post_list`.
         """
         self.manager = GeneralManager
@@ -293,7 +293,7 @@ class GeneralManagerTestCase(TestCase):
     def test_deactivate_alias_emits_warning(self):
         """
         Verify that calling deactivate on a manager instance invokes the interface's delete method and emits a DeprecationWarning.
-        
+
         Asserts that delete is called with creator_id=1 and history_comment=None and that deactivate returns None.
         """
         manager_obj = self.manager()

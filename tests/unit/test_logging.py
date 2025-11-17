@@ -298,7 +298,7 @@ def test_apps_logging_when_asgi_missing() -> None:
 def test_read_only_interface_schema_warning_logs() -> None:
     """
     Verifies that synchronizing a read-only interface logs a "readonly schema out of date" warning that includes the parent manager name.
-    
+
     Patches ReadOnlyManagementCapability.ensure_schema_is_up_to_date to simulate a stale schema and asserts that ReadOnlyManagementCapability.sync_data emits a warning with context["manager"] set to the read-only interface's parent class name.
     """
     FakeModel = type("FakeModel", (), {"__name__": "FakeModel"})

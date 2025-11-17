@@ -38,14 +38,14 @@ class OrmMutationCapability(BaseCapability):
     ) -> models.Model:
         """
         Apply simple (non-relational) attribute updates to a Django model instance.
-        
+
         Parameters:
             instance (models.Model): The model instance to modify.
             kwargs (dict[str, Any]): Mapping of field names to values; entries with the sentinel `NOT_PROVIDED` are ignored.
-        
+
         Returns:
             models.Model: The same instance after attribute assignment.
-        
+
         Raises:
             InvalidFieldValueError: If assigning a value raises a `ValueError` for a field.
             InvalidFieldTypeError: If assigning a value raises a `TypeError` for a field.
@@ -55,12 +55,12 @@ class OrmMutationCapability(BaseCapability):
         def _perform() -> models.Model:
             """
             Apply the provided simple attribute values to the captured model instance, ignoring keys marked NOT_PROVIDED.
-            
+
             The function sets each key on the enclosed `instance` to its corresponding value and returns the mutated model instance. Keys whose value is `NOT_PROVIDED` are skipped.
-            
+
             Returns:
                 models.Model: The same model instance after attribute assignment.
-            
+
             Raises:
                 InvalidFieldValueError: If assigning a value raises ValueError for a field.
                 InvalidFieldTypeError: If assigning a value raises TypeError for a field.
@@ -93,15 +93,15 @@ class OrmMutationCapability(BaseCapability):
     ) -> int:
         """
         Persist the model instance while recording creator metadata and an optional change reason.
-        
+
         Performs the save inside an atomic transaction using the interface's configured database alias when available, sets `changed_by_id` on the instance if the attribute exists, runs model validation, and attaches a change reason after a successful save when `history_comment` is provided.
-        
+
         Parameters:
             interface_cls (type[OrmInterfaceBase]): The interface class used to resolve support capabilities and configuration.
             instance (models.Model): The Django model instance to validate and save.
             creator_id (int | None): Identifier of the user or process responsible for the change; assigned to `instance.changed_by_id` when supported.
             history_comment (str | None): Optional comment describing the change; attached as a change reason after save when provided.
-        
+
         Returns:
             int: The primary key (`pk`) of the saved instance.
         """
@@ -114,9 +114,9 @@ class OrmMutationCapability(BaseCapability):
         def _perform() -> int:
             """
             Save the model instance within an atomic database transaction, validating it and assigning the creator when available.
-            
+
             Performs model validation, assigns `changed_by_id` if the attribute exists, saves to the interface's configured database alias when present, and returns the instance primary key.
-            
+
             Returns:
                 The primary key (pk) of the saved instance.
             """
@@ -161,14 +161,14 @@ class OrmMutationCapability(BaseCapability):
     ) -> models.Model:
         """
         Apply many-to-many updates to a model instance's related fields.
-        
+
         Parameters:
             interface_cls (type[OrmInterfaceBase]): Interface class owning the model (used for observability).
             instance (models.Model): The model instance whose relationships will be updated.
             many_to_many_kwargs (dict[str, list[int]]): Mapping of relation keys to lists of related object IDs.
                 Each key is expected to end with the suffix `_id_list`; the suffix is removed to derive the relation manager name.
             history_comment (str | None): Optional change reason to attach to the instance's history after updates.
-        
+
         Returns:
             models.Model: The same model instance after its many-to-many relations have been updated.
         """
@@ -181,11 +181,11 @@ class OrmMutationCapability(BaseCapability):
         def _perform() -> models.Model:
             """
             Apply the provided many-to-many id lists to the instance's related managers.
-            
+
             This sets each many-to-many relation on `instance` using entries from `many_to_many_kwargs`,
             where each key expectedly ends with the suffix `_id_list` and maps to the corresponding
             relation name after removing that suffix.
-            
+
             Returns:
                 models.Model: The same `instance` after its many-to-many relations have been updated.
             """
@@ -219,16 +219,16 @@ class OrmCreateCapability(BaseCapability):
     ) -> dict[str, Any]:
         """
         Create a new ORM model instance from the provided payload and persist it with optional creator and history metadata.
-        
+
         Parameters:
-        	interface_cls (type[OrmInterfaceBase]): Interface class that defines the target model and capabilities.
-        	*args: Ignored positional arguments (kept for signature compatibility).
-        	**kwargs: Field values used to construct the instance. Recognized special keys:
-        		creator_id (int, optional): Identifier to record as the creator/changed_by of the saved instance.
-        		history_comment (str, optional): Change reason to attach to the created instance's history.
-        
+                interface_cls (type[OrmInterfaceBase]): Interface class that defines the target model and capabilities.
+                *args: Ignored positional arguments (kept for signature compatibility).
+                **kwargs: Field values used to construct the instance. Recognized special keys:
+                        creator_id (int, optional): Identifier to record as the creator/changed_by of the saved instance.
+                        history_comment (str, optional): Change reason to attach to the created instance's history.
+
         Returns:
-        	result (dict[str, Any]): A dictionary containing the new instance primary key as {"id": <pk>}.
+                result (dict[str, Any]): A dictionary containing the new instance primary key as {"id": <pk>}.
         """
         _ = args
         payload_snapshot = {"kwargs": dict(kwargs)}
@@ -236,9 +236,9 @@ class OrmCreateCapability(BaseCapability):
         def _perform() -> dict[str, Any]:
             """
             Create a new model instance from the given kwargs, persist it with optional creator and history metadata, and apply many-to-many relations.
-            
+
             Pops `creator_id` and `history_comment` from the local payload, normalizes the remaining payload, assigns simple attributes to a new model instance, saves the instance (recording creator/history when provided), and updates many-to-many relationships.
-            
+
             Returns:
                 dict[str, Any]: A mapping with key `"id"` set to the primary key of the created instance.
             """
@@ -288,12 +288,12 @@ class OrmUpdateCapability(BaseCapability):
     ) -> dict[str, Any]:
         """
         Update the model instance referenced by the given interface instance with the provided payload, persisting changes and recording history and many-to-many updates.
-        
+
         Parameters:
             interface_instance (OrmInterfaceBase): Interface wrapper whose `pk` identifies the target model instance to update.
             *args: Ignored.
             **kwargs: Field values to apply; may include `creator_id` (int) and `history_comment` (str) to record who made the change and why. Payload will be normalized and split into simple fields and many-to-many relations before applying.
-        
+
         Returns:
             dict[str, Any]: A mapping containing the saved instance id as {"id": <pk>}.
         """
@@ -303,9 +303,9 @@ class OrmUpdateCapability(BaseCapability):
         def _perform() -> dict[str, Any]:
             """
             Update an existing model instance from a normalized payload, persist the changes with history, and return the instance id.
-            
+
             Performs simple-field updates and many-to-many relation updates, saves the instance while recording creator and history comment when provided, and returns a dict with the resulting primary key.
-            
+
             Returns:
                 dict[str, int]: A mapping {"id": pk} where `pk` is the primary key of the updated instance.
             """
@@ -361,15 +361,15 @@ class OrmDeleteCapability(BaseCapability):
     ) -> dict[str, Any]:
         """
         Delete or deactivate the provided ORM interface instance according to the interface's deletion policy.
-        
+
         If soft-delete is enabled for the interface, the instance is marked inactive (requires the instance to implement SupportsActivation) and saved with an optional history comment indicating deactivation. If soft-delete is not enabled, the instance is hard-deleted inside a database transaction using the support-provided database alias when available; the function attempts to set `changed_by_id` from `creator_id` and attaches the provided history comment as the change reason before deletion.
-        
+
         Parameters:
             interface_instance: The interface-wrapped model instance to remove.
-        
+
         Returns:
             result (dict[str, Any]): A dict containing the primary key under the key `"id"`.
-        
+
         Raises:
             MissingActivationSupportError: If soft-delete is enabled but the instance does not implement activation support.
         """
@@ -379,12 +379,12 @@ class OrmDeleteCapability(BaseCapability):
         def _perform() -> dict[str, Any]:
             """
             Delete or deactivate the target ORM instance referenced by the surrounding interface_instance, recording creator and history metadata as appropriate.
-            
+
             Performs a soft deactivation when soft-delete is enabled for the model (requiring activation support) or a hard delete otherwise. When soft-deactivating, saves the instance with a deactivation history comment; when hard-deleting, sets the change reason and performs the deletion inside a database transaction.
-            
+
             Returns:
                 result (dict[str, Any]): A dictionary of the form `{"id": pk}` where `pk` is the primary key of the affected instance.
-            
+
             Raises:
                 MissingActivationSupportError: If soft-delete is enabled but the instance does not implement activation support.
             """
@@ -458,11 +458,11 @@ class OrmValidationCapability(BaseCapability):
     ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
         """
         Normalize and split a mutation payload into simple field values and many-to-many relation values.
-        
+
         Parameters:
             interface_cls (type): The interface class whose schema/normalizer should be used.
             payload (dict[str, Any]): Raw input payload to validate and normalize.
-        
+
         Returns:
             tuple:
                 - dict[str, Any]: Normalized simple field values suitable for direct assignment.
@@ -473,9 +473,9 @@ class OrmValidationCapability(BaseCapability):
         def _perform() -> tuple[dict[str, Any], dict[str, list[Any]]]:
             """
             Normalize and validate the provided payload into simple field values and many-to-many lists.
-            
+
             Performs key validation, splits the payload into simple and many-to-many parts, and returns the normalized results.
-            
+
             Returns:
                 tuple:
                     - normalized_simple (dict[str, Any]): Mapping of simple field names to their normalized values.
@@ -506,16 +506,16 @@ def _normalize_payload(
 ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
     """
     Normalize a raw mutation payload into simple attributes and many-to-many mappings for the given ORM interface.
-    
+
     If the interface provides a validation capability with `normalize_payload`, that handler is used; otherwise the support-provided payload normalizer is used to validate keys, split the payload, and normalize values.
-    
+
     Parameters:
-    	interface_cls (type[OrmInterfaceBase]): The interface class whose normalization rules should be applied.
-    	payload (dict[str, Any]): The raw input payload to validate and normalize.
-    
+        interface_cls (type[OrmInterfaceBase]): The interface class whose normalization rules should be applied.
+        payload (dict[str, Any]): The raw input payload to validate and normalize.
+
     Returns:
-    	normalized_simple (dict[str, Any]): Simple attribute names mapped to normalized values.
-    	normalized_many (dict[str, list[Any]]): Many-to-many field names mapped to lists of normalized related IDs or values.
+        normalized_simple (dict[str, Any]): Simple attribute names mapped to normalized values.
+        normalized_many (dict[str, list[Any]]): Many-to-many field names mapped to lists of normalized related IDs or values.
     """
     handler = interface_cls.get_capability_handler("validation")
     if handler is not None and hasattr(handler, "normalize_payload"):
@@ -535,10 +535,10 @@ def _mutation_capability_for(
 ) -> OrmMutationCapability:
     """
     Retrieve the ORM mutation capability associated with the given interface class.
-    
+
     Parameters:
         interface_cls (type[OrmInterfaceBase]): The interface class to query for the orm_mutation capability.
-    
+
     Returns:
         OrmMutationCapability: The required mutation capability instance for the interface class.
     """
