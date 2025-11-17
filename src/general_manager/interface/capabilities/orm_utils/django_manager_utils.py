@@ -24,7 +24,7 @@ class DjangoManagerSelector(Generic[HistoryModelT]):
     def active_manager(self) -> models.Manager[HistoryModelT]:
         """
         Selects the manager that yields active model records when soft-delete is enabled, otherwise the model's default manager.
-        
+
         Returns:
             models.Manager[HistoryModelT]: Manager bound to the configured database alias; yields only active records when soft-delete is enabled, otherwise yields the model's normal queryset.
         """
@@ -38,7 +38,7 @@ class DjangoManagerSelector(Generic[HistoryModelT]):
     def all_manager(self) -> models.Manager[HistoryModelT]:
         """
         Select a manager that returns all rows for the model, using the model's `all_objects` manager when soft-delete is enabled and available.
-        
+
         Returns:
             A Django manager bound to the configured database alias that exposes all rows. If `use_soft_delete` is True and the model defines `all_objects`, that manager is used; otherwise the model's default manager is returned.
         """

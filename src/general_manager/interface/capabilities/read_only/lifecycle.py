@@ -33,13 +33,13 @@ class ReadOnlyLifecycleCapability(OrmLifecycleCapability):
     ]:
         """
         Ensure the interface is configured to use soft-delete and delegate creation to the superclass using GeneralManagerBasisModel.
-        
+
         Parameters:
             name (str): The name of the model/class being created.
             attrs (dict[str, Any]): Attribute dictionary for the new class.
             interface (type[OrmInterfaceBase[Any]]): The interface class; a Meta class will be added if missing and configured for soft-delete.
             base_model_class (type[GeneralManagerBasisModel]): Ignored by this implementation; the superclass is called with GeneralManagerBasisModel.
-        
+
         Returns:
             tuple[dict[str, Any], type[OrmInterfaceBase[Any]], type[GeneralManagerBasisModel]]: The possibly-updated attrs, the (possibly-modified) interface class, and the base model class used for creation (GeneralManagerBasisModel).
         """
@@ -64,13 +64,13 @@ class ReadOnlyLifecycleCapability(OrmLifecycleCapability):
     ) -> None:
         """
         Register the newly created manager class as a read-only class in GeneralManagerMeta.
-        
+
         Ensures base class post-create behavior is executed and then appends `new_class` to GeneralManagerMeta.read_only_classes if it is not already present.
-        
+
         Parameters:
-        	new_class (Type[GeneralManager]): The newly created GeneralManager subclass to register as read-only.
-        	interface_class (type[OrmInterfaceBase[Any]]): The interface class that was used to create `new_class`.
-        	model (Type[GeneralManagerBasisModel] | None): The ORM model class associated with the new manager, or `None` if not applicable.
+                new_class (Type[GeneralManager]): The newly created GeneralManager subclass to register as read-only.
+                interface_class (type[OrmInterfaceBase[Any]]): The interface class that was used to create `new_class`.
+                model (Type[GeneralManagerBasisModel] | None): The ORM model class associated with the new manager, or `None` if not applicable.
         """
         super().post_create(
             new_class=new_class,

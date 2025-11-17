@@ -57,7 +57,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Prepare test fixtures by defining and registering a temporary Django model and creating its database tables.
-        
+
         Defines a temporary model class ExistingUnitCustomer (app_label "general_manager"), registers it with the app registry if missing, ensures model history tracking is attached, creates the model and its history tables in the test database, and assigns the model class to cls.model.
         """
         super().setUpClass()
@@ -90,7 +90,7 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     def tearDownClass(cls) -> None:
         """
         Remove the dynamically created model and its history from the database and app registry.
-        
+
         Deletes the model and its history tables, unregisters both models from the "general_manager" app registry and global model caches, clears the apps cache, and then calls the superclass tearDownClass for further cleanup.
         """
         with connection.schema_editor() as schema:
@@ -121,12 +121,12 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     ]:
         """
         Invoke an interface's handle_interface pre-hook to prepare attributes, a concrete interface, and its model for creating a temporary manager class.
-        
+
         Parameters:
             interface_cls (type[ExistingModelInterface]): The interface class to handle.
             name (str): The name to use for the temporary manager class (defaults to "TemporaryManager").
             attrs (dict[str, object] | None): Initial class attributes for the temporary manager. If None, a default attrs dict with "__module__" set to the current module will be used.
-        
+
         Returns:
             tuple:
                 new_attrs (dict[str, object]): The attributes produced by the pre-hook, suitable for creating the manager class.
@@ -145,10 +145,10 @@ class ExistingModelInterfaceTestCase(TransactionTestCase):
     ) -> ExistingModelResolutionCapability:
         """
         Retrieve the ExistingModelResolutionCapability associated with the given interface class.
-        
+
         Parameters:
             interface_cls (type[ExistingModelInterface]): The interface class requesting the capability.
-        
+
         Returns:
             ExistingModelResolutionCapability: The capability instance used to resolve models, ensure history, build factories, and apply rules for the interface.
         """

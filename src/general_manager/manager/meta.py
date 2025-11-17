@@ -250,9 +250,9 @@ _CAPABILITY_BUILDER: "ManifestCapabilityBuilder | None" = None
 def _capability_builder() -> "ManifestCapabilityBuilder":
     """
     Lazily initialize and return the module-level ManifestCapabilityBuilder instance.
-    
+
     Creates a ManifestCapabilityBuilder on first invocation, caches it in the module-global `_CAPABILITY_BUILDER`, and returns the cached instance on subsequent calls.
-    
+
     Returns:
         ManifestCapabilityBuilder: The module-level ManifestCapabilityBuilder instance.
     """

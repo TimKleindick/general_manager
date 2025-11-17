@@ -19,7 +19,7 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Register four GeneralManager-backed test models on the test class for AutoFactory integration tests.
-        
+
         Defines nested GeneralManager classes Manufacturer, CarOption, Car, and Fleet with corresponding DatabaseInterface fields and Factory configurations used by the tests. Assigns those classes to the test class as attributes (Manufacturer, CarOption, Car, Fleet) and sets `general_manager_classes` to the list [Manufacturer, CarOption, Car, Fleet]. The Fleet factory includes an `_adjustmentMethod` that produces a deterministic list of record dictionaries for use by integration tests.
         """
 
@@ -117,7 +117,7 @@ class AutoFactoryIntegrationTest(GeneralManagerTransactionTestCase):
     def setUp(self) -> None:
         """
         Create and persist a unique test user and assign it to self.user.
-        
+
         Creates a Django user whose username is "auto-factory-user-{uuid}" and stores the created user instance on self.user for use by tests.
         """
         super().setUp()

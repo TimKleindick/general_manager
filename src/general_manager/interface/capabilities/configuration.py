@@ -18,7 +18,7 @@ class InterfaceCapabilityConfig:
     def instantiate(self) -> Capability:
         """
         Instantiate the configured capability using the stored handler and options.
-        
+
         Returns:
             Capability: An instance produced by calling the configured handler. If `options` is falsy, the handler is called with no arguments; otherwise `options` are passed as keyword arguments.
         """
@@ -38,7 +38,7 @@ class CapabilitySet:
     def __post_init__(self) -> None:
         """
         Ensure the `entries` field is stored as a tuple.
-        
+
         Runs after object initialization to convert `entries` into a tuple, enforcing an immutable sequence of capability configurations.
         """
         object.__setattr__(self, "entries", tuple(self.entries))
@@ -52,10 +52,10 @@ def flatten_capability_entries(
 ) -> tuple[InterfaceCapabilityConfig, ...]:
     """
     Expand capability bundles and return a flat tuple of capability configurations.
-    
+
     Parameters:
         entries: An iterable of CapabilitySet or InterfaceCapabilityConfig; any CapabilitySet encountered is expanded into its contained InterfaceCapabilityConfig entries.
-    
+
     Returns:
         A tuple of InterfaceCapabilityConfig containing all concrete capability configurations with bundles expanded.
     """
@@ -73,12 +73,12 @@ def iter_capability_entries(
 ) -> Iterator[InterfaceCapabilityConfig]:
     """
     Yield capability configurations, expanding any CapabilitySet bundles.
-    
+
     Parameters:
         entries: An iterable or sequence of CapabilityConfigEntry (either an InterfaceCapabilityConfig
             or a CapabilitySet). If an entry is a CapabilitySet, its contained InterfaceCapabilityConfig
             items are yielded individually.
-    
+
     Returns:
         Iterator[InterfaceCapabilityConfig]: An iterator that yields InterfaceCapabilityConfig items,
         with CapabilitySet entries expanded into their contained configurations.

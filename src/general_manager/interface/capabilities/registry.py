@@ -19,7 +19,7 @@ class CapabilityRegistry:
     def __init__(self) -> None:
         """
         Initialize an in-memory registry for interface capability declarations and concrete instances.
-        
+
         Creates two empty mappings:
         - _bindings: maps interface classes to a set of CapabilityName representing declared capabilities.
         - _instances: maps interface classes to a tuple of Capability objects representing bound concrete capabilities.
@@ -50,10 +50,10 @@ class CapabilityRegistry:
     def get(self, interface_cls: type[InterfaceBase]) -> frozenset[CapabilityName]:
         """
         Retrieve the capability names registered for the given interface class.
-        
+
         Parameters:
             interface_cls (type[InterfaceBase]): The interface class to look up.
-        
+
         Returns:
             frozenset[CapabilityName]: A frozenset of capability names registered for the interface; empty frozenset if none are registered.
         """
@@ -66,7 +66,7 @@ class CapabilityRegistry:
     ) -> None:
         """
         Record concrete Capability instances for the given interface class.
-        
+
         Parameters:
             interface_cls (type[InterfaceBase]): Interface class to bind instances to.
             capabilities (Iterable[Capability]): Iterable of concrete capability objects to store; replaces any previously bound instances.
@@ -76,7 +76,7 @@ class CapabilityRegistry:
     def instances(self, interface_cls: type[InterfaceBase]) -> tuple["Capability", ...]:
         """
         Retrieve the concrete capability objects associated with the given interface.
-        
+
         Returns:
             A tuple of `Capability` objects registered for `interface_cls`; an empty tuple if none are registered.
         """
@@ -85,7 +85,7 @@ class CapabilityRegistry:
     def snapshot(self) -> Mapping[type[InterfaceBase], frozenset[CapabilityName]]:
         """
         Return a read-only mapping of registered interface classes to their declared capability names.
-        
+
         Returns:
             Mapping[type[InterfaceBase], frozenset[CapabilityName]]: A read-only MappingProxyType mapping each interface class to a frozenset of its registered capability names (empty frozenset if none).
         """

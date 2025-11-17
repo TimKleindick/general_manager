@@ -325,9 +325,9 @@ class GraphQL:
     def create_graphql_mutation(cls, generalManagerClass: type[GeneralManager]) -> None:
         """
         Register GraphQL mutation classes for a GeneralManager and store them in the class mutation registry.
-        
+
         Generates and registers create/update/delete mutation classes when the manager's Interface advertises support for the corresponding operation—either by overriding the InterfaceBase method or by listing the operation in Interface.get_capabilities(). Each registered mutation is stored on the class-level registry (_mutations) under the names `create<ManagerName>`, `update<ManagerName>`, and `delete<ManagerName>` and exposes a `success` flag plus a field named for the manager that returns the affected manager instance when available.
-        
+
         Parameters:
             generalManagerClass (type[GeneralManager]): The GeneralManager subclass whose Interface determines which mutations are created and registered.
         """
@@ -349,13 +349,13 @@ class GraphQL:
         def _supports(op_name: str, method_name: str) -> bool:
             """
             Determine whether the interface supports a given operation.
-            
+
             Parameters:
-            	op_name (str): Logical name of the operation (e.g., "create", "update", "delete") to check against the interface's reported capabilities.
-            	method_name (str): Name of the InterfaceBase method to inspect on `interface_cls` to see if it has been overridden.
-            
+                op_name (str): Logical name of the operation (e.g., "create", "update", "delete") to check against the interface's reported capabilities.
+                method_name (str): Name of the InterfaceBase method to inspect on `interface_cls` to see if it has been overridden.
+
             Returns:
-            	bool: `True` if the method is overridden on the interface class or if `op_name` appears in the interface's capabilities, `False` otherwise.
+                bool: `True` if the method is overridden on the interface class or if `op_name` appears in the interface's capabilities, `False` otherwise.
             """
             method = getattr(interface_cls, method_name)
             base_method = getattr(InterfaceBase, method_name)

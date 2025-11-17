@@ -54,14 +54,14 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         """
         Dynamically define and attach a LegacyCustomer Django model, an ExistingModelInterface, and a GeneralManager subclass to the test class for integration tests.
-        
+
         This sets up:
         - LegacyCustomer: a Django model with fields `name`, `notes`, `is_active`, `changed_by` (FK to User), and `owners` (M2M to User) and Meta.app_label = "general_manager".
         - A single AlwaysPassRule instance used to track rule evaluations.
         - CustomerInterface: an ExistingModelInterface bound to LegacyCustomer with the rule included in its Meta.rules.
         - CustomerManager: a GeneralManager using CustomerInterface, exposing a class-level `_rule_tracker` referencing the rule and an inner Factory with name "Legacy Customer".
         The created classes are attached to the test class as `LegacyCustomer`, `CustomerInterface`, `CustomerManager`, and `general_manager_classes` (list containing CustomerManager).
-        
+
         Parameters:
             cls: The test class to which the generated model, interface, and manager are attached.
         """

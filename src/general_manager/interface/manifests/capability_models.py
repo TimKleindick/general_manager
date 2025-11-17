@@ -20,7 +20,7 @@ class CapabilityPlan:
     def __post_init__(self) -> None:
         """
         Normalize and freeze the dataclass fields for immutability.
-        
+
         Converts `required` and `optional` to `frozenset` and wraps `flags` in a read-only mapping so that all exposed attributes are immutable after initialization.
         """
         object.__setattr__(self, "required", frozenset(self.required))
@@ -39,10 +39,10 @@ class CapabilityConfig:
     def is_flag_enabled(self, flag_name: str) -> bool:
         """
         Determine if a named flag is enabled.
-        
+
         Parameters:
             flag_name (str): Name of the flag to check.
-        
+
         Returns:
             True if the named flag evaluates to truthy, False otherwise.
         """
@@ -60,7 +60,7 @@ class CapabilitySelection:
     def __post_init__(self) -> None:
         """
         Normalize the dataclass fields to immutable frozenset instances after initialization.
-        
+
         Converts `required`, `optional`, and `activated_optional` attributes to `frozenset` to enforce immutability and consistent types for downstream consumers.
         """
         object.__setattr__(self, "required", frozenset(self.required))
@@ -73,7 +73,7 @@ class CapabilitySelection:
     def all(self) -> frozenset[CapabilityName]:
         """
         Combined set of capabilities to attach to the interface.
-        
+
         Returns:
             frozenset[CapabilityName]: The union of `required` and `activated_optional` capabilities.
         """

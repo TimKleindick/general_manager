@@ -178,7 +178,7 @@ class InterfaceBase(ABC):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """
         Initialize capability-related class state for newly created subclasses.
-        
+
         This method resets per-subclass capability registries and configuration to a clean default, merges configured capability overrides into the class's capability_overrides mapping, and clears the flag that marks configured capabilities as applied. Any keyword arguments are forwarded to the superclass implementation.
         """
         super().__init_subclass__(**kwargs)
@@ -211,7 +211,7 @@ class InterfaceBase(ABC):
     def set_capability_selection(cls, selection: "CapabilitySelection") -> None:
         """
         Attach a resolved capability selection to the interface and update its active capability names.
-        
+
         Parameters:
             selection (CapabilitySelection): The resolved capability selection whose `all` set will become the interface's active capability names.
         """
@@ -222,7 +222,7 @@ class InterfaceBase(ABC):
     def get_capabilities(cls) -> frozenset[CapabilityName]:
         """
         Get the capability names attached to this interface class.
-        
+
         Returns:
             frozenset[CapabilityName]: A frozenset of capability names registered on the interface class.
         """
@@ -233,10 +233,10 @@ class InterfaceBase(ABC):
     def get_capability_handler(cls, name: CapabilityName) -> "Capability | None":
         """
         Retrieve the capability instance associated with the given capability name.
-        
+
         Parameters:
             name (CapabilityName): The capability identifier to look up.
-        
+
         Returns:
             Capability | None: The capability handler registered for `name`, or `None` if no handler is bound.
         """
@@ -247,7 +247,7 @@ class InterfaceBase(ABC):
     def iter_capability_configs(cls) -> Iterable[InterfaceCapabilityConfig]:
         """
         Iterate configured capability entries declared on the interface.
-        
+
         Returns:
             Iterable[InterfaceCapabilityConfig]: An iterable of capability configuration entries registered on the interface.
         """
@@ -262,14 +262,14 @@ class InterfaceBase(ABC):
     ) -> "Capability":
         """
         Retrieve the configured capability handler for the interface by name.
-        
+
         Parameters:
             name (CapabilityName): The capability identifier to look up.
             expected_type (type[Capability] | None): If provided, require the returned handler to be an instance of this type.
-        
+
         Returns:
             Capability: The capability handler instance corresponding to `name`.
-        
+
         Raises:
             NotImplementedError: If the interface has no capability configured under `name`.
             TypeError: If `expected_type` is provided and the handler is not an instance of that type.
@@ -295,17 +295,17 @@ class InterfaceBase(ABC):
     ) -> "Capability":
         """
         Retrieve the capability handler with the given name from this interface's class, enforcing an expected handler type if provided.
-        
+
         Parameters:
-        	name (CapabilityName): The capability name to retrieve.
-        	expected_type (type[Capability] | None): If provided, the returned handler must be an instance of this type.
-        
+                name (CapabilityName): The capability name to retrieve.
+                expected_type (type[Capability] | None): If provided, the returned handler must be an instance of this type.
+
         Returns:
-        	Capability: The capability handler associated with `name`.
-        
+                Capability: The capability handler associated with `name`.
+
         Raises:
-        	KeyError: If the named capability is not available.
-        	TypeError: If the found capability is not an instance of `expected_type`.
+                KeyError: If the named capability is not available.
+                TypeError: If the found capability is not an instance of `expected_type`.
         """
         return self.__class__.require_capability(
             name,
@@ -316,7 +316,7 @@ class InterfaceBase(ABC):
     def capability_selection(cls) -> "CapabilitySelection | None":
         """
         Return the resolved capability selection associated with this interface.
-        
+
         @returns
             `CapabilitySelection` if a selection has been set, `None` otherwise.
         """
@@ -327,7 +327,7 @@ class InterfaceBase(ABC):
     def _lifecycle_capability(cls) -> "Capability | None":
         """
         Retrieve the lifecycle capability handler attached to the interface, if one is configured.
-        
+
         Returns:
             Capability | None: The `Capability` instance identified by the class's `lifecycle_capability_name`, or `None` if no lifecycle capability is configured.
         """
@@ -340,7 +340,7 @@ class InterfaceBase(ABC):
     def _ensure_capabilities_initialized(cls) -> None:
         """
         Ensure the interface's capability registry is initialized and configured for this class.
-        
+
         If no capability selection has been attached, construct or reuse an automatic ManifestCapabilityBuilder to build the class's capabilities. Afterward, instantiate and bind any configured capability overrides so capability handlers, startup hooks, and system checks are registered.
         """
         if cls._capability_selection is None:
@@ -357,7 +357,7 @@ class InterfaceBase(ABC):
     def _apply_configured_capabilities(cls) -> None:
         """
         Apply and bind the interface's configured capability handlers exactly once.
-        
+
         Instantiates each entry returned by iter_capability_configs and binds the resulting capability handlers to the class. This method is idempotent: if configured capabilities have already been applied it does nothing. It also sets the internal flag that marks the configured capabilities as applied.
         """
         if cls._configured_capabilities_applied:
@@ -377,9 +377,9 @@ class InterfaceBase(ABC):
     ) -> dict[CapabilityName, CapabilityOverride]:
         """
         Builds a mapping of configured capability names to capability handlers or factory callables.
-        
+
         Instantiates an entry for each configured capability: if the configured entry supplies options, the value is a factory callable (created via _make_capability_factory) that will produce the capability when invoked; otherwise the value is the capability handler class itself. Configured handlers that do not expose a `name` attribute are skipped.
-        
+
         Returns:
             overrides (dict[CapabilityName, CapabilityOverride]): Mapping from capability name to either a capability handler class or a factory callable that produces a capability instance.
         """
@@ -405,14 +405,15 @@ class InterfaceBase(ABC):
     ) -> CapabilityOverride:
         """
         Create a factory callable that produces instances of a capability handler using the given options.
-        
+
         Parameters:
             handler_cls (type[Capability]): The Capability subclass to instantiate.
             options (dict[str, Any]): Keyword arguments to supply to the handler constructor.
-        
+
         Returns:
             CapabilityOverride: A zero-argument callable that, when invoked, returns a new instance of `handler_cls` constructed with `options`.
         """
+
         def _factory(
             handler_cls: type[Capability] = handler_cls,
             options: dict[str, Any] = options,
@@ -427,13 +428,13 @@ class InterfaceBase(ABC):
     ) -> Capability:
         """
         Instantiate a configured capability and verify it implements the Capability protocol.
-        
+
         Parameters:
             config (InterfaceCapabilityConfig): Configuration entry whose `instantiate()` method produces a capability handler.
-        
+
         Returns:
             Capability: The instantiated capability handler.
-        
+
         Raises:
             TypeError: If the instantiated handler does not implement the expected Capability protocol (missing a `setup` method).
         """
@@ -450,12 +451,12 @@ class InterfaceBase(ABC):
     def _bind_capability_handler(cls, handler: Capability) -> None:
         """
         Bind a capability handler to the interface class, replacing any existing handler with the same name.
-        
+
         Binds the provided capability to the interface by tearing down a previously bound handler with the same name (if any), setting up the new handler, adding its name to the class capability set, and registering any startup hooks and system checks exposed by the handler.
-        
+
         Parameters:
             handler (Capability): Capability instance to bind. Must expose a `name` attribute.
-        
+
         Raises:
             AttributeError: If `handler` does not have a `name` attribute.
         """
@@ -479,9 +480,9 @@ class InterfaceBase(ABC):
     def _register_startup_hooks(cls, handler: Capability) -> None:
         """
         Register startup hooks provided by a capability handler onto the interface class.
-        
+
         If the handler defines a callable `get_startup_hooks(cls)`, that is called with the interface class to obtain hooks. Otherwise, if the handler exposes a `startup_hooks` attribute, that value is used. Each callable hook found is registered via `register_startup_hook`. Non-callable hook entries and empty/None hook collections are ignored.
-        
+
         Parameters:
             cls: The interface class to which startup hooks will be registered.
             handler: A capability handler that provides startup hooks via `get_startup_hooks` or `startup_hooks`.
@@ -502,10 +503,10 @@ class InterfaceBase(ABC):
     def _register_system_checks(cls, handler: Capability) -> None:
         """
         Register any system check callables exposed by a capability handler for the given interface class.
-        
+
         The handler may expose checks via a callable `get_system_checks(cls)` or a `system_checks` iterable attribute.
         Each callable found is registered with register_system_check for the provided interface class; non-callable entries are ignored.
-        
+
         Parameters:
             cls (type): The interface class to associate the system checks with.
             handler (Capability): Capability instance that may provide system checks.
@@ -678,10 +679,10 @@ class InterfaceBase(ABC):
         def _invoke() -> dict[str, Any]:
             """
             Invoke the configured "create" capability handler for this interface and return its result.
-            
+
             Returns:
                 dict[str, Any]: The payload returned by the create handler.
-            
+
             Raises:
                 NotImplementedError: If no create capability is available or the handler does not implement `create`.
             """
@@ -702,10 +703,10 @@ class InterfaceBase(ABC):
     def update(self, *args: Any, **kwargs: Any) -> Any:
         """
         Update the underlying managed record.
-        
+
         Returns:
             The updated record or a manager-specific result.
-        
+
         Raises:
             NotImplementedError: If this interface does not provide an update capability.
         """
@@ -714,10 +715,10 @@ class InterfaceBase(ABC):
         def _invoke() -> Any:
             """
             Invoke the update capability handler to perform an update operation.
-            
+
             Returns:
                 The result returned by the capability's `update` handler.
-            
+
             Raises:
                 NotImplementedError: If the interface does not provide an `update` capability.
             """
@@ -740,12 +741,12 @@ class InterfaceBase(ABC):
     def delete(self, *args: Any, **kwargs: Any) -> Any:
         """
         Delete the underlying record managed by this interface.
-        
+
         Delegates the deletion to the interface's configured delete capability and executes the operation with observability hooks.
-        
+
         Returns:
             The result of the delete operation as returned by the delete capability.
-        
+
         Raises:
             NotImplementedError: If the interface does not provide a delete capability.
         """
@@ -754,10 +755,10 @@ class InterfaceBase(ABC):
         def _invoke() -> Any:
             """
             Invoke the bound delete capability to remove the managed record.
-            
+
             Returns:
                 The result returned by the capability's `delete` handler.
-            
+
             Raises:
                 NotImplementedError: If the interface has no `delete` handler implemented.
             """
@@ -798,10 +799,10 @@ class InterfaceBase(ABC):
     def get_data(self) -> Any:
         """
         Get the materialized data for this manager.
-        
+
         Returns:
             The materialized data for this manager (implementation-defined).
-        
+
         Raises:
             NotImplementedError: if reading is not supported for this manager.
         """
@@ -810,10 +811,10 @@ class InterfaceBase(ABC):
         def _invoke() -> Any:
             """
             Invoke the configured read capability to retrieve this manager's materialized data.
-            
+
             Returns:
                 The materialized data returned by the read capability.
-            
+
             Raises:
                 NotImplementedError: If this interface does not support read (no `get_data` on the read capability).
             """
@@ -837,10 +838,10 @@ class InterfaceBase(ABC):
     def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
         """
         Retrieve metadata describing each attribute exposed by the manager.
-        
+
         Returns:
             dict[str, AttributeTypedDict]: Mapping from attribute name to its metadata (keys include `type`, `default`, `is_required`, `is_editable`, and `is_derived`).
-        
+
         Raises:
             NotImplementedError: If the manager does not provide a read capability implementing `get_attribute_types`.
         """
@@ -855,10 +856,10 @@ class InterfaceBase(ABC):
     def get_attributes(cls) -> dict[str, Any]:
         """
         Retrieve attribute values exposed by the interface.
-        
+
         Returns:
             dict[str, Any]: Mapping of attribute names to their current values.
-        
+
         Raises:
             NotImplementedError: If the interface does not provide a read capability implementing `get_attributes`.
         """
@@ -873,7 +874,7 @@ class InterfaceBase(ABC):
     def get_graph_ql_properties(cls) -> dict[str, GraphQLProperty]:
         """
         Collect GraphQLProperty descriptors declared on the interface's parent manager class.
-        
+
         Returns:
             dict[str, GraphQLProperty]: Mapping from attribute name to the corresponding GraphQLProperty instance found on the parent manager class. Returns an empty dict if no parent class is set or none of its attributes are GraphQLProperty instances.
         """
@@ -889,13 +890,13 @@ class InterfaceBase(ABC):
     def filter(cls, **kwargs: Any) -> Bucket[Any]:
         """
         Filter records using the provided lookup expressions and return a Bucket of matches.
-        
+
         Parameters:
             **kwargs: Lookup expressions mapping field lookups (e.g., "name__icontains") to values.
-        
+
         Returns:
             Bucket[Any]: Bucket containing records that match the lookup expressions.
-        
+
         Raises:
             NotImplementedError: If the interface's query capability does not implement filtering.
         """
@@ -908,13 +909,13 @@ class InterfaceBase(ABC):
     def exclude(cls, **kwargs: Any) -> Bucket[Any]:
         """
         Obtain a Bucket of records excluding those that match the given lookup expressions.
-        
+
         Parameters:
             **kwargs: Lookup expressions accepted by the query capability (e.g., field=value, field__lookup=value).
-        
+
         Returns:
             Bucket[Any]: A Bucket containing records that do not match the provided lookup expressions.
-        
+
         Raises:
             NotImplementedError: If the interface's query capability does not implement an `exclude` operation.
         """
@@ -927,10 +928,10 @@ class InterfaceBase(ABC):
     def all(cls) -> Bucket[Any]:
         """
         Retrieve a Bucket containing all records for this interface.
-        
+
         Returns:
             Bucket[Any]: A Bucket containing every record accessible via this interface.
-        
+
         Raises:
             NotImplementedError: If the configured query capability does not implement `all`.
         """
@@ -950,17 +951,17 @@ class InterfaceBase(ABC):
     ) -> Any:
         """
         Execute a callable while invoking optional observer lifecycle hooks before, after, and on error.
-        
+
         Parameters:
             target (object): The subject of the operation (passed to observer hooks).
             operation (str): A short name of the operation (passed to observer hooks).
             payload (dict[str, Any]): Contextual data about the operation (passed to observer hooks).
             func (Callable[[], Any]): The callable to execute.
             observer (Capability | None): Optional capability providing `before_operation`, `after_operation`, and/or `on_error` hooks.
-        
+
         Returns:
             Any: The value returned by `func`.
-        
+
         Notes:
             If `func` raises an exception, the exception is propagated after calling `observer.on_error(...)` if available.
         """
@@ -997,11 +998,11 @@ class InterfaceBase(ABC):
     ) -> Any:
         """
         Invoke a lifecycle callable using only the keyword arguments that match its signature.
-        
+
         Parameters:
             lifecycle_callable (Callable[..., Any]): The callable to invoke.
             **kwargs: Candidate keyword arguments; only those with names present in the callable's parameter list will be passed.
-        
+
         Returns:
             Any: The value returned by calling `lifecycle_callable` with the filtered arguments.
         """
@@ -1015,7 +1016,7 @@ class InterfaceBase(ABC):
     def _default_base_model_class() -> type["GeneralManagerBasisModel"]:
         """
         Return the default base model class used by GeneralManager implementations.
-        
+
         Returns:
             GeneralManagerBasisModel: The concrete model class used as the default base for managers.
         """
@@ -1032,12 +1033,12 @@ class InterfaceBase(ABC):
     ]:
         """
         Provide pre- and post-creation hooks for GeneralManager class construction derived from the interface's lifecycle capability.
-        
+
         Returns:
-            tuple[classPreCreationMethod, classPostCreationMethod]: 
+            tuple[classPreCreationMethod, classPostCreationMethod]:
                 - pre-create callable accepting (name, attrs, interface, base_model_class=None) and returning (attrs, interface_class, related_class).
                 - post-create callable accepting (new_class, interface_class, model) and returning None.
-        
+
         Raises:
             NotImplementedError: If no lifecycle capability is declared and the class does not override handle_interface.
         """
@@ -1055,15 +1056,15 @@ class InterfaceBase(ABC):
                 ) -> tuple[attributes, interfaceBaseClass, relatedClass]:
                     """
                     Wraps and invoke the lifecycle pre-creation hook for a GeneralManager class.
-                    
+
                     Calls the configured pre-create lifecycle callable with the provided name, attrs, interface, and a base_model_class (uses the interface's default base model class when None) and returns the possibly-modified creation trio.
-                    
+
                     Parameters:
                         name (str): Proposed class name for the GeneralManager.
                         attrs (dict[str, Any]): Attribute dictionary for the class being created.
                         interface (Type[InterfaceBase]): Interface base class passed to the lifecycle hook.
                         base_model_class (type[GeneralManagerBasisModel] | None): Base model class to supply to the lifecycle hook; if None, the interface's default is used.
-                    
+
                     Returns:
                         tuple[dict[str, Any], Type[InterfaceBase], Type[Model] | None]: A tuple of (attributes, interface class, related model class) as returned or transformed by the lifecycle pre-create callable.
                     """
@@ -1084,7 +1085,7 @@ class InterfaceBase(ABC):
                 ) -> None:
                     """
                     Invoke the post-creation lifecycle callable for a newly created GeneralManager class.
-                    
+
                     Parameters:
                         new_class (Type[GeneralManager]): The newly created GeneralManager subclass.
                         interface_class (Type[InterfaceBase]): The interface class used to create the manager.
@@ -1107,13 +1108,13 @@ class InterfaceBase(ABC):
     def get_field_type(cls, field_name: str) -> type:
         """
         Resolve the declared Python type for the named input field.
-        
+
         Parameters:
             field_name (str): Name of the input field to look up.
-        
+
         Returns:
             type: The Python type declared for the specified field.
-        
+
         Raises:
             KeyError: If no input field with the given name is defined.
         """

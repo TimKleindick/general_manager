@@ -273,7 +273,7 @@ class TestGrapQlMutation(TestCase):
                 def get_capabilities(cls):
                     """
                     Return the set of capabilities supported by the interface.
-                    
+
                     Returns:
                         frozenset: A frozenset containing "create", "update", and "delete".
                     """
@@ -283,11 +283,11 @@ class TestGrapQlMutation(TestCase):
                 def create(cls, *_args, **kwargs):
                     """
                     Create a new instance of the class using the provided positional and keyword arguments.
-                    
+
                     Parameters:
                         *args: Positional arguments forwarded to the class constructor.
                         **kwargs: Keyword arguments forwarded to the class constructor.
-                    
+
                     Returns:
                         instance: A newly created instance of `cls`.
                     """
@@ -370,10 +370,10 @@ class TestGrapQlMutation(TestCase):
                 def get_field_type(cls, field_name: str) -> None:
                     """
                     Get the declared type of the named attribute on the class.
-                    
+
                     Parameters:
                         field_name (str): The attribute name whose declared type should be retrieved.
-                    
+
                     Returns:
                         The attribute's type if available, otherwise None.
                     """
@@ -383,7 +383,7 @@ class TestGrapQlMutation(TestCase):
                 def get_capabilities(cls):
                     """
                     Provide the set of capability names supported by this interface.
-                    
+
                     Returns:
                         frozenset: A frozenset of capability name strings (e.g., "create", "update", "delete"). Empty frozenset if no capabilities are supported.
                     """
@@ -663,7 +663,7 @@ class TestGrapQlMutation(TestCase):
             def __init__(self, *_, **kwargs):
                 """
                 Initialize the instance and set the `field1` attribute from kwargs if provided.
-                
+
                 Parameters:
                     field1: Value to assign to `self.field1` if present in keyword arguments.
                 """

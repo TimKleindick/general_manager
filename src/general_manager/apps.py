@@ -68,7 +68,7 @@ class GeneralmanagerConfig(AppConfig):
     def ready(self) -> None:
         """
         Initialize the general_manager app on Django startup.
-        
+
         Installs the startup hook runner, registers capability system checks, initializes pending GeneralManager class attributes and property accessors, configures the audit logger from settings, and, if AUTOCREATE_GRAPHQL is true, builds and registers the GraphQL schema and endpoint.
         """
         self.install_startup_hook_runner()
@@ -85,7 +85,7 @@ class GeneralmanagerConfig(AppConfig):
     def register_system_checks() -> None:
         """
         Register capability-provided system checks with Django's checks framework under the "general_manager" tag.
-        
+
         Discovers system check hooks via iter_interface_system_checks() and registers each hook (wrapped to isolate exceptions) so they run as Django system checks; does nothing if no hooks are found.
         """
 
@@ -109,14 +109,15 @@ class GeneralmanagerConfig(AppConfig):
     ) -> Callable[..., list[Any]]:
         """
         Create a wrapper for an interface-specific system check hook that logs exceptions and returns no checks on failure.
-        
+
         Parameters:
             interface_cls (Type[Any]): Interface class whose name is included in error logging.
             hook (Callable[[], list[Any]]): Callable that performs system checks and returns a list of check messages.
-        
+
         Returns:
             list[Any]: The hook's list of system checks, or an empty list if the hook raises an exception.
         """
+
         def _check(*_: Any, **__: Any) -> list[Any]:
             try:
                 return hook()
@@ -133,7 +134,7 @@ class GeneralmanagerConfig(AppConfig):
     def install_startup_hook_runner() -> None:
         """
         Ensure registered startup hooks run before Django management commands execute.
-        
+
         Installs a wrapper around BaseCommand.run_from_argv that collects and executes
         startup hooks (via iter_interface_startup_hooks) before delegating to the original
         run_from_argv. Hooks are executed for all commands except that for the "runserver"
@@ -154,7 +155,7 @@ class GeneralmanagerConfig(AppConfig):
         ) -> None:
             """
             Run a Django management command after executing registered startup hooks when appropriate.
-            
+
             Executes startup hooks collected from iter_interface_startup_hooks() before delegating to the original BaseCommand.run_from_argv. Hooks are skipped for the runserver autoreload child process (determined by RUN_MAIN) but run for the initial runserver process and for other commands. Delegates to the preserved original_run_from_argv and returns its result.
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
@@ -193,9 +194,9 @@ class GeneralmanagerConfig(AppConfig):
     ) -> None:
         """
         Initialize GeneralManager interface attributes, create attribute-based accessors, wire GraphQL connection properties between related managers, and validate each class's permission configuration.
-        
+
         For each class in `pending_attribute_initialization`, assign its Interface attributes to the class's `_attributes` and create attribute property accessors. For each class in `all_classes`, inspect Interface `input_fields` and, when an input field's type is another GeneralManager subclass, add a GraphQL property on the connected manager that resolves related objects filtered by that input attribute. Finally, validate or normalize each class's `Permission` attribute via GeneralmanagerConfig.check_permission_class.
-        
+
         Parameters:
             pending_attribute_initialization (list[type[GeneralManager]]): GeneralManager classes whose Interface attributes must be initialized and for which attribute properties should be created.
             all_classes (list[type[GeneralManager]]): All registered GeneralManager classes to inspect for input-field connections and to validate permissions.
