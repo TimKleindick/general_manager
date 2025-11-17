@@ -14,9 +14,24 @@ class DummyTarget:
     __name__ = "DummyTarget"
 
     def __init__(self, capability: LoggingObservabilityCapability):
+        """
+        Initialize the instance with a logging observability capability.
+        
+        Parameters:
+            capability (LoggingObservabilityCapability): Capability used to record observability events (start, end, error) for operations on the target.
+        """
         self._capability = capability
 
     def get_capability_handler(self, name: str):
+        """
+        Retrieve a named capability handler exposed by the target.
+        
+        Parameters:
+            name (str): Name of the capability to retrieve.
+        
+        Returns:
+            The capability handler instance if the named capability exists (for example, "observability"), or None if the capability is not available.
+        """
         if name == "observability":
             return self._capability
         return None
@@ -34,6 +49,12 @@ def test_with_observability_logs_before_and_after():
     sentinel = object()
 
     def func():
+        """
+        Provide a sentinel object used by tests.
+        
+        Returns:
+            The sentinel object used as a unique test value.
+        """
         return sentinel
 
     result = with_observability(
@@ -68,6 +89,12 @@ def test_with_observability_logs_errors_and_propagates():
     target = DummyTarget(capability)
 
     def func():
+        """
+        Always raises a ValueError with the message 'boom'.
+        
+        Raises:
+            ValueError: Always raised with message "boom".
+        """
         raise ValueError("boom")
 
     with pytest.raises(ValueError):

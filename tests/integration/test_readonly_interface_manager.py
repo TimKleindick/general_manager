@@ -9,6 +9,12 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
 def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
+    """
+    Synchronize the provided ReadOnlyInterface's configured seed data into the database.
+    
+    Parameters:
+        interface_cls (type[ReadOnlyInterface]): The ReadOnlyInterface class whose data should be synchronized into persistent storage.
+    """
     capability = interface_cls.require_capability(
         "read_only_management",
         expected_type=ReadOnlyManagementCapability,
@@ -68,6 +74,11 @@ class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
 class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """
+        Create and register a Milestone GeneralManager subclass with seeded records and a ReadOnlyInterface for integration tests.
+        
+        This class-level setup defines a Milestone model with fields customer_name, name, description, and step, provides initial `_data` seed records, exposes a nested ReadOnlyInterface describing the public fields, and assigns the created class to `cls.Milestone` and `cls.general_manager_classes` for use by tests.
+        """
         class Milestone(GeneralManager):
             customer_name: str
             name: str

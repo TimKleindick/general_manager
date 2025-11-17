@@ -131,8 +131,8 @@ class GMTestCaseMeta(type):
         ) -> None:
             """
             Prepare the class-level test environment for GeneralManager GraphQL tests.
-
-            Resets GraphQL and manager registries, optionally installs an app-config fallback for resolving AppConfig, clears the default GraphQL URL pattern, creates any missing database tables for the test's registered models (including their history models and related models used by HistoricalChanges) and records created table names on `cls._gm_created_tables`, initializes GeneralManager classes, read-only interfaces, and GraphQL registrations, runs any user-defined `setUpClass`, and finally invokes the base `GraphQLTransactionTestCase.setUpClass`.
+            
+            Resets GraphQL registries and type/schema state, optionally installs an AppConfig fallback, creates any missing database tables for the test's registered models (including their history models and related models used by HistoricalChanges) and records created table names on cls._gm_created_tables, initializes GeneralManager classes and GraphQL registrations (including installing the startup hook runner and registering system checks), and runs any user-defined setUpClass followed by the base GraphQLTransactionTestCase.setUpClass.
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None
@@ -287,9 +287,9 @@ class GeneralManagerTransactionTestCase(
 
     def setUp(self) -> None:
         """
-        Install a LoggingCache as the default cache backend for the test and clear its operation log.
-
-        Replaces Django's default cache connection with a LoggingCache instance and resets the cache operation log so the test starts with no prior cache operations recorded.
+        Install a LoggingCache as the Django default cache for the test and clear its operation log.
+        
+        Replaces Django's default cache connection with a fresh LoggingCache and resets its recorded operations, then runs any registered startup hooks for the test class.
         """
         super().setUp()
         caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
@@ -428,6 +428,11 @@ class GeneralManagerTransactionTestCase(
 
     @classmethod
     def _run_registered_startup_hooks(cls) -> None:
+        """
+        Collects interfaces declared on the test class's GeneralManager classes, ensures their capabilities are loaded, and executes any registered startup hooks for those interfaces.
+        
+        For each GM class in `general_manager_classes`, the method looks for an `Interface` attribute that is a subclass of `InterfaceBase`. If any are found, it calls `get_capabilities()` on each interface class and then runs every startup hook registered via `iter_interface_startup_hooks()` whose interface matches one of the collected interfaces.
+        """
         interfaces: set[type[InterfaceBase]] = set()
         for manager_class in cls.general_manager_classes:
             interface_cls = getattr(manager_class, "Interface", None)
@@ -446,12 +451,9 @@ class GeneralManagerTransactionTestCase(
     #
     def assert_cache_miss(self) -> None:
         """
-        Assert that a cache retrieval missed and was followed by a write.
-
-        The expectation is a `get` operation returning no value and a subsequent `set` operation storing the computed result. The cache operation log is cleared afterwards.
-
-        Returns:
-            None
+        Assert that a cache get returned no value and that a subsequent set stored the result.
+        
+        Checks the default LoggingCache's operation log for a ("get", key, False) entry indicating a miss and a ("set", key) entry indicating the computed value was stored. Clears the cache operation log after performing the assertions.
         """
         cache_backend = cast(LoggingCache, caches["default"])
         ops = cache_backend.ops
