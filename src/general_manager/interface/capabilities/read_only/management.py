@@ -377,27 +377,11 @@ class ReadOnlyManagementCapability(BaseCapability):
     ) -> tuple[Callable[[], None], ...]:
         """Expose a startup hook that synchronizes read-only data."""
 
-        def _sync() -> None:
-            try:
-                self.sync_data(interface_cls)
-            except MissingReadOnlyBindingError:
-                manager_cls = getattr(interface_cls, "_parent_class", None)
-                model = getattr(interface_cls, "_model", None)
-                _resolve_logger().debug(
-                    "read-only startup hook unavailable",
-                    context={
-                        "interface": getattr(interface_cls, "__name__", None),
-                        "has_parent": manager_cls is not None,
-                        "has_model": model is not None,
-                    },
-                )
-
         manager_cls = getattr(interface_cls, "_parent_class", None)
         model = getattr(interface_cls, "_model", None)
         if manager_cls is None or model is None:
-            # The hook still needs to be registered so that it can run once the
-            # interface has been fully configured. We log for observability but
-            # avoid dropping the hook entirely.
+            # Without metadata we cannot bind to the manager/model pair, so we
+            # skip registration and rely on a later call once binding occurs.
             _resolve_logger().debug(
                 "read-only startup hook registration deferred",
                 context={
@@ -406,6 +390,20 @@ class ReadOnlyManagementCapability(BaseCapability):
                     "has_model": model is not None,
                 },
             )
+            return tuple()
+
+        def _sync() -> None:
+            try:
+                self.sync_data(interface_cls)
+            except MissingReadOnlyBindingError:
+                _resolve_logger().debug(
+                    "read-only startup hook unavailable",
+                    context={
+                        "interface": getattr(interface_cls, "__name__", None),
+                        "has_parent": manager_cls is not None,
+                        "has_model": model is not None,
+                    },
+                )
 
         return (_sync,)
 

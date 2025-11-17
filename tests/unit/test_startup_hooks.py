@@ -104,10 +104,23 @@ class StartupHookRegistryTests(SimpleTestCase):
             calls.append(interface_cls.__name__)
 
         capability.sync_data = _sync  # type: ignore[assignment]
-        hooks = capability.get_startup_hooks(ReadOnlyInterface)
+
+        class ReadyInterface(ReadOnlyInterface):
+            pass
+
+        class _DummyManager:
+            pass
+
+        class _DummyModel:
+            pass
+
+        ReadyInterface._parent_class = _DummyManager
+        ReadyInterface._model = _DummyModel
+
+        hooks = capability.get_startup_hooks(ReadyInterface)
         for hook in hooks:
             hook()
-        self.assertEqual(calls, ["ReadOnlyInterface"])
+        self.assertEqual(calls, ["ReadyInterface"])
 
 
 class StartupHookRunnerTests(SimpleTestCase):
