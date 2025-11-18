@@ -137,7 +137,7 @@ def test_registry_tracks_multiple_interfaces():
     registry = CapabilityRegistry()
     registry.register(DatabaseInterface, ["read", "write", "query"])
     registry.register(CalculationInterface, ["read", "query"])
-    
+
     assert registry.get(DatabaseInterface) == frozenset(["read", "write", "query"])
     assert registry.get(CalculationInterface) == frozenset(["read", "query"])
 ```
@@ -148,15 +148,15 @@ def test_with_observability_before_operation():
     """Test that before_operation is called when present."""
     capability = Mock()
     capability.before_operation = Mock()
-    
+
     target = Mock()
     target.get_capability_handler = Mock(return_value=capability)
-    
+
     def func():
         return "result"
-    
+
     with_observability(target, operation="create", payload={"test": "data"}, func=func)
-    
+
     capability.before_operation.assert_called_once()
 ```
 
@@ -166,14 +166,14 @@ def test_manifest_resolve_inheritance():
     """Test resolving with inheritance aggregation."""
     base_plan = CapabilityPlan(required=frozenset(["read"]))
     derived_plan = CapabilityPlan(required=frozenset(["write"]))
-    
+
     manifest = CapabilityManifest(plans={
         BaseInterface: base_plan,
         DerivedInterface: derived_plan
     })
-    
+
     resolved = manifest.resolve(DerivedInterface)
-    
+
     # Should merge capabilities from both classes
     assert "read" in resolved.required
     assert "write" in resolved.required
@@ -230,7 +230,7 @@ For questions or issues with these tests:
 
 ---
 
-**Last Updated**: November 2024  
-**Test Framework**: pytest  
-**Python Version**: 3.12+  
+**Last Updated**: November 2024
+**Test Framework**: pytest
+**Python Version**: 3.12+
 **Django Version**: 5.2+

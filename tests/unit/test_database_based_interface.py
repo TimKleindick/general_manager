@@ -35,6 +35,7 @@ from general_manager.interface.capabilities.orm import (
     OrmMutationCapability,
     OrmPersistenceSupportCapability,
 )
+import pytest
 
 
 class PersonModel(models.Model):
@@ -1676,30 +1677,33 @@ class PayloadNormalizerTestCase(TransactionTestCase):
 
 # Additional tests for PayloadNormalizer
 
+
 def test_payload_normalizer_normalize_filter_kwargs_with_manager():
     """Test normalize_filter_kwargs unwraps manager objects."""
     from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
         PayloadNormalizer,
     )
     from django.db import models
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
+
     # Create a mock manager object
-    mock_manager = type('MockManager', (), {
-        'identification': {'id': 42},
-        '__class__': type('GeneralManager', (), {})
-    })()
-    
+    mock_manager = type(
+        "MockManager",
+        (),
+        {"identification": {"id": 42}, "__class__": type("GeneralManager", (), {})},
+    )()
+
     kwargs = {"name": "test", "related": mock_manager}
     # Note: This will pass through because mock isn't a real GeneralManager
     result = normalizer.normalize_filter_kwargs(kwargs)
-    
+
     assert "name" in result
 
 
@@ -1709,15 +1713,16 @@ def test_payload_normalizer_validate_keys_valid():
         PayloadNormalizer,
     )
     from django.db import models
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
         age = models.IntegerField()
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
+
     # Should not raise
     normalizer.validate_keys({"name": "test", "age": 25})
 
@@ -1729,14 +1734,15 @@ def test_payload_normalizer_validate_keys_invalid():
     )
     from general_manager.interface.utils.errors import UnknownFieldError
     from django.db import models
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
+
     with pytest.raises(UnknownFieldError):
         normalizer.validate_keys({"invalid_field": "value"})
 
@@ -1747,27 +1753,24 @@ def test_payload_normalizer_split_many_to_many():
         PayloadNormalizer,
     )
     from django.db import models
-    
+
     class RelatedModel(models.Model):
         class Meta:
             app_label = "test"
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
         tags = models.ManyToManyField(RelatedModel)
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
-    kwargs = {
-        "name": "test",
-        "tags_id_list": [1, 2, 3],
-        "other": "value"
-    }
-    
+
+    kwargs = {"name": "test", "tags_id_list": [1, 2, 3], "other": "value"}
+
     remaining, many = normalizer.split_many_to_many(kwargs)
-    
+
     assert "tags_id_list" in many
     assert "tags_id_list" not in remaining
     assert "name" in remaining
@@ -1780,18 +1783,19 @@ def test_payload_normalizer_normalize_simple_values():
         PayloadNormalizer,
     )
     from django.db import models
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
         value = models.IntegerField()
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
+
     kwargs = {"name": "test", "value": 42}
     result = normalizer.normalize_simple_values(kwargs)
-    
+
     assert result["name"] == "test"
     assert result["value"] == 42
 
@@ -1802,17 +1806,18 @@ def test_payload_normalizer_normalize_many_values_with_none():
         PayloadNormalizer,
     )
     from django.db import models
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
+
     kwargs = {"field_a": None, "field_b": [1, 2], "field_c": models.NOT_PROVIDED}
     result = normalizer.normalize_many_values(kwargs)
-    
+
     # None and NOT_PROVIDED should be omitted
     assert "field_a" not in result
     assert "field_c" not in result
@@ -1825,15 +1830,16 @@ def test_payload_normalizer_normalize_many_values_single_item():
         PayloadNormalizer,
     )
     from django.db import models
-    
+
     class TestModel(models.Model):
         name = models.CharField(max_length=100)
+
         class Meta:
             app_label = "test"
-    
+
     normalizer = PayloadNormalizer(TestModel)
-    
+
     kwargs = {"field": 42}
     result = normalizer.normalize_many_values(kwargs)
-    
+
     assert result["field"] == [42]
