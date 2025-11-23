@@ -304,7 +304,7 @@ class InterfaceBase(ABC):
                 Capability: The capability handler associated with `name`.
 
         Raises:
-                KeyError: If the named capability is not available.
+                NotImplementedError: If the named capability is not available.
                 TypeError: If the found capability is not an instance of `expected_type`.
         """
         return self.__class__.require_capability(
