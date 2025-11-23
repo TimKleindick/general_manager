@@ -9,7 +9,6 @@ from ..orm import OrmLifecycleCapability
 from general_manager.interface.utils.models import GeneralManagerBasisModel
 
 if TYPE_CHECKING:  # pragma: no cover
-    from general_manager.interface.interfaces.read_only import ReadOnlyInterface
     from general_manager.interface.orm_interface import OrmInterfaceBase
     from general_manager.manager.general_manager import GeneralManager
 

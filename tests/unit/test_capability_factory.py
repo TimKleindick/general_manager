@@ -14,12 +14,6 @@ from general_manager.interface.capabilities.builtin import (
     CreateCapability,
     UpdateCapability,
     DeleteCapability,
-    HistoryCapability,
-    ValidationCapability,
-    NotificationCapability,
-    SchedulingCapability,
-    AccessControlCapability,
-    ObservabilityCapability,
 )
 
 

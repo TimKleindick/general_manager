@@ -5,7 +5,6 @@ from general_manager.cache.cache_decorator import cached, DependencyTracker
 from general_manager.utils.make_cache_key import make_cache_key
 import pickle
 import time
-from contextlib import suppress
 
 
 def _trusted_pickle_loads(data: bytes) -> object:

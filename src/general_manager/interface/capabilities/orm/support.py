@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, TYPE_CHECKING, Callable, ClassVar, Type, cast
 
 from django.db import models

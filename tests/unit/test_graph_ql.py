@@ -14,7 +14,7 @@ from general_manager.api.graphql import (
     GraphQL,
     get_read_permission_filter,
 )
-from general_manager.measurement.measurement import Measurement, ureg
+from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.base_interface import InterfaceBase

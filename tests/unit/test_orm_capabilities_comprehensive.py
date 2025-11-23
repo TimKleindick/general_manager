@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta
-from django.utils import timezone
-from django.db import models
+from unittest.mock import Mock, patch
+from datetime import datetime
 
 from general_manager.interface.capabilities.orm import (
     OrmPersistenceSupportCapability,

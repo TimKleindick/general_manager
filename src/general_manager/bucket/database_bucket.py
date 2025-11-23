@@ -1,7 +1,7 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, Generator, Type, TypeVar
+from typing import Any, Generator, Type, TypeVar
 
 from django.core.exceptions import FieldError
 from django.db import models

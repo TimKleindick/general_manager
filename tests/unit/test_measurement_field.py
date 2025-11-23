@@ -6,10 +6,8 @@ from django.core.exceptions import ValidationError
 from general_manager.measurement.measurement import (
     Measurement,
     ureg,
-    currency_units,
 )
 from general_manager.measurement.measurement_field import MeasurementField
-import pint
 from django.db import models
 
 

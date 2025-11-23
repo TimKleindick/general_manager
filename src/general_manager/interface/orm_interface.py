@@ -12,7 +12,6 @@ from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.configuration import CapabilityConfigEntry
 from general_manager.interface.capabilities.orm import (
-    OrmHistoryCapability,
     OrmLifecycleCapability,
 )
 from general_manager.interface.utils.models import (

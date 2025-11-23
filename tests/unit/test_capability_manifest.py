@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from general_manager.interface.manifests.capability_manifest import (
     CapabilityManifest,
@@ -11,7 +10,6 @@ from general_manager.interface.manifests.capability_manifest import (
 )
 from general_manager.interface.manifests.capability_models import CapabilityPlan
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.interface.orm_interface import OrmInterfaceBase
 from general_manager.interface.interfaces.database import DatabaseInterface
 from general_manager.interface.interfaces.existing_model import ExistingModelInterface
 from general_manager.interface.interfaces.read_only import ReadOnlyInterface

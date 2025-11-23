@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from general_manager.interface.capabilities.core.utils import with_observability
 

@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 from django.db import models
 from django.core.exceptions import ValidationError, FieldDoesNotExist
 from django.apps import apps
-from simple_history.models import HistoricalRecords
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import OrmInterfaceBase
