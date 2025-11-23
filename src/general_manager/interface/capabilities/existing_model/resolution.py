@@ -71,7 +71,7 @@ class ExistingModelResolutionCapability(BaseCapability):
             if isinstance(model_reference, str):
                 try:
                     model = apps.get_model(model_reference)
-                except LookupError as error:
+                except (LookupError, ValueError) as error:
                     raise InvalidModelReferenceError(model_reference) from error
             elif isinstance(model_reference, type) and issubclass(
                 model_reference, models.Model
