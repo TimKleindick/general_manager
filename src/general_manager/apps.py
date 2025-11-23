@@ -156,7 +156,17 @@ class GeneralmanagerConfig(AppConfig):
             """
             Run a Django management command after executing registered startup hooks when appropriate.
 
-            Executes startup hooks collected from iter_interface_startup_hooks() before delegating to the original BaseCommand.run_from_argv. Hooks are skipped for the runserver autoreload child process (determined by RUN_MAIN) but run for the initial runserver process and for other commands. Delegates to the preserved original_run_from_argv and returns its result.
+            Executes startup hooks collected from iter_interface_startup_hooks() before
+            delegating to the original BaseCommand.run_from_argv. For most commands the
+            hooks always run; for the ``runserver`` command they run only in the
+            autoreload main process (when ``RUN_MAIN == "true"``) and are skipped in the
+            initial launcher process. Delegates to the preserved original_run_from_argv
+            and returns its result.
+
+            Parameters:
+                self (BaseCommand): The management command instance.
+                argv (list[str]): Command-line arguments passed to the management command.
+
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
             command = argv[1] if len(argv) > 1 else None
