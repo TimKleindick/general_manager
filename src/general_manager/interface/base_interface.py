@@ -53,7 +53,12 @@ type relatedClass = Type[Model] | None
 type newlyCreatedGeneralManagerClass = Type[GeneralManager]
 
 type classPreCreationMethod = Callable[
-    [generalManagerClassName, attributes, interfaceBaseClass],
+    [
+        generalManagerClassName,
+        attributes,
+        interfaceBaseClass,
+        type["GeneralManagerBasisModel"] | None,
+    ],
     tuple[attributes, interfaceBaseClass, relatedClass],
 ]
 
