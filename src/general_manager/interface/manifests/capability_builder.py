@@ -84,6 +84,7 @@ class ManifestCapabilityBuilder:
             optional=frozenset(optional),
             activated_optional=frozenset(activated),
         )
+        interface_cls.set_capability_selection(selection)
         capability_instances = self._instantiate_capabilities(
             interface_cls, selection.all
         )
@@ -174,11 +175,11 @@ class ManifestCapabilityBuilder:
         capabilities: list["Capability"],
     ) -> None:
         """
-        Attach capability instances to an interface class by invoking each capability's setup hook.
+        Attach capability instances to an interface class by binding each capability to the interface.
 
         Parameters:
             interface_cls (type[InterfaceBase]): The interface class to attach capabilities to.
-            capabilities (list[Capability]): Capability instances to attach; each will have its `setup(interface_cls)` method called in order.
+            capabilities (list[Capability]): Capability instances to attach; each will be bound to the interface in order.
         """
         for capability in capabilities:
-            capability.setup(interface_cls)
+            interface_cls._bind_capability_handler(capability)
