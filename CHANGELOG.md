@@ -2,6 +2,92 @@
 
 <!-- version list -->
 
+## v0.24.0 (2025-11-23)
+
+### Bug Fixes
+
+- Bind capability instances to the interface and update setup method description
+  ([`f512d35`](https://github.com/TimKleindick/general_manager/commit/f512d356ecb4a7a40b85b45e75bdeef7894a8eb7))
+
+- Defer read-only startup hook registration based on metadata presence
+  ([`82d6266`](https://github.com/TimKleindick/general_manager/commit/82d6266e9ee4a747243f217df348d38d84e315ed))
+
+- Enhance error handling for ReadOnlyInterface binding and startup hook registration
+  ([`389d3b6`](https://github.com/TimKleindick/general_manager/commit/389d3b64c953d65fd84e134bd1e1fa182f02d1e5))
+
+- Enhance factory attribute handling by preserving Meta class attributes in
+  ExistingModelResolutionCapability
+  ([`b7cfd32`](https://github.com/TimKleindick/general_manager/commit/b7cfd3205f2f9a17eefe454bfe1495cd058a926a))
+
+- Extend classPreCreationMethod type to include GeneralManagerBasisModel
+  ([`e876cd4`](https://github.com/TimKleindick/general_manager/commit/e876cd40003a81949afb432f9b8afb851186f8da))
+
+- Extend exception handling in model resolution to include ValueError
+  ([`97f776a`](https://github.com/TimKleindick/general_manager/commit/97f776a72625551c9803576e4c0f1327ffc5003e))
+
+- Improve read-only startup hook registration and error handling
+  ([`2a34d75`](https://github.com/TimKleindick/general_manager/commit/2a34d75c07ea22c6d778fc6ddb343c619bfd06f8))
+
+- Update parameter types in ReadOnlyManagementCapability for better type safety
+  ([`8683daf`](https://github.com/TimKleindick/general_manager/commit/8683daf3c7330a3d8f655da6b5b6d5ad98e3be35))
+
+### Chores
+
+- Reorganize interfaces and tighten capability plumbing
+  ([`f1071a9`](https://github.com/TimKleindick/general_manager/commit/f1071a9b46f83e2516a10c61cd01dcb507adcf49))
+
+### Documentation
+
+- Improve docstring clarity and add parameter descriptions for management command execution
+  ([`d88fbf7`](https://github.com/TimKleindick/general_manager/commit/d88fbf794d9c6da8e128cfa5dadf0c0cb8c6e8ef))
+
+- Introduce capability-driven interface skeletons and startup hooks
+  ([`3ae0c28`](https://github.com/TimKleindick/general_manager/commit/3ae0c283d0f6e1a2001d564fa97491be34257127))
+
+- Update documentation for capability-first approach
+  ([`5514a45`](https://github.com/TimKleindick/general_manager/commit/5514a45d9b1e0e012b59ecd4463712c32a4591e8))
+
+- Update exception type in InterfaceBase capability retrieval documentation
+  ([`6d2e4ae`](https://github.com/TimKleindick/general_manager/commit/6d2e4ae22d1ea84a0a799260a146dffaa22d6d65))
+
+### Features
+
+- Add capability-driven startup/system check hooks
+  ([`b7a2dc7`](https://github.com/TimKleindick/general_manager/commit/b7a2dc7bc267eeb88557f23e671d17d191a85edb))
+
+- Refactor capability management and add soft delete support
+  ([`378bb48`](https://github.com/TimKleindick/general_manager/commit/378bb48ac1f92130ec548d97ed8721f8b5a2357d))
+
+### Refactoring
+
+- Interface structure
+  ([`2ace9fe`](https://github.com/TimKleindick/general_manager/commit/2ace9fe6d8e8de892ad4f542e22c1cbec3131b79))
+
+- Remove unused imports across multiple files for cleaner code
+  ([`db6695f`](https://github.com/TimKleindick/general_manager/commit/db6695f690b8d9ad0fc6dbe157190a05062610ea))
+
+- Rename OrmPersistenceInterface and OrmWritableInterface to OrmInterfaceBase; update related
+  references
+  ([`06d9cd7`](https://github.com/TimKleindick/general_manager/commit/06d9cd71df94e511d535b44298f8e87461196787))
+
+### Testing
+
+- Add comprehensive capability infrastructure unit tests
+  ([`10a2bee`](https://github.com/TimKleindick/general_manager/commit/10a2bee16e52f13ecb477d65920c21726506ff9d))
+
+- Add tests for read-only startup hook registration based on metadata presence
+  ([`627668e`](https://github.com/TimKleindick/general_manager/commit/627668ed4bd42a5a93c22c1f8c083a47550b7086))
+
+- Add unit tests for built-in, existing-model, and calculation capabilities
+  ([`10a2bee`](https://github.com/TimKleindick/general_manager/commit/10a2bee16e52f13ecb477d65920c21726506ff9d))
+
+- Streamline test cases for enhanced interface capabilities
+  ([`5cda968`](https://github.com/TimKleindick/general_manager/commit/5cda9683da0488de402e10be4c63f591ca210973))
+
+- Update capability names and improve type assertions in tests
+  ([`10a2bee`](https://github.com/TimKleindick/general_manager/commit/10a2bee16e52f13ecb477d65920c21726506ff9d))
+
+
 ## v0.23.0 (2025-11-07)
 
 ### Bug Fixes
