@@ -1,9 +1,11 @@
 from typing import ClassVar
+from unittest.mock import patch
 
 from django.test import TestCase
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface import CalculationInterface
 from general_manager.interface.capabilities.calculation import (
+    CalculationLifecycleCapability,
     CalculationQueryCapability,
 )
 from general_manager.interface.capabilities.configuration import (
@@ -156,3 +158,56 @@ class TestCalculationInterface(TestCase):
         self.assertIsNotNone(handler)
         self.assertIsInstance(handler, CustomQueryCapability)
         self.assertEqual(handler.label, "custom")
+
+
+class LifecycleInterface(CalculationInterface):
+    foo = Input(type=str)
+    bar = Input(type=int)
+
+
+class TestCalculationLifecycleCapability(TestCase):
+    def setUp(self):
+        self.capability = CalculationLifecycleCapability()
+
+    def test_pre_create_collects_input_fields(self):
+        attrs = {"__module__": __name__}
+
+        with patch(
+            "general_manager.interface.capabilities.calculation.lifecycle.call_with_observability",
+            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+        ):
+            updated_attrs, interface_cls, _ = self.capability.pre_create(
+                name="GeneratedManager",
+                attrs=attrs,
+                interface=LifecycleInterface,
+            )
+
+        self.assertIn("Interface", updated_attrs)
+        self.assertEqual(updated_attrs["_interface_type"], "calculation")
+        generated_interface = updated_attrs["Interface"]
+        self.assertTrue(issubclass(generated_interface, LifecycleInterface))
+        self.assertEqual(
+            set(generated_interface.input_fields.keys()),
+            {"foo", "bar"},
+        )
+        self.assertEqual(interface_cls, generated_interface)
+
+    def test_post_create_sets_parent_class(self):
+        temp_interface = type(
+            "TempInterface",
+            (LifecycleInterface,),
+            {},
+        )
+        manager_cls = type("TempManager", (), {})
+
+        with patch(
+            "general_manager.interface.capabilities.calculation.lifecycle.call_with_observability",
+            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+        ):
+            self.capability.post_create(
+                new_class=manager_cls,
+                interface_class=temp_interface,
+                model=None,
+            )
+
+        self.assertIs(temp_interface._parent_class, manager_cls)  # type: ignore[attr-defined]

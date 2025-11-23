@@ -1685,13 +1685,13 @@ def test_payload_normalizer_normalize_filter_kwargs_with_manager():
     )
     from django.db import models
 
-    class TestModel(models.Model):
+    class FilterTestModel(models.Model):
         name = models.CharField(max_length=100)
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(FilterTestModel)
 
     # Create a mock manager object
     mock_manager = type(
@@ -1714,14 +1714,14 @@ def test_payload_normalizer_validate_keys_valid():
     )
     from django.db import models
 
-    class TestModel(models.Model):
+    class ValidateKeysModel(models.Model):
         name = models.CharField(max_length=100)
         age = models.IntegerField()
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(ValidateKeysModel)
 
     # Should not raise
     normalizer.validate_keys({"name": "test", "age": 25})
@@ -1735,13 +1735,13 @@ def test_payload_normalizer_validate_keys_invalid():
     from general_manager.interface.utils.errors import UnknownFieldError
     from django.db import models
 
-    class TestModel(models.Model):
+    class InvalidKeysModel(models.Model):
         name = models.CharField(max_length=100)
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(InvalidKeysModel)
 
     with pytest.raises(UnknownFieldError):
         normalizer.validate_keys({"invalid_field": "value"})
@@ -1754,18 +1754,18 @@ def test_payload_normalizer_split_many_to_many():
     )
     from django.db import models
 
-    class RelatedModel(models.Model):
+    class PayloadRelatedModel(models.Model):
         class Meta:
             app_label = "test"
 
-    class TestModel(models.Model):
+    class SplitManyModel(models.Model):
         name = models.CharField(max_length=100)
-        tags = models.ManyToManyField(RelatedModel)
+        tags = models.ManyToManyField(PayloadRelatedModel)
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(SplitManyModel)
 
     kwargs = {"name": "test", "tags_id_list": [1, 2, 3], "other": "value"}
 
@@ -1784,14 +1784,14 @@ def test_payload_normalizer_normalize_simple_values():
     )
     from django.db import models
 
-    class TestModel(models.Model):
+    class SimpleValuesModel(models.Model):
         name = models.CharField(max_length=100)
         value = models.IntegerField()
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(SimpleValuesModel)
 
     kwargs = {"name": "test", "value": 42}
     result = normalizer.normalize_simple_values(kwargs)
@@ -1807,13 +1807,13 @@ def test_payload_normalizer_normalize_many_values_with_none():
     )
     from django.db import models
 
-    class TestModel(models.Model):
+    class ManyValuesModel(models.Model):
         name = models.CharField(max_length=100)
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(ManyValuesModel)
 
     kwargs = {"field_a": None, "field_b": [1, 2], "field_c": models.NOT_PROVIDED}
     result = normalizer.normalize_many_values(kwargs)
@@ -1831,13 +1831,13 @@ def test_payload_normalizer_normalize_many_values_single_item():
     )
     from django.db import models
 
-    class TestModel(models.Model):
+    class SingleItemModel(models.Model):
         name = models.CharField(max_length=100)
 
         class Meta:
             app_label = "test"
 
-    normalizer = PayloadNormalizer(TestModel)
+    normalizer = PayloadNormalizer(SingleItemModel)
 
     kwargs = {"field": 42}
     result = normalizer.normalize_many_values(kwargs)
