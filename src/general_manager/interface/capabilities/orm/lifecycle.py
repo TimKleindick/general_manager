@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, ClassVar, Type, cast
+from typing import Any, TYPE_CHECKING, ClassVar, cast
 
 from django.db import models
 from general_manager.factory.auto_factory import AutoFactory

@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from typing import ClassVar
-from unittest.mock import Mock
 
 from general_manager.interface.capabilities.registry import CapabilityRegistry
-from general_manager.interface.capabilities.base import Capability
 from general_manager.interface.base_interface import InterfaceBase
 
 

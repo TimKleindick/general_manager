@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
     from general_manager.manager.group_manager import GroupManager
     from general_manager.bucket.group_bucket import GroupBucket
-    from general_manager.interface.base_interface import InterfaceBase
 
 
 class Bucket(ABC, Generic[GeneralManagerType]):

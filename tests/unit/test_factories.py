@@ -521,7 +521,6 @@ class TestGetManyToManyFieldValue(TestCase):
         """Test that fields with RegexValidator generate matching values."""
         from general_manager.factory.factories import get_field_value
         from django.core.validators import RegexValidator
-        import re
 
         # Create a CharField with RegexValidator
         validator = RegexValidator(regex=r"^\d{3}-\d{3}-\d{4}$")

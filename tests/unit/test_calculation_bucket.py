@@ -5,7 +5,6 @@ from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import Input
 from general_manager.manager import GeneralManager
-from general_manager.api.property import GraphQLProperty
 from typing import ClassVar
 
 

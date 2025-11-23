@@ -3,20 +3,15 @@ from typing import TYPE_CHECKING, ClassVar, Dict, Literal, Optional, cast
 from django.test import TestCase
 from django.contrib.auth.models import User, AnonymousUser
 from django.utils.crypto import get_random_string
-from unittest.mock import Mock, patch, PropertyMock, MagicMock
+from unittest.mock import Mock, patch
 
 from general_manager.permission.base_permission import BasePermission
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.permission.permission_checks import (
     permission_functions,
-    PermissionDict,
 )
 
 if TYPE_CHECKING:
-    from general_manager.manager.general_manager import GeneralManager
-    from general_manager.permission.permission_data_manager import (
-        PermissionDataManager,
-    )
     from django.contrib.auth.models import AbstractUser
 
 

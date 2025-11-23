@@ -2,14 +2,10 @@
 """Unit tests for GraphQL subscription consumer functionality."""
 
 import asyncio
-import json
-from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import unittest
 
-from graphql import GraphQLError, GraphQLSchema, parse
-from graphql.type import GraphQLObjectType, GraphQLField, GraphQLString
+from graphql import GraphQLError, GraphQLSchema
 
 from general_manager.api.graphql_subscription_consumer import (
     GraphQLSubscriptionConsumer,

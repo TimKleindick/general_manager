@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Iterable, Iterator, List, Tuple, Type
+from typing import Callable, Dict, Iterator, List, Tuple, Type
 
 StartupHook = Callable[[], None]
 InterfaceType = Type[object]

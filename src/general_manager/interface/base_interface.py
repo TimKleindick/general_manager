@@ -1,7 +1,7 @@
 """Abstract interface layer shared by all GeneralManager implementations."""
 
 from __future__ import annotations
-from abc import ABC, abstractmethod
+from abc import ABC
 import warnings
 import inspect
 from typing import (
@@ -15,7 +15,6 @@ from typing import (
     TypedDict,
     cast,
 )
-from datetime import datetime
 from django.conf import settings
 from django.db.models import Model
 

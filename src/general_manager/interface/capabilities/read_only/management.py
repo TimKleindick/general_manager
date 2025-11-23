@@ -13,7 +13,6 @@ from django.db import (
     transaction as django_transaction,
 )
 
-from general_manager.interface.base_interface import interfaceBaseClass
 from general_manager.interface.utils.models import GeneralManagerBasisModel
 from general_manager.interface.utils.errors import (
     InvalidReadOnlyDataFormatError,
@@ -47,9 +46,6 @@ def _resolve_logger():
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.orm_interface import (
         OrmInterfaceBase,
-    )
-    from general_manager.interface.interfaces.read_only import (
-        ReadOnlyInterface,
     )
     from general_manager.manager.general_manager import GeneralManager
 

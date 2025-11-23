@@ -9,7 +9,7 @@ from factory.faker import Faker
 import exrex  # type: ignore[import-untyped]
 from django.core.validators import RegexValidator
 from django.db import models
-from datetime import date, datetime, time, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 from random import SystemRandom
 from general_manager.measurement.measurement import Measurement

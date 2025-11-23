@@ -11,7 +11,6 @@ from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.utils.database_interface_protocols import (
     SupportsHistory,
-    SupportsHistoryQuery,
 )
 
 from .support import get_support_capability

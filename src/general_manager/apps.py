@@ -4,7 +4,7 @@ import importlib.abc
 import os
 import sys
 from importlib import import_module, util
-from typing import TYPE_CHECKING, Any, Callable, Type, cast
+from typing import TYPE_CHECKING, Any, Callable, Type
 
 import graphene  # type: ignore[import]
 from django.apps import AppConfig
@@ -53,10 +53,7 @@ class InvalidPermissionClassError(TypeError):
 
 
 if TYPE_CHECKING:
-    from general_manager.interface.interfaces.read_only import (
-        ReadOnlyInterface,
-    )
-    from general_manager.interface.base_interface import InterfaceBase
+    pass
 
 logger = get_logger("apps")
 

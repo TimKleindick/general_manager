@@ -1,7 +1,7 @@
 """Utilities for tracing relationships between GeneralManager classes."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
+from typing import Any, ClassVar, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
 

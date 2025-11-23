@@ -25,7 +25,6 @@ from general_manager.interface.infrastructure.startup_hooks import (
 )
 from general_manager.interface.infrastructure.system_checks import (
     clear_system_checks,
-    register_system_check,
     registered_system_checks,
 )
 
