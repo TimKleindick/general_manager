@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Callable, Type, cast, ClassVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, Type, cast, ClassVar
 
 from django.core.checks import Warning
 from django.db import (
@@ -245,11 +245,11 @@ class ReadOnlyManagementCapability(BaseCapability):
         self,
         interface_cls: type["OrmInterfaceBase[Any]"],
         *,
-        connection=None,
-        transaction=None,
-        integrity_error=None,
-        json_module=None,
-        logger_instance=None,
+        connection: Optional[Any] = None,
+        transaction: Optional[Any] = None,
+        integrity_error: Optional[Any] = None,
+        json_module: Optional[Any] = None,
+        logger_instance: Optional[Any] = None,
         unique_fields: set[str] | None = None,
         schema_validated: bool = False,
     ) -> None:
