@@ -333,8 +333,15 @@ class ExistingModelResolutionCapability(BaseCapability):
         factory_attributes: dict[str, Any] = {}
         if factory_definition:
             for attr_name, attr_value in factory_definition.__dict__.items():
-                if not attr_name.startswith("__"):
+                if not attr_name.startswith("__") and attr_name != "Meta":
                     factory_attributes[attr_name] = attr_value
         factory_attributes["interface"] = interface_cls
-        factory_attributes["Meta"] = type("Meta", (), {"model": model})
+        meta_attrs: dict[str, Any] = {}
+        meta_cls = getattr(factory_definition, "Meta", None)
+        if meta_cls is not None:
+            for attr_name, attr_value in meta_cls.__dict__.items():
+                if not attr_name.startswith("__"):
+                    meta_attrs[attr_name] = attr_value
+        meta_attrs["model"] = model
+        factory_attributes["Meta"] = type("Meta", (), meta_attrs)
         return type(f"{name}Factory", (AutoFactory,), factory_attributes)
