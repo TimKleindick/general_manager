@@ -199,8 +199,9 @@ def get_field_value(
             related_instances = list(related_model.objects.all())
             if related_instances:
                 return LazyFunction(lambda: _RNG.choice(related_instances))
-            else:
-                raise MissingFactoryOrInstancesError(related_model)
+            if field.null:
+                return None
+            raise MissingFactoryOrInstancesError(related_model)
     elif isinstance(field, models.ForeignKey):
         related_model = get_related_model(field)
         # Create or get an instance of the related model
@@ -220,8 +221,9 @@ def get_field_value(
             related_instances = list(related_model.objects.all())
             if related_instances:
                 return LazyFunction(lambda: _RNG.choice(related_instances))
-            else:
-                raise MissingFactoryOrInstancesError(related_model)
+            if field.null:
+                return None
+            raise MissingFactoryOrInstancesError(related_model)
     else:
         return None
 
