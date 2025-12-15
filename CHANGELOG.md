@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.24.2 (2025-12-15)
+
+### Bug Fixes
+
+- Correct dimensionless unit handling in Measurement class for multiplication and division
+  operations
+  ([`7757afa`](https://github.com/TimKleindick/general_manager/commit/7757afa0428b95ba1573420636cd3b36dd29315d))
+
+
 ## v0.24.1 (2025-12-15)
 
 ### Bug Fixes
