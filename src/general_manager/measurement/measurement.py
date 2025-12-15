@@ -447,7 +447,9 @@ class Measurement:
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             result_quantity = self.quantity * other
-            return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
+            return Measurement(
+                Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
+            )
         else:
             raise MeasurementScalarTypeError("Multiplication")
 
@@ -476,7 +478,9 @@ class Measurement:
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             result_quantity = self.quantity / other
-            return Measurement(Decimal(str(result_quantity.magnitude)), str(self.unit))
+            return Measurement(
+                Decimal(str(result_quantity.magnitude)), str(result_quantity.units)
+            )
         else:
             raise MeasurementScalarTypeError("Division")
 
