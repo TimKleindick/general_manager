@@ -431,6 +431,36 @@ class TestGetManyToManyFieldValue(TestCase):
         self.assertIn("test_field", str(ctx.exception))
         self.assertIn("must be a Django model class", str(ctx.exception))
 
+    def test_nullable_foreign_key_without_factory_returns_none(self):
+        """Nullable foreign keys without factories or instances should fall back to None."""
+        from general_manager.factory.factories import get_field_value
+        from django.db import models
+
+        class OptionalModel(models.Model):
+            name = models.CharField(max_length=100)
+
+            class Meta:
+                app_label = "test_app"
+
+        field = Mock()
+        field.related_model = OptionalModel
+        field.null = True
+        field.name = "optional_fk"
+
+        def custom_isinstance(obj, cls):
+            if cls == models.ForeignKey:
+                return True
+            return isinstance(obj, cls)
+
+        with (
+            patch.object(OptionalModel.objects, "all", return_value=[]),
+            patch(
+                "general_manager.factory.factories.isinstance",
+                side_effect=custom_isinstance,
+            ),
+        ):
+            self.assertIsNone(get_field_value(field))
+
     def test_field_value_with_null_field_randomness(self):
         """Test that nullable fields sometimes return None with proper randomness."""
         from general_manager.factory.factories import get_field_value
