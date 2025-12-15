@@ -123,3 +123,22 @@ class MeasurementFieldTests(TestCase):
                 1, "liter"
             )  # Liters are incompatible with the meter dimension
             self.instance.full_clean()
+
+    def test_deconstruct_preserves_base_unit_and_options(self):
+        """
+        Ensure deconstruct serializes base_unit and options so the field can be reconstructed.
+        """
+        field = MeasurementField(base_unit="kg", null=True, blank=True, editable=False)
+        _name, _path, args, kwargs = field.deconstruct()
+
+        self.assertIsInstance(args, list)
+        self.assertEqual(kwargs["base_unit"], "kg")
+        self.assertTrue(kwargs["null"])
+        self.assertTrue(kwargs["blank"])
+        self.assertFalse(kwargs["editable"])
+
+        rebuilt = MeasurementField(*args, **kwargs)
+        self.assertEqual(rebuilt.base_unit, "kg")
+        self.assertTrue(rebuilt.null)
+        self.assertTrue(rebuilt.blank)
+        self.assertFalse(rebuilt.editable)
