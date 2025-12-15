@@ -182,6 +182,17 @@ class MeasurementField(models.Field):
         transform = self.value_field.get_transform(lookup_name)
         return cast(type[Transform] | None, transform)
 
+    def deconstruct(self) -> tuple[str, str, list[Any], dict[str, Any]]:
+        """
+        Return serialization details so migrations can reconstruct the field.
+
+        Ensures the required `base_unit` argument is preserved alongside the
+        standard Django field options emitted by the base implementation.
+        """
+        name, path, args, kwargs = super().deconstruct()
+        kwargs["base_unit"] = self.base_unit
+        return name, path, list(args), kwargs
+
     def db_type(self, connection: BaseDatabaseWrapper) -> None:  # type: ignore[override]
         """
         Signal to Django that the field does not map to a single column.
