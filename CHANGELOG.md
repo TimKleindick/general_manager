@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.24.1 (2025-12-15)
+
+### Bug Fixes
+
+- Handle nullable fields in get_field_value to prevent exceptions
+  ([`27f1382`](https://github.com/TimKleindick/general_manager/commit/27f1382d81ac2256e06ca32ff1994217616bc2c3))
+
+- Preserve base_unit in deconstruct method for migration compatibility
+  ([`0392a68`](https://github.com/TimKleindick/general_manager/commit/0392a6839fbd2039a0b7f19cebe1e857e5010d6a))
+
+### Testing
+
+- Add test for nullable foreign key handling in get_field_value
+  ([`7655a5e`](https://github.com/TimKleindick/general_manager/commit/7655a5e8ff2351f9d94a3da5bd015e3242a1bb8c))
+
+- Add test to ensure deconstruct method preserves base unit and options in MeasurementField
+  ([`f2292bf`](https://github.com/TimKleindick/general_manager/commit/f2292bfcacdb0972d68967e254506b003cd6a967))
+
+
 ## v0.24.0 (2025-11-23)
 
 ### Bug Fixes
