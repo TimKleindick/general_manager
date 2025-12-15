@@ -286,6 +286,16 @@ class MeasurementTestCase(TestCase):
         m3 = Measurement(100, "")
         self.assertEqual(str(m3.to("%")), "10000 percent")
 
+    def test_percentage_scalar_multiplication_returns_dimensionless(self):
+        """
+        Multiplying a percentage by a scalar should yield a dimensionless result with the correct magnitude.
+        """
+        result = Measurement(200, "%") * 500
+
+        self.assertEqual(result.unit, "dimensionless")
+        self.assertEqual(result.magnitude, Decimal("1000"))
+        self.assertEqual(str(result), "1000")
+
     def test_dimensionless_values(self):
         """
         Test initialization, arithmetic operations, and comparisons for dimensionless Measurement instances.
