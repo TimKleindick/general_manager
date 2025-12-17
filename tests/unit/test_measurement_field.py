@@ -1,6 +1,8 @@
 # tests.py
 
 from django.test import TestCase
+from django.test import TransactionTestCase
+from django.test.utils import isolate_apps
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from general_manager.measurement.measurement import (
@@ -8,7 +10,7 @@ from general_manager.measurement.measurement import (
     ureg,
 )
 from general_manager.measurement.measurement_field import MeasurementField
-from django.db import models
+from django.db import connection, models
 
 
 class MeasurementFieldTests(TestCase):
@@ -142,3 +144,78 @@ class MeasurementFieldTests(TestCase):
         self.assertTrue(rebuilt.null)
         self.assertTrue(rebuilt.blank)
         self.assertFalse(rebuilt.editable)
+
+
+class MeasurementFieldConstraintTests(TransactionTestCase):
+    @isolate_apps("tests")
+    def test_unique_constraint_targets_value_column(self):
+        class Container(models.Model):
+            name = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = "tests"
+
+        constraint = models.UniqueConstraint(
+            fields=["container", "volume"],
+            name="uniq_container_volume",
+        )
+
+        class Size(models.Model):
+            container = models.ForeignKey(Container, on_delete=models.CASCADE)
+            volume = MeasurementField(base_unit="liter")
+
+            class Meta:
+                app_label = "tests"
+                constraints = (constraint,)
+
+        constraint = Size._meta.constraints[0]
+
+        try:
+            with connection.schema_editor() as editor:
+                editor.create_model(Container)
+                editor.create_model(Size)
+                editor.add_constraint(Size, constraint)
+
+            with connection.cursor() as cursor:
+                constraints = connection.introspection.get_constraints(
+                    cursor, Size._meta.db_table
+                )
+        finally:
+            if Size._meta.db_table in connection.introspection.table_names():
+                with connection.schema_editor() as editor:
+                    editor.delete_model(Size)
+            if Container._meta.db_table in connection.introspection.table_names():
+                with connection.schema_editor() as editor:
+                    editor.delete_model(Container)
+
+        self.assertIn("uniq_container_volume", constraints)
+        self.assertEqual(
+            constraints["uniq_container_volume"]["columns"],
+            ["container_id", "volume_value"],
+        )
+
+    @isolate_apps("tests")
+    def test_unique_kwarg_enforces_uniqueness_on_value_column(self):
+        class VolumeHolder(models.Model):
+            volume = MeasurementField(base_unit="liter", unique=True)
+
+            class Meta:
+                app_label = "tests"
+
+        try:
+            with connection.schema_editor() as editor:
+                editor.create_model(VolumeHolder)
+
+            with connection.cursor() as cursor:
+                constraints = connection.introspection.get_constraints(
+                    cursor, VolumeHolder._meta.db_table
+                )
+        finally:
+            if VolumeHolder._meta.db_table in connection.introspection.table_names():
+                with connection.schema_editor() as editor:
+                    editor.delete_model(VolumeHolder)
+
+        unique_columns = [
+            info["columns"] for info in constraints.values() if info["unique"]
+        ]
+        self.assertIn(["volume_value"], unique_columns)
