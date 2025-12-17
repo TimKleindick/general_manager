@@ -42,15 +42,18 @@ class MeasurementField(models.Field):
         **kwargs: Any,
     ) -> None:
         """
-        Configure a measurement field backed by separate value and unit columns.
-
+        Create a MeasurementField configured with a canonical base unit and paired backing columns.
+        
+        Initializes the field's canonical base unit and derived dimensionality, records the editable flag, constructs the Decimal-backed value column and Char-backed unit column using the provided null/blank/editable/unique settings, and forwards remaining arguments to the base Field constructor.
+        
         Parameters:
-            base_unit (str): Canonical unit used to normalise stored measurements.
-            *args: Positional arguments forwarded to the base Field implementation.
-            null (bool): If True, the measurement may be stored as NULL in the database.
+            base_unit (str): Canonical unit used to normalize and store measurements.
+            *args (Any): Positional arguments forwarded to the base Field implementation.
+            null (bool): If True, the backing columns may be NULL in the database.
             blank (bool): If True, forms may accept an empty value for this field.
-            editable (bool): If False, assignments through the model API are rejected.
-            **kwargs: Additional keyword arguments forwarded to the base Field implementation.
+            editable (bool): If False, assignments through the model API will be rejected.
+            unique (bool): If True, the backing value column is created with a unique constraint.
+            **kwargs (Any): Additional keyword arguments forwarded to the base Field implementation.
         """
         self.base_unit = base_unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
@@ -130,15 +133,29 @@ class MeasurementField(models.Field):
         cls: type[models.Model],
     ) -> None:
         """
-        Rewrite uniqueness constraints to reference the concrete value column.
-
-        SQLite rebuilds tables using only concrete fields, which drops the
-        non-concrete MeasurementField. By swapping occurrences of the logical
-        field name with the backing value column in uniqueness declarations we
-        ensure migrations and schema editing can resolve the referenced field.
+        Remap model uniqueness constraints to reference this field's backing value column.
+        
+        Updates the given model class's metadata so any uniqueness constraints that
+        refer to the logical MeasurementField name are rewritten to use the concrete
+        backing value column (self.value_attr). This ensures migrations and schema
+        operations target a real database column instead of the non-concrete logical
+        field.
+        
+        Parameters:
+            cls (type[models.Model]): The model class whose _meta.constraints and
+                _meta.unique_together will be modified in-place.
         """
 
         def swap_field_name(field_name: str) -> str:
+            """
+            Map a field name to the backing value field name when it matches this measurement field's logical name.
+            
+            Parameters:
+                field_name (str): The field name to potentially remap.
+            
+            Returns:
+                str: `self.value_attr` when `field_name` equals this field's logical name (`self.name`); otherwise the original `field_name`.
+            """
             return self.value_attr if field_name == self.name else field_name
 
         remapped_constraints: list[models.BaseConstraint] = []
@@ -168,14 +185,14 @@ class MeasurementField(models.Field):
         output_field: models.Field[object, object] | None = None,
     ) -> Col:
         """
-        Produce a column expression referencing the underlying value field.
-
+        Return a Col expression that references this field's backing value column for ORM queries.
+        
         Parameters:
-            alias (str): Table alias used within the query.
-            output_field (models.Field | None): Optional output field override.
-
+            alias (str): Table alias to use for the column reference.
+            output_field (models.Field | None): Optional field to use as the expression's output type; defaults to the backing value field.
+        
         Returns:
-            Col: ORM expression targeting the numeric component.
+            Col: Column expression targeting the numeric backing value field.
         """
         return Col(alias, self.value_field, output_field or self.value_field)  # type: ignore
 
