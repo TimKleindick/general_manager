@@ -149,6 +149,11 @@ class MeasurementFieldTests(TestCase):
 class MeasurementFieldConstraintTests(TransactionTestCase):
     @isolate_apps("tests")
     def test_unique_constraint_targets_value_column(self):
+        """
+        Verify that adding a UniqueConstraint on a MeasurementField uses the field's value column.
+        
+        Creates temporary Container and Size models where Size.volume is a MeasurementField, applies a UniqueConstraint on ("container", "volume"), inspects database constraints, and asserts the constraint exists and references the container foreign-key column and the measurement value column ("container_id", "volume_value"). Cleans up created tables afterward.
+        """
         class Container(models.Model):
             name = models.CharField(max_length=20)
 
@@ -196,6 +201,11 @@ class MeasurementFieldConstraintTests(TransactionTestCase):
 
     @isolate_apps("tests")
     def test_unique_kwarg_enforces_uniqueness_on_value_column(self):
+        """
+        Verifies that applying `unique=True` to a MeasurementField creates a unique constraint on its value column.
+        
+        Creates a temporary model with a MeasurementField configured as unique, creates the table, introspects database constraints, and asserts that a unique constraint exists for the underlying `volume_value` column. The temporary table is removed after inspection.
+        """
         class VolumeHolder(models.Model):
             volume = MeasurementField(base_unit="liter", unique=True)
 
