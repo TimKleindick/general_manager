@@ -38,6 +38,7 @@ class MeasurementField(models.Field):
         null: bool = False,
         blank: bool = False,
         editable: bool = True,
+        unique: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -57,42 +58,28 @@ class MeasurementField(models.Field):
         self.editable = editable
         self.value_field: models.Field[Any, Any]
         self.unit_field: models.Field[Any, Any]
-        if null:
-            self.value_field = models.DecimalField(
-                max_digits=30,
-                decimal_places=10,
-                db_index=True,
-                editable=editable,
-                null=True,
-                blank=blank,
-            )
-            self.unit_field = models.CharField(
-                max_length=30,
-                editable=editable,
-                null=True,
-                blank=blank,
-            )
-        else:
-            self.value_field = models.DecimalField(
-                max_digits=30,
-                decimal_places=10,
-                db_index=True,
-                editable=editable,
-                null=False,
-                blank=blank,
-            )
-            self.unit_field = models.CharField(
-                max_length=30,
-                editable=editable,
-                null=False,
-                blank=blank,
-            )
+        self.value_field = models.DecimalField(
+            max_digits=30,
+            decimal_places=10,
+            db_index=True,
+            unique=unique,
+            editable=editable,
+            null=null,
+            blank=blank,
+        )
+        self.unit_field = models.CharField(
+            max_length=30,
+            editable=editable,
+            null=null,
+            blank=blank,
+        )
 
         options: dict[str, Any] = {
             **kwargs,
             "null": null,
             "blank": blank,
             "editable": editable,
+            "unique": unique,
         }
         super().__init__(*args, **options)
 
@@ -133,8 +120,46 @@ class MeasurementField(models.Field):
             self.unit_field.set_attributes_from_name(self.unit_attr)
             self.unit_field.contribute_to_class(cls, self.unit_attr)
 
+        self._remap_constraints_to_value_field(cls)
+
         # Descriptor override
         setattr(cls, name, self)
+
+    def _remap_constraints_to_value_field(
+        self,
+        cls: type[models.Model],
+    ) -> None:
+        """
+        Rewrite uniqueness constraints to reference the concrete value column.
+
+        SQLite rebuilds tables using only concrete fields, which drops the
+        non-concrete MeasurementField. By swapping occurrences of the logical
+        field name with the backing value column in uniqueness declarations we
+        ensure migrations and schema editing can resolve the referenced field.
+        """
+
+        def swap_field_name(field_name: str) -> str:
+            return self.value_attr if field_name == self.name else field_name
+
+        remapped_constraints: list[models.BaseConstraint] = []
+        for constraint in cls._meta.constraints:
+            if isinstance(constraint, models.UniqueConstraint):
+                fields = tuple(swap_field_name(f) for f in constraint.fields)
+                include_names = tuple(
+                    swap_field_name(f) for f in getattr(constraint, "include", ())
+                )
+                include_original = getattr(constraint, "include", ())
+                if fields != constraint.fields or include_names != include_original:
+                    constraint.fields = fields
+                    if hasattr(constraint, "include"):
+                        constraint.include = include_names  # type: ignore[attr-defined]
+            remapped_constraints.append(constraint)
+
+        cls._meta.constraints = remapped_constraints
+        cls._meta.unique_together = tuple(
+            tuple(swap_field_name(field) for field in unique_set)
+            for unique_set in cls._meta.unique_together
+        )
 
     # ---- ORM Delegation ----
     def get_col(
