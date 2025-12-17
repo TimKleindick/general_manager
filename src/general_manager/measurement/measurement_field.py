@@ -158,6 +158,33 @@ class MeasurementField(models.Field):
             """
             return self.value_attr if field_name == self.name else field_name
 
+        def rebuild_unique_constraint(
+            constraint: models.UniqueConstraint,
+            fields: tuple[str, ...],
+            include_names: tuple[str, ...],
+        ) -> models.UniqueConstraint:
+            """
+            Create a copy of a UniqueConstraint with remapped fields/include.
+            """
+
+            opclasses = getattr(constraint, "opclasses", ())
+            include_attr = getattr(constraint, "include", None)
+            kwargs: dict[str, Any] = {
+                "fields": fields,
+                "name": constraint.name,
+                "condition": constraint.condition,
+                "deferrable": constraint.deferrable,
+                "opclasses": opclasses,
+                "nulls_distinct": constraint.nulls_distinct,
+                "violation_error_code": constraint.violation_error_code,
+                "violation_error_message": constraint.violation_error_message,
+            }
+            if include_attr is not None:
+                kwargs["include"] = include_names
+
+            expressions = tuple(constraint.expressions)
+            return constraint.__class__(*expressions, **kwargs)
+
         remapped_constraints: list[models.BaseConstraint] = []
         for constraint in cls._meta.constraints:
             if isinstance(constraint, models.UniqueConstraint):
@@ -167,9 +194,11 @@ class MeasurementField(models.Field):
                 )
                 include_original = getattr(constraint, "include", ())
                 if fields != constraint.fields or include_names != include_original:
-                    constraint.fields = fields
-                    if hasattr(constraint, "include"):
-                        constraint.include = include_names  # type: ignore[attr-defined]
+                    constraint = rebuild_unique_constraint(
+                        constraint,
+                        fields,
+                        include_names,
+                    )
             remapped_constraints.append(constraint)
 
         cls._meta.constraints = remapped_constraints
