@@ -1,10 +1,12 @@
 from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
+from decimal import Decimal
 from typing import ClassVar, Any
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import ReadOnlyInterface
 from general_manager.interface.capabilities.read_only import (
     ReadOnlyManagementCapability,
 )
+from general_manager.measurement import Measurement, MeasurementField
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
@@ -117,3 +119,59 @@ class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):
         self.assertEqual(milestones.count(), 2)
         names = {m.name for m in milestones}
         self.assertEqual(names, {"Requested", "Nominated"})
+
+
+class ReadOnlyWithMeasurementFields(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        """
+        Define a Packaging manager with a MeasurementField to verify read-only sync populates backing columns.
+        """
+
+        class Packaging(GeneralManager):
+            name: str
+            total_volume: Measurement
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"name": "Small Box", "total_volume": "2 liter"},
+                {"name": "Medium Box", "total_volume": Measurement(750, "milliliter")},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                name = CharField(max_length=50, unique=True)
+                total_volume = MeasurementField(base_unit="liter")
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Packaging = Packaging
+        cls.general_manager_classes = [Packaging]
+
+    def test_sync_handles_measurement_fields(self):
+        sync_read_only_interface(self.Packaging.Interface)
+
+        packages = self.Packaging.all()
+        self.assertEqual(packages.count(), 2)
+
+        small = self.Packaging.filter(name="Small Box").first()
+        medium = self.Packaging.filter(name="Medium Box").first()
+
+        self.assertIsNotNone(small)
+        self.assertIsNotNone(medium)
+
+        self.assertEqual(small.total_volume.quantity.magnitude, Decimal("2"))
+        self.assertEqual(str(small.total_volume.quantity.units), "liter")
+
+        self.assertAlmostEqual(
+            float(medium.total_volume.quantity.magnitude), 750.0, places=6
+        )
+        self.assertEqual(str(medium.total_volume.quantity.units), "milliliter")
+
+        packaging_model = self.Packaging.Interface._model  # type: ignore[attr-defined]
+        small_record = packaging_model.objects.get(name="Small Box")
+        medium_record = packaging_model.objects.get(name="Medium Box")
+
+        self.assertEqual(small_record.total_volume_value, Decimal("2"))
+        self.assertEqual(small_record.total_volume_unit, "liter")
+        self.assertEqual(medium_record.total_volume_value, Decimal("0.75"))
+        self.assertEqual(medium_record.total_volume_unit, "milliliter")
