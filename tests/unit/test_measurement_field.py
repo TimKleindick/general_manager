@@ -231,3 +231,39 @@ class MeasurementFieldConstraintTests(TransactionTestCase):
             info["columns"] for info in constraints.values() if info["unique"]
         ]
         self.assertIn(["volume_value"], unique_columns)
+
+    @isolate_apps("tests")
+    def test_unique_together_remaps_value_column(self):
+        """
+        Ensure unique_together entries referencing MeasurementField names point to the backing value column.
+
+        Creates a Product model with (name, weight) unique_together, builds the table, inspects constraints, and asserts the unique constraint includes `weight_value`. Cleans up the temporary table afterward.
+        """
+
+        class Product(models.Model):
+            name = models.CharField(max_length=30)
+            weight = MeasurementField(base_unit="kg")
+
+            class Meta:
+                app_label = "tests"
+                unique_together = (("name", "weight"),)
+
+        try:
+            with connection.schema_editor() as editor:
+                editor.create_model(Product)
+
+            with connection.cursor() as cursor:
+                constraints = connection.introspection.get_constraints(
+                    cursor, Product._meta.db_table
+                )
+        finally:
+            if Product._meta.db_table in connection.introspection.table_names():
+                with connection.schema_editor() as editor:
+                    editor.delete_model(Product)
+
+        multi_unique_columns = [
+            info["columns"]
+            for info in constraints.values()
+            if info["unique"] and len(info["columns"]) > 1
+        ]
+        self.assertIn(["name", "weight_value"], multi_unique_columns)
