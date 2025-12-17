@@ -43,9 +43,9 @@ class MeasurementField(models.Field):
     ) -> None:
         """
         Create a MeasurementField configured with a canonical base unit and paired backing columns.
-        
+
         Initializes the field's canonical base unit and derived dimensionality, records the editable flag, constructs the Decimal-backed value column and Char-backed unit column using the provided null/blank/editable/unique settings, and forwards remaining arguments to the base Field constructor.
-        
+
         Parameters:
             base_unit (str): Canonical unit used to normalize and store measurements.
             *args (Any): Positional arguments forwarded to the base Field implementation.
@@ -134,13 +134,13 @@ class MeasurementField(models.Field):
     ) -> None:
         """
         Remap model uniqueness constraints to reference this field's backing value column.
-        
+
         Updates the given model class's metadata so any uniqueness constraints that
         refer to the logical MeasurementField name are rewritten to use the concrete
         backing value column (self.value_attr). This ensures migrations and schema
         operations target a real database column instead of the non-concrete logical
         field.
-        
+
         Parameters:
             cls (type[models.Model]): The model class whose _meta.constraints and
                 _meta.unique_together will be modified in-place.
@@ -149,10 +149,10 @@ class MeasurementField(models.Field):
         def swap_field_name(field_name: str) -> str:
             """
             Map a field name to the backing value field name when it matches this measurement field's logical name.
-            
+
             Parameters:
                 field_name (str): The field name to potentially remap.
-            
+
             Returns:
                 str: `self.value_attr` when `field_name` equals this field's logical name (`self.name`); otherwise the original `field_name`.
             """
@@ -186,11 +186,11 @@ class MeasurementField(models.Field):
     ) -> Col:
         """
         Return a Col expression that references this field's backing value column for ORM queries.
-        
+
         Parameters:
             alias (str): Table alias to use for the column reference.
             output_field (models.Field | None): Optional field to use as the expression's output type; defaults to the backing value field.
-        
+
         Returns:
             Col: Column expression targeting the numeric backing value field.
         """
