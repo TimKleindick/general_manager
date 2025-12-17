@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.24.3 (2025-12-17)
+
+### Bug Fixes
+
+- Refactor unique constraint handling in MeasurementField to support remapping of fields and
+  includes
+  ([`2aedb00`](https://github.com/TimKleindick/general_manager/commit/2aedb0086fd383f2c9d9f2a876df5a0db9758bf5))
+
+- Unique constraint handling for MeasurementField and add related tests
+  ([`2d29a1e`](https://github.com/TimKleindick/general_manager/commit/2d29a1ee6d0a4dc58d36482262f1e73664ec06aa))
+
+### Documentation
+
+- Remove unnecessary whitespace in MeasurementField and related tests
+  ([`a29a2ac`](https://github.com/TimKleindick/general_manager/commit/a29a2ac83a1be6f7f3528d2a1fda8b844707e569))
+
+### Testing
+
+- Add unique constraint test for MeasurementField remapping
+  ([`76d23c8`](https://github.com/TimKleindick/general_manager/commit/76d23c89902bed2433c0fbd5a0b6a2476376ec33))
+
+
 ## v0.24.2 (2025-12-15)
 
 ### Bug Fixes
