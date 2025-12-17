@@ -182,15 +182,18 @@ class ReadOnlyManagementCapability(BaseCapability):
                         cursor, table
                     )
                 existing_cols = {col.name for col in desc}
-                local_fields = getattr(model_opts, "local_fields", []) or []
-                model_cols = {
-                    cast(
-                        str,
-                        getattr(field, "column", None) or getattr(field, "name", ""),
-                    )
-                    for field in local_fields
-                }
-                model_cols.discard("")
+                local_fields = (
+                    getattr(model_opts, "local_concrete_fields", None)
+                    or getattr(model_opts, "local_fields", [])
+                    or []
+                )
+                model_cols: set[str] = set()
+                for field in local_fields:
+                    if hasattr(field, "concrete") and not field.concrete:
+                        continue
+                    column = cast(str | None, getattr(field, "column", None))
+                    if column:
+                        model_cols.add(column)
                 missing = model_cols - existing_cols
                 extra = existing_cols - model_cols
                 return list(missing), list(extra)

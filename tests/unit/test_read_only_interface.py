@@ -312,6 +312,54 @@ class EnsureSchemaTests(TestCase):
         )
         self.assertEqual(warnings, [])
 
+    def test_schema_ignores_non_concrete_fields(self):
+        """
+        Ensure virtual/non-concrete fields (e.g., MeasurementField descriptors) do not trigger missing-column warnings.
+        """
+
+        def table_names(_: object) -> list[str]:
+            return [DummyModel._meta.db_table]
+
+        connection.introspection.table_names = table_names  # type: ignore[assignment]
+        fake_desc = [
+            SimpleNamespace(name="id"),
+            SimpleNamespace(name="volume_value"),
+            SimpleNamespace(name="volume_unit"),
+        ]
+
+        def get_table_description(_: object, __: object) -> list[SimpleNamespace]:
+            return fake_desc
+
+        connection.introspection.get_table_description = (  # type: ignore[assignment]
+            get_table_description
+        )
+
+        non_concrete_field = SimpleNamespace(
+            name="volume",
+            column=None,
+            concrete=False,
+        )
+        concrete_fields = [
+            SimpleNamespace(name="id", column="id", concrete=True),
+            SimpleNamespace(name="volume_value", column="volume_value", concrete=True),
+            SimpleNamespace(name="volume_unit", column="volume_unit", concrete=True),
+        ]
+
+        class M:
+            class _meta:
+                db_table = DummyModel._meta.db_table
+                local_fields: ClassVar[list[SimpleNamespace]] = [
+                    non_concrete_field,
+                    *concrete_fields,
+                ]
+                local_concrete_fields: ClassVar[list[SimpleNamespace]] = concrete_fields
+
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface, DummyManager, M
+        )
+        self.assertEqual(warnings, [])
+
 
 # ------------------------------------------------------------
 # Tests for sync_data
