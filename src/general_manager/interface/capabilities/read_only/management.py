@@ -56,7 +56,6 @@ class ReadOnlyManagementCapability(BaseCapability):
     """Provide schema verification and data-sync behavior for read-only interfaces."""
 
     name: ClassVar[CapabilityName] = "read_only_management"
-    startup_hook_dependency_resolver: Callable[[type[object]], set[type[object]]]
 
     @staticmethod
     def _related_readonly_interfaces(
