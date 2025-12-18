@@ -2,6 +2,62 @@
 
 <!-- version list -->
 
+## v0.25.0 (2025-12-18)
+
+### Bug Fixes
+
+- Add duplicate detection for MeasurementField value_attr mappings in ReadOnlyManagementCapability
+  ([`a7042f3`](https://github.com/TimKleindick/general_manager/commit/a7042f39aa04eed76f185db0db9396021d99a790))
+
+- Correct type hint for startup_hook_dependency_resolver in ReadOnlyManagementCapability
+  ([`54a5990`](https://github.com/TimKleindick/general_manager/commit/54a59906673f034cdc080630552f276fd0e4f2c0))
+
+- Enhance error handling during readonly instance save operations
+  ([`ec61675`](https://github.com/TimKleindick/general_manager/commit/ec616759c3fb7aa0ea7f79a4d967b8ec7c1077bd))
+
+- Improve dependency ordering in startup hooks
+  ([`24bf809`](https://github.com/TimKleindick/general_manager/commit/24bf809be56389994308d13c8ec72ed50fb1269e))
+
+- Normalize related values before setting many-to-many relationships in ReadOnlyManagementCapability
+  ([`9dab070`](https://github.com/TimKleindick/general_manager/commit/9dab07032cf8c1c87f23931f50092c51c394e130))
+
+- Prevent duplicate entries in resolver_map for GeneralManagerTransactionTestCase
+  ([`bc4f73a`](https://github.com/TimKleindick/general_manager/commit/bc4f73a8f841170ff1fd13e11dc4f4b293a0cc1f))
+
+- Remove unused startup_hook_dependency_resolver in ReadOnlyManagementCapability
+  ([`2fcd96f`](https://github.com/TimKleindick/general_manager/commit/2fcd96f59126f7a1401037286223c9eb13f4a0a3))
+
+- Update ReadOnlyManagementCapability to handle non-concrete fields and enhance measurement field
+  synchronization tests
+  ([`3e83835`](https://github.com/TimKleindick/general_manager/commit/3e838357c7df5cfba8fd0f4dd682c51a3faf9c78))
+
+- Update type hint for interfaces parameter in order_interfaces_by_dependency to Sequence
+  ([`ff71672`](https://github.com/TimKleindick/general_manager/commit/ff7167219fca16652a94473a56334e47d0ce9504))
+
+### Documentation
+
+- Add support for custom ordering of startup hooks with dependency resolvers
+  ([`74e70c4`](https://github.com/TimKleindick/general_manager/commit/74e70c4f1096d41a8b8e956d818ac794bf77a577))
+
+### Features
+
+- Enhance ReadOnlyManagementCapability with dependency resolution for startup hooks and improve
+  related interface handling
+  ([`41293a5`](https://github.com/TimKleindick/general_manager/commit/41293a59ee67be3d6d1dae6cb344f0189ee0694c))
+
+### Testing
+
+- Add unit tests for startup hook dependency resolver and error handling
+  ([`f3ebcd5`](https://github.com/TimKleindick/general_manager/commit/f3ebcd5e90b63bdeaeb96d60743b034a677d3e76))
+
+- For logger resolution and related interface synchronization in ReadOnlyManagementCapability
+  ([`f32f3c5`](https://github.com/TimKleindick/general_manager/commit/f32f3c5d874d3884723b7381e8df69f4911e8908))
+
+- Update ReadOnly interface tests to include relation lookup scenarios and enhance sync
+  functionality
+  ([`f4e9b31`](https://github.com/TimKleindick/general_manager/commit/f4e9b31176a5fecb7328689e7764979c8f4ade8d))
+
+
 ## v0.24.3 (2025-12-17)
 
 ### Bug Fixes
