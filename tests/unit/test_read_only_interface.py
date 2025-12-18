@@ -12,8 +12,15 @@ from general_manager.interface.capabilities.read_only import (
     ReadOnlyLifecycleCapability,
     ReadOnlyManagementCapability,
 )
+from general_manager.interface.capabilities.read_only import (
+    management as read_only_management,
+)
+from general_manager.interface.capabilities import read_only as read_only_package
 from general_manager.interface.utils.models import GeneralManagerBasisModel
-from general_manager.interface.utils.errors import MissingReadOnlyBindingError
+from general_manager.interface.utils.errors import (
+    MissingReadOnlyBindingError,
+    ReadOnlyRelationLookupError,
+)
 
 from django.db import models
 
@@ -210,6 +217,81 @@ class GetUniqueFieldsTests(SimpleTestCase):
         self.assertSetEqual(result, {"email", "username", "other", "extra"})
 
 
+class ReadOnlyLoggerResolutionTests(SimpleTestCase):
+    def test_resolve_logger_prefers_package_logger(self) -> None:
+        """
+        Ensure _resolve_logger returns the package-level logger when it is overridden.
+        """
+        original_logger = read_only_package.logger
+        sentinel_logger = mock.Mock()
+        read_only_package.logger = sentinel_logger
+        try:
+            resolved = read_only_management._resolve_logger()
+            self.assertIs(resolved, sentinel_logger)
+        finally:
+            read_only_package.logger = original_logger
+
+
+class ReadOnlyDependencyResolutionTests(SimpleTestCase):
+    def test_related_readonly_interfaces_filters_candidates(self) -> None:
+        """
+        Ensure related read-only interfaces are discovered only for concrete relations.
+        """
+
+        class RelatedInterface:
+            _interface_type = "readonly"
+
+        class NonReadOnlyInterface:
+            _interface_type = "other"
+
+        class MainInterface:
+            _interface_type = "readonly"
+
+        class RelatedManager:
+            Interface = RelatedInterface
+
+        class NonReadOnlyManager:
+            Interface = NonReadOnlyInterface
+
+        class MainManager:
+            Interface = MainInterface
+
+        class RelatedModel:
+            _general_manager_class = RelatedManager
+
+        class NonReadOnlyModel:
+            _general_manager_class = NonReadOnlyManager
+
+        class MainModel:
+            _general_manager_class = MainManager
+
+        class FakeRelationField:
+            def __init__(self, model: type, *, auto_created: bool = False) -> None:
+                self.is_relation = True
+                self.auto_created = auto_created
+                self.remote_field = SimpleNamespace(model=model)
+
+        class InterfaceModel:
+            class _meta:
+                @staticmethod
+                def get_fields():
+                    return [
+                        FakeRelationField(RelatedModel),
+                        FakeRelationField(NonReadOnlyModel),
+                        FakeRelationField(MainModel),
+                        FakeRelationField(RelatedModel, auto_created=True),
+                    ]
+
+        MainInterface._model = InterfaceModel
+
+        capability = ReadOnlyManagementCapability()
+        related = capability._related_readonly_interfaces(MainInterface)
+        self.assertEqual(related, {RelatedInterface})
+
+        resolver = capability.get_startup_hook_dependency_resolver(MainInterface)
+        self.assertEqual(resolver(MainInterface), {RelatedInterface})
+
+
 # ------------------------------------------------------------
 # Tests for ensure_schema_is_up_to_date
 # ------------------------------------------------------------
@@ -257,6 +339,41 @@ class EnsureSchemaTests(TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIsInstance(warnings[0], Warning)
         self.assertIn("does not exist", warnings[0].hint)
+
+    def test_missing_model_meta_warns(self):
+        """
+        Tests that a warning is returned when the model lacks Django metadata.
+        """
+
+        class ModelWithoutMeta:
+            pass
+
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface,
+            DummyManager,
+            ModelWithoutMeta,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("cannot validate schema", warnings[0].hint)
+
+    def test_missing_db_table_warns(self):
+        """
+        Tests that a warning is returned when the model metadata has no db_table.
+        """
+
+        class ModelMissingTable:
+            class _meta:
+                db_table = None
+
+        capability = ReadOnlyManagementCapability()
+        warnings = capability.ensure_schema_is_up_to_date(
+            DummyInterface,
+            DummyManager,
+            ModelMissingTable,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("db_table", warnings[0].hint)
 
     def test_schema_up_to_date(self):
         # table_names returns the target table name
@@ -458,6 +575,15 @@ class SyncDataTests(SimpleTestCase):
             self.capability.sync_data(DummyInterface)
         self.assertIn("_data must be a JSON string or a list", str(cm.exception))
 
+    def test_invalid_json_format_raises(self):
+        """
+        Test that sync_data raises when JSON data does not decode to a list.
+        """
+        DummyManager._data = '{"name": "alpha"}'
+        with self.assertRaises(TypeError) as cm:
+            self.capability.sync_data(DummyInterface)
+        self.assertIn("JSON must decode to a list", str(cm.exception))
+
     def test_no_unique_fields_raises(self):
         # Stop the existing get_unique_fields stub and return an empty set
         """
@@ -528,6 +654,179 @@ class SyncDataMetadataValidationTests(SimpleTestCase):
         capability = ReadOnlyManagementCapability()
         with self.assertRaises(MissingReadOnlyBindingError):
             capability.sync_data(IncompleteInterface)
+
+
+class SyncDataRelationResolutionTests(SimpleTestCase):
+    def setUp(self) -> None:
+        """
+        Replace transaction.atomic with a no-op context manager for relation resolution tests.
+        """
+
+        class _DummyAtomic:
+            def __enter__(self) -> None:
+                return None
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+        self.atomic_patch = mock.patch(
+            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            return_value=_DummyAtomic(),
+        )
+        self.atomic_patch.start()
+
+    def tearDown(self) -> None:
+        self.atomic_patch.stop()
+
+    def test_relation_lookup_failure_logs_and_raises(self) -> None:
+        """
+        Ensure relation lookup errors are logged and propagated when no match exists.
+        """
+
+        class RelatedQuerySet:
+            def __init__(self, items: list[object]) -> None:
+                self._items = items
+
+            def __getitem__(self, item: object):
+                if isinstance(item, slice):
+                    return self._items[item]
+                return self._items[item]
+
+            def count(self) -> int:
+                return len(self._items)
+
+        class RelatedManager:
+            def filter(self, **_: object) -> RelatedQuerySet:
+                return RelatedQuerySet([])
+
+        class RelatedModel:
+            objects = RelatedManager()
+
+        class FakeForeignKey(models.ForeignKey):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class RelationModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeForeignKey("related", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {"name": "alpha", "related": {"code": "missing"}}
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        logger = mock.Mock()
+
+        with self.assertRaises(ReadOnlyRelationLookupError):
+            capability.sync_data(
+                RelationInterface,
+                unique_fields={"name"},
+                schema_validated=True,
+                logger_instance=logger,
+            )
+
+        logger.warning.assert_called_once()
+        context = logger.warning.call_args[1]["context"]
+        self.assertEqual(context["field"], "related")
+        self.assertEqual(context["matches"], 0)
+        self.assertEqual(context["index"], 0)
+
+
+class SyncDataRelatedInterfaceTests(SimpleTestCase):
+    def setUp(self) -> None:
+        """
+        Replace transaction.atomic with a no-op context manager for related sync tests.
+        """
+
+        class _DummyAtomic:
+            def __enter__(self) -> None:
+                return None
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+        self.atomic_patch = mock.patch(
+            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            return_value=_DummyAtomic(),
+        )
+        self.atomic_patch.start()
+
+    def tearDown(self) -> None:
+        self.atomic_patch.stop()
+
+    def test_related_interface_sync_runs_first(self) -> None:
+        """
+        Verify that related read-only interfaces are synchronized before local data.
+        """
+
+        class RelatedInterface:
+            _interface_type = "readonly"
+
+            @classmethod
+            def require_capability(cls, *_: object, **__: object) -> object:
+                return related_capability
+
+        class RelatedManager:
+            Interface = RelatedInterface
+
+        class RelatedModel:
+            _general_manager_class = RelatedManager
+
+        class FakeForeignKey(models.ForeignKey):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class MainModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeForeignKey("related", RelatedModel)]
+
+        class MainManager:
+            _data: ClassVar[list[dict[str, object]]] = []
+
+        class MainInterface(ReadOnlyInterface):
+            _model = MainModel
+            _parent_class = MainManager
+
+        related_capability = ReadOnlyManagementCapability()
+        related_capability.sync_data = mock.Mock()
+
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(
+            MainInterface,
+            unique_fields={"name"},
+            schema_validated=True,
+        )
+
+        related_capability.sync_data.assert_called_once()
 
 
 class SystemCheckHookTests(SimpleTestCase):
