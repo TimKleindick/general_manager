@@ -483,13 +483,13 @@ class InterfaceBase(ABC):
     @classmethod
     def _register_startup_hooks(cls, handler: Capability) -> None:
         """
-        Register startup hooks provided by a capability handler onto the interface class.
-
-        If the handler defines a callable `get_startup_hooks(cls)`, that is called with the interface class to obtain hooks. Otherwise, if the handler exposes a `startup_hooks` attribute, that value is used. Each callable hook found is registered via `register_startup_hook`. Non-callable hook entries and empty/None hook collections are ignored.
-
+        Register startup hooks exposed by a capability handler on the interface class.
+        
+        If the handler provides a callable `get_startup_hooks(cls)` that returns hooks, that value is used; otherwise a `startup_hooks` attribute is used if present. If the handler provides a callable `get_startup_hook_dependency_resolver(cls)` or a `startup_hook_dependency_resolver` attribute, that resolver is supplied when registering each hook. Non-callable hook entries and empty or None hook collections are ignored.
+        
         Parameters:
-            cls: The interface class to which startup hooks will be registered.
-            handler: A capability handler that provides startup hooks via `get_startup_hooks` or `startup_hooks`.
+            cls: The interface class to receive the startup hooks.
+            handler: A capability handler that may expose startup hooks and an optional dependency resolver.
         """
         hooks: Iterable[Callable[[], None]] | None = None
         dependency_resolver = None

@@ -131,15 +131,9 @@ class GeneralmanagerConfig(AppConfig):
     @staticmethod
     def install_startup_hook_runner() -> None:
         """
-        Ensure registered startup hooks run before Django management commands execute.
-
-        Installs a wrapper around BaseCommand.run_from_argv that collects and executes
-        startup hooks (via iter_interface_startup_hooks) before delegating to the original
-        run_from_argv. Hooks are executed for all commands except that for the "runserver"
-        command they run only when the process is the autoreload main process (RUN_MAIN == "true").
-        The installation is idempotent: if already installed the function returns immediately.
-        The original run_from_argv is preserved on BaseCommand._gm_original_run_from_argv and
-        an installation flag is set on BaseCommand._gm_startup_hooks_runner_installed.
+        Install a runner that executes registered startup hooks before Django management commands run.
+        
+        This is idempotent: if already installed it does nothing. The installed wrapper executes all registered startup hooks prior to delegating to the original BaseCommand.run_from_argv. For the "runserver" command hooks run only in the autoreload main process (when the environment variable RUN_MAIN == "true"); for other commands hooks always run. The original run_from_argv is preserved on BaseCommand._gm_original_run_from_argv and an installation flag is set on BaseCommand._gm_startup_hooks_runner_installed.
         """
 
         if getattr(BaseCommand, "_gm_startup_hooks_runner_installed", False):
@@ -152,19 +146,9 @@ class GeneralmanagerConfig(AppConfig):
             argv: list[str],
         ) -> None:
             """
-            Run a Django management command after executing registered startup hooks when appropriate.
-
-            Executes startup hooks collected from iter_interface_startup_hooks() before
-            delegating to the original BaseCommand.run_from_argv. For most commands the
-            hooks always run; for the ``runserver`` command they run only in the
-            autoreload main process (when ``RUN_MAIN == "true"``) and are skipped in the
-            initial launcher process. Delegates to the preserved original_run_from_argv
-            and returns its result.
-
-            Parameters:
-                self (BaseCommand): The management command instance.
-                argv (list[str]): Command-line arguments passed to the management command.
-
+            Execute registered startup hooks when appropriate, then invoke the preserved BaseCommand.run_from_argv.
+            
+            When the command is not "runserver", registered startup hooks are executed before the original command runs. For the "runserver" command hooks run only in the autoreload main process (when RUN_MAIN == "true"). Collected hooks are grouped by their dependency resolver and executed in dependency-ordered sequence per resolver. Logging records the start and completion of hook execution. After hooks complete (or are skipped), this function delegates to the previously preserved original_run_from_argv.
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
             command = argv[1] if len(argv) > 1 else None

@@ -171,6 +171,11 @@ class StartupHookRegistryTests(SimpleTestCase):
         self.assertEqual(calls, ["ReadyInterface"])
 
     def test_order_interfaces_by_dependency_runs_dependencies_first(self) -> None:
+        """
+        Ensure interfaces are ordered so dependencies are listed before the interfaces that depend on them.
+        
+        Sets up three InterfaceBase subclasses where A depends on B and B depends on C, runs order_interfaces_by_dependency with a resolver for that dependency map, and asserts the resulting order is [InterfaceC, InterfaceB, InterfaceA].
+        """
         class InterfaceA(InterfaceBase):
             _interface_type = "a"
             input_fields: ClassVar[dict[str, object]] = {}
@@ -199,6 +204,15 @@ class StartupHookRegistryTests(SimpleTestCase):
         }
 
         def _resolver(interface_cls: type[InterfaceBase]) -> set[type[InterfaceBase]]:
+            """
+            Get the set of interface classes that the given interface depends on.
+            
+            Parameters:
+            	interface_cls (type[InterfaceBase]): Interface class to resolve dependencies for.
+            
+            Returns:
+            	dependencies (set[type[InterfaceBase]]): Set of interface classes that `interface_cls` depends on; empty set if no dependencies are registered.
+            """
             return dependency_map.get(interface_cls, set())
 
         ordered = order_interfaces_by_dependency(

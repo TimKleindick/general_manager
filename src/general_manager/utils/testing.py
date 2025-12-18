@@ -430,9 +430,9 @@ class GeneralManagerTransactionTestCase(
     @classmethod
     def _run_registered_startup_hooks(cls) -> None:
         """
-        Collects interfaces declared on the test class's GeneralManager classes, ensures their capabilities are loaded, and executes any registered startup hooks for those interfaces.
-
-        For each GM class in `general_manager_classes`, the method looks for an `Interface` attribute that is a subclass of `InterfaceBase`. If any are found, it calls `get_capabilities()` on each interface class and then runs every startup hook registered for that interface, preserving the order of `general_manager_classes`.
+        Run startup hooks registered for the test class's GeneralManager interfaces.
+        
+        Collects each Interface subclass declared on classes in `general_manager_classes` (preserving that order), ensures each interface's capabilities are initialized by calling `get_capabilities()`, and executes the startup hooks registered for those interfaces. Hooks are executed grouped and ordered per interface dependency resolver so that only hooks whose resolver matches the group run in dependency-resolved sequence.
         """
         interfaces: list[type[InterfaceBase]] = []
         for manager_class in cls.general_manager_classes:
@@ -467,9 +467,9 @@ class GeneralManagerTransactionTestCase(
     #
     def assert_cache_miss(self) -> None:
         """
-        Assert that a cache get returned no value and that a subsequent set stored the result.
-
-        Checks the default LoggingCache's operation log for a ("get", key, False) entry indicating a miss and a ("set", key) entry indicating the computed value was stored. Clears the cache operation log after performing the assertions.
+        Assert that the default test cache experienced a miss followed by a write and then clear the cache operation log.
+        
+        Checks the default LoggingCache's `ops` for a `("get", key, False)` entry (cache miss) and a `("set", key)` entry (value stored), failing the test if either is absent. Clears the cache operation log after verification.
         """
         cache_backend = cast(LoggingCache, caches["default"])
         ops = cache_backend.ops

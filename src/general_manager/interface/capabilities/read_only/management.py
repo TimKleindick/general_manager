@@ -63,7 +63,15 @@ class ReadOnlyManagementCapability(BaseCapability):
         interface_cls: type["OrmInterfaceBase[Any]"],
     ) -> set[type["OrmInterfaceBase[Any]"]]:
         """
-        Discover read-only interfaces referenced by concrete relation fields on the given interface's model.
+        Discover read-only interface classes referenced by concrete relation fields on the given interface's model.
+        
+        Inspects the model's fields and collects distinct read-only interface classes referenced by relation fields (excluding the provided interface).
+        
+        Parameters:
+            interface_cls (type): The ORM interface class whose model will be inspected.
+        
+        Returns:
+            set[type]: A set of read-only interface classes referenced from the model's relation fields (excluding `interface_cls`).
         """
 
         model = getattr(interface_cls, "_model", None)
@@ -92,7 +100,13 @@ class ReadOnlyManagementCapability(BaseCapability):
         self, interface_cls: type["OrmInterfaceBase[Any]"]
     ) -> Callable[[type[object]], Set[type[object]]]:
         """
-        Provide a dependency resolver so read-only startup hooks execute after their related interfaces.
+        Return a resolver function that identifies read-only interfaces which must run before a given interface's startup hook.
+        
+        Parameters:
+            interface_cls (type[OrmInterfaceBase[Any]]): The interface class for which to obtain a startup-hook dependency resolver.
+        
+        Returns:
+            Callable[[type[object]], Set[type[object]]]: A callable that, when invoked with an interface class, returns a set of read-only interface classes that should be executed prior to that interface's startup hook.
         """
 
         return cast(
@@ -102,13 +116,12 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def get_unique_fields(self, model: Type[models.Model]) -> set[str]:
         """
-        Collect candidate unique field names from a Django model's metadata.
-
-        Parameters:
-            model (Type[models.Model]): Django model class to inspect.
-
+        Gather candidate unique field names declared on the Django model, remapping measurement-backed fields to their public attribute names.
+        
+        Includes fields marked `unique=True`, fields listed in `unique_together` (or equivalent tuple/list/set entries), and fields referenced by `UniqueConstraint` definitions. Excludes the primary key named "id". If the model has no `_meta`, returns an empty set.
+        
         Returns:
-            set[str]: Unique field names discovered from the model's `local_fields` (fields with `unique=True`), `unique_together`, and `UniqueConstraint` definitions. Returns an empty set if the model has no metadata.
+            set[str]: A set of unique field names (with MeasurementField-backed value attributes remapped to their wrapper attribute names).
         """
         opts = getattr(model, "_meta", None)
         if opts is None:
@@ -347,13 +360,13 @@ class ReadOnlyManagementCapability(BaseCapability):
 
         def _perform() -> None:
             """
-            Perform the core read-only data synchronization for the bound interface.
-
-            Parses the interface's bound JSON data, validates or verifies schema state when required, and ensures the model's rows reflect the incoming data by creating new records, updating existing records, and deactivating records absent from the input. Uses the configured unique fields to identify records and only writes model fields that are allowed and editable; records changes are logged when any create/update/deactivate occurs.
-
+            Synchronize the bound read-only JSON payload into the Django model so the table's active records match the incoming data.
+            
+            Parses the interface's bound JSON data, resolves related objects, and applies creates, updates, and deactivations using the configured unique fields. Only editable model fields are written; many-to-many assignments are applied post-save. If schema validation is requested and the schema is out of date, the sync aborts without making changes.
+            
             Raises:
                 MissingReadOnlyDataError: if the parent interface has no `_data` attribute.
-                InvalidReadOnlyDataTypeError: if the bound data is not a JSON string or a list.
+                InvalidReadOnlyDataTypeError: if the bound data is neither a JSON string nor a list.
                 InvalidReadOnlyDataFormatError: if a JSON string does not decode to a list or an item is missing a required unique field.
                 MissingUniqueFieldError: if no unique fields can be determined for the model.
                 IntegrityError: if a create operation violates database constraints and reconciliation fails.
@@ -477,7 +490,20 @@ class ReadOnlyManagementCapability(BaseCapability):
                 idx: int,
             ) -> models.Model | object:
                 """
-                Resolve a related object from a dict lookup, warning and failing when the match count is not exactly one.
+                Resolve a related model instance from a lookup dict or return the original value.
+                
+                Parameters:
+                    field_name (str): Name of the relation field used for logging and error context.
+                    remote_model (Type[models.Model]): The related Django model to query.
+                    raw_value (object): A value from the payload; if a dict it is treated as a filter lookup for `remote_model`.
+                    idx (int): Index of the current item in the incoming payload, used for logging context.
+                
+                Returns:
+                    models.Model | object: The resolved model instance when `raw_value` is a dict that matches exactly one record;
+                    otherwise returns `raw_value` unchanged.
+                
+                Raises:
+                    ReadOnlyRelationLookupError: If the lookup dict results in zero or multiple matches.
                 """
                 if not isinstance(raw_value, dict):
                     return raw_value
@@ -510,7 +536,19 @@ class ReadOnlyManagementCapability(BaseCapability):
                 idx: int,
             ) -> list[models.Model | object]:
                 """
-                Resolve many-to-many payloads into related instances or identifiers.
+                Resolve a many-to-many field payload into a list of related model instances or lookup identifiers.
+                
+                Parameters:
+                	field_name (str): Name of the many-to-many field being resolved.
+                	remote_model (Type[models.Model]): The related model class for the field.
+                	raw_value (object): The incoming payload for the field; may be None or a list of entries (each entry is a lookup dict or identifier).
+                	idx (int): Index of the parent item in the incoming payload (used for error context).
+                
+                Returns:
+                	list[models.Model | object]: A list containing either resolved related model instances or the original lookup identifiers for each entry in the payload. Returns an empty list when `raw_value` is None.
+                
+                Raises:
+                	InvalidReadOnlyDataFormatError: If `raw_value` is present but is not a list.
                 """
                 if raw_value is None:
                     return []
@@ -528,7 +566,16 @@ class ReadOnlyManagementCapability(BaseCapability):
                 idx: int,
             ) -> tuple[dict[str, Any], dict[str, list[models.Model | object]]]:
                 """
-                Convert relation payloads into model instances while separating many-to-many values for post-save assignment.
+                Resolve relation payloads in a single data item into model instances and collect many-to-many assignments for post-save processing.
+                
+                Parameters:
+                	data (dict[str, Any]): Incoming record payload; keys may include relation field names whose values are lookup dicts or lists.
+                	idx (int): Index of the record within the incoming payload used to annotate errors and logs.
+                
+                Returns:
+                	tuple:
+                		- resolved (dict[str, Any]): A copy of `data` where foreign key and one-to-one relation values are replaced with resolved model instances and many-to-many fields are removed.
+                		- m2m_assignments (dict[str, list[models.Model | object]]): Mapping of many-to-many field names to lists of resolved related model instances to assign after the main instance is saved.
                 """
                 resolved = dict(data)
                 m2m_assignments: dict[str, list[models.Model | object]] = {}
