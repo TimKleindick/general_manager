@@ -22,8 +22,9 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.infrastructure.startup_hooks import (
-    registered_startup_hook_entries,
+    DependencyResolver,
     order_interfaces_by_dependency,
+    registered_startup_hook_entries,
 )
 
 _original_get_app: Callable[[str], AppConfig | None] = (
@@ -450,7 +451,7 @@ class GeneralManagerTransactionTestCase(
 
         registry = registered_startup_hook_entries()
         # Group interfaces by dependency resolver so each hook set orders independently.
-        resolver_map: dict[object, list[type[InterfaceBase]]] = {}
+        resolver_map: dict[DependencyResolver | None, list[type[InterfaceBase]]] = {}
         for interface_cls in interfaces:
             entries = registry.get(interface_cls, ())
             for entry in entries:
@@ -460,7 +461,7 @@ class GeneralManagerTransactionTestCase(
                     resolver_list.append(interface_cls)
 
         for resolver, iface_list in resolver_map.items():
-            ordered = order_interfaces_by_dependency(iface_list, resolver)  # type: ignore[arg-type]
+            ordered = order_interfaces_by_dependency(iface_list, resolver)
             for interface_cls in ordered:
                 for entry in registry.get(interface_cls, ()):
                     if entry.dependency_resolver is resolver:

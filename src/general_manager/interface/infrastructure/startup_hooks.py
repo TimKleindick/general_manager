@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Iterator, List, Tuple, Type, Set
+from typing import Callable, Dict, Iterator, List, Sequence, Tuple, Type, Set
 
 StartupHook = Callable[[], None]
 DependencyResolver = Callable[[Type[object]], Set[Type[object]]]
@@ -104,7 +104,7 @@ def clear_startup_hooks() -> None:
 
 
 def order_interfaces_by_dependency(
-    interfaces: List[InterfaceType],
+    interfaces: Sequence[InterfaceType],
     dependency_resolver: DependencyResolver | None,
 ) -> List[InterfaceType]:
     """
@@ -119,16 +119,17 @@ def order_interfaces_by_dependency(
     Returns:
         List[InterfaceType]: A list containing the same interfaces as `interfaces` arranged to respect dependencies when possible.
     """
+    interface_list = list(interfaces)
     if not dependency_resolver:
-        return list(interfaces)
+        return list(interface_list)
 
     dependencies: Dict[InterfaceType, Set[InterfaceType]] = {
-        iface: {dep for dep in dependency_resolver(iface) if dep in interfaces}
-        for iface in interfaces
+        iface: {dep for dep in dependency_resolver(iface) if dep in interface_list}
+        for iface in interface_list
     }
 
     incoming_counts: Dict[InterfaceType, int] = {
-        iface: len(dependencies[iface]) for iface in interfaces
+        iface: len(dependencies[iface]) for iface in interface_list
     }
     ordered: List[InterfaceType] = []
 
@@ -141,7 +142,7 @@ def order_interfaces_by_dependency(
         """
         return [
             iface
-            for iface in interfaces
+            for iface in interface_list
             if incoming_counts.get(iface, 0) == 0 and iface not in ordered
         ]
 
@@ -154,7 +155,7 @@ def order_interfaces_by_dependency(
                 incoming_counts[dep_iface] = incoming_counts.get(dep_iface, 0) - 1
         queue = _queue_items()
 
-    for iface in interfaces:
+    for iface in interface_list:
         if iface not in ordered:
             ordered.append(iface)
 
