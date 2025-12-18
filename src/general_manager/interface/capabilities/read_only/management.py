@@ -158,6 +158,24 @@ class ReadOnlyManagementCapability(BaseCapability):
             for name, field in vars(model).items()
             if isinstance(field, MeasurementField)
         }
+        if measurement_fields:
+            value_attr_map: dict[str, list[str]] = {}
+            for name, field in measurement_fields.items():
+                value_attr = field.value_attr
+                value_attr_map.setdefault(value_attr, []).append(name)
+            duplicates = {
+                value_attr: names
+                for value_attr, names in value_attr_map.items()
+                if len(names) > 1
+            }
+            if duplicates:
+                raise ValueError(
+                    "Duplicate MeasurementField value_attr mappings detected: "
+                    + ", ".join(
+                        f"{value_attr} -> {sorted(names)}"
+                        for value_attr, names in sorted(duplicates.items())
+                    )
+                )
         reverse_measurement_map = {
             field.value_attr: name for name, field in measurement_fields.items()
         }
