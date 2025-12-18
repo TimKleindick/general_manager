@@ -19,6 +19,13 @@ class StartupHookEntry:
         hook: StartupHook,
         dependency_resolver: DependencyResolver | None,
     ) -> None:
+        """
+        Initialize a StartupHookEntry pairing a startup hook with an optional dependency resolver.
+        
+        Parameters:
+            hook: A callable to be invoked at startup.
+            dependency_resolver: Optional callable that, given an interface type, returns a set of interface types this hook depends on; may be None if no dependency information is provided.
+        """
         self.hook = hook
         self.dependency_resolver = dependency_resolver
 
@@ -33,14 +40,15 @@ def register_startup_hook(
     dependency_resolver: DependencyResolver | None = None,
 ) -> None:
     """
-    Register a startup hook for an interface class.
-
-    If the same `hook` and dependency_resolver are already registered for `interface_cls`, it will not be added again.
-
+    Register a startup hook associated with an interface type.
+    
+    If the same `hook` with an equal `dependency_resolver` is already registered for `interface_cls`, registration is ignored.
+    
     Parameters:
-        interface_cls (InterfaceType): The interface class that the hook is associated with.
-        hook (StartupHook): A callable to be invoked at startup for implementations of the interface.
-        dependency_resolver (Callable | None): Optional resolver returning interface dependencies.
+        interface_cls (InterfaceType): The interface type the hook applies to.
+        hook (StartupHook): Callable invoked at startup for implementations of the interface.
+        dependency_resolver (DependencyResolver | None): Optional callable that, given an interface type,
+            returns a set of interface types this interface depends on (used to determine execution ordering).
     """
     entries = _REGISTRY.setdefault(interface_cls, [])
     if not any(
@@ -52,10 +60,10 @@ def register_startup_hook(
 
 def iter_interface_startup_hooks() -> Iterator[Tuple[InterfaceType, StartupHook]]:
     """
-    Iterate over all registered startup hooks paired with their interface classes.
-
+    Yield pairs of registered interface types and their startup hooks.
+    
     Returns:
-        iterator of tuples (InterfaceType, StartupHook): Each yielded tuple contains an interface class and one of its registered startup hooks.
+        Iterator[Tuple[InterfaceType, StartupHook]]: An iterator that yields (interface_cls, hook) tuples for every startup hook registered for an interface, preserving the registration order for hooks of a given interface.
     """
     for interface_cls, entries in _REGISTRY.items():
         for entry in entries:
@@ -64,7 +72,10 @@ def iter_interface_startup_hooks() -> Iterator[Tuple[InterfaceType, StartupHook]
 
 def registered_startup_hooks() -> Dict[InterfaceType, Tuple[StartupHook, ...]]:
     """
-    Provide a shallow snapshot of currently registered startup hooks keyed by interface type (callables only).
+    Return a shallow snapshot of registered startup hooks keyed by interface type.
+    
+    Returns:
+        mapping (Dict[InterfaceType, Tuple[StartupHook, ...]]): A dictionary mapping each interface type to a tuple of its registered startup hook callables. The tuple preserves the hooks' registration order.
     """
     return {
         interface: tuple(entry.hook for entry in entries)
@@ -76,7 +87,11 @@ def registered_startup_hook_entries() -> Dict[
     InterfaceType, Tuple[StartupHookEntry, ...]
 ]:
     """
-    Provide startup hook entries (including dependency resolvers) keyed by interface type.
+    Provide a shallow snapshot of registered startup hook entries keyed by interface type.
+    
+    Returns:
+        A dict mapping each interface type to a tuple of its registered StartupHookEntry objects,
+        preserving the registration order for each interface.
     """
     return {interface: tuple(entries) for interface, entries in _REGISTRY.items()}
 
@@ -93,7 +108,16 @@ def order_interfaces_by_dependency(
     dependency_resolver: DependencyResolver | None,
 ) -> List[InterfaceType]:
     """
-    Topologically order interfaces using the provided dependency_resolver; fall back to preserving the input order.
+    Produce an ordering of the given interfaces that respects dependencies when a resolver is provided.
+    
+    When `dependency_resolver` is None or falsey, the input order is preserved. When a resolver is provided, interfaces are ordered so that for any interface A that depends on B (and B is present in the input list), B appears before A when possible; interfaces involved in cycles or otherwise unresolved dependencies are appended after the ordered portion while preserving their presence.
+    
+    Parameters:
+        interfaces (List[InterfaceType]): The list of interface types to order. Order among inputs is used as a stable tie-breaker.
+        dependency_resolver (DependencyResolver | None): Optional callable that returns the set of interfaces an interface depends on; dependencies not present in `interfaces` are ignored.
+    
+    Returns:
+        List[InterfaceType]: A list containing the same interfaces as `interfaces` arranged to respect dependencies when possible.
     """
     if not dependency_resolver:
         return list(interfaces)
@@ -109,6 +133,12 @@ def order_interfaces_by_dependency(
     ordered: List[InterfaceType] = []
 
     def _queue_items() -> List[InterfaceType]:
+        """
+        Collect interfaces that currently have zero incoming dependencies and are not yet ordered.
+        
+        Returns:
+            List[InterfaceType]: Interfaces whose incoming dependency count is zero (or missing) and which are not present in `ordered`.
+        """
         return [
             iface
             for iface in interfaces

@@ -127,7 +127,9 @@ class ReadOnlyWithMeasurementFields(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Define a Packaging manager with a MeasurementField to verify read-only sync populates backing columns.
+        Set up a Packaging test manager with a Measurement field and register it for integration tests.
+        
+        Defines an inner GeneralManager subclass `Packaging` that seeds two records with `total_volume` values (one as a string, one as a Measurement), exposes a nested ReadOnlyInterface with a `total_volume` MeasurementField using "liter" as the base unit, and assigns the created manager to `cls.Packaging` and `cls.general_manager_classes` for use by the test cases.
         """
 
         class Packaging(GeneralManager):
@@ -150,6 +152,17 @@ class ReadOnlyWithMeasurementFields(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [Packaging]
 
     def test_sync_handles_measurement_fields(self):
+        """
+        Verify that syncing a read-only interface with Measurement fields correctly populates model instances and their backing value/unit columns.
+        
+        This test syncs the Packaging read-only interface, asserts two records are created, and checks:
+        - Retrieved Packaging instances expose Measurement objects with the expected magnitudes and units:
+          - "Small Box": magnitude 2, unit "liter"
+          - "Medium Box": magnitude 750 milliliter
+        - The underlying database model stores the base/value and unit columns correctly:
+          - "Small Box": total_volume_value == Decimal("2"), total_volume_unit == "liter"
+          - "Medium Box": total_volume_value == Decimal("0.75"), total_volume_unit == "milliliter"
+        """
         sync_read_only_interface(self.Packaging.Interface)
 
         packages = self.Packaging.all()
@@ -183,7 +196,13 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
         """
-        Define Size and Packaging managers to verify relation lookups resolve nested payloads.
+        Set up Size and Packaging test managers and register them for integration tests of read-only relation lookups.
+        
+        Defines two GeneralManager subclasses:
+        - Size: seeds three records in _data with container and Measurement `volume`, exposes a ReadOnlyInterface with a MeasurementField for `volume` and a unique_together constraint on (container, volume).
+        - Packaging: exposes a ReadOnlyInterface with a MeasurementField `total_volume` and a ForeignKey `basis_size` to Size.Interface._model, and provides _default_data that references Size records by payload.
+        
+        Registers the created classes as cls.Size and cls.Packaging and adds them to cls.general_manager_classes for use by the test suite.
         """
 
         class Size(GeneralManager):
@@ -285,6 +304,11 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
         self.assertEqual(str(package.basis_size.volume.quantity.units), "milliliter")  # type: ignore[attr-defined]
 
     def test_foreign_key_lookup_missing_match_fails(self):
+        """
+        Verifies that syncing a read-only interface with a foreign-key reference fails when the referenced records are missing.
+        
+        Sets the Size seed data to empty, syncs the Size interface to ensure no Size records exist, and then asserts that syncing the Packaging interface raises ReadOnlyRelationLookupError due to the missing related Size entries.
+        """
         original_size_data = self.Size._data
         try:
             self.Size._data = []
