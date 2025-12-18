@@ -51,6 +51,6 @@ This ADR documents the target state so that we can incrementally implement the r
 
 ## Status Notes
 
-- Startup hooks now live under `general_manager.interface.infrastructure.startup_hooks` and system checks under `infrastructure/system_checks.py`.
-- `ReadOnlyManagementCapability` exposes both data sync and schema-check hooks, and `InterfaceBase` registers them as capabilities bind to interfaces.
-- `apps.py` runs every registered hook at startup, so future capabilities get bootstrap behavior without editing the app config again.
+- Startup hooks now live under `general_manager.interface.infrastructure.startup_hooks` and system checks under `infrastructure/system_checks.py`. Startup hooks may carry dependency resolvers so each capability can order its hooks independently (e.g., read-only sync resolves related interfaces first).
+- `ReadOnlyManagementCapability` exposes both data sync and schema-check hooks (with a dependency resolver), and `InterfaceBase` registers them as capabilities bind to interfaces.
+- `apps.py` runs every registered hook at startup, grouping hooks by resolver and ordering interfaces topologically per group, so future capabilities get bootstrap behavior and their own ordering without editing the app config again.

@@ -30,6 +30,24 @@ class CacheWarmupCapability(BaseCapability):
 
 Implement `get_startup_hooks(interface_cls)` or `get_system_checks(interface_cls)` to plug into the global registries. InterfaceBase will register them automatically when the capability binds.
 
+Startup hooks can also declare how they should be ordered relative to other interfaces. If your hook needs related read-only data to exist, expose a dependency resolver:
+
+```python
+class CacheWarmupCapability(BaseCapability):
+    name = "cache_warmup"
+
+    def get_startup_hooks(self, interface_cls):
+        return (lambda: CacheBackend.preload(interface_cls._parent_class),)
+
+    def get_startup_hook_dependency_resolver(self, interface_cls):
+        # Return a callable that yields dependent interfaces; ordering is computed per hook set.
+        def resolver(iface):
+            return getattr(iface, "_dependencies", set())
+        return resolver
+```
+
+Each startup hook set is ordered independently using its resolver, so multiple capabilities on the same interface can each define their own dependency graph without interfering with one another.
+
 ## 4. Wire it into bundles/configs
 
 - Add the capability to a bundle (e.g., extend `general_manager.interface.bundles.database`).
