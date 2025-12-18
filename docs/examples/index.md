@@ -10,5 +10,6 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 - [Permission cookbook](permission_cookbook.md)
 - [Custom audit logger](audit_logger_custom.md)
 - [Existing model interface recipes](existing_model_interface.md)
+- [Startup hooks with custom ordering](startup_hooks.md)
 
 Contributions are welcome—add your own recipes as your project evolves.
