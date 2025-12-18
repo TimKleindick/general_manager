@@ -679,9 +679,12 @@ class ReadOnlyManagementCapability(BaseCapability):
                         current_ids = set(
                             m2m_manager.all().values_list("pk", flat=True)
                         )
-                        new_ids = {getattr(obj, "pk", obj) for obj in related_values}
+                        normalized_values = [
+                            getattr(obj, "pk", obj) for obj in related_values
+                        ]
+                        new_ids = set(normalized_values)
                         if current_ids != new_ids:
-                            m2m_manager.set(related_values)
+                            m2m_manager.set(normalized_values)
                             updated = True
                     needs_activation = not getattr(instance, "is_active", True)
                     if updated or needs_activation or is_created:
