@@ -431,7 +431,7 @@ class GeneralManagerTransactionTestCase(
     def _run_registered_startup_hooks(cls) -> None:
         """
         Run startup hooks registered for the test class's GeneralManager interfaces.
-        
+
         Collects each Interface subclass declared on classes in `general_manager_classes` (preserving that order), ensures each interface's capabilities are initialized by calling `get_capabilities()`, and executes the startup hooks registered for those interfaces. Hooks are executed grouped and ordered per interface dependency resolver so that only hooks whose resolver matches the group run in dependency-resolved sequence.
         """
         interfaces: list[type[InterfaceBase]] = []
@@ -468,7 +468,7 @@ class GeneralManagerTransactionTestCase(
     def assert_cache_miss(self) -> None:
         """
         Assert that the default test cache experienced a miss followed by a write and then clear the cache operation log.
-        
+
         Checks the default LoggingCache's `ops` for a `("get", key, False)` entry (cache miss) and a `("set", key)` entry (value stored), failing the test if either is absent. Clears the cache operation log after verification.
         """
         cache_backend = cast(LoggingCache, caches["default"])

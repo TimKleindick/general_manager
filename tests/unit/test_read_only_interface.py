@@ -269,7 +269,7 @@ class ReadOnlyDependencyResolutionTests(SimpleTestCase):
             def __init__(self, model: type, *, auto_created: bool = False) -> None:
                 """
                 Initialize a minimal relation descriptor that marks a field as a relation to a target model.
-                
+
                 Parameters:
                     model (type): The related model class this relation points to.
                     auto_created (bool): Whether the relation was automatically created (default False).
@@ -284,7 +284,7 @@ class ReadOnlyDependencyResolutionTests(SimpleTestCase):
                 def get_fields():
                     """
                     Return a list of relation field descriptors used by the interface model.
-                    
+
                     Returns:
                         list: A list of FakeRelationField instances in this order:
                             - a relation to `RelatedModel`
@@ -454,7 +454,7 @@ class EnsureSchemaTests(TestCase):
         def table_names(_: object) -> list[str]:
             """
             Return the database table name(s) used by the dummy model.
-            
+
             Returns:
                 list[str]: A list containing DummyModel._meta.db_table.
             """
@@ -470,7 +470,7 @@ class EnsureSchemaTests(TestCase):
         def get_table_description(_: object, __: object) -> list[SimpleNamespace]:
             """
             Provide a fake table description used in tests.
-            
+
             Returns:
                 list[SimpleNamespace]: List of SimpleNamespace objects representing column metadata for a table (e.g., column name and attributes).
             """
@@ -598,7 +598,7 @@ class SyncDataTests(SimpleTestCase):
     def test_invalid_data_type_raises(self):
         """
         Verifies sync_data raises a TypeError when the manager's _data is neither a JSON string nor a list.
-        
+
         Asserts the raised exception message contains "_data must be a JSON string or a list".
         """
         DummyManager._data = 123  # weder str noch list
@@ -697,7 +697,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def __enter__(self) -> None:
                 """
                 Enter the context for this manager without yielding a context value.
-                
+
                 Returns:
                     None
                 """
@@ -706,7 +706,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def __exit__(self, *_: object) -> None:
                 """
                 No-op context manager exit that ignores all exception information and does not suppress exceptions.
-                
+
                 This method accepts the standard context manager exit arguments but ignores them; any exception raised inside the context will propagate.
                 """
                 return None
@@ -720,7 +720,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
     def tearDown(self) -> None:
         """
         Stop the atomic transaction patch applied during test setup.
-        
+
         This restores the original django_transaction.atomic by stopping the patch started in setUp.
         """
         self.atomic_patch.stop()
@@ -734,21 +734,21 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def __init__(self, items: list[object]) -> None:
                 """
                 Initialize the instance's internal storage with the provided list of items.
-                
+
                 Parameters:
-                	items (list[object]): List used as the instance's internal item storage.
+                        items (list[object]): List used as the instance's internal item storage.
                 """
                 self._items = items
 
             def __getitem__(self, item: object):
                 """
                 Retrieve an element or subsequence from the container.
-                
+
                 Parameters:
-                	item (int | slice): An index to select a single element or a slice to select a subsequence.
-                
+                        item (int | slice): An index to select a single element or a slice to select a subsequence.
+
                 Returns:
-                	The element at `item` when an index is provided, or the subsequence corresponding to the slice.
+                        The element at `item` when an index is provided, or the subsequence corresponding to the slice.
                 """
                 if isinstance(item, slice):
                     return self._items[item]
@@ -757,7 +757,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def count(self) -> int:
                 """
                 Return the number of items in the collection.
-                
+
                 Returns:
                     int: The count of items contained.
                 """
@@ -767,10 +767,10 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def filter(self, **_: object) -> RelatedQuerySet:
                 """
                 Return an empty RelatedQuerySet regardless of provided lookup arguments.
-                
+
                 Parameters:
                     **_ (object): Arbitrary lookup keyword arguments which are ignored.
-                
+
                 Returns:
                     RelatedQuerySet: An empty RelatedQuerySet.
                 """
@@ -783,11 +783,11 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a lightweight relation-like field for tests.
-                
+
                 Parameters:
                     name (str): The attribute name of the field.
                     remote_model (type): The model class this field relates to; assigned to `remote_field.model`.
-                
+
                 Notes:
                     The created object will present as a relation (`is_relation = True`) and not auto-created (`auto_created = False`).
                 """
@@ -809,7 +809,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide the list of model fields for tests, including a foreign key named "related" to RelatedModel.
-                    
+
                     Returns:
                         list: A list containing a FakeForeignKey instance named "related" that references `RelatedModel`.
                     """
@@ -852,7 +852,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
             def __enter__(self) -> None:
                 """
                 Enter the context for this manager without yielding a context value.
-                
+
                 Returns:
                     None
                 """
@@ -861,7 +861,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
             def __exit__(self, *_: object) -> None:
                 """
                 No-op context manager exit that ignores all exception information and does not suppress exceptions.
-                
+
                 This method accepts the standard context manager exit arguments but ignores them; any exception raised inside the context will propagate.
                 """
                 return None
@@ -875,7 +875,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
     def tearDown(self) -> None:
         """
         Stop the atomic transaction patch applied during test setup.
-        
+
         This restores the original django_transaction.atomic by stopping the patch started in setUp.
         """
         self.atomic_patch.stop()
@@ -892,7 +892,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
             def require_capability(cls, *_: object, **__: object) -> object:
                 """
                 Provide the capability associated with this class.
-                
+
                 Returns:
                     related_capability (object): The capability object required by the class.
                 """
@@ -908,11 +908,11 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a lightweight relation-like field for tests.
-                
+
                 Parameters:
                     name (str): The attribute name of the field.
                     remote_model (type): The model class this field relates to; assigned to `remote_field.model`.
-                
+
                 Notes:
                     The created object will present as a relation (`is_relation = True`) and not auto-created (`auto_created = False`).
                 """
@@ -934,7 +934,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide the list of model fields for tests, including a foreign key named "related" to RelatedModel.
-                    
+
                     Returns:
                         list: A list containing a FakeForeignKey instance named "related" that references `RelatedModel`.
                     """
