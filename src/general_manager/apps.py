@@ -22,7 +22,8 @@ from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.audit import configure_audit_logger_from_settings
 from general_manager.interface.infrastructure.startup_hooks import (
-    iter_interface_startup_hooks,
+    registered_startup_hook_entries,
+    order_interfaces_by_dependency,
 )
 from general_manager.interface.infrastructure.system_checks import (
     iter_interface_system_checks,
@@ -168,23 +169,38 @@ class GeneralmanagerConfig(AppConfig):
             run_main = os.environ.get("RUN_MAIN") == "true"
             command = argv[1] if len(argv) > 1 else None
             should_run_hooks = command != "runserver" or run_main
-            hooks = list(iter_interface_startup_hooks()) if should_run_hooks else []
-            if hooks:
+            hooks_registry = (
+                registered_startup_hook_entries() if should_run_hooks else {}
+            )
+            if hooks_registry:
+                resolver_map: dict[object, list[type]] = {}
+                for interface_cls, entries in hooks_registry.items():
+                    for entry in entries:
+                        resolver_map.setdefault(entry.dependency_resolver, []).append(
+                            interface_cls
+                        )
                 logger.debug(
                     "running startup hooks",
                     context={
                         "command": command,
-                        "count": len(hooks),
+                        "count": sum(len(v) for v in hooks_registry.values()),
                         "autoreload": not run_main if command == "runserver" else False,
                     },
                 )
-                for _, hook in hooks:
-                    hook()
+                for resolver, iface_list in resolver_map.items():
+                    ordered_interfaces = order_interfaces_by_dependency(
+                        iface_list,
+                        resolver,  # type: ignore[arg-type]
+                    )
+                    for interface_cls in ordered_interfaces:
+                        for entry in hooks_registry.get(interface_cls, ()):
+                            if entry.dependency_resolver is resolver:
+                                entry.hook()
                 logger.debug(
                     "finished startup hooks",
                     context={
                         "command": command,
-                        "count": len(hooks),
+                        "count": sum(len(v) for v in hooks_registry.values()),
                     },
                 )
             result = original_run_from_argv(self, argv)

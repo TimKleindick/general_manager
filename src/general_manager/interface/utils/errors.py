@@ -14,6 +14,7 @@ __all__ = [
     "MissingReadOnlyBindingError",
     "MissingReadOnlyDataError",
     "MissingUniqueFieldError",
+    "ReadOnlyRelationLookupError",
     "UnknownFieldError",
 ]
 
@@ -112,6 +113,34 @@ class MissingUniqueFieldError(ValueError):
         """
         super().__init__(
             f"ReadOnlyInterface '{interface_name}' must declare at least one unique field."
+        )
+
+
+class ReadOnlyRelationLookupError(ValueError):
+    """Raised when a read-only sync cannot resolve a related object."""
+
+    def __init__(
+        self,
+        interface_name: str,
+        field_name: str,
+        matches: int,
+        lookup: dict[str, object] | object,
+    ) -> None:
+        """
+        Initialize the error describing a failed related-object lookup during read-only sync.
+
+        Parameters:
+            interface_name: Name of the read-only interface performing the sync.
+            field_name: Name of the related field being resolved.
+            matches: Number of matches returned by the lookup (expected exactly 1).
+            lookup: The lookup payload used to search for the related record.
+        """
+        super().__init__(
+            (
+                f"ReadOnlyInterface '{interface_name}' could not resolve relation "
+                f"'{field_name}' (expected 1 match, found {matches}) for lookup "
+                f"{lookup!r}."
+            )
         )
 
 
