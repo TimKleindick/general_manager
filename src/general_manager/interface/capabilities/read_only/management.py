@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Callable, Optional, Type, cast, ClassVar, Set
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Type, cast
 
 from django.core.checks import Warning
 from django.db import (
@@ -56,7 +56,7 @@ class ReadOnlyManagementCapability(BaseCapability):
     """Provide schema verification and data-sync behavior for read-only interfaces."""
 
     name: ClassVar[CapabilityName] = "read_only_management"
-    startup_hook_dependency_resolver: Callable[[type[object]], Set[type[object]]]
+    startup_hook_dependency_resolver: Callable[[type[object]], set[type[object]]]
 
     @staticmethod
     def _related_readonly_interfaces(
@@ -98,7 +98,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def get_startup_hook_dependency_resolver(
         self, interface_cls: type["OrmInterfaceBase[Any]"]
-    ) -> Callable[[type[object]], Set[type[object]]]:
+    ) -> Callable[[type[object]], set[type[object]]]:
         """
         Return a resolver function that identifies read-only interfaces which must run before a given interface's startup hook.
 
@@ -110,7 +110,7 @@ class ReadOnlyManagementCapability(BaseCapability):
         """
 
         return cast(
-            Callable[[type[object]], Set[type[object]]],
+            Callable[[type[object]], set[type[object]]],
             self._related_readonly_interfaces,
         )
 
