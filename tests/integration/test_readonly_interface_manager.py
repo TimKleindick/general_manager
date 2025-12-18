@@ -334,3 +334,475 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
                 sync_read_only_interface(self.Packaging.Interface)
         finally:
             self.Packaging._data = original_data
+
+
+class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
+    """Integration tests for M2M field handling in read-only interfaces."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up Tag, Category, and Product managers with M2M relationships."""
+
+        class Tag(GeneralManager):
+            name: str
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"name": "featured"},
+                {"name": "sale"},
+                {"name": "new"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                name = CharField(max_length=50, unique=True)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class Category(GeneralManager):
+            code: str
+            title: str
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"code": "ELEC", "title": "Electronics"},
+                {"code": "BOOK", "title": "Books"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=10, unique=True)
+                title = CharField(max_length=100)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class Product(GeneralManager):
+            sku: str
+            name: str
+            category: Category
+            tags: list[Tag]
+
+            _data: ClassVar[list[dict[str, Any]]] = []
+            _default_data: ClassVar[list[dict[str, Any]]] = [
+                {
+                    "sku": "PROD001",
+                    "name": "Laptop",
+                    "category": {"code": "ELEC"},
+                    "tags": [{"name": "featured"}, {"name": "sale"}],
+                },
+                {
+                    "sku": "PROD002",
+                    "name": "Novel",
+                    "category": {"code": "BOOK"},
+                    "tags": [{"name": "new"}],
+                },
+                {
+                    "sku": "PROD003",
+                    "name": "Tablet",
+                    "category": {"code": "ELEC"},
+                    "tags": [],
+                },
+            ]
+
+            class Interface(ReadOnlyInterface):
+                sku = CharField(max_length=20, unique=True)
+                name = CharField(max_length=200)
+                category = models.ForeignKey(
+                    Category.Interface._model,
+                    on_delete=models.CASCADE,
+                )
+                tags = models.ManyToManyField(Tag.Interface._model)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Tag = Tag
+        cls.Category = Category
+        cls.Product = Product
+        cls.general_manager_classes = [Tag, Category, Product]
+
+    def setUp(self) -> None:
+        """Clear data and reset to defaults before each test."""
+        self.Product._data = list(self.Product._default_data)
+        super().setUp()
+        self.Tag.Interface._model.all_objects.all().delete()
+        self.Category.Interface._model.all_objects.all().delete()
+        self.Product.Interface._model.all_objects.all().delete()
+
+    def test_m2m_with_dict_lookups_resolves_correctly(self) -> None:
+        """Verify M2M fields can use dict lookups to resolve related instances."""
+        sync_read_only_interface(self.Tag.Interface)
+        sync_read_only_interface(self.Category.Interface)
+        sync_read_only_interface(self.Product.Interface)
+
+        laptop = self.Product.Interface._model.objects.filter(sku="PROD001").first()
+        self.assertIsNotNone(laptop)
+        self.assertEqual(laptop.name, "Laptop")
+
+        tag_names = set(laptop.tags.all().values_list("name", flat=True))
+        self.assertEqual(tag_names, {"featured", "sale"})
+
+    def test_m2m_with_empty_list_creates_no_relations(self) -> None:
+        """Verify M2M field with empty list creates instance with no relations."""
+        sync_read_only_interface(self.Tag.Interface)
+        sync_read_only_interface(self.Category.Interface)
+        sync_read_only_interface(self.Product.Interface)
+
+        tablet = self.Product.Interface._model.objects.filter(sku="PROD003").first()
+        self.assertIsNotNone(tablet)
+        self.assertEqual(tablet.tags.count(), 0)
+
+    def test_m2m_updates_existing_relations(self) -> None:
+        """Verify M2M field updates clear old relations and set new ones."""
+        sync_read_only_interface(self.Tag.Interface)
+        sync_read_only_interface(self.Category.Interface)
+        sync_read_only_interface(self.Product.Interface)
+
+        novel = self.Product.Interface._model.objects.filter(sku="PROD002").first()
+        self.assertEqual(novel.tags.count(), 1)
+
+        self.Product._data = [
+            {
+                "sku": "PROD001",
+                "name": "Laptop",
+                "category": {"code": "ELEC"},
+                "tags": [{"name": "featured"}, {"name": "sale"}],
+            },
+            {
+                "sku": "PROD002",
+                "name": "Novel",
+                "category": {"code": "BOOK"},
+                "tags": [{"name": "featured"}, {"name": "new"}],
+            },
+            {
+                "sku": "PROD003",
+                "name": "Tablet",
+                "category": {"code": "ELEC"},
+                "tags": [],
+            },
+        ]
+
+        sync_read_only_interface(self.Product.Interface)
+
+        novel.refresh_from_db()
+        tag_names = set(novel.tags.all().values_list("name", flat=True))
+        self.assertEqual(tag_names, {"featured", "new"})
+
+    def test_m2m_with_none_value_creates_no_relations(self) -> None:
+        """Verify M2M field with None value is treated as empty."""
+        self.Product._data = [
+            {
+                "sku": "PROD999",
+                "name": "Test",
+                "category": {"code": "ELEC"},
+                "tags": None,
+            }
+        ]
+
+        sync_read_only_interface(self.Tag.Interface)
+        sync_read_only_interface(self.Category.Interface)
+        sync_read_only_interface(self.Product.Interface)
+
+        product = self.Product.Interface._model.objects.filter(sku="PROD999").first()
+        self.assertIsNotNone(product)
+        self.assertEqual(product.tags.count(), 0)
+
+    def test_m2m_non_list_raises_format_error(self) -> None:
+        """Verify M2M field with non-list/non-None value raises error."""
+        from general_manager.interface.utils.errors import (
+            InvalidReadOnlyDataFormatError,
+        )
+
+        self.Product._data = [
+            {
+                "sku": "PROD999",
+                "name": "Test",
+                "category": {"code": "ELEC"},
+                "tags": "invalid",
+            }
+        ]
+
+        sync_read_only_interface(self.Tag.Interface)
+        sync_read_only_interface(self.Category.Interface)
+
+        with self.assertRaises(InvalidReadOnlyDataFormatError):
+            sync_read_only_interface(self.Product.Interface)
+
+
+class ReadOnlyDependencyOrderingIntegrationTests(GeneralManagerTransactionTestCase):
+    """Integration tests for dependency-ordered startup hooks."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up Country, State, City hierarchy with dependencies."""
+
+        class Country(GeneralManager):
+            code: str
+            name: str
+
+            _data: ClassVar[list[dict[str, str]]] = [
+                {"code": "US", "name": "United States"},
+                {"code": "CA", "name": "Canada"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=2, unique=True)
+                name = CharField(max_length=100)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class State(GeneralManager):
+            code: str
+            name: str
+            country: Country
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"code": "NY", "name": "New York", "country": {"code": "US"}},
+                {"code": "CA", "name": "California", "country": {"code": "US"}},
+                {"code": "ON", "name": "Ontario", "country": {"code": "CA"}},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=5, unique=True)
+                name = CharField(max_length=100)
+                country = models.ForeignKey(
+                    Country.Interface._model,
+                    on_delete=models.CASCADE,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class City(GeneralManager):
+            name: str
+            state: State
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"name": "New York City", "state": {"code": "NY"}},
+                {"name": "Los Angeles", "state": {"code": "CA"}},
+                {"name": "Toronto", "state": {"code": "ON"}},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                name = CharField(max_length=200)
+                state = models.ForeignKey(
+                    State.Interface._model,
+                    on_delete=models.CASCADE,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+                    unique_together = (("name", "state"),)
+
+        cls.Country = Country
+        cls.State = State
+        cls.City = City
+        cls.general_manager_classes = [Country, State, City]
+
+    def test_sync_respects_dependency_order(self) -> None:
+        """Verify sync automatically resolves dependencies in correct order."""
+        self.City.Interface._model.all_objects.all().delete()
+        self.State.Interface._model.all_objects.all().delete()
+        self.Country.Interface._model.all_objects.all().delete()
+
+        sync_read_only_interface(self.City.Interface)
+
+        self.assertEqual(self.Country.Interface._model.objects.count(), 2)
+        self.assertEqual(self.State.Interface._model.objects.count(), 3)
+        self.assertEqual(self.City.Interface._model.objects.count(), 3)
+
+        nyc = self.City.filter(name="New York City").first()
+        self.assertIsNotNone(nyc)
+        self.assertEqual(nyc.state.code, "NY")
+        self.assertEqual(nyc.state.country.code, "US")
+
+    def test_dependency_resolver_identifies_related_interfaces(self) -> None:
+        """Verify dependency resolver correctly identifies related read-only interfaces."""
+        from general_manager.interface.capabilities.read_only import (
+            ReadOnlyManagementCapability,
+        )
+
+        capability = self.City.Interface.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+
+        resolver = capability.get_startup_hook_dependency_resolver(self.City.Interface)
+        dependencies = resolver(self.City.Interface)
+
+        self.assertIn(self.State.Interface, dependencies)
+
+        state_dependencies = resolver(self.State.Interface)
+        self.assertIn(self.Country.Interface, state_dependencies)
+
+    def test_circular_dependency_handling(self) -> None:
+        """Verify system handles potential circular references gracefully."""
+        sync_read_only_interface(self.City.Interface)
+        sync_read_only_interface(self.City.Interface)
+        self.assertEqual(self.City.Interface._model.objects.count(), 3)
+
+
+class ReadOnlyActivationManagerTests(GeneralManagerTransactionTestCase):
+    """Integration tests for all_objects activation handling."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up simple Status manager."""
+
+        class Status(GeneralManager):
+            code: str
+            label: str
+
+            _data: ClassVar[list[dict[str, str]]] = [
+                {"code": "ACTIVE", "label": "Active"},
+                {"code": "INACTIVE", "label": "Inactive"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=20, unique=True)
+                label = CharField(max_length=100)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Status = Status
+        cls.general_manager_classes = [Status]
+
+    def test_uses_all_objects_for_activation_when_available(self) -> None:
+        """Verify sync uses all_objects manager for is_active updates."""
+        sync_read_only_interface(self.Status.Interface)
+        self.assertEqual(self.Status.Interface._model.objects.count(), 2)
+        status = self.Status.Interface._model.objects.get(code="ACTIVE")
+        status.is_active = False
+        status.save()
+
+        self.assertEqual(self.Status.Interface._model.objects.count(), 1)
+        self.assertEqual(self.Status.Interface._model.all_objects.count(), 2)
+
+        sync_read_only_interface(self.Status.Interface)
+        self.assertEqual(self.Status.Interface._model.objects.count(), 2)
+
+    def test_processed_pks_bulk_activation(self) -> None:
+        """Verify bulk is_active=True update for processed PKs."""
+        self.Status.Interface._model.all_objects.all().update(is_active=False)
+        self.assertEqual(self.Status.Interface._model.objects.count(), 0)
+
+        sync_read_only_interface(self.Status.Interface)
+        self.assertEqual(self.Status.Interface._model.objects.count(), 2)
+
+
+class ReadOnlyRecursionPreventionIntegrationTests(GeneralManagerTransactionTestCase):
+    """Integration tests for sync recursion prevention with real DB access."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up Alpha/Beta managers with circular relations."""
+
+        class Alpha(GeneralManager):
+            code: str
+            beta: "Beta | None"
+
+            _data: ClassVar[list[dict[str, Any]]] = [{"code": "A1", "beta": None}]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=10, unique=True)
+                beta = models.ForeignKey(
+                    "general_manager.Beta",
+                    on_delete=models.SET_NULL,
+                    null=True,
+                    blank=True,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class Beta(GeneralManager):
+            code: str
+            alpha: "Alpha | None"
+
+            _data: ClassVar[list[dict[str, Any]]] = [{"code": "B1", "alpha": None}]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=10, unique=True)
+                alpha = models.ForeignKey(
+                    "general_manager.Alpha",
+                    on_delete=models.SET_NULL,
+                    null=True,
+                    blank=True,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Alpha = Alpha
+        cls.Beta = Beta
+        cls.general_manager_classes = [Alpha, Beta]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.Alpha.Interface._model.all_objects.all().delete()
+        self.Beta.Interface._model.all_objects.all().delete()
+
+    def test_sync_handles_circular_relations(self) -> None:
+        """Verify circular relations do not cause recursion errors."""
+        sync_read_only_interface(self.Alpha.Interface)
+        self.assertEqual(self.Alpha.Interface._model.objects.count(), 1)
+        self.assertEqual(self.Beta.Interface._model.objects.count(), 1)
+
+
+class ReadOnlySchemaConcreteFieldsIntegrationTests(GeneralManagerTransactionTestCase):
+    """Integration tests for schema validation with non-concrete fields."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up Tag and Item managers with M2M relation."""
+
+        class Tag(GeneralManager):
+            name: str
+
+            _data: ClassVar[list[dict[str, str]]] = [
+                {"name": "alpha"},
+                {"name": "beta"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                name = CharField(max_length=50, unique=True)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class Item(GeneralManager):
+            code: str
+            tags: list[Tag]
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"code": "ITEM1", "tags": [{"name": "alpha"}]}
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=20, unique=True)
+                tags = models.ManyToManyField(Tag.Interface._model)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Tag = Tag
+        cls.Item = Item
+        cls.general_manager_classes = [Tag, Item]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.Tag.Interface._model.all_objects.all().delete()
+        self.Item.Interface._model.all_objects.all().delete()
+
+    def test_schema_validation_ignores_m2m_fields(self) -> None:
+        """Verify ensure_schema_is_up_to_date ignores non-concrete M2M fields."""
+        capability = self.Item.Interface.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+        warnings = capability.ensure_schema_is_up_to_date(
+            self.Item.Interface,
+            self.Item,
+            self.Item.Interface._model,
+        )
+        self.assertEqual(warnings, [])

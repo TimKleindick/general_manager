@@ -1,8 +1,12 @@
 # type: ignore
 from django.test import SimpleTestCase, override_settings
 from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.capabilities.builtin import BaseCapability
+from general_manager.interface.capabilities.configuration import (
+    InterfaceCapabilityConfig,
+)
 from general_manager.manager.general_manager import GeneralManager
-from typing import ClassVar
+from typing import Callable, ClassVar, Type
 
 
 # Dummy InputField implementation for testing
@@ -345,3 +349,122 @@ class InterfaceBaseTests(SimpleTestCase):
         # Upper bound
         inst2 = DummyInterface(a=1, b="v", gm=DummyGM({"id": 22}), vals=3, c=1)
         self.assertEqual(inst2.identification["vals"], 3)
+
+
+# ------------------------------------------------------------
+# Tests for startup hook dependency resolver registration
+# ------------------------------------------------------------
+class StartupHookDependencyResolverTests(SimpleTestCase):
+    """Tests for dependency resolver registration in InterfaceBase."""
+
+    def setUp(self) -> None:
+        """Clear startup hooks before each test."""
+        from general_manager.interface.infrastructure.startup_hooks import (
+            clear_startup_hooks,
+        )
+
+        clear_startup_hooks()
+
+    def tearDown(self) -> None:
+        """Clear startup hooks after each test."""
+        from general_manager.interface.infrastructure.startup_hooks import (
+            clear_startup_hooks,
+        )
+
+        clear_startup_hooks()
+
+    def test_registers_dependency_resolver_from_get_method(self) -> None:
+        """Verify dependency resolver from get_startup_hook_dependency_resolver is registered."""
+        from general_manager.interface.infrastructure.startup_hooks import (
+            registered_startup_hook_entries,
+        )
+
+        class TestCapability(BaseCapability):
+            name: ClassVar[str] = "test_resolver"
+
+            def get_startup_hooks(
+                self, interface_cls: Type[InterfaceBase]
+            ) -> tuple[Callable[[], None], ...]:
+                return (lambda: None,)
+
+            def get_startup_hook_dependency_resolver(
+                self, interface_cls: Type[InterfaceBase]
+            ) -> Callable[[Type[object]], set[Type[object]]]:
+                def resolver(iface: Type[object]) -> set[Type[object]]:
+                    return set()
+
+                return resolver
+
+        class TestInterface(InterfaceBase):
+            _interface_type = "test"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[tuple[InterfaceCapabilityConfig, ...]] = (
+                InterfaceCapabilityConfig(TestCapability),
+            )
+
+        TestInterface.get_capabilities()
+        entries = registered_startup_hook_entries()
+
+        self.assertIn(TestInterface, entries)
+        self.assertEqual(len(entries[TestInterface]), 1)
+        self.assertIsNotNone(entries[TestInterface][0].dependency_resolver)
+
+    def test_registers_dependency_resolver_from_attribute(self) -> None:
+        """Verify dependency resolver from attribute is registered."""
+        from general_manager.interface.infrastructure.startup_hooks import (
+            registered_startup_hook_entries,
+        )
+
+        def resolver_func(iface: object) -> set[object]:
+            return set()
+
+        class TestCapability(BaseCapability):
+            name: ClassVar[str] = "test_attr_resolver"
+            startup_hook_dependency_resolver = resolver_func
+
+            def get_startup_hooks(
+                self, interface_cls: Type[InterfaceBase]
+            ) -> tuple[Callable[[], None], ...]:
+                return (lambda: None,)
+
+        class TestInterface(InterfaceBase):
+            _interface_type = "test"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[tuple[InterfaceCapabilityConfig, ...]] = (
+                InterfaceCapabilityConfig(TestCapability),
+            )
+
+        TestInterface.get_capabilities()
+        entries = registered_startup_hook_entries()
+
+        self.assertIn(TestInterface, entries)
+        resolver = entries[TestInterface][0].dependency_resolver
+        resolved_func = getattr(resolver, "__func__", resolver)
+        self.assertIs(resolved_func, resolver_func)
+
+    def test_registers_none_resolver_when_not_provided(self) -> None:
+        """Verify None resolver when capability provides no resolver."""
+        from general_manager.interface.infrastructure.startup_hooks import (
+            registered_startup_hook_entries,
+        )
+
+        class TestCapability(BaseCapability):
+            name: ClassVar[str] = "test_no_resolver"
+
+            def get_startup_hooks(
+                self, interface_cls: Type[InterfaceBase]
+            ) -> tuple[Callable[[], None], ...]:
+                return (lambda: None,)
+
+        class TestInterface(InterfaceBase):
+            _interface_type = "test"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[tuple[InterfaceCapabilityConfig, ...]] = (
+                InterfaceCapabilityConfig(TestCapability),
+            )
+
+        TestInterface.get_capabilities()
+        entries = registered_startup_hook_entries()
+
+        self.assertIn(TestInterface, entries)
+        self.assertIsNone(entries[TestInterface][0].dependency_resolver)

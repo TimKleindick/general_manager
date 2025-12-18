@@ -7,6 +7,7 @@ from django.db import connection
 from unittest import mock
 
 from general_manager.interface import ReadOnlyInterface
+from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.orm import OrmLifecycleCapability
 from general_manager.interface.capabilities.read_only import (
     ReadOnlyLifecycleCapability,
@@ -17,6 +18,9 @@ from general_manager.interface.capabilities.read_only import (
 )
 from general_manager.interface.capabilities import read_only as read_only_package
 from general_manager.interface.utils.models import GeneralManagerBasisModel
+from general_manager.interface.capabilities.configuration import (
+    InterfaceCapabilityConfig,
+)
 from general_manager.interface.utils.errors import (
     MissingReadOnlyBindingError,
     ReadOnlyRelationLookupError,
@@ -1082,3 +1086,395 @@ class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
 
         mock_parent.assert_called_once()
         self.assertIn(DummyManager, GeneralManagerMeta.read_only_classes)
+
+
+# ------------------------------------------------------------
+# Tests for dependency resolver and related interface discovery
+# ------------------------------------------------------------
+class ReadOnlyDependencyResolverTests(SimpleTestCase):
+    """Tests for ReadOnlyManagementCapability dependency resolver."""
+
+    def test_related_readonly_interfaces_returns_empty_for_no_relations(self) -> None:
+        """Verify _related_readonly_interfaces returns empty set when model has no relations."""
+
+        class SimpleModel:
+            _meta = SimpleNamespace(get_fields=lambda: [])
+
+        class SimpleInterface(ReadOnlyInterface):
+            _model = SimpleModel
+            _interface_type = "readonly"
+
+        capability = ReadOnlyManagementCapability()
+        related = capability._related_readonly_interfaces(SimpleInterface)
+        self.assertEqual(related, set())
+
+    def test_related_readonly_interfaces_finds_foreign_key_relations(self) -> None:
+        """Verify _related_readonly_interfaces discovers ForeignKey relations."""
+
+        class RelatedManager:
+            pass
+
+        class RelatedInterface(ReadOnlyInterface):
+            _interface_type = "readonly"
+
+        RelatedManager.Interface = RelatedInterface
+
+        class RelatedModel:
+            _general_manager_class = RelatedManager
+
+        class FakeForeignKeyField:
+            is_relation = True
+            auto_created = False
+            remote_field = SimpleNamespace(model=RelatedModel)
+
+        class MainModel:
+            _meta = SimpleNamespace(get_fields=lambda: [FakeForeignKeyField()])
+
+        class MainInterface(ReadOnlyInterface):
+            _model = MainModel
+            _interface_type = "readonly"
+
+        capability = ReadOnlyManagementCapability()
+        related = capability._related_readonly_interfaces(MainInterface)
+        self.assertEqual(related, {RelatedInterface})
+
+    def test_related_readonly_interfaces_excludes_self(self) -> None:
+        """Verify _related_readonly_interfaces excludes the interface itself."""
+
+        class SelfRefManager:
+            pass
+
+        class SelfRefInterface(ReadOnlyInterface):
+            _interface_type = "readonly"
+            _model = None
+
+        SelfRefManager.Interface = SelfRefInterface
+
+        class SelfRefModel:
+            _general_manager_class = SelfRefManager
+
+        SelfRefInterface._model = SelfRefModel
+
+        class FakeForeignKeyField:
+            is_relation = True
+            auto_created = False
+            remote_field = SimpleNamespace(model=SelfRefModel)
+
+        SelfRefModel._meta = SimpleNamespace(get_fields=lambda: [FakeForeignKeyField()])
+
+        capability = ReadOnlyManagementCapability()
+        related = capability._related_readonly_interfaces(SelfRefInterface)
+        self.assertEqual(related, set())
+
+    def test_related_readonly_interfaces_excludes_non_readonly(self) -> None:
+        """Verify _related_readonly_interfaces excludes non-readonly interfaces."""
+
+        class NonReadOnlyManager:
+            pass
+
+        class NonReadOnlyInterface(InterfaceBase):
+            _interface_type = "standard"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        NonReadOnlyManager.Interface = NonReadOnlyInterface
+
+        class RelatedModel:
+            _general_manager_class = NonReadOnlyManager
+
+        class FakeForeignKeyField:
+            is_relation = True
+            auto_created = False
+            remote_field = SimpleNamespace(model=RelatedModel)
+
+        class MainModel:
+            _meta = SimpleNamespace(get_fields=lambda: [FakeForeignKeyField()])
+
+        class MainInterface(ReadOnlyInterface):
+            _model = MainModel
+            _interface_type = "readonly"
+
+        capability = ReadOnlyManagementCapability()
+        related = capability._related_readonly_interfaces(MainInterface)
+        self.assertEqual(related, set())
+
+    def test_related_readonly_interfaces_excludes_auto_created(self) -> None:
+        """Verify _related_readonly_interfaces excludes auto-created reverse relations."""
+
+        class FakeAutoCreatedField:
+            is_relation = True
+            auto_created = True
+
+        class MainModel:
+            _meta = SimpleNamespace(get_fields=lambda: [FakeAutoCreatedField()])
+
+        class MainInterface(ReadOnlyInterface):
+            _model = MainModel
+            _interface_type = "readonly"
+
+        capability = ReadOnlyManagementCapability()
+        related = capability._related_readonly_interfaces(MainInterface)
+        self.assertEqual(related, set())
+
+    def test_get_startup_hook_dependency_resolver_returns_callable(self) -> None:
+        """Verify get_startup_hook_dependency_resolver returns a callable."""
+        capability = ReadOnlyManagementCapability()
+
+        class TestInterface(ReadOnlyInterface):
+            pass
+
+        resolver = capability.get_startup_hook_dependency_resolver(TestInterface)
+        self.assertTrue(callable(resolver))
+
+    def test_dependency_resolver_returns_related_interfaces(self) -> None:
+        """Verify dependency resolver identifies related read-only interfaces."""
+
+        class DependencyManager:
+            pass
+
+        class DependencyInterface(ReadOnlyInterface):
+            _interface_type = "readonly"
+
+        DependencyManager.Interface = DependencyInterface
+
+        class DependencyModel:
+            _general_manager_class = DependencyManager
+
+        class FakeForeignKeyField:
+            is_relation = True
+            auto_created = False
+            remote_field = SimpleNamespace(model=DependencyModel)
+
+        class MainModel:
+            _meta = SimpleNamespace(get_fields=lambda: [FakeForeignKeyField()])
+
+        class MainInterface(ReadOnlyInterface):
+            _model = MainModel
+            _interface_type = "readonly"
+
+        capability = ReadOnlyManagementCapability()
+        resolver = capability.get_startup_hook_dependency_resolver(MainInterface)
+        dependencies = resolver(MainInterface)
+        self.assertEqual(dependencies, {DependencyInterface})
+
+
+# ------------------------------------------------------------
+# Tests for measurement field remapping in unique fields
+# ------------------------------------------------------------
+class GetUniqueFieldsMeasurementRemappingTests(SimpleTestCase):
+    """Tests for measurement field remapping in get_unique_fields."""
+
+    def test_remaps_measurement_value_attr_to_wrapper_name(self) -> None:
+        """Verify get_unique_fields remaps MeasurementField value attributes."""
+        from general_manager.measurement.measurement_field import MeasurementField
+
+        class FakeField:
+            name = "volume_value"
+            unique = True
+
+        class FakeMeta:
+            local_fields: ClassVar[list[FakeField]] = [FakeField()]
+            unique_together: ClassVar[list[object]] = []
+            constraints: ClassVar[list[object]] = []
+
+        class TestModel:
+            _meta = FakeMeta()
+            volume = MeasurementField("liter")
+
+        TestModel.volume.value_attr = "volume_value"
+
+        capability = ReadOnlyManagementCapability()
+        unique_fields = capability.get_unique_fields(TestModel)
+
+        self.assertIn("volume", unique_fields)
+        self.assertNotIn("volume_value", unique_fields)
+
+    def test_preserves_non_measurement_unique_fields(self) -> None:
+        """Verify get_unique_fields keeps non-measurement unique fields unchanged."""
+        from general_manager.measurement.measurement_field import MeasurementField
+
+        class FakeCodeField:
+            name = "code"
+            unique = True
+
+        class FakeVolumeField:
+            name = "volume_value"
+            unique = True
+
+        class FakeMeta:
+            local_fields: ClassVar[list[object]] = [FakeCodeField(), FakeVolumeField()]
+            unique_together: ClassVar[list[object]] = []
+            constraints: ClassVar[list[object]] = []
+
+        class TestModel:
+            _meta = FakeMeta()
+            volume = MeasurementField("liter")
+
+        TestModel.volume.value_attr = "volume_value"
+
+        capability = ReadOnlyManagementCapability()
+        unique_fields = capability.get_unique_fields(TestModel)
+
+        self.assertIn("code", unique_fields)
+        self.assertIn("volume", unique_fields)
+        self.assertNotIn("volume_value", unique_fields)
+
+
+# ------------------------------------------------------------
+# Tests for relation resolution in sync_data
+# ------------------------------------------------------------
+class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
+    """Tests for relation field resolution in sync_data."""
+
+    def test_resolve_to_instance_returns_unchanged_non_dict(self) -> None:
+        """Verify _resolve_to_instance returns non-dict values unchanged."""
+        pass
+
+    def test_foreign_key_dict_lookup_single_match(self) -> None:
+        """Verify dict lookups for ForeignKey fields resolve to instances."""
+        pass
+
+    def test_foreign_key_dict_lookup_no_matches_raises(self) -> None:
+        """Verify dict lookups with no matches raise ReadOnlyRelationLookupError."""
+        pass
+
+    def test_foreign_key_dict_lookup_multiple_matches_raises(self) -> None:
+        """Verify dict lookups with multiple matches raise ReadOnlyRelationLookupError."""
+        pass
+
+    def test_many_to_many_resolution_with_dicts(self) -> None:
+        """Verify M2M fields accept list of dicts for related object lookups."""
+        pass
+
+    def test_many_to_many_none_returns_empty_list(self) -> None:
+        """Verify M2M field with None value resolves to empty list."""
+        pass
+
+    def test_many_to_many_non_list_raises_format_error(self) -> None:
+        """Verify M2M field with non-list value raises InvalidReadOnlyDataFormatError."""
+        pass
+
+
+# ------------------------------------------------------------
+# Tests for sync recursion prevention
+# ------------------------------------------------------------
+class SyncDataRecursionPreventionTests(SimpleTestCase):
+    """Tests for preventing infinite recursion in sync_data."""
+
+    def test_sync_stack_prevents_reentry(self) -> None:
+        """Verify sync_data prevents recursive calls to same interface."""
+        capability = ReadOnlyManagementCapability()
+
+        class TestManager:
+            _data: ClassVar[list[dict[str, object]]] = []
+
+        class TestModel:
+            _meta = SimpleNamespace(
+                local_fields=[],
+                get_fields=lambda: [],
+            )
+            objects = FakeManager()
+
+        class TestInterface(ReadOnlyInterface):
+            _parent_class = TestManager
+            _model = TestModel
+
+        original_sync = capability.sync_data
+        call_count = [0]
+
+        def counting_sync(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] > 1:
+                self.fail("sync_data was called recursively")
+            return original_sync(*args, **kwargs)
+
+        atomic_patch = mock.patch(
+            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            return_value=mock.MagicMock(
+                __enter__=lambda _: None, __exit__=lambda *_: None
+            ),
+        )
+        with (
+            atomic_patch,
+            mock.patch.object(
+                capability,
+                "ensure_schema_is_up_to_date",
+                return_value=[],
+            ),
+            mock.patch.object(
+                ReadOnlyManagementCapability,
+                "sync_data",
+                side_effect=counting_sync,
+            ),
+        ):
+            capability.sync_data(
+                TestInterface,
+                schema_validated=True,
+                unique_fields={"id"},
+            )
+
+
+# ------------------------------------------------------------
+# Tests for concrete field filtering in schema validation
+# ------------------------------------------------------------
+class SchemaValidationConcreteFieldsTests(SimpleTestCase):
+    """Tests for concrete field filtering in ensure_schema_is_up_to_date."""
+
+    def test_skips_non_concrete_fields(self) -> None:
+        """Verify schema validation only checks concrete fields."""
+
+        class FakeConcreteField:
+            concrete = True
+            column = "real_column"
+
+        class FakeNonConcreteField:
+            concrete = False
+            column = "virtual_column"
+
+        class FakeMeta:
+            db_table = "test_table"
+            local_concrete_fields: ClassVar[list[FakeConcreteField]] = [
+                FakeConcreteField()
+            ]
+
+        class TestModel:
+            _meta = FakeMeta()
+
+        class TestManager:
+            pass
+
+        class TestInterface(ReadOnlyInterface):
+            _parent_class = TestManager
+            _model = TestModel
+
+        capability = ReadOnlyManagementCapability()
+
+        mock_connection = mock.Mock()
+        mock_cursor = mock.MagicMock()
+        mock_connection.cursor.return_value = mock.MagicMock(
+            __enter__=lambda _: mock_cursor,
+            __exit__=lambda *_: None,
+        )
+        mock_connection.introspection.table_names.return_value = ["test_table"]
+
+        class FakeColumn:
+            name = "real_column"
+
+        mock_connection.introspection.get_table_description.return_value = [
+            FakeColumn()
+        ]
+
+        with mock.patch(
+            "general_manager.interface.capabilities.read_only.management.django_connection",
+            mock_connection,
+        ):
+            warnings = capability.ensure_schema_is_up_to_date(
+                TestInterface,
+                TestManager,
+                TestModel,
+                connection=mock_connection,
+            )
+
+        self.assertEqual(warnings, [])

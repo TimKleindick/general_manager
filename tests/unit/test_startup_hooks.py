@@ -22,7 +22,9 @@ from general_manager.interface.infrastructure.startup_hooks import (
     clear_startup_hooks,
     order_interfaces_by_dependency,
     register_startup_hook,
+    registered_startup_hook_entries,
     registered_startup_hooks,
+    StartupHookEntry,
 )
 from general_manager.interface.infrastructure.system_checks import (
     clear_system_checks,
@@ -338,3 +340,395 @@ class SystemCheckRegistryTests(SimpleTestCase):
             DummyStartupCapability.check_calls,
             [DummyStartupInterface] * len(checks[DummyStartupInterface]),
         )
+
+
+class StartupHookEntryTests(SimpleTestCase):
+    """Tests for the StartupHookEntry dataclass."""
+
+    def test_entry_creation_with_resolver(self) -> None:
+        """Verify StartupHookEntry stores hook and dependency resolver correctly."""
+
+        def hook() -> None:
+            return None
+
+        def resolver(iface: object) -> set[object]:
+            return set()
+
+        entry = StartupHookEntry(hook, resolver)
+        self.assertIs(entry.hook, hook)
+        self.assertIs(entry.dependency_resolver, resolver)
+
+    def test_entry_creation_without_resolver(self) -> None:
+        """Verify StartupHookEntry accepts None as dependency resolver."""
+
+        def hook() -> None:
+            return None
+
+        entry = StartupHookEntry(hook, None)
+        self.assertIs(entry.hook, hook)
+        self.assertIsNone(entry.dependency_resolver)
+
+
+class RegisteredStartupHookEntriesTests(SimpleTestCase):
+    """Tests for registered_startup_hook_entries function."""
+
+    def setUp(self) -> None:
+        """Clear startup hooks before each test."""
+        clear_startup_hooks()
+
+    def tearDown(self) -> None:
+        """Clear startup hooks after each test."""
+        clear_startup_hooks()
+
+    def test_returns_empty_dict_when_no_hooks_registered(self) -> None:
+        """Verify registered_startup_hook_entries returns empty dict initially."""
+        entries = registered_startup_hook_entries()
+        self.assertEqual(entries, {})
+
+    def test_returns_entries_with_resolvers(self) -> None:
+        """Verify registered_startup_hook_entries includes dependency resolvers."""
+
+        def hook1() -> None:
+            return None
+
+        def hook2() -> None:
+            return None
+
+        def resolver1(iface: object) -> set[object]:
+            return set()
+
+        def resolver2(iface: object) -> set[object]:
+            return {DummyStartupInterface}
+
+        register_startup_hook(
+            DummyStartupInterface,
+            hook1,
+            dependency_resolver=resolver1,
+        )
+        register_startup_hook(
+            DummyStartupInterface,
+            hook2,
+            dependency_resolver=resolver2,
+        )
+
+        entries = registered_startup_hook_entries()
+        self.assertIn(DummyStartupInterface, entries)
+        self.assertEqual(len(entries[DummyStartupInterface]), 2)
+        self.assertIs(entries[DummyStartupInterface][0].hook, hook1)
+        self.assertIs(entries[DummyStartupInterface][0].dependency_resolver, resolver1)
+        self.assertIs(entries[DummyStartupInterface][1].hook, hook2)
+        self.assertIs(entries[DummyStartupInterface][1].dependency_resolver, resolver2)
+
+    def test_prevents_duplicate_hook_with_same_resolver(self) -> None:
+        """Verify same hook with same resolver is not registered twice."""
+
+        def hook() -> None:
+            return None
+
+        def resolver(iface: object) -> set[object]:
+            return set()
+
+        register_startup_hook(DummyStartupInterface, hook, dependency_resolver=resolver)
+        register_startup_hook(DummyStartupInterface, hook, dependency_resolver=resolver)
+
+        entries = registered_startup_hook_entries()
+        self.assertEqual(len(entries[DummyStartupInterface]), 1)
+
+    def test_allows_same_hook_with_different_resolvers(self) -> None:
+        """Verify same hook can be registered with different resolvers."""
+
+        def hook() -> None:
+            return None
+
+        def resolver1(iface: object) -> set[object]:
+            return set()
+
+        def resolver2(iface: object) -> set[object]:
+            return {DummyStartupInterface}
+
+        register_startup_hook(
+            DummyStartupInterface, hook, dependency_resolver=resolver1
+        )
+        register_startup_hook(
+            DummyStartupInterface, hook, dependency_resolver=resolver2
+        )
+
+        entries = registered_startup_hook_entries()
+        self.assertEqual(len(entries[DummyStartupInterface]), 2)
+
+
+class OrderInterfacesByDependencyEdgeCasesTests(SimpleTestCase):
+    """Edge case tests for order_interfaces_by_dependency."""
+
+    def test_handles_empty_list(self) -> None:
+        """Verify empty interface list returns empty list."""
+
+        def resolver(iface: object) -> set[object]:
+            return set()
+
+        ordered = order_interfaces_by_dependency([], resolver)
+        self.assertEqual(ordered, [])
+
+    def test_preserves_order_when_no_resolver(self) -> None:
+        """Verify input order preserved when resolver is None."""
+
+        class A(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class B(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        ordered = order_interfaces_by_dependency([B, A], None)
+        self.assertEqual(ordered, [B, A])
+
+    def test_handles_self_dependency(self) -> None:
+        """Verify interface depending on itself is handled gracefully."""
+
+        class SelfDependent(InterfaceBase):
+            _interface_type = "self"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        def resolver(iface: object) -> set[object]:
+            return {iface} if iface == SelfDependent else set()
+
+        ordered = order_interfaces_by_dependency([SelfDependent], resolver)
+        self.assertIn(SelfDependent, ordered)
+
+    def test_handles_circular_dependencies(self) -> None:
+        """Verify circular dependencies don't cause infinite loop."""
+
+        class A(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class B(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        deps = {A: {B}, B: {A}}
+
+        def resolver(iface: object) -> set[type[InterfaceBase]]:
+            return deps.get(iface, set())
+
+        ordered = order_interfaces_by_dependency([A, B], resolver)
+        self.assertEqual(len(ordered), 2)
+        self.assertIn(A, ordered)
+        self.assertIn(B, ordered)
+
+    def test_handles_missing_dependencies(self) -> None:
+        """Verify dependencies not in interface list are ignored."""
+
+        class A(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class B(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class C(InterfaceBase):
+            _interface_type = "c"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        deps = {A: {C}}
+
+        def resolver(iface: object) -> set[type[InterfaceBase]]:
+            return deps.get(iface, set())
+
+        ordered = order_interfaces_by_dependency([A, B], resolver)
+        self.assertEqual(len(ordered), 2)
+        self.assertIn(A, ordered)
+        self.assertIn(B, ordered)
+
+    def test_complex_dependency_graph(self) -> None:
+        """Verify complex multi-level dependencies are ordered correctly."""
+
+        class A(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class B(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class C(InterfaceBase):
+            _interface_type = "c"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class D(InterfaceBase):
+            _interface_type = "d"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        deps = {
+            D: {C, A},
+            C: {B},
+            B: {A},
+            A: set(),
+        }
+
+        def resolver(iface: object) -> set[type[InterfaceBase]]:
+            return deps.get(iface, set())
+
+        ordered = order_interfaces_by_dependency([D, C, B, A], resolver)
+
+        a_idx = ordered.index(A)
+        b_idx = ordered.index(B)
+        c_idx = ordered.index(C)
+        d_idx = ordered.index(D)
+
+        self.assertLess(a_idx, b_idx)
+        self.assertLess(a_idx, c_idx)
+        self.assertLess(a_idx, d_idx)
+        self.assertLess(b_idx, c_idx)
+        self.assertLess(b_idx, d_idx)
+        self.assertLess(c_idx, d_idx)
+
+
+class StartupHookRunnerDependencyOrderingTests(SimpleTestCase):
+    """Tests for startup hook runner with dependency ordering."""
+
+    def setUp(self) -> None:
+        """Prepare test environment."""
+        clear_startup_hooks()
+        self._original_run = BaseCommand.run_from_argv
+        for attr in (
+            "_gm_startup_hooks_runner_installed",
+            "_gm_original_run_from_argv",
+        ):
+            if hasattr(BaseCommand, attr):
+                delattr(BaseCommand, attr)
+
+    def tearDown(self) -> None:
+        """Restore global state."""
+        BaseCommand.run_from_argv = self._original_run
+        clear_startup_hooks()
+        os.environ.pop("RUN_MAIN", None)
+
+    def test_runner_orders_hooks_by_dependency(self) -> None:
+        """Verify runner executes hooks in dependency order."""
+
+        class InterfaceA(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceB(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        execution_order: list[str] = []
+
+        def hook_a() -> None:
+            execution_order.append("A")
+
+        def hook_b() -> None:
+            execution_order.append("B")
+
+        deps = {InterfaceB: {InterfaceA}, InterfaceA: set()}
+
+        def resolver(iface: object) -> set[type[InterfaceBase]]:
+            return deps.get(iface, set())
+
+        register_startup_hook(InterfaceA, hook_a, dependency_resolver=resolver)
+        register_startup_hook(InterfaceB, hook_b, dependency_resolver=resolver)
+
+        def fake_run(self: BaseCommand, argv: list[str]) -> str:
+            return "ok"
+
+        BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
+        GeneralmanagerConfig.install_startup_hook_runner()
+        BaseCommand().run_from_argv(["manage.py", "migrate"])
+
+        self.assertEqual(execution_order, ["A", "B"])
+
+    def test_runner_groups_hooks_by_resolver(self) -> None:
+        """Verify hooks with different resolvers are grouped separately."""
+
+        class InterfaceX(InterfaceBase):
+            _interface_type = "x"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceY(InterfaceBase):
+            _interface_type = "y"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        execution_log: list[tuple[str, object]] = []
+
+        def hook_x1() -> None:
+            execution_log.append(("X1", resolver1))
+
+        def hook_x2() -> None:
+            execution_log.append(("X2", resolver2))
+
+        def hook_y() -> None:
+            execution_log.append(("Y", None))
+
+        def resolver1(iface: object) -> set[object]:
+            return set()
+
+        def resolver2(iface: object) -> set[object]:
+            return set()
+
+        register_startup_hook(InterfaceX, hook_x1, dependency_resolver=resolver1)
+        register_startup_hook(InterfaceX, hook_x2, dependency_resolver=resolver2)
+        register_startup_hook(InterfaceY, hook_y, dependency_resolver=None)
+
+        def fake_run(self: BaseCommand, argv: list[str]) -> str:
+            return "ok"
+
+        BaseCommand.run_from_argv = fake_run  # type: ignore[assignment]
+        GeneralmanagerConfig.install_startup_hook_runner()
+        BaseCommand().run_from_argv(["manage.py", "test"])
+
+        self.assertEqual(len(execution_log), 3)
+        executed_names = {log[0] for log in execution_log}
+        self.assertEqual(executed_names, {"X1", "X2", "Y"})
