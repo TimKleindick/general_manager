@@ -455,7 +455,9 @@ class GeneralManagerTransactionTestCase(
             entries = registry.get(interface_cls, ())
             for entry in entries:
                 key = entry.dependency_resolver
-                resolver_map.setdefault(key, []).append(interface_cls)
+                resolver_list = resolver_map.setdefault(key, [])
+                if interface_cls not in resolver_list:
+                    resolver_list.append(interface_cls)
 
         for resolver, iface_list in resolver_map.items():
             ordered = order_interfaces_by_dependency(iface_list, resolver)  # type: ignore[arg-type]
