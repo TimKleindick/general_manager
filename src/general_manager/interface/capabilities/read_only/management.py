@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Callable, Optional, Type, cast, ClassVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, Type, cast, ClassVar, Set
 
 from django.core.checks import Warning
 from django.db import (
@@ -13,6 +13,7 @@ from django.db import (
     transaction as django_transaction,
 )
 
+from general_manager.measurement.measurement_field import MeasurementField
 from general_manager.interface.utils.models import GeneralManagerBasisModel
 from general_manager.interface.utils.errors import (
     InvalidReadOnlyDataFormatError,
@@ -20,6 +21,7 @@ from general_manager.interface.utils.errors import (
     MissingReadOnlyDataError,
     MissingReadOnlyBindingError,
     MissingUniqueFieldError,
+    ReadOnlyRelationLookupError,
 )
 from general_manager.logging import get_logger
 
@@ -54,6 +56,49 @@ class ReadOnlyManagementCapability(BaseCapability):
     """Provide schema verification and data-sync behavior for read-only interfaces."""
 
     name: ClassVar[CapabilityName] = "read_only_management"
+    startup_hook_dependency_resolver: Callable[[type[object]], Set[type[object]]]
+
+    @staticmethod
+    def _related_readonly_interfaces(
+        interface_cls: type["OrmInterfaceBase[Any]"],
+    ) -> set[type["OrmInterfaceBase[Any]"]]:
+        """
+        Discover read-only interfaces referenced by concrete relation fields on the given interface's model.
+        """
+
+        model = getattr(interface_cls, "_model", None)
+        opts = getattr(model, "_meta", None)
+        if not opts or not hasattr(opts, "get_fields"):
+            return set()
+
+        related: set[type["OrmInterfaceBase[Any]"]] = set()
+        for field in opts.get_fields():
+            if not getattr(field, "is_relation", False) or getattr(
+                field, "auto_created", False
+            ):
+                continue
+            remote_model = getattr(getattr(field, "remote_field", None), "model", None)
+            manager_cls = getattr(remote_model, "_general_manager_class", None)
+            candidate = getattr(manager_cls, "Interface", None)
+            if (
+                isinstance(candidate, type)
+                and candidate is not interface_cls
+                and getattr(candidate, "_interface_type", None) == "readonly"
+            ):
+                related.add(candidate)
+        return related
+
+    def get_startup_hook_dependency_resolver(
+        self, interface_cls: type["OrmInterfaceBase[Any]"]
+    ) -> Callable[[type[object]], Set[type[object]]]:
+        """
+        Provide a dependency resolver so read-only startup hooks execute after their related interfaces.
+        """
+
+        return cast(
+            Callable[[type[object]], Set[type[object]]],
+            self._related_readonly_interfaces,
+        )
 
     def get_unique_fields(self, model: Type[models.Model]) -> set[str]:
         """
@@ -96,7 +141,19 @@ class ReadOnlyManagementCapability(BaseCapability):
             if isinstance(constraint, models.UniqueConstraint):
                 unique_fields.update(getattr(constraint, "fields", []))
 
-        return unique_fields
+        measurement_fields = {
+            name: field
+            for name, field in vars(model).items()
+            if isinstance(field, MeasurementField)
+        }
+        reverse_measurement_map = {
+            field.value_attr: name for name, field in measurement_fields.items()
+        }
+
+        remapped_unique_fields = {
+            reverse_measurement_map.get(field, field) for field in unique_fields
+        }
+        return remapped_unique_fields
 
     def ensure_schema_is_up_to_date(
         self,
@@ -280,6 +337,14 @@ class ReadOnlyManagementCapability(BaseCapability):
             "schema_validated": schema_validated,
         }
 
+        in_progress: set[type["OrmInterfaceBase[Any]"]] = getattr(
+            self, "_sync_stack", set()
+        )
+        if interface_cls in in_progress:
+            return None
+        in_progress.add(interface_cls)
+        self._sync_stack = in_progress
+
         def _perform() -> None:
             """
             Perform the core read-only data synchronization for the bound interface.
@@ -360,12 +425,144 @@ class ReadOnlyManagementCapability(BaseCapability):
             )
             active_logger = logger_instance or _resolve_logger()
 
+            relation_fields = {
+                f.name: f
+                for f in getattr(model_opts, "get_fields", lambda: [])()
+                if getattr(f, "is_relation", False)
+                and not getattr(f, "auto_created", False)
+            }
+
+            related_interfaces: list[type["OrmInterfaceBase[Any]"]] = []
+            for field in relation_fields.values():
+                remote_model = getattr(
+                    getattr(field, "remote_field", None), "model", None
+                )
+                general_manager_cls = getattr(
+                    remote_model, "_general_manager_class", None
+                )
+                candidate_interface = getattr(general_manager_cls, "Interface", None)
+                if (
+                    candidate_interface
+                    and candidate_interface is not interface_cls
+                    and candidate_interface not in related_interfaces
+                    and isinstance(candidate_interface, type)
+                    and getattr(candidate_interface, "_interface_type", None)
+                    == "readonly"
+                ):
+                    related_interfaces.append(candidate_interface)
+
+            for related_interface in related_interfaces:
+                related_capability = cast(
+                    ReadOnlyManagementCapability,
+                    related_interface.require_capability(
+                        "read_only_management",
+                        expected_type=ReadOnlyManagementCapability,
+                    ),
+                )
+                related_capability.sync_data(
+                    related_interface,
+                    connection=db_connection,
+                    transaction=db_transaction,
+                    integrity_error=integrity_error_cls,
+                    json_module=json_lib,
+                    logger_instance=active_logger,
+                    unique_fields=None,
+                    schema_validated=schema_validated,
+                )
+
+            def _resolve_to_instance(
+                field_name: str,
+                remote_model: Type[models.Model],
+                raw_value: object,
+                idx: int,
+            ) -> models.Model | object:
+                """
+                Resolve a related object from a dict lookup, warning and failing when the match count is not exactly one.
+                """
+                if not isinstance(raw_value, dict):
+                    return raw_value
+                lookup = cast(dict[str, object], raw_value)
+                qs = remote_model.objects.filter(**lookup)
+                matches = list(qs[:2])
+                match_count = len(matches)
+                if match_count != 1:
+                    match_count = qs.count() if match_count == 2 else match_count
+                    active_logger.warning(
+                        "readonly relation lookup failed",
+                        context={
+                            "manager": parent_class.__name__,
+                            "model": model.__name__,
+                            "field": field_name,
+                            "lookup": lookup,
+                            "matches": match_count,
+                            "index": idx,
+                        },
+                    )
+                    raise ReadOnlyRelationLookupError(
+                        parent_class.__name__, field_name, match_count, lookup
+                    )
+                return matches[0]
+
+            def _resolve_many_to_many(
+                field_name: str,
+                remote_model: Type[models.Model],
+                raw_value: object,
+                idx: int,
+            ) -> list[models.Model | object]:
+                """
+                Resolve many-to-many payloads into related instances or identifiers.
+                """
+                if raw_value is None:
+                    return []
+                if not isinstance(raw_value, list):
+                    raise InvalidReadOnlyDataFormatError()
+                resolved: list[models.Model | object] = []
+                for entry in raw_value:
+                    resolved.append(
+                        _resolve_to_instance(field_name, remote_model, entry, idx)
+                    )
+                return resolved
+
+            def _resolve_relations(
+                data: dict[str, Any],
+                idx: int,
+            ) -> tuple[dict[str, Any], dict[str, list[models.Model | object]]]:
+                """
+                Convert relation payloads into model instances while separating many-to-many values for post-save assignment.
+                """
+                resolved = dict(data)
+                m2m_assignments: dict[str, list[models.Model | object]] = {}
+                for field_name, field in relation_fields.items():
+                    if field_name not in data:
+                        continue
+                    remote_model = cast(Type[models.Model], field.remote_field.model)
+                    if isinstance(field, models.ManyToManyField):
+                        resolved.pop(field_name, None)
+                        m2m_assignments[field_name] = _resolve_many_to_many(
+                            field_name,
+                            remote_model,
+                            data[field_name],
+                            idx,
+                        )
+                    elif isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                        resolved[field_name] = _resolve_to_instance(
+                            field_name,
+                            remote_model,
+                            data[field_name],
+                            idx,
+                        )
+                return resolved, m2m_assignments
+
             with db_transaction.atomic():
                 json_unique_values: set[tuple[Any, ...]] = set()
+                processed_pks: list[Any] = []
 
                 for idx, data in enumerate(data_list):
+                    resolved_data, m2m_assignments = _resolve_relations(data, idx)
                     try:
-                        lookup = {field: data[field] for field in unique_field_order}
+                        lookup = {
+                            field: resolved_data[field] for field in unique_field_order
+                        }
                     except KeyError as exc:
                         missing = exc.args[0]
                         raise InvalidReadOnlyDataFormatError() from KeyError(
@@ -387,13 +584,17 @@ class ReadOnlyManagementCapability(BaseCapability):
                             if getattr(f, "name", None)
                         }
                         allowed_fields.discard("")
+                        if "is_active" in allowed_fields:
+                            resolved_data.setdefault("is_active", True)
                         create_kwargs = {
-                            k: v for k, v in data.items() if k in allowed_fields
+                            k: v
+                            for k, v in resolved_data.items()
+                            if k in allowed_fields
                         }
                         try:
                             instance = cast(
                                 GeneralManagerBasisModel,
-                                model.objects.create(**create_kwargs),
+                                manager.create(**create_kwargs),
                             )
                             is_created = True
                         except integrity_error_cls:
@@ -406,15 +607,49 @@ class ReadOnlyManagementCapability(BaseCapability):
                     if instance is None:
                         continue
                     updated = False
-                    for field_name in editable_fields.intersection(data.keys()):
-                        value = data[field_name]
+                    for field_name in editable_fields.intersection(
+                        resolved_data.keys()
+                    ):
+                        value = resolved_data[field_name]
                         if getattr(instance, field_name, None) != value:
-                            setattr(instance, field_name, value)
                             updated = True
-                    if updated or not getattr(instance, "is_active", True):
-                        instance.is_active = True  # type: ignore[attr-defined]
+                        setattr(instance, field_name, value)
+                    if (
+                        updated
+                        and not hasattr(instance, "refresh_from_db")
+                        and hasattr(instance, "save")
+                    ):
                         instance.save()
+                    for field_name, related_values in m2m_assignments.items():
+                        m2m_manager = getattr(instance, field_name)
+                        current_ids = set(
+                            m2m_manager.all().values_list("pk", flat=True)
+                        )
+                        new_ids = {getattr(obj, "pk", obj) for obj in related_values}
+                        if current_ids != new_ids:
+                            m2m_manager.set(related_values)
+                            updated = True
+                    needs_activation = not getattr(instance, "is_active", True)
+                    if updated or needs_activation or is_created:
+                        activation_manager = getattr(model, "all_objects", None)
+                        if activation_manager is not None and hasattr(
+                            activation_manager, "filter"
+                        ):
+                            activation_manager.filter(
+                                pk=getattr(instance, "pk", None)
+                            ).update(  # type: ignore[arg-type]
+                                is_active=True
+                            )
+                            if hasattr(instance, "refresh_from_db"):
+                                instance.refresh_from_db()
+                            elif hasattr(instance, "save"):
+                                instance.save()
+                        else:
+                            instance.is_active = True  # type: ignore[attr-defined]
+                            if hasattr(instance, "save"):
+                                instance.save()
                         changes["created" if is_created else "updated"].append(instance)
+                    processed_pks.append(getattr(instance, "pk", None))
 
                 existing_instances = model.objects.filter(is_active=True)
                 for existing_instance in existing_instances:
@@ -430,6 +665,11 @@ class ReadOnlyManagementCapability(BaseCapability):
                         existing_instance.save()
                         changes["deactivated"].append(existing_instance)
 
+                if processed_pks and hasattr(model, "all_objects"):
+                    model.all_objects.filter(pk__in=processed_pks).update(  # type: ignore[arg-type]
+                        is_active=True
+                    )
+
             if any(changes.values()):
                 active_logger.info(
                     "readonly data synchronized",
@@ -442,12 +682,15 @@ class ReadOnlyManagementCapability(BaseCapability):
                     },
                 )
 
-        return call_with_observability(
-            interface_cls,
-            operation="read_only.sync_data",
-            payload=payload_snapshot,
-            func=_perform,
-        )
+        try:
+            return call_with_observability(
+                interface_cls,
+                operation="read_only.sync_data",
+                payload=payload_snapshot,
+                func=_perform,
+            )
+        finally:
+            in_progress.discard(interface_cls)
 
     def get_startup_hooks(
         self,

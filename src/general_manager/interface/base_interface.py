@@ -492,6 +492,13 @@ class InterfaceBase(ABC):
             handler: A capability handler that provides startup hooks via `get_startup_hooks` or `startup_hooks`.
         """
         hooks: Iterable[Callable[[], None]] | None = None
+        dependency_resolver = None
+        get_resolver = getattr(handler, "get_startup_hook_dependency_resolver", None)
+        if callable(get_resolver):
+            dependency_resolver = get_resolver(cls)
+        elif hasattr(handler, "startup_hook_dependency_resolver"):
+            dependency_resolver = handler.startup_hook_dependency_resolver
+
         get_hooks = getattr(handler, "get_startup_hooks", None)
         if callable(get_hooks):
             hooks = get_hooks(cls)
@@ -501,7 +508,11 @@ class InterfaceBase(ABC):
             return
         for hook in hooks:
             if callable(hook):
-                register_startup_hook(cls, hook)
+                register_startup_hook(
+                    cls,
+                    hook,
+                    dependency_resolver=dependency_resolver,
+                )
 
     @classmethod
     def _register_system_checks(cls, handler: Capability) -> None:
