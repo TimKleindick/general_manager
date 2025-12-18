@@ -614,12 +614,19 @@ class ReadOnlyManagementCapability(BaseCapability):
                         if getattr(instance, field_name, None) != value:
                             updated = True
                         setattr(instance, field_name, value)
-                    if (
-                        updated
-                        and not hasattr(instance, "refresh_from_db")
-                        and hasattr(instance, "save")
-                    ):
-                        instance.save()
+                    if updated and hasattr(instance, "save"):
+                        try:
+                            instance.save()
+                        except Exception as exc:
+                            active_logger.warning(
+                                "readonly instance save failed",
+                                context={
+                                    "manager": parent_class.__name__,
+                                    "model": model.__name__,
+                                    "error": str(exc),
+                                },
+                            )
+                            raise
                     for field_name, related_values in m2m_assignments.items():
                         m2m_manager = getattr(instance, field_name)
                         current_ids = set(
