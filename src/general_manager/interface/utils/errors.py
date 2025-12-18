@@ -128,12 +128,12 @@ class ReadOnlyRelationLookupError(ValueError):
     ) -> None:
         """
         Error raised when a read-only interface cannot resolve a related object during synchronization.
-        
+
         Parameters:
-        	interface_name (str): Name of the read-only interface performing the sync.
-        	field_name (str): Name of the related field being resolved.
-        	matches (int): Number of records found by the lookup (expected exactly 1).
-        	lookup (dict[str, object] | object): Lookup payload used to search for the related record.
+                interface_name (str): Name of the read-only interface performing the sync.
+                field_name (str): Name of the related field being resolved.
+                matches (int): Number of records found by the lookup (expected exactly 1).
+                lookup (dict[str, object] | object): Lookup payload used to search for the related record.
         """
         super().__init__(
             (

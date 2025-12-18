@@ -484,9 +484,9 @@ class InterfaceBase(ABC):
     def _register_startup_hooks(cls, handler: Capability) -> None:
         """
         Register startup hooks exposed by a capability handler on the interface class.
-        
+
         If the handler provides a callable `get_startup_hooks(cls)` that returns hooks, that value is used; otherwise a `startup_hooks` attribute is used if present. If the handler provides a callable `get_startup_hook_dependency_resolver(cls)` or a `startup_hook_dependency_resolver` attribute, that resolver is supplied when registering each hook. Non-callable hook entries and empty or None hook collections are ignored.
-        
+
         Parameters:
             cls: The interface class to receive the startup hooks.
             handler: A capability handler that may expose startup hooks and an optional dependency resolver.

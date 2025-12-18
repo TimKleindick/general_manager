@@ -132,7 +132,7 @@ class GeneralmanagerConfig(AppConfig):
     def install_startup_hook_runner() -> None:
         """
         Install a runner that executes registered startup hooks before Django management commands run.
-        
+
         This is idempotent: if already installed it does nothing. The installed wrapper executes all registered startup hooks prior to delegating to the original BaseCommand.run_from_argv. For the "runserver" command hooks run only in the autoreload main process (when the environment variable RUN_MAIN == "true"); for other commands hooks always run. The original run_from_argv is preserved on BaseCommand._gm_original_run_from_argv and an installation flag is set on BaseCommand._gm_startup_hooks_runner_installed.
         """
 
@@ -147,7 +147,7 @@ class GeneralmanagerConfig(AppConfig):
         ) -> None:
             """
             Execute registered startup hooks when appropriate, then invoke the preserved BaseCommand.run_from_argv.
-            
+
             When the command is not "runserver", registered startup hooks are executed before the original command runs. For the "runserver" command hooks run only in the autoreload main process (when RUN_MAIN == "true"). Collected hooks are grouped by their dependency resolver and executed in dependency-ordered sequence per resolver. Logging records the start and completion of hook execution. After hooks complete (or are skipped), this function delegates to the previously preserved original_run_from_argv.
             """
             run_main = os.environ.get("RUN_MAIN") == "true"
