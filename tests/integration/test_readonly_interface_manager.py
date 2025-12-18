@@ -1,3 +1,4 @@
+from django.db import models
 from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
 from decimal import Decimal
 from typing import ClassVar, Any
@@ -6,6 +7,7 @@ from general_manager.interface import ReadOnlyInterface
 from general_manager.interface.capabilities.read_only import (
     ReadOnlyManagementCapability,
 )
+from general_manager.interface.utils.errors import ReadOnlyRelationLookupError
 from general_manager.measurement import Measurement, MeasurementField
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -175,3 +177,136 @@ class ReadOnlyWithMeasurementFields(GeneralManagerTransactionTestCase):
         self.assertEqual(small_record.total_volume_unit, "liter")
         self.assertEqual(medium_record.total_volume_value, Decimal("0.75"))
         self.assertEqual(medium_record.total_volume_unit, "milliliter")
+
+
+class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        """
+        Define Size and Packaging managers to verify relation lookups resolve nested payloads.
+        """
+
+        class Size(GeneralManager):
+            container: str
+            volume: Measurement
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"container": "Flasche", "volume": "330 milliliter"},
+                {"container": "Flasche", "volume": "500 milliliter"},
+                {"container": "Dose", "volume": "330 milliliter"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                container = CharField(max_length=50)
+                volume = MeasurementField("milliliter")
+
+                class Meta:
+                    app_label = "general_manager"
+                    unique_together = (("container", "volume"),)
+
+        class Packaging(GeneralManager):
+            type: str
+            total_volume: Measurement
+            basis_size: Size
+
+            _data: ClassVar[list[dict[str, Any]]] = []
+            _default_data: ClassVar[list[dict[str, Any]]] = [
+                {
+                    "type": "Einzelflasche 0.33l",
+                    "total_volume": "330 milliliter",
+                    "basis_size": {"container": "Flasche", "volume": "330 milliliter"},
+                },
+                {
+                    "type": "Einzelflasche 0.5l",
+                    "total_volume": "500 milliliter",
+                    "basis_size": {"container": "Flasche", "volume": "500 milliliter"},
+                },
+                {
+                    "type": "Einzeldose 0.33l",
+                    "total_volume": "330 milliliter",
+                    "basis_size": {"container": "Dose", "volume": "330 milliliter"},
+                },
+            ]
+
+            class Interface(ReadOnlyInterface):
+                type = CharField(max_length=100, unique=True)
+                total_volume = MeasurementField("milliliter")
+                basis_size = models.ForeignKey(
+                    Size.Interface._model,
+                    on_delete=models.CASCADE,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Size = Size
+        cls.Packaging = Packaging
+        cls.general_manager_classes = [Size, Packaging]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.Size.Interface._model.all_objects.all().delete()
+        self.Packaging.Interface._model.all_objects.all().delete()
+        self.Packaging._data = list(self.Packaging._default_data)
+
+    def test_foreign_key_lookup_resolves_unique_match(self):
+        capability = self.Size.Interface.require_capability(
+            "read_only_management",
+            expected_type=ReadOnlyManagementCapability,
+        )
+        warnings = capability.ensure_schema_is_up_to_date(
+            self.Size.Interface,
+            self.Size,
+            self.Size.Interface._model,
+        )
+        self.assertEqual(warnings, [])
+        self.assertTrue(self.Size._data)
+        sync_read_only_interface(self.Size.Interface)
+        size_model = self.Size.Interface._model  # type: ignore[attr-defined]
+        self.assertTrue(size_model._meta.get_field("is_active").default)
+        self.assertEqual(size_model.all_objects.count(), 3)
+        self.assertListEqual(
+            list(size_model.all_objects.values_list("is_active", flat=True)),
+            [True, True, True],
+        )
+        self.assertEqual(size_model.objects.count(), 3)
+        self.assertEqual(
+            size_model.objects.filter(
+                container="Flasche", volume="330 milliliter"
+            ).count(),
+            1,
+        )
+        sync_read_only_interface(self.Packaging.Interface)
+
+        package = self.Packaging.filter(type="Einzelflasche 0.33l").first()
+        self.assertIsNotNone(package)
+        self.assertEqual(package.basis_size.container, "Flasche")
+        self.assertEqual(package.basis_size.volume.quantity.magnitude, Decimal("330"))  # type: ignore[attr-defined]
+        self.assertEqual(str(package.basis_size.volume.quantity.units), "milliliter")  # type: ignore[attr-defined]
+
+    def test_foreign_key_lookup_missing_match_fails(self):
+        original_size_data = self.Size._data
+        try:
+            self.Size._data = []
+            sync_read_only_interface(self.Size.Interface)
+            self.assertEqual(self.Size.Interface._model.objects.count(), 0)
+            with self.assertRaises(ReadOnlyRelationLookupError):
+                sync_read_only_interface(self.Packaging.Interface)
+        finally:
+            self.Size._data = original_size_data
+
+    def test_foreign_key_lookup_multiple_matches_fails(self):
+        sync_read_only_interface(self.Size.Interface)
+        original_data = self.Packaging._data
+        try:
+            self.Packaging._data = [
+                {
+                    "type": "Ambiguous",
+                    "total_volume": "1000 milliliter",
+                    "basis_size": {"container": "Flasche"},
+                }
+            ]
+            with self.assertRaises(ReadOnlyRelationLookupError):
+                sync_read_only_interface(self.Packaging.Interface)
+        finally:
+            self.Packaging._data = original_data

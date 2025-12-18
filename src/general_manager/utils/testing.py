@@ -22,7 +22,8 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.infrastructure.startup_hooks import (
-    iter_interface_startup_hooks,
+    registered_startup_hook_entries,
+    order_interfaces_by_dependency,
 )
 
 _original_get_app: Callable[[str], AppConfig | None] = (
@@ -431,22 +432,37 @@ class GeneralManagerTransactionTestCase(
         """
         Collects interfaces declared on the test class's GeneralManager classes, ensures their capabilities are loaded, and executes any registered startup hooks for those interfaces.
 
-        For each GM class in `general_manager_classes`, the method looks for an `Interface` attribute that is a subclass of `InterfaceBase`. If any are found, it calls `get_capabilities()` on each interface class and then runs every startup hook registered via `iter_interface_startup_hooks()` whose interface matches one of the collected interfaces.
+        For each GM class in `general_manager_classes`, the method looks for an `Interface` attribute that is a subclass of `InterfaceBase`. If any are found, it calls `get_capabilities()` on each interface class and then runs every startup hook registered for that interface, preserving the order of `general_manager_classes`.
         """
-        interfaces: set[type[InterfaceBase]] = set()
+        interfaces: list[type[InterfaceBase]] = []
         for manager_class in cls.general_manager_classes:
             interface_cls = getattr(manager_class, "Interface", None)
-            if isinstance(interface_cls, type) and issubclass(
-                interface_cls, InterfaceBase
+            if (
+                isinstance(interface_cls, type)
+                and issubclass(interface_cls, InterfaceBase)
+                and interface_cls not in interfaces
             ):
-                interfaces.add(interface_cls)
+                interfaces.append(interface_cls)
         if not interfaces:
             return
         for interface_cls in interfaces:
             interface_cls.get_capabilities()
-        for interface_cls, hook in iter_interface_startup_hooks():
-            if interface_cls in interfaces:
-                hook()
+
+        registry = registered_startup_hook_entries()
+        # Group interfaces by dependency resolver so each hook set orders independently.
+        resolver_map: dict[object, list[type[InterfaceBase]]] = {}
+        for interface_cls in interfaces:
+            entries = registry.get(interface_cls, ())
+            for entry in entries:
+                key = entry.dependency_resolver
+                resolver_map.setdefault(key, []).append(interface_cls)
+
+        for resolver, iface_list in resolver_map.items():
+            ordered = order_interfaces_by_dependency(iface_list, resolver)  # type: ignore[arg-type]
+            for interface_cls in ordered:
+                for entry in registry.get(interface_cls, ()):
+                    if entry.dependency_resolver is resolver:
+                        entry.hook()
 
     #
     def assert_cache_miss(self) -> None:
