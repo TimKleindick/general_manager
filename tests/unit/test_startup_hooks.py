@@ -20,6 +20,7 @@ from general_manager.interface.capabilities.read_only import (
 )
 from general_manager.interface.infrastructure.startup_hooks import (
     clear_startup_hooks,
+    order_interfaces_by_dependency,
     register_startup_hook,
     registered_startup_hooks,
 )
@@ -168,6 +169,43 @@ class StartupHookRegistryTests(SimpleTestCase):
         for hook in hooks:
             hook()
         self.assertEqual(calls, ["ReadyInterface"])
+
+    def test_order_interfaces_by_dependency_runs_dependencies_first(self) -> None:
+        class InterfaceA(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceB(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceC(InterfaceBase):
+            _interface_type = "c"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        dependency_map = {
+            InterfaceA: {InterfaceB},
+            InterfaceB: {InterfaceC},
+            InterfaceC: set(),
+        }
+
+        def _resolver(interface_cls: type[InterfaceBase]) -> set[type[InterfaceBase]]:
+            return dependency_map.get(interface_cls, set())
+
+        ordered = order_interfaces_by_dependency(
+            [InterfaceA, InterfaceB, InterfaceC],
+            _resolver,
+        )
+        self.assertEqual(ordered, [InterfaceC, InterfaceB, InterfaceA])
 
 
 class StartupHookRunnerTests(SimpleTestCase):

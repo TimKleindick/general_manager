@@ -104,8 +104,7 @@ def order_interfaces_by_dependency(
     }
 
     incoming_counts: Dict[InterfaceType, int] = {
-        iface: sum(1 for deps in dependencies.values() if iface in deps)
-        for iface in interfaces
+        iface: len(dependencies[iface]) for iface in interfaces
     }
     ordered: List[InterfaceType] = []
 
