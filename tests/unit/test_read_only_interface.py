@@ -520,7 +520,7 @@ class SyncDataTests(SimpleTestCase):
         # Reset manager instances
         """
         Prepare the test environment for SyncDataTests.
-        
+
         Resets DummyModel.objects and DummyManager._data, replaces DummyModel._meta.local_fields with test fields, patches the Django transaction.atomic context manager to a no-op, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, starts a logger patch to capture log calls, and instantiates a ReadOnlyManagementCapability for use in tests.
         """
         DummyModel.objects = FakeManager()
@@ -547,7 +547,7 @@ class SyncDataTests(SimpleTestCase):
         def _atomic_exit(*_: object) -> None:
             """
             No-op __exit__ callable intended for use as a dummy context manager exit method.
-            
+
             Accepts any positional and keyword arguments and performs no action.
             """
             return None
@@ -696,7 +696,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
     def setUp(self) -> None:
         """
         Patch django_transaction.atomic to return a no-op context manager used by relation-resolution tests.
-        
+
         Installs and starts a mock patch that replaces the transactional context manager with one that performs no database transaction behavior but still lets exceptions propagate. The active patch object is assigned to `self.atomic_patch` so it can be stopped in tearDown.
         """
 
@@ -713,7 +713,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
             def __exit__(self, *_: object) -> None:
                 """
                 No-op context manager exit that ignores exception information and does not suppress exceptions.
-                
+
                 Accepts the standard context manager exit arguments but always returns None so any exception raised inside the context propagates.
                 """
                 return None
@@ -868,7 +868,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
             def __exit__(self, *_: object) -> None:
                 """
                 No-op context manager exit that ignores exception information and does not suppress exceptions.
-                
+
                 Accepts the standard context manager exit arguments but always returns None so any exception raised inside the context propagates.
                 """
                 return None
@@ -1340,7 +1340,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __enter__(self) -> None:
                 """
                 No-op context-manager entry that performs no setup.
-                
+
                 This method enables use of the object in a `with` statement and intentionally does nothing on entry.
                 """
                 return None
@@ -1348,7 +1348,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __exit__(self, *_: object) -> None:
                 """
                 No-op context manager exit method that ignores exception information and performs no cleanup.
-                
+
                 Parameters:
                     _ (object): Positional arguments for exception type, value, and traceback (ignored).
                 """
@@ -1376,7 +1376,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -1400,7 +1400,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used in tests.
-                    
+
                     Returns:
                         list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
                     """
@@ -1435,7 +1435,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, items: list[object]) -> None:
                 """
                 Initialize the object with an initial list of items.
-                
+
                 Parameters:
                     items (list[object]): Initial collection of items to populate the instance's internal storage.
                 """
@@ -1444,10 +1444,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __getitem__(self, item: object):
                 """
                 Retrieve an element or slice from the underlying container.
-                
+
                 Parameters:
                     item (object): An index or a slice describing the element(s) to retrieve.
-                
+
                 Returns:
                     The element at the given index, or a list (or sequence) corresponding to the provided slice.
                 """
@@ -1458,7 +1458,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def count(self) -> int:
                 """
                 Return the number of items in the collection.
-                
+
                 Returns:
                     int: The count of items in the collection.
                 """
@@ -1468,9 +1468,9 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self) -> None:
                 """
                 Initialize the instance and prepare storage for the most recently used filter kwargs.
-                
+
                 The instance attribute `last_filter_kwargs` records the keyword arguments passed to the last relation-query filter operation; it is set to `None` until a filter has been performed.
-                
+
                 Attributes:
                     last_filter_kwargs (dict[str, object] | None): Keyword arguments from the most recent filter call, or `None` if none have been recorded.
                 """
@@ -1479,12 +1479,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def filter(self, **kwargs: object) -> RelatedQuerySet:
                 """
                 Filter related instances by the provided lookup kwargs and return a RelatedQuerySet of matches.
-                
+
                 The provided lookup kwargs are recorded on `self.last_filter_kwargs` for later inspection.
-                
+
                 Parameters:
                     **kwargs: Lookup criteria used to match related instances.
-                
+
                 Returns:
                     RelatedQuerySet: A queryset-like container with matching related instances, or an empty RelatedQuerySet if no matches are found.
                 """
@@ -1499,7 +1499,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -1523,7 +1523,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used in tests.
-                    
+
                     Returns:
                         list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
                     """
@@ -1561,7 +1561,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, items: list[object]) -> None:
                 """
                 Initialize the object with an initial list of items.
-                
+
                 Parameters:
                     items (list[object]): Initial collection of items to populate the instance's internal storage.
                 """
@@ -1570,10 +1570,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __getitem__(self, item: object):
                 """
                 Retrieve an element or slice from the underlying container.
-                
+
                 Parameters:
                     item (object): An index or a slice describing the element(s) to retrieve.
-                
+
                 Returns:
                     The element at the given index, or a list (or sequence) corresponding to the provided slice.
                 """
@@ -1584,7 +1584,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def count(self) -> int:
                 """
                 Return the number of items in the collection.
-                
+
                 Returns:
                     int: The count of items in the collection.
                 """
@@ -1594,10 +1594,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def filter(self, **_: object) -> RelatedQuerySet:
                 """
                 Provide an empty RelatedQuerySet regardless of supplied filter arguments.
-                
+
                 Parameters:
                     **_ (object): Arbitrary keyword arguments representing filter criteria; accepted but ignored.
-                
+
                 Returns:
                     RelatedQuerySet: An empty RelatedQuerySet instance (contains no items).
                 """
@@ -1610,7 +1610,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -1634,7 +1634,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used in tests.
-                    
+
                     Returns:
                         list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
                     """
@@ -1666,7 +1666,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, items: list[object]) -> None:
                 """
                 Initialize the object with an initial list of items.
-                
+
                 Parameters:
                     items (list[object]): Initial collection of items to populate the instance's internal storage.
                 """
@@ -1675,10 +1675,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __getitem__(self, item: object):
                 """
                 Retrieve an element or slice from the underlying container.
-                
+
                 Parameters:
                     item (object): An index or a slice describing the element(s) to retrieve.
-                
+
                 Returns:
                     The element at the given index, or a list (or sequence) corresponding to the provided slice.
                 """
@@ -1689,7 +1689,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def count(self) -> int:
                 """
                 Return the number of items in the collection.
-                
+
                 Returns:
                     int: The count of items in the collection.
                 """
@@ -1699,10 +1699,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def filter(self, **kwargs: object) -> RelatedQuerySet:
                 """
                 Return a RelatedQuerySet containing related instances that match the provided lookup criteria.
-                
+
                 Parameters:
                     **kwargs (object): Lookup criteria used to filter related instances.
-                
+
                 Returns:
                     RelatedQuerySet: A queryset with two copies of the matching related instance if `kwargs` equals the expected lookup; an empty queryset otherwise.
                 """
@@ -1717,7 +1717,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -1741,7 +1741,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used in tests.
-                    
+
                     Returns:
                         list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
                     """
@@ -1777,7 +1777,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, items: list[object]) -> None:
                 """
                 Initialize the object with an initial list of items.
-                
+
                 Parameters:
                     items (list[object]): Initial collection of items to populate the instance's internal storage.
                 """
@@ -1786,10 +1786,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __getitem__(self, item: object):
                 """
                 Retrieve an element or slice from the underlying container.
-                
+
                 Parameters:
                     item (object): An index or a slice describing the element(s) to retrieve.
-                
+
                 Returns:
                     The element at the given index, or a list (or sequence) corresponding to the provided slice.
                 """
@@ -1800,7 +1800,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def count(self) -> int:
                 """
                 Return the number of items in the collection.
-                
+
                 Returns:
                     int: The count of items in the collection.
                 """
@@ -1810,7 +1810,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self) -> None:
                 """
                 Initialize the object and prepare storage for recording filter keyword-argument snapshots.
-                
+
                 The attribute `last_filter_kwargs` is a list that accumulates dictionaries of keyword arguments passed to recent filter/lookups (each dict maps parameter names to their values).
                 """
                 self.last_filter_kwargs: list[dict[str, object]] = []
@@ -1818,13 +1818,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def filter(self, **kwargs: object) -> RelatedQuerySet:
                 """
                 Record the provided lookup kwargs and return a RelatedQuerySet containing the single matching instance from the internal lookup map, or an empty RelatedQuerySet if none is found.
-                
+
                 Parameters:
                     **kwargs: Attributes and values to match when resolving a related instance.
-                
+
                 Returns:
                     RelatedQuerySet: A queryset-like container with the matched instance if a single match exists, otherwise empty.
-                
+
                 Side effects:
                     Appends a copy of `kwargs` to `self.last_filter_kwargs`.
                 """
@@ -1841,7 +1841,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -1855,7 +1855,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self) -> None:
                 """
                 Initialize the object and create an internal empty list to hold stored items.
-                
+
                 The list is used as the in-memory container for instances managed by this helper.
                 """
                 self._items: list[object] = []
@@ -1863,7 +1863,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def all(self):
                 """
                 Return the queryset-like object unchanged.
-                
+
                 Returns:
                     The same queryset-like object (self).
                 """
@@ -1872,11 +1872,11 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def values_list(self, field: str, flat: bool = False) -> list[object]:
                 """
                 Extracts a named attribute from each item, returning the attribute value when present or the original item when absent.
-                
+
                 Parameters:
                     field (str): Name of the attribute to retrieve from each item.
                     flat (bool): Ignored for compatibility; has no effect on the result.
-                
+
                 Returns:
                     values (list[object]): A list where each element is getattr(item, field) if the item has that attribute, otherwise the original item.
                 """
@@ -1888,7 +1888,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def set(self, values: list[object]) -> None:
                 """
                 Replace the internal item collection with a shallow copy of the given values.
-                
+
                 Parameters:
                     values (list[object]): Sequence of items to store; a shallow copy of this list will become the internal container.
                 """
@@ -1898,14 +1898,14 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def create(self, **kwargs):
                 """
                 Create a FakeInstance with the given attributes and register it with the manager.
-                
+
                 The created instance is marked inactive, saved, and assigned an empty `tags` relation before being stored.
-                
+
                 Parameters:
-                	kwargs: Attributes to set on the created FakeInstance.
-                
+                        kwargs: Attributes to set on the created FakeInstance.
+
                 Returns:
-                	inst (FakeInstance): The newly created and registered fake instance.
+                        inst (FakeInstance): The newly created and registered fake instance.
                 """
                 inst = FakeInstance(**kwargs)
                 inst.is_active = False
@@ -1927,7 +1927,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used by tests, including a many-to-many "tags" relation to RelatedModel.
-                    
+
                     Returns:
                         list: A list containing a FakeManyToMany instance representing the "tags" relation to RelatedModel.
                     """
@@ -1963,7 +1963,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, items: list[object]) -> None:
                 """
                 Initialize the object with an initial list of items.
-                
+
                 Parameters:
                     items (list[object]): Initial collection of items to populate the instance's internal storage.
                 """
@@ -1972,10 +1972,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __getitem__(self, item: object):
                 """
                 Retrieve an element or slice from the underlying container.
-                
+
                 Parameters:
                     item (object): An index or a slice describing the element(s) to retrieve.
-                
+
                 Returns:
                     The element at the given index, or a list (or sequence) corresponding to the provided slice.
                 """
@@ -1986,7 +1986,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def count(self) -> int:
                 """
                 Return the number of items in the collection.
-                
+
                 Returns:
                     int: The count of items in the collection.
                 """
@@ -1996,10 +1996,10 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def filter(self, **_: object) -> RelatedQuerySet:
                 """
                 Provide an empty RelatedQuerySet regardless of supplied filter arguments.
-                
+
                 Parameters:
                     **_ (object): Arbitrary keyword arguments representing filter criteria; accepted but ignored.
-                
+
                 Returns:
                     RelatedQuerySet: An empty RelatedQuerySet instance (contains no items).
                 """
@@ -2012,7 +2012,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -2026,7 +2026,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self) -> None:
                 """
                 Initialize the object and create an internal empty list to hold stored items.
-                
+
                 The list is used as the in-memory container for instances managed by this helper.
                 """
                 self._items: list[object] = []
@@ -2034,7 +2034,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def all(self):
                 """
                 Return the queryset-like object unchanged.
-                
+
                 Returns:
                     The same queryset-like object (self).
                 """
@@ -2043,11 +2043,11 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def values_list(self, field: str, flat: bool = False) -> list[object]:
                 """
                 Extracts a named attribute from each item, returning the attribute value when present or the original item when absent.
-                
+
                 Parameters:
                     field (str): Name of the attribute to retrieve from each item.
                     flat (bool): Ignored for compatibility; has no effect on the result.
-                
+
                 Returns:
                     values (list[object]): A list where each element is getattr(item, field) if the item has that attribute, otherwise the original item.
                 """
@@ -2059,7 +2059,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def set(self, values: list[object]) -> None:
                 """
                 Replace the internal item collection with a shallow copy of the given values.
-                
+
                 Parameters:
                     values (list[object]): Sequence of items to store; a shallow copy of this list will become the internal container.
                 """
@@ -2069,14 +2069,14 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def create(self, **kwargs):
                 """
                 Create a FakeInstance with the given attributes and register it with the manager.
-                
+
                 The created instance is marked inactive, saved, and assigned an empty `tags` relation before being stored.
-                
+
                 Parameters:
-                	kwargs: Attributes to set on the created FakeInstance.
-                
+                        kwargs: Attributes to set on the created FakeInstance.
+
                 Returns:
-                	inst (FakeInstance): The newly created and registered fake instance.
+                        inst (FakeInstance): The newly created and registered fake instance.
                 """
                 inst = FakeInstance(**kwargs)
                 inst.is_active = False
@@ -2098,7 +2098,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used by tests, including a many-to-many "tags" relation to RelatedModel.
-                    
+
                     Returns:
                         list: A list containing a FakeManyToMany instance representing the "tags" relation to RelatedModel.
                     """
@@ -2132,7 +2132,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
             def __init__(self, name: str, remote_model: type) -> None:
                 """
                 Create a minimal relation-like field stub for tests.
-                
+
                 Parameters:
                     name (str): The field's name.
                     remote_model (type): The related model class assigned to the field's `remote_field.model`.
@@ -2155,7 +2155,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 def get_fields():
                     """
                     Provide a list of fake model fields used by tests, including a many-to-many "tags" relation to RelatedModel.
-                    
+
                     Returns:
                         list: A list containing a FakeManyToMany instance representing the "tags" relation to RelatedModel.
                     """
@@ -2188,7 +2188,7 @@ class SyncDataRecursionPreventionTests(SimpleTestCase):
     def test_sync_stack_prevents_reentry(self) -> None:
         """
         Ensure sync_data cannot be re-entered for the same interface.
-        
+
         Verifies that invoking sync_data for an interface does not allow recursive re-entry — the method is called at most once per top-level invocation.
         """
         capability = ReadOnlyManagementCapability()
@@ -2213,13 +2213,13 @@ class SyncDataRecursionPreventionTests(SimpleTestCase):
         def counting_sync(*args, **kwargs):
             """
             Wrapper for a sync function that tracks invocation count and fails the test if the function is re-entered.
-            
+
             This function increments a shared call counter each time it is invoked, calls self.fail(...) to mark the test as failed if the counter exceeds 1 (indicating recursive or re-entrant calls), and forwards all positional and keyword arguments to the original sync function.
-            
+
             Parameters:
                 *args: Positional arguments to pass through to the original sync function.
                 **kwargs: Keyword arguments to pass through to the original sync function.
-            
+
             Returns:
                 The return value of the wrapped `original_sync` function.
             """

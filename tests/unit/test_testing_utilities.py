@@ -269,7 +269,7 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
         def hook() -> None:
             """
             Append the string "ran" to the surrounding `execution_log` list to record that the hook executed.
-            
+
             This function is intended to be used as a startup hook that records invocation by mutating the enclosing `execution_log`.
             """
             execution_log.append("ran")
@@ -303,7 +303,7 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
         def hook_a() -> None:
             """
             Append the string "A" to the shared execution_log list.
-            
+
             This function records that hook A ran by mutating the module-level `execution_log` list.
             """
             execution_log.append("A")

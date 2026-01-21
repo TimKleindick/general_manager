@@ -531,10 +531,10 @@ class ReadOnlyManagementCapability(BaseCapability):
                 ) -> dict[str, object]:
                     """
                     Flatten a nested dictionary into a single-level dict by joining nested keys with '__'.
-                    
+
                     Parameters:
                         lookup_dict (dict[str, object]): Nested mapping whose leaf values will be preserved. Keys are converted to strings before joining.
-                    
+
                     Returns:
                         dict[str, object]: A flat mapping where each key is the path of nested keys joined with '__' and each value is the corresponding leaf value.
                     """
@@ -543,9 +543,9 @@ class ReadOnlyManagementCapability(BaseCapability):
                     def _walk(prefix: str, value: object) -> None:
                         """
                         Recursively flattens a nested mapping into keys joined by '__' and stores results in the outer `flattened` mapping.
-                        
+
                         This helper traverses `value`; when `value` is a dict it recurses into each item, appending the child key to `prefix` with a '__' separator. When `value` is not a dict, it assigns `flattened[prefix] = value`. The function mutates the surrounding `flattened` mapping and returns None.
-                        
+
                         Parameters:
                             prefix (str): Current key path used as the target key in `flattened`.
                             value (object): The value or nested mapping to flatten.
