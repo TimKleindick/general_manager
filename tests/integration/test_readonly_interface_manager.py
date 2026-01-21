@@ -9,21 +9,10 @@ from general_manager.interface.capabilities.read_only import (
 )
 from general_manager.interface.utils.errors import ReadOnlyRelationLookupError
 from general_manager.measurement import Measurement, MeasurementField
-from general_manager.utils.testing import GeneralManagerTransactionTestCase
-
-
-def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
-    """
-    Synchronize the provided ReadOnlyInterface's configured seed data into the database.
-
-    Parameters:
-        interface_cls (type[ReadOnlyInterface]): The ReadOnlyInterface class whose data should be synchronized into persistent storage.
-    """
-    capability = interface_cls.require_capability(
-        "read_only_management",
-        expected_type=ReadOnlyManagementCapability,
-    )
-    capability.sync_data(interface_cls)
+from general_manager.utils.testing import (
+    GeneralManagerTransactionTestCase,
+    run_registered_startup_hooks,
+)
 
 
 class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
@@ -116,7 +105,7 @@ class ReadOnlyWithComplexData(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [Milestone]
 
     def test_sync_populates_database(self):
-        sync_read_only_interface(self.Milestone.Interface)
+        run_registered_startup_hooks(interfaces=[self.Milestone.Interface])
         milestones = self.Milestone.all()
         self.assertEqual(milestones.count(), 2)
         names = {m.name for m in milestones}
@@ -163,7 +152,7 @@ class ReadOnlyWithMeasurementFields(GeneralManagerTransactionTestCase):
           - "Small Box": total_volume_value == Decimal("2"), total_volume_unit == "liter"
           - "Medium Box": total_volume_value == Decimal("0.75"), total_volume_unit == "milliliter"
         """
-        sync_read_only_interface(self.Packaging.Interface)
+        run_registered_startup_hooks(interfaces=[self.Packaging.Interface])
 
         packages = self.Packaging.all()
         self.assertEqual(packages.count(), 2)
@@ -280,7 +269,7 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(warnings, [])
         self.assertTrue(self.Size._data)
-        sync_read_only_interface(self.Size.Interface)
+        run_registered_startup_hooks(interfaces=[self.Size.Interface])
         size_model = self.Size.Interface._model  # type: ignore[attr-defined]
         self.assertTrue(size_model._meta.get_field("is_active").default)
         self.assertEqual(size_model.all_objects.count(), 3)
@@ -295,7 +284,7 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
             ).count(),
             1,
         )
-        sync_read_only_interface(self.Packaging.Interface)
+        run_registered_startup_hooks(interfaces=[self.Packaging.Interface])
 
         package = self.Packaging.filter(type="Einzelflasche 0.33l").first()
         self.assertIsNotNone(package)
@@ -312,15 +301,15 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
         original_size_data = self.Size._data
         try:
             self.Size._data = []
-            sync_read_only_interface(self.Size.Interface)
+            run_registered_startup_hooks(interfaces=[self.Size.Interface])
             self.assertEqual(self.Size.Interface._model.objects.count(), 0)
             with self.assertRaises(ReadOnlyRelationLookupError):
-                sync_read_only_interface(self.Packaging.Interface)
+                run_registered_startup_hooks(interfaces=[self.Packaging.Interface])
         finally:
             self.Size._data = original_size_data
 
     def test_foreign_key_lookup_multiple_matches_fails(self):
-        sync_read_only_interface(self.Size.Interface)
+        run_registered_startup_hooks(interfaces=[self.Size.Interface])
         original_data = self.Packaging._data
         try:
             self.Packaging._data = [
@@ -331,7 +320,7 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
                 }
             ]
             with self.assertRaises(ReadOnlyRelationLookupError):
-                sync_read_only_interface(self.Packaging.Interface)
+                run_registered_startup_hooks(interfaces=[self.Packaging.Interface])
         finally:
             self.Packaging._data = original_data
 
@@ -417,7 +406,7 @@ class ReadOnlyNestedRelationLookupTests(GeneralManagerTransactionTestCase):
         self.City.Interface._model.all_objects.all().delete()
 
     def test_nested_foreign_key_lookup_resolves(self) -> None:
-        sync_read_only_interface(self.City.Interface)
+        run_registered_startup_hooks(interfaces=[self.City.Interface])
         city = self.City.filter(name="Berlin").first()
         self.assertIsNotNone(city)
         self.assertEqual(city.country.code, "DE")
@@ -517,9 +506,9 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
 
     def test_m2m_with_dict_lookups_resolves_correctly(self) -> None:
         """Verify M2M fields can use dict lookups to resolve related instances."""
-        sync_read_only_interface(self.Tag.Interface)
-        sync_read_only_interface(self.Category.Interface)
-        sync_read_only_interface(self.Product.Interface)
+        run_registered_startup_hooks(interfaces=[self.Tag.Interface])
+        run_registered_startup_hooks(interfaces=[self.Category.Interface])
+        run_registered_startup_hooks(interfaces=[self.Product.Interface])
 
         laptop = self.Product.Interface._model.objects.filter(sku="PROD001").first()
         self.assertIsNotNone(laptop)
@@ -530,9 +519,9 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
 
     def test_m2m_with_empty_list_creates_no_relations(self) -> None:
         """Verify M2M field with empty list creates instance with no relations."""
-        sync_read_only_interface(self.Tag.Interface)
-        sync_read_only_interface(self.Category.Interface)
-        sync_read_only_interface(self.Product.Interface)
+        run_registered_startup_hooks(interfaces=[self.Tag.Interface])
+        run_registered_startup_hooks(interfaces=[self.Category.Interface])
+        run_registered_startup_hooks(interfaces=[self.Product.Interface])
 
         tablet = self.Product.Interface._model.objects.filter(sku="PROD003").first()
         self.assertIsNotNone(tablet)
@@ -540,9 +529,9 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
 
     def test_m2m_updates_existing_relations(self) -> None:
         """Verify M2M field updates clear old relations and set new ones."""
-        sync_read_only_interface(self.Tag.Interface)
-        sync_read_only_interface(self.Category.Interface)
-        sync_read_only_interface(self.Product.Interface)
+        run_registered_startup_hooks(interfaces=[self.Tag.Interface])
+        run_registered_startup_hooks(interfaces=[self.Category.Interface])
+        run_registered_startup_hooks(interfaces=[self.Product.Interface])
 
         novel = self.Product.Interface._model.objects.filter(sku="PROD002").first()
         self.assertEqual(novel.tags.count(), 1)
@@ -568,7 +557,7 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
             },
         ]
 
-        sync_read_only_interface(self.Product.Interface)
+        run_registered_startup_hooks(interfaces=[self.Product.Interface])
 
         novel.refresh_from_db()
         tag_names = set(novel.tags.all().values_list("name", flat=True))
@@ -585,9 +574,9 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
             }
         ]
 
-        sync_read_only_interface(self.Tag.Interface)
-        sync_read_only_interface(self.Category.Interface)
-        sync_read_only_interface(self.Product.Interface)
+        run_registered_startup_hooks(interfaces=[self.Tag.Interface])
+        run_registered_startup_hooks(interfaces=[self.Category.Interface])
+        run_registered_startup_hooks(interfaces=[self.Product.Interface])
 
         product = self.Product.Interface._model.objects.filter(sku="PROD999").first()
         self.assertIsNotNone(product)
@@ -608,11 +597,11 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
             }
         ]
 
-        sync_read_only_interface(self.Tag.Interface)
-        sync_read_only_interface(self.Category.Interface)
+        run_registered_startup_hooks(interfaces=[self.Tag.Interface])
+        run_registered_startup_hooks(interfaces=[self.Category.Interface])
 
         with self.assertRaises(InvalidReadOnlyDataFormatError):
-            sync_read_only_interface(self.Product.Interface)
+            run_registered_startup_hooks(interfaces=[self.Product.Interface])
 
 
 class ReadOnlyDependencyOrderingIntegrationTests(GeneralManagerTransactionTestCase):
@@ -692,7 +681,7 @@ class ReadOnlyDependencyOrderingIntegrationTests(GeneralManagerTransactionTestCa
         self.State.Interface._model.all_objects.all().delete()
         self.Country.Interface._model.all_objects.all().delete()
 
-        sync_read_only_interface(self.City.Interface)
+        run_registered_startup_hooks(interfaces=[self.City.Interface])
 
         self.assertEqual(self.Country.Interface._model.objects.count(), 2)
         self.assertEqual(self.State.Interface._model.objects.count(), 3)
@@ -724,8 +713,8 @@ class ReadOnlyDependencyOrderingIntegrationTests(GeneralManagerTransactionTestCa
 
     def test_circular_dependency_handling(self) -> None:
         """Verify system handles potential circular references gracefully."""
-        sync_read_only_interface(self.City.Interface)
-        sync_read_only_interface(self.City.Interface)
+        run_registered_startup_hooks(interfaces=[self.City.Interface])
+        run_registered_startup_hooks(interfaces=[self.City.Interface])
         self.assertEqual(self.City.Interface._model.objects.count(), 3)
 
 
@@ -757,7 +746,7 @@ class ReadOnlyActivationManagerTests(GeneralManagerTransactionTestCase):
 
     def test_uses_all_objects_for_activation_when_available(self) -> None:
         """Verify sync uses all_objects manager for is_active updates."""
-        sync_read_only_interface(self.Status.Interface)
+        run_registered_startup_hooks(interfaces=[self.Status.Interface])
         self.assertEqual(self.Status.Interface._model.objects.count(), 2)
         status = self.Status.Interface._model.objects.get(code="ACTIVE")
         status.is_active = False
@@ -766,7 +755,7 @@ class ReadOnlyActivationManagerTests(GeneralManagerTransactionTestCase):
         self.assertEqual(self.Status.Interface._model.objects.count(), 1)
         self.assertEqual(self.Status.Interface._model.all_objects.count(), 2)
 
-        sync_read_only_interface(self.Status.Interface)
+        run_registered_startup_hooks(interfaces=[self.Status.Interface])
         self.assertEqual(self.Status.Interface._model.objects.count(), 2)
 
     def test_processed_pks_bulk_activation(self) -> None:
@@ -774,7 +763,7 @@ class ReadOnlyActivationManagerTests(GeneralManagerTransactionTestCase):
         self.Status.Interface._model.all_objects.all().update(is_active=False)
         self.assertEqual(self.Status.Interface._model.objects.count(), 0)
 
-        sync_read_only_interface(self.Status.Interface)
+        run_registered_startup_hooks(interfaces=[self.Status.Interface])
         self.assertEqual(self.Status.Interface._model.objects.count(), 2)
 
 
@@ -832,7 +821,7 @@ class ReadOnlyRecursionPreventionIntegrationTests(GeneralManagerTransactionTestC
 
     def test_sync_handles_circular_relations(self) -> None:
         """Verify circular relations do not cause recursion errors."""
-        sync_read_only_interface(self.Alpha.Interface)
+        run_registered_startup_hooks(managers=[self.Alpha])
         self.assertEqual(self.Alpha.Interface._model.objects.count(), 1)
         self.assertEqual(self.Beta.Interface._model.objects.count(), 1)
 

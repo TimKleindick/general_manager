@@ -2,7 +2,7 @@
 
 from contextlib import suppress
 from importlib import import_module
-from typing import Any, Callable, ClassVar, cast
+from typing import Any, Callable, ClassVar, Sequence, cast
 
 from django.apps import AppConfig, apps as global_apps
 from django.conf import settings
@@ -95,6 +95,65 @@ def _get_historical_changes_related_models(
             continue
         related_models.append(cast(type[models.Model], related_model))
     return related_models
+
+
+def run_registered_startup_hooks(
+    *,
+    managers: Sequence[type[GeneralManager]] | None = None,
+    interfaces: Sequence[type[InterfaceBase]] | None = None,
+) -> list[type[InterfaceBase]]:
+    """
+    Run startup hooks registered for the given GeneralManager or Interface classes.
+
+    Parameters:
+        managers (Sequence[type[GeneralManager]] | None): GeneralManager classes to source Interface classes from.
+        interfaces (Sequence[type[InterfaceBase]] | None): Explicit Interface classes to include.
+
+    Returns:
+        list[type[InterfaceBase]]: The ordered interface list whose hooks were considered.
+    """
+    interface_list: list[type[InterfaceBase]] = []
+    if managers:
+        for manager_class in managers:
+            interface_cls = getattr(manager_class, "Interface", None)
+            if (
+                isinstance(interface_cls, type)
+                and issubclass(interface_cls, InterfaceBase)
+                and interface_cls not in interface_list
+            ):
+                interface_list.append(interface_cls)
+    if interfaces:
+        for interface_cls in interfaces:
+            if (
+                isinstance(interface_cls, type)
+                and issubclass(interface_cls, InterfaceBase)
+                and interface_cls not in interface_list
+            ):
+                interface_list.append(interface_cls)
+    if not interface_list:
+        return []
+    for interface_cls in interface_list:
+        interface_cls.get_capabilities()
+
+    registry = registered_startup_hook_entries()
+    # Group interfaces by dependency resolver so each hook set orders independently.
+    resolver_map: dict[DependencyResolver | None, list[type[InterfaceBase]]] = {}
+    for interface_cls in interface_list:
+        entries = registry.get(interface_cls, ())
+        for entry in entries:
+            key = entry.dependency_resolver
+            resolver_list = resolver_map.setdefault(key, [])
+            if interface_cls not in resolver_list:
+                resolver_list.append(interface_cls)
+
+    for resolver, iface_list in resolver_map.items():
+        ordered = order_interfaces_by_dependency(iface_list, resolver)
+        for interface_cls in ordered:
+            for entry in registry.get(interface_cls, ()):
+                if entry.dependency_resolver is resolver:
+                    entry.hook()
+
+    return interface_list
 
 
 class GMTestCaseMeta(type):
@@ -435,37 +494,7 @@ class GeneralManagerTransactionTestCase(
 
         Collects each Interface subclass declared on classes in `general_manager_classes` (preserving that order), ensures each interface's capabilities are initialized by calling `get_capabilities()`, and executes the startup hooks registered for those interfaces. Hooks are executed grouped and ordered per interface dependency resolver so that only hooks whose resolver matches the group run in dependency-resolved sequence.
         """
-        interfaces: list[type[InterfaceBase]] = []
-        for manager_class in cls.general_manager_classes:
-            interface_cls = getattr(manager_class, "Interface", None)
-            if (
-                isinstance(interface_cls, type)
-                and issubclass(interface_cls, InterfaceBase)
-                and interface_cls not in interfaces
-            ):
-                interfaces.append(interface_cls)
-        if not interfaces:
-            return
-        for interface_cls in interfaces:
-            interface_cls.get_capabilities()
-
-        registry = registered_startup_hook_entries()
-        # Group interfaces by dependency resolver so each hook set orders independently.
-        resolver_map: dict[DependencyResolver | None, list[type[InterfaceBase]]] = {}
-        for interface_cls in interfaces:
-            entries = registry.get(interface_cls, ())
-            for entry in entries:
-                key = entry.dependency_resolver
-                resolver_list = resolver_map.setdefault(key, [])
-                if interface_cls not in resolver_list:
-                    resolver_list.append(interface_cls)
-
-        for resolver, iface_list in resolver_map.items():
-            ordered = order_interfaces_by_dependency(iface_list, resolver)
-            for interface_cls in ordered:
-                for entry in registry.get(interface_cls, ()):
-                    if entry.dependency_resolver is resolver:
-                        entry.hook()
+        run_registered_startup_hooks(managers=cls.general_manager_classes)
 
     #
     def assert_cache_miss(self) -> None:

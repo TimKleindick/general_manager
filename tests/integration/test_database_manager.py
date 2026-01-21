@@ -11,28 +11,12 @@ from typing import ClassVar
 from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
-from general_manager.interface.capabilities.read_only import (
-    ReadOnlyManagementCapability,
-)
 from general_manager.bucket.base_bucket import Bucket
 
-from general_manager.utils.testing import GeneralManagerTransactionTestCase
-
-
-def sync_read_only_interface(interface_cls: type[ReadOnlyInterface]) -> None:
-    """
-    Synchronize the authoritative read-only data for a ReadOnlyInterface subclass.
-
-    This obtains the interface's read-only management capability and triggers a data synchronization for the provided interface class.
-
-    Parameters:
-        interface_cls (type[ReadOnlyInterface]): The ReadOnlyInterface subclass whose data should be synchronized.
-    """
-    capability = interface_cls.require_capability(
-        "read_only_management",
-        expected_type=ReadOnlyManagementCapability,
-    )
-    capability.sync_data(interface_cls)
+from general_manager.utils.testing import (
+    GeneralManagerTransactionTestCase,
+    run_registered_startup_hooks,
+)
 
 
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
@@ -413,7 +397,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         # Clear existing data and resync
         self.TestCountry.Interface._model._meta.model.objects.all().delete()
-        sync_read_only_interface(self.TestCountry.Interface)
+        run_registered_startup_hooks(interfaces=[self.TestCountry.Interface])
 
         countries_after_sync = self.TestCountry.all()
         self.assertEqual(len(countries_after_sync), 2)
