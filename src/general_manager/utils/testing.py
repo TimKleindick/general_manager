@@ -76,13 +76,9 @@ def _get_historical_changes_related_models(
     history_model_class: type[models.Model],
 ) -> list[type[models.Model]]:
     """
-    Finds models subclassing `HistoricalChanges` that are related to the given history model via ManyToOne relations.
-
-    Parameters:
-        history_model_class (type[models.Model]): Django model class for a history model to inspect.
-
-    Returns:
-        list[type[models.Model]]: List of related model classes that subclass `HistoricalChanges` and are connected to `history_model_class` by a `ManyToOneRel`.
+    Collects model classes that subclass `HistoricalChanges` and are related to the given history model via a ManyToOne relation.
+    
+    @returns list[type[models.Model]]: List of model classes that subclass `HistoricalChanges` and are connected to `history_model_class` by a `ManyToOneRel`.
     """
     related_models: list[type[models.Model]] = []
     for rel in history_model_class._meta.get_fields():
@@ -103,14 +99,14 @@ def run_registered_startup_hooks(
     interfaces: Sequence[type[InterfaceBase]] | None = None,
 ) -> list[type[InterfaceBase]]:
     """
-    Run startup hooks registered for the given GeneralManager or Interface classes.
-
+    Collects Interface subclasses from the provided GeneralManager classes and/or explicit interface classes, initializes their capabilities, orders them per dependency resolver, and executes their registered startup hooks.
+    
     Parameters:
-        managers (Sequence[type[GeneralManager]] | None): GeneralManager classes to source Interface classes from.
-        interfaces (Sequence[type[InterfaceBase]] | None): Explicit Interface classes to include.
-
+    	managers (Sequence[type[GeneralManager]] | None): GeneralManager classes to source Interface classes from.
+    	interfaces (Sequence[type[InterfaceBase]] | None): Explicit Interface classes to include.
+    
     Returns:
-        list[type[InterfaceBase]]: The ordered interface list whose hooks were considered.
+    	processed_interfaces (list[type[InterfaceBase]]): The list of Interface classes that were collected and whose startup hooks were considered, in the original collection order (not necessarily the execution order).
     """
     interface_list: list[type[InterfaceBase]] = []
     if managers:
@@ -499,9 +495,9 @@ class GeneralManagerTransactionTestCase(
     #
     def assert_cache_miss(self) -> None:
         """
-        Assert that the default test cache experienced a miss followed by a write and then clear the cache operation log.
-
-        Checks the default LoggingCache's `ops` for a `("get", key, False)` entry (cache miss) and a `("set", key)` entry (value stored), failing the test if either is absent. Clears the cache operation log after verification.
+        Assert that the default test cache recorded a miss followed by a set, then clear the cache operation log.
+        
+        Verifies the default LoggingCache's operation log contains a ("get", key, False) entry indicating a cache miss and a ("set", key) entry indicating a subsequent write. Clears the cache ops after verification.
         """
         cache_backend = cast(LoggingCache, caches["default"])
         ops = cache_backend.ops
