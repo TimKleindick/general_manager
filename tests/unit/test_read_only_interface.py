@@ -553,7 +553,7 @@ class SyncDataTests(SimpleTestCase):
             return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            "general_manager.interface.capabilities.read_only.management.django_transaction.atomic",
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
         self.atomic_patch.start()
@@ -717,7 +717,7 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
                 return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            "general_manager.interface.capabilities.read_only.management.django_transaction.atomic",
             return_value=_DummyAtomic(),
         )
         self.atomic_patch.start()
@@ -872,7 +872,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
                 return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            "general_manager.interface.capabilities.read_only.management.django_transaction.atomic",
             return_value=_DummyAtomic(),
         )
         self.atomic_patch.start()
@@ -1342,7 +1342,7 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
                 return None
 
         self.atomic_patch = mock.patch(
-            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            "general_manager.interface.capabilities.read_only.management.django_transaction.atomic",
             return_value=_DummyAtomic(),
         )
         self.atomic_patch.start()
@@ -1865,7 +1865,7 @@ class SyncDataRecursionPreventionTests(SimpleTestCase):
             return original_sync(*args, **kwargs)
 
         atomic_patch = mock.patch(
-            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            "general_manager.interface.capabilities.read_only.management.django_transaction.atomic",
             return_value=mock.MagicMock(
                 __enter__=lambda _: None, __exit__=lambda *_: None
             ),
