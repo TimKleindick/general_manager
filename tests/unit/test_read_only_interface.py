@@ -519,9 +519,9 @@ class SyncDataTests(SimpleTestCase):
     def setUp(self):
         # Reset manager instances
         """
-        Prepare the test environment for SyncDataTests by resetting model manager state, stubbing database transaction and capability methods, and capturing logs.
-
-        Resets DummyModel.objects and DummyManager._data, replaces DummyModel._meta.local_fields with test fields, patches the transaction.atomic context manager to a no-op, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, and starts a logger patch to capture log calls for assertions.
+        Prepare the test environment for SyncDataTests.
+        
+        Resets DummyModel.objects and DummyManager._data, replaces DummyModel._meta.local_fields with test fields, patches the Django transaction.atomic context manager to a no-op, stubs ReadOnlyManagementCapability.get_unique_fields to return {'name'} and ensure_schema_is_up_to_date to return an empty list, starts a logger patch to capture log calls, and instantiates a ReadOnlyManagementCapability for use in tests.
         """
         DummyModel.objects = FakeManager()
         DummyManager._data = None
@@ -546,9 +546,9 @@ class SyncDataTests(SimpleTestCase):
 
         def _atomic_exit(*_: object) -> None:
             """
-            A no-op context manager exit callable that accepts any arguments and does nothing.
-
-            Intended for use as a dummy `__exit__` implementation; it ignores all positional and keyword arguments and performs no action.
+            No-op __exit__ callable intended for use as a dummy context manager exit method.
+            
+            Accepts any positional and keyword arguments and performs no action.
             """
             return None
 
@@ -695,7 +695,9 @@ class SyncDataMetadataValidationTests(SimpleTestCase):
 class SyncDataRelationResolutionTests(SimpleTestCase):
     def setUp(self) -> None:
         """
-        Replace transaction.atomic with a no-op context manager for relation resolution tests.
+        Patch django_transaction.atomic to return a no-op context manager used by relation-resolution tests.
+        
+        Installs and starts a mock patch that replaces the transactional context manager with one that performs no database transaction behavior but still lets exceptions propagate. The active patch object is assigned to `self.atomic_patch` so it can be stopped in tearDown.
         """
 
         class _DummyAtomic:
@@ -710,9 +712,9 @@ class SyncDataRelationResolutionTests(SimpleTestCase):
 
             def __exit__(self, *_: object) -> None:
                 """
-                No-op context manager exit that ignores all exception information and does not suppress exceptions.
-
-                This method accepts the standard context manager exit arguments but ignores them; any exception raised inside the context will propagate.
+                No-op context manager exit that ignores exception information and does not suppress exceptions.
+                
+                Accepts the standard context manager exit arguments but always returns None so any exception raised inside the context propagates.
                 """
                 return None
 
@@ -865,9 +867,9 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
 
             def __exit__(self, *_: object) -> None:
                 """
-                No-op context manager exit that ignores all exception information and does not suppress exceptions.
-
-                This method accepts the standard context manager exit arguments but ignores them; any exception raised inside the context will propagate.
+                No-op context manager exit that ignores exception information and does not suppress exceptions.
+                
+                Accepts the standard context manager exit arguments but always returns None so any exception raised inside the context propagates.
                 """
                 return None
 
@@ -1336,9 +1338,20 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class _DummyAtomic:
             def __enter__(self) -> None:
+                """
+                No-op context-manager entry that performs no setup.
+                
+                This method enables use of the object in a `with` statement and intentionally does nothing on entry.
+                """
                 return None
 
             def __exit__(self, *_: object) -> None:
+                """
+                No-op context manager exit method that ignores exception information and performs no cleanup.
+                
+                Parameters:
+                    _ (object): Positional arguments for exception type, value, and traceback (ignored).
+                """
                 return None
 
         self.atomic_patch = mock.patch(
@@ -1361,6 +1374,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeForeignKey(models.ForeignKey):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1378,6 +1398,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used in tests.
+                    
+                    Returns:
+                        list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
+                    """
                     return [FakeForeignKey("related", RelatedModel)]
 
         class RelationManager:
@@ -1407,21 +1433,61 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class RelatedQuerySet:
             def __init__(self, items: list[object]) -> None:
+                """
+                Initialize the object with an initial list of items.
+                
+                Parameters:
+                    items (list[object]): Initial collection of items to populate the instance's internal storage.
+                """
                 self._items = items
 
             def __getitem__(self, item: object):
+                """
+                Retrieve an element or slice from the underlying container.
+                
+                Parameters:
+                    item (object): An index or a slice describing the element(s) to retrieve.
+                
+                Returns:
+                    The element at the given index, or a list (or sequence) corresponding to the provided slice.
+                """
                 if isinstance(item, slice):
                     return self._items[item]
                 return self._items[item]
 
             def count(self) -> int:
+                """
+                Return the number of items in the collection.
+                
+                Returns:
+                    int: The count of items in the collection.
+                """
                 return len(self._items)
 
         class RelatedManager:
             def __init__(self) -> None:
+                """
+                Initialize the instance and prepare storage for the most recently used filter kwargs.
+                
+                The instance attribute `last_filter_kwargs` records the keyword arguments passed to the last relation-query filter operation; it is set to `None` until a filter has been performed.
+                
+                Attributes:
+                    last_filter_kwargs (dict[str, object] | None): Keyword arguments from the most recent filter call, or `None` if none have been recorded.
+                """
                 self.last_filter_kwargs: dict[str, object] | None = None
 
             def filter(self, **kwargs: object) -> RelatedQuerySet:
+                """
+                Filter related instances by the provided lookup kwargs and return a RelatedQuerySet of matches.
+                
+                The provided lookup kwargs are recorded on `self.last_filter_kwargs` for later inspection.
+                
+                Parameters:
+                    **kwargs: Lookup criteria used to match related instances.
+                
+                Returns:
+                    RelatedQuerySet: A queryset-like container with matching related instances, or an empty RelatedQuerySet if no matches are found.
+                """
                 self.last_filter_kwargs = dict(kwargs)
                 items = [related_instance] if kwargs == expected_lookup else []
                 return RelatedQuerySet(items)
@@ -1431,6 +1497,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeForeignKey(models.ForeignKey):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1448,6 +1521,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used in tests.
+                    
+                    Returns:
+                        list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
+                    """
                     return [FakeForeignKey("related", RelatedModel)]
 
         class RelationManager:
@@ -1480,18 +1559,48 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class RelatedQuerySet:
             def __init__(self, items: list[object]) -> None:
+                """
+                Initialize the object with an initial list of items.
+                
+                Parameters:
+                    items (list[object]): Initial collection of items to populate the instance's internal storage.
+                """
                 self._items = items
 
             def __getitem__(self, item: object):
+                """
+                Retrieve an element or slice from the underlying container.
+                
+                Parameters:
+                    item (object): An index or a slice describing the element(s) to retrieve.
+                
+                Returns:
+                    The element at the given index, or a list (or sequence) corresponding to the provided slice.
+                """
                 if isinstance(item, slice):
                     return self._items[item]
                 return self._items[item]
 
             def count(self) -> int:
+                """
+                Return the number of items in the collection.
+                
+                Returns:
+                    int: The count of items in the collection.
+                """
                 return len(self._items)
 
         class RelatedManager:
             def filter(self, **_: object) -> RelatedQuerySet:
+                """
+                Provide an empty RelatedQuerySet regardless of supplied filter arguments.
+                
+                Parameters:
+                    **_ (object): Arbitrary keyword arguments representing filter criteria; accepted but ignored.
+                
+                Returns:
+                    RelatedQuerySet: An empty RelatedQuerySet instance (contains no items).
+                """
                 return RelatedQuerySet([])
 
         class RelatedModel:
@@ -1499,6 +1608,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeForeignKey(models.ForeignKey):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1516,6 +1632,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used in tests.
+                    
+                    Returns:
+                        list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
+                    """
                     return [FakeForeignKey("related", RelatedModel)]
 
         class RelationManager:
@@ -1542,18 +1664,48 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class RelatedQuerySet:
             def __init__(self, items: list[object]) -> None:
+                """
+                Initialize the object with an initial list of items.
+                
+                Parameters:
+                    items (list[object]): Initial collection of items to populate the instance's internal storage.
+                """
                 self._items = items
 
             def __getitem__(self, item: object):
+                """
+                Retrieve an element or slice from the underlying container.
+                
+                Parameters:
+                    item (object): An index or a slice describing the element(s) to retrieve.
+                
+                Returns:
+                    The element at the given index, or a list (or sequence) corresponding to the provided slice.
+                """
                 if isinstance(item, slice):
                     return self._items[item]
                 return self._items[item]
 
             def count(self) -> int:
+                """
+                Return the number of items in the collection.
+                
+                Returns:
+                    int: The count of items in the collection.
+                """
                 return len(self._items)
 
         class RelatedManager:
             def filter(self, **kwargs: object) -> RelatedQuerySet:
+                """
+                Return a RelatedQuerySet containing related instances that match the provided lookup criteria.
+                
+                Parameters:
+                    **kwargs (object): Lookup criteria used to filter related instances.
+                
+                Returns:
+                    RelatedQuerySet: A queryset with two copies of the matching related instance if `kwargs` equals the expected lookup; an empty queryset otherwise.
+                """
                 if kwargs == expected_lookup:
                     return RelatedQuerySet([related_instance, related_instance])
                 return RelatedQuerySet([])
@@ -1563,6 +1715,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeForeignKey(models.ForeignKey):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1580,6 +1739,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used in tests.
+                    
+                    Returns:
+                        list: A list containing a FakeForeignKey named "related" that targets `RelatedModel`.
+                    """
                     return [FakeForeignKey("related", RelatedModel)]
 
         class RelationManager:
@@ -1610,21 +1775,59 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class RelatedQuerySet:
             def __init__(self, items: list[object]) -> None:
+                """
+                Initialize the object with an initial list of items.
+                
+                Parameters:
+                    items (list[object]): Initial collection of items to populate the instance's internal storage.
+                """
                 self._items = items
 
             def __getitem__(self, item: object):
+                """
+                Retrieve an element or slice from the underlying container.
+                
+                Parameters:
+                    item (object): An index or a slice describing the element(s) to retrieve.
+                
+                Returns:
+                    The element at the given index, or a list (or sequence) corresponding to the provided slice.
+                """
                 if isinstance(item, slice):
                     return self._items[item]
                 return self._items[item]
 
             def count(self) -> int:
+                """
+                Return the number of items in the collection.
+                
+                Returns:
+                    int: The count of items in the collection.
+                """
                 return len(self._items)
 
         class RelatedManager:
             def __init__(self) -> None:
+                """
+                Initialize the object and prepare storage for recording filter keyword-argument snapshots.
+                
+                The attribute `last_filter_kwargs` is a list that accumulates dictionaries of keyword arguments passed to recent filter/lookups (each dict maps parameter names to their values).
+                """
                 self.last_filter_kwargs: list[dict[str, object]] = []
 
             def filter(self, **kwargs: object) -> RelatedQuerySet:
+                """
+                Record the provided lookup kwargs and return a RelatedQuerySet containing the single matching instance from the internal lookup map, or an empty RelatedQuerySet if none is found.
+                
+                Parameters:
+                    **kwargs: Attributes and values to match when resolving a related instance.
+                
+                Returns:
+                    RelatedQuerySet: A queryset-like container with the matched instance if a single match exists, otherwise empty.
+                
+                Side effects:
+                    Appends a copy of `kwargs` to `self.last_filter_kwargs`.
+                """
                 self.last_filter_kwargs.append(dict(kwargs))
                 key = tuple(sorted(kwargs.items()))
                 instance = lookup_map.get(key)
@@ -1636,6 +1839,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeManyToMany(models.ManyToManyField):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1643,22 +1853,60 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeM2MRelation:
             def __init__(self) -> None:
+                """
+                Initialize the object and create an internal empty list to hold stored items.
+                
+                The list is used as the in-memory container for instances managed by this helper.
+                """
                 self._items: list[object] = []
 
             def all(self):
+                """
+                Return the queryset-like object unchanged.
+                
+                Returns:
+                    The same queryset-like object (self).
+                """
                 return self
 
             def values_list(self, field: str, flat: bool = False) -> list[object]:
+                """
+                Extracts a named attribute from each item, returning the attribute value when present or the original item when absent.
+                
+                Parameters:
+                    field (str): Name of the attribute to retrieve from each item.
+                    flat (bool): Ignored for compatibility; has no effect on the result.
+                
+                Returns:
+                    values (list[object]): A list where each element is getattr(item, field) if the item has that attribute, otherwise the original item.
+                """
                 return [
                     getattr(item, field) if hasattr(item, field) else item
                     for item in self._items
                 ]
 
             def set(self, values: list[object]) -> None:
+                """
+                Replace the internal item collection with a shallow copy of the given values.
+                
+                Parameters:
+                    values (list[object]): Sequence of items to store; a shallow copy of this list will become the internal container.
+                """
                 self._items = list(values)
 
         class M2MManager(FakeManager):
             def create(self, **kwargs):
+                """
+                Create a FakeInstance with the given attributes and register it with the manager.
+                
+                The created instance is marked inactive, saved, and assigned an empty `tags` relation before being stored.
+                
+                Parameters:
+                	kwargs: Attributes to set on the created FakeInstance.
+                
+                Returns:
+                	inst (FakeInstance): The newly created and registered fake instance.
+                """
                 inst = FakeInstance(**kwargs)
                 inst.is_active = False
                 inst.save()
@@ -1677,6 +1925,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used by tests, including a many-to-many "tags" relation to RelatedModel.
+                    
+                    Returns:
+                        list: A list containing a FakeManyToMany instance representing the "tags" relation to RelatedModel.
+                    """
                     return [FakeManyToMany("tags", RelatedModel)]
 
         class RelationManager:
@@ -1707,18 +1961,48 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class RelatedQuerySet:
             def __init__(self, items: list[object]) -> None:
+                """
+                Initialize the object with an initial list of items.
+                
+                Parameters:
+                    items (list[object]): Initial collection of items to populate the instance's internal storage.
+                """
                 self._items = items
 
             def __getitem__(self, item: object):
+                """
+                Retrieve an element or slice from the underlying container.
+                
+                Parameters:
+                    item (object): An index or a slice describing the element(s) to retrieve.
+                
+                Returns:
+                    The element at the given index, or a list (or sequence) corresponding to the provided slice.
+                """
                 if isinstance(item, slice):
                     return self._items[item]
                 return self._items[item]
 
             def count(self) -> int:
+                """
+                Return the number of items in the collection.
+                
+                Returns:
+                    int: The count of items in the collection.
+                """
                 return len(self._items)
 
         class RelatedManager:
             def filter(self, **_: object) -> RelatedQuerySet:
+                """
+                Provide an empty RelatedQuerySet regardless of supplied filter arguments.
+                
+                Parameters:
+                    **_ (object): Arbitrary keyword arguments representing filter criteria; accepted but ignored.
+                
+                Returns:
+                    RelatedQuerySet: An empty RelatedQuerySet instance (contains no items).
+                """
                 return RelatedQuerySet([])
 
         class RelatedModel:
@@ -1726,6 +2010,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeManyToMany(models.ManyToManyField):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1733,22 +2024,60 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeM2MRelation:
             def __init__(self) -> None:
+                """
+                Initialize the object and create an internal empty list to hold stored items.
+                
+                The list is used as the in-memory container for instances managed by this helper.
+                """
                 self._items: list[object] = []
 
             def all(self):
+                """
+                Return the queryset-like object unchanged.
+                
+                Returns:
+                    The same queryset-like object (self).
+                """
                 return self
 
             def values_list(self, field: str, flat: bool = False) -> list[object]:
+                """
+                Extracts a named attribute from each item, returning the attribute value when present or the original item when absent.
+                
+                Parameters:
+                    field (str): Name of the attribute to retrieve from each item.
+                    flat (bool): Ignored for compatibility; has no effect on the result.
+                
+                Returns:
+                    values (list[object]): A list where each element is getattr(item, field) if the item has that attribute, otherwise the original item.
+                """
                 return [
                     getattr(item, field) if hasattr(item, field) else item
                     for item in self._items
                 ]
 
             def set(self, values: list[object]) -> None:
+                """
+                Replace the internal item collection with a shallow copy of the given values.
+                
+                Parameters:
+                    values (list[object]): Sequence of items to store; a shallow copy of this list will become the internal container.
+                """
                 self._items = list(values)
 
         class M2MManager(FakeManager):
             def create(self, **kwargs):
+                """
+                Create a FakeInstance with the given attributes and register it with the manager.
+                
+                The created instance is marked inactive, saved, and assigned an empty `tags` relation before being stored.
+                
+                Parameters:
+                	kwargs: Attributes to set on the created FakeInstance.
+                
+                Returns:
+                	inst (FakeInstance): The newly created and registered fake instance.
+                """
                 inst = FakeInstance(**kwargs)
                 inst.is_active = False
                 inst.save()
@@ -1767,6 +2096,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used by tests, including a many-to-many "tags" relation to RelatedModel.
+                    
+                    Returns:
+                        list: A list containing a FakeManyToMany instance representing the "tags" relation to RelatedModel.
+                    """
                     return [FakeManyToMany("tags", RelatedModel)]
 
         class RelationManager:
@@ -1795,6 +2130,13 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
         class FakeManyToMany(models.ManyToManyField):
             def __init__(self, name: str, remote_model: type) -> None:
+                """
+                Create a minimal relation-like field stub for tests.
+                
+                Parameters:
+                    name (str): The field's name.
+                    remote_model (type): The related model class assigned to the field's `remote_field.model`.
+                """
                 self.name = name
                 self.remote_field = SimpleNamespace(model=remote_model)
                 self.is_relation = True
@@ -1811,6 +2153,12 @@ class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields():
+                    """
+                    Provide a list of fake model fields used by tests, including a many-to-many "tags" relation to RelatedModel.
+                    
+                    Returns:
+                        list: A list containing a FakeManyToMany instance representing the "tags" relation to RelatedModel.
+                    """
                     return [FakeManyToMany("tags", RelatedModel)]
 
         class RelationManager:
@@ -1838,7 +2186,11 @@ class SyncDataRecursionPreventionTests(SimpleTestCase):
     """Tests for preventing infinite recursion in sync_data."""
 
     def test_sync_stack_prevents_reentry(self) -> None:
-        """Verify sync_data prevents recursive calls to same interface."""
+        """
+        Ensure sync_data cannot be re-entered for the same interface.
+        
+        Verifies that invoking sync_data for an interface does not allow recursive re-entry — the method is called at most once per top-level invocation.
+        """
         capability = ReadOnlyManagementCapability()
 
         class TestManager:
@@ -1859,6 +2211,18 @@ class SyncDataRecursionPreventionTests(SimpleTestCase):
         call_count = [0]
 
         def counting_sync(*args, **kwargs):
+            """
+            Wrapper for a sync function that tracks invocation count and fails the test if the function is re-entered.
+            
+            This function increments a shared call counter each time it is invoked, calls self.fail(...) to mark the test as failed if the counter exceeds 1 (indicating recursive or re-entrant calls), and forwards all positional and keyword arguments to the original sync function.
+            
+            Parameters:
+                *args: Positional arguments to pass through to the original sync function.
+                **kwargs: Keyword arguments to pass through to the original sync function.
+            
+            Returns:
+                The return value of the wrapped `original_sync` function.
+            """
             call_count[0] += 1
             if call_count[0] > 1:
                 self.fail("sync_data was called recursively")
