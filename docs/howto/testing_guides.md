@@ -19,6 +19,27 @@ Use the following strategies to test managers, permissions, and GraphQL APIs eff
 - Snapshot responses when the schema is stable to detect unintended changes.
 - Verify pagination metadata (`pageInfo`) when you change bucket filters.
 
+## Startup hooks in tests
+
+- `GeneralManagerTransactionTestCase` runs registered startup hooks for the classes in `general_manager_classes` during `setUp`.
+- If you need to run hooks directly (for a subset of interfaces), call `general_manager.utils.testing.run_registered_startup_hooks`.
+
+Example:
+
+```python
+from general_manager.utils.testing import run_registered_startup_hooks
+
+run_registered_startup_hooks(interfaces=[MyManager.Interface])
+```
+
+or for managers:
+
+```python
+from general_manager.utils.testing import run_registered_startup_hooks
+
+run_registered_startup_hooks(managers=[MyManager])
+```
+
 ## Performance tests
 
 - Populate data with factories and measure query times using Django's `assertNumQueries` context manager.
