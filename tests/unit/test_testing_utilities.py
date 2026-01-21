@@ -252,3 +252,64 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
         FakeTestCase._run_registered_startup_hooks()
 
         self.assertEqual(execution_count[0], 1)
+
+    def test_public_run_hooks_accepts_interfaces(self) -> None:
+        """Verify run_registered_startup_hooks executes hooks for explicit interfaces."""
+        from general_manager.utils.testing import run_registered_startup_hooks
+
+        execution_log: list[str] = []
+
+        class TestInterface(InterfaceBase):
+            _interface_type = "test"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        def hook() -> None:
+            execution_log.append("ran")
+
+        register_startup_hook(TestInterface, hook)
+
+        run_registered_startup_hooks(interfaces=[TestInterface])
+
+        self.assertEqual(execution_log, ["ran"])
+
+    def test_public_run_hooks_combines_managers_and_interfaces(self) -> None:
+        """Verify run_registered_startup_hooks merges manager and interface inputs."""
+        from general_manager.utils.testing import run_registered_startup_hooks
+
+        execution_log: list[str] = []
+
+        class InterfaceA(InterfaceBase):
+            _interface_type = "a"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        class InterfaceB(InterfaceBase):
+            _interface_type = "b"
+            input_fields: ClassVar[dict[str, object]] = {}
+            configured_capabilities: ClassVar[
+                tuple[InterfaceCapabilityConfig, ...]
+            ] = ()
+
+        def hook_a() -> None:
+            execution_log.append("A")
+
+        def hook_b() -> None:
+            execution_log.append("B")
+
+        register_startup_hook(InterfaceA, hook_a)
+        register_startup_hook(InterfaceB, hook_b)
+
+        class FakeManager:
+            Interface = InterfaceA
+
+        run_registered_startup_hooks(
+            managers=[FakeManager],
+            interfaces=[InterfaceB, InterfaceA],
+        )
+
+        self.assertEqual(sorted(execution_log), ["A", "B"])
