@@ -22,6 +22,7 @@ from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
 )
 from general_manager.interface.utils.errors import (
+    InvalidReadOnlyDataFormatError,
     MissingReadOnlyBindingError,
     ReadOnlyRelationLookupError,
 )
@@ -1328,33 +1329,506 @@ class GetUniqueFieldsMeasurementRemappingTests(SimpleTestCase):
 class SyncDataRelationResolutionPlaceholderTests(SimpleTestCase):
     """Tests for relation field resolution in sync_data."""
 
+    def setUp(self) -> None:
+        """
+        Replace transaction.atomic with a no-op context manager for relation resolution tests.
+        """
+
+        class _DummyAtomic:
+            def __enter__(self) -> None:
+                return None
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+        self.atomic_patch = mock.patch(
+            "general_manager.interface.capabilities.read_only.django_transaction.atomic",
+            return_value=_DummyAtomic(),
+        )
+        self.atomic_patch.start()
+
+    def tearDown(self) -> None:
+        """
+        Stop the atomic transaction patch applied during test setup.
+        """
+        self.atomic_patch.stop()
+
     def test_resolve_to_instance_returns_unchanged_non_dict(self) -> None:
         """Verify _resolve_to_instance returns non-dict values unchanged."""
-        pass
+
+        class RelatedModel:
+            objects = FakeManager()
+
+        class FakeForeignKey(models.ForeignKey):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class RelationModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                    FakeField("related"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeForeignKey("related", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {"name": "alpha", "related": 123}
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(
+            RelationInterface,
+            unique_fields={"name"},
+            schema_validated=True,
+        )
+
+        self.assertEqual(len(RelationModel.objects._instances), 1)
+        instance = RelationModel.objects._instances[0]
+        self.assertEqual(instance.related, 123)
 
     def test_foreign_key_dict_lookup_single_match(self) -> None:
         """Verify dict lookups for ForeignKey fields resolve to instances."""
-        pass
+        related_instance = FakeInstance(code="X1", pk=100)
+        expected_lookup = {"code": "X1", "region__slug": "eu"}
+
+        class RelatedQuerySet:
+            def __init__(self, items: list[object]) -> None:
+                self._items = items
+
+            def __getitem__(self, item: object):
+                if isinstance(item, slice):
+                    return self._items[item]
+                return self._items[item]
+
+            def count(self) -> int:
+                return len(self._items)
+
+        class RelatedManager:
+            def __init__(self) -> None:
+                self.last_filter_kwargs: dict[str, object] | None = None
+
+            def filter(self, **kwargs: object) -> RelatedQuerySet:
+                self.last_filter_kwargs = dict(kwargs)
+                items = [related_instance] if kwargs == expected_lookup else []
+                return RelatedQuerySet(items)
+
+        class RelatedModel:
+            objects = RelatedManager()
+
+        class FakeForeignKey(models.ForeignKey):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class RelationModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                    FakeField("related"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeForeignKey("related", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {
+                    "name": "alpha",
+                    "related": {"code": "X1", "region": {"slug": "eu"}},
+                }
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(
+            RelationInterface,
+            unique_fields={"name"},
+            schema_validated=True,
+        )
+
+        self.assertEqual(len(RelationModel.objects._instances), 1)
+        instance = RelationModel.objects._instances[0]
+        self.assertIs(instance.related, related_instance)
+        self.assertEqual(RelatedModel.objects.last_filter_kwargs, expected_lookup)
 
     def test_foreign_key_dict_lookup_no_matches_raises(self) -> None:
         """Verify dict lookups with no matches raise ReadOnlyRelationLookupError."""
-        pass
+        expected_lookup = {"code": "missing"}
+
+        class RelatedQuerySet:
+            def __init__(self, items: list[object]) -> None:
+                self._items = items
+
+            def __getitem__(self, item: object):
+                if isinstance(item, slice):
+                    return self._items[item]
+                return self._items[item]
+
+            def count(self) -> int:
+                return len(self._items)
+
+        class RelatedManager:
+            def filter(self, **_: object) -> RelatedQuerySet:
+                return RelatedQuerySet([])
+
+        class RelatedModel:
+            objects = RelatedManager()
+
+        class FakeForeignKey(models.ForeignKey):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class RelationModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                    FakeField("related"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeForeignKey("related", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {"name": "alpha", "related": expected_lookup}
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        with self.assertRaises(ReadOnlyRelationLookupError):
+            capability.sync_data(
+                RelationInterface,
+                unique_fields={"name"},
+                schema_validated=True,
+            )
 
     def test_foreign_key_dict_lookup_multiple_matches_raises(self) -> None:
         """Verify dict lookups with multiple matches raise ReadOnlyRelationLookupError."""
-        pass
+        related_instance = FakeInstance(code="X1", pk=100)
+        expected_lookup = {"code": "X1"}
+
+        class RelatedQuerySet:
+            def __init__(self, items: list[object]) -> None:
+                self._items = items
+
+            def __getitem__(self, item: object):
+                if isinstance(item, slice):
+                    return self._items[item]
+                return self._items[item]
+
+            def count(self) -> int:
+                return len(self._items)
+
+        class RelatedManager:
+            def filter(self, **kwargs: object) -> RelatedQuerySet:
+                if kwargs == expected_lookup:
+                    return RelatedQuerySet([related_instance, related_instance])
+                return RelatedQuerySet([])
+
+        class RelatedModel:
+            objects = RelatedManager()
+
+        class FakeForeignKey(models.ForeignKey):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class RelationModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                    FakeField("related"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeForeignKey("related", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {"name": "alpha", "related": expected_lookup}
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        with self.assertRaises(ReadOnlyRelationLookupError):
+            capability.sync_data(
+                RelationInterface,
+                unique_fields={"name"},
+                schema_validated=True,
+            )
 
     def test_many_to_many_resolution_with_dicts(self) -> None:
         """Verify M2M fields accept list of dicts for related object lookups."""
-        pass
+        related_instance_a = FakeInstance(slug="a", pk=1)
+        related_instance_b = FakeInstance(slug="b", pk=2)
+        lookup_map = {
+            (("slug", "a"),): related_instance_a,
+            (("category__name", "special"),): related_instance_b,
+        }
+
+        class RelatedQuerySet:
+            def __init__(self, items: list[object]) -> None:
+                self._items = items
+
+            def __getitem__(self, item: object):
+                if isinstance(item, slice):
+                    return self._items[item]
+                return self._items[item]
+
+            def count(self) -> int:
+                return len(self._items)
+
+        class RelatedManager:
+            def __init__(self) -> None:
+                self.last_filter_kwargs: list[dict[str, object]] = []
+
+            def filter(self, **kwargs: object) -> RelatedQuerySet:
+                self.last_filter_kwargs.append(dict(kwargs))
+                key = tuple(sorted(kwargs.items()))
+                instance = lookup_map.get(key)
+                items = [instance] if instance is not None else []
+                return RelatedQuerySet(items)
+
+        class RelatedModel:
+            objects = RelatedManager()
+
+        class FakeManyToMany(models.ManyToManyField):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class FakeM2MRelation:
+            def __init__(self) -> None:
+                self._items: list[object] = []
+
+            def all(self):
+                return self
+
+            def values_list(self, field: str, flat: bool = False) -> list[object]:
+                return [
+                    getattr(item, field) if hasattr(item, field) else item
+                    for item in self._items
+                ]
+
+            def set(self, values: list[object]) -> None:
+                self._items = list(values)
+
+        class M2MManager(FakeManager):
+            def create(self, **kwargs):
+                inst = FakeInstance(**kwargs)
+                inst.is_active = False
+                inst.save()
+                inst.tags = FakeM2MRelation()
+                self._instances.append(inst)
+                return inst
+
+        class RelationModel:
+            objects = M2MManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeManyToMany("tags", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {
+                    "name": "alpha",
+                    "tags": [{"slug": "a"}, {"category": {"name": "special"}}],
+                }
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(
+            RelationInterface,
+            unique_fields={"name"},
+            schema_validated=True,
+        )
+
+        self.assertEqual(len(RelationModel.objects._instances), 1)
+        instance = RelationModel.objects._instances[0]
+        self.assertEqual(instance.tags._items, [1, 2])
 
     def test_many_to_many_none_returns_empty_list(self) -> None:
         """Verify M2M field with None value resolves to empty list."""
-        pass
+
+        class RelatedQuerySet:
+            def __init__(self, items: list[object]) -> None:
+                self._items = items
+
+            def __getitem__(self, item: object):
+                if isinstance(item, slice):
+                    return self._items[item]
+                return self._items[item]
+
+            def count(self) -> int:
+                return len(self._items)
+
+        class RelatedManager:
+            def filter(self, **_: object) -> RelatedQuerySet:
+                return RelatedQuerySet([])
+
+        class RelatedModel:
+            objects = RelatedManager()
+
+        class FakeManyToMany(models.ManyToManyField):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class FakeM2MRelation:
+            def __init__(self) -> None:
+                self._items: list[object] = []
+
+            def all(self):
+                return self
+
+            def values_list(self, field: str, flat: bool = False) -> list[object]:
+                return [
+                    getattr(item, field) if hasattr(item, field) else item
+                    for item in self._items
+                ]
+
+            def set(self, values: list[object]) -> None:
+                self._items = list(values)
+
+        class M2MManager(FakeManager):
+            def create(self, **kwargs):
+                inst = FakeInstance(**kwargs)
+                inst.is_active = False
+                inst.save()
+                inst.tags = FakeM2MRelation()
+                self._instances.append(inst)
+                return inst
+
+        class RelationModel:
+            objects = M2MManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeManyToMany("tags", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [{"name": "alpha", "tags": None}]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(
+            RelationInterface,
+            unique_fields={"name"},
+            schema_validated=True,
+        )
+
+        self.assertEqual(len(RelationModel.objects._instances), 1)
+        instance = RelationModel.objects._instances[0]
+        self.assertEqual(instance.tags._items, [])
 
     def test_many_to_many_non_list_raises_format_error(self) -> None:
         """Verify M2M field with non-list value raises InvalidReadOnlyDataFormatError."""
-        pass
+
+        class RelatedModel:
+            objects = FakeManager()
+
+        class FakeManyToMany(models.ManyToManyField):
+            def __init__(self, name: str, remote_model: type) -> None:
+                self.name = name
+                self.remote_field = SimpleNamespace(model=remote_model)
+                self.is_relation = True
+                self.auto_created = False
+
+        class RelationModel:
+            objects = FakeManager()
+
+            class _meta:
+                local_fields: ClassVar[list[FakeField]] = [
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                ]
+
+                @staticmethod
+                def get_fields():
+                    return [FakeManyToMany("tags", RelatedModel)]
+
+        class RelationManager:
+            _data: ClassVar[list[dict[str, object]]] = [
+                {"name": "alpha", "tags": "not-a-list"}
+            ]
+
+        class RelationInterface(ReadOnlyInterface):
+            _model = RelationModel
+            _parent_class = RelationManager
+
+        capability = ReadOnlyManagementCapability()
+        with self.assertRaises(InvalidReadOnlyDataFormatError):
+            capability.sync_data(
+                RelationInterface,
+                unique_fields={"name"},
+                schema_validated=True,
+            )
 
 
 # ------------------------------------------------------------

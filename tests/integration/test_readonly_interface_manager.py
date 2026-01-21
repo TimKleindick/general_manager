@@ -336,6 +336,94 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
             self.Packaging._data = original_data
 
 
+class ReadOnlyNestedRelationLookupTests(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        """
+        Set up Region, Country, and City managers for nested foreign-key lookups.
+
+        Region and Country are read-only interfaces with a foreign key from Country to Region.
+        City is a read-only interface with a foreign key to Country, and its seed data resolves
+        the Country relation using a nested lookup dict.
+        """
+
+        class Region(GeneralManager):
+            code: str
+            name: str
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"code": "EU", "name": "Europe"},
+                {"code": "NA", "name": "North America"},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=2, unique=True)
+                name = CharField(max_length=50)
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class Country(GeneralManager):
+            code: str
+            name: str
+            region: Region
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {"code": "DE", "name": "Germany", "region": {"code": "EU"}},
+                {"code": "US", "name": "United States", "region": {"code": "NA"}},
+            ]
+
+            class Interface(ReadOnlyInterface):
+                code = CharField(max_length=2, unique=True)
+                name = CharField(max_length=50)
+                region = models.ForeignKey(
+                    "Region",
+                    on_delete=models.CASCADE,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        class City(GeneralManager):
+            name: str
+            country: Country
+
+            _data: ClassVar[list[dict[str, Any]]] = [
+                {
+                    "name": "Berlin",
+                    "country": {"code": "DE", "region": {"code": "EU"}},
+                }
+            ]
+
+            class Interface(ReadOnlyInterface):
+                name = CharField(max_length=50, unique=True)
+                country = models.ForeignKey(
+                    "Country",
+                    on_delete=models.CASCADE,
+                )
+
+                class Meta:
+                    app_label = "general_manager"
+
+        cls.Region = Region
+        cls.Country = Country
+        cls.City = City
+        cls.general_manager_classes = [Region, Country, City]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.Region.Interface._model.all_objects.all().delete()
+        self.Country.Interface._model.all_objects.all().delete()
+        self.City.Interface._model.all_objects.all().delete()
+
+    def test_nested_foreign_key_lookup_resolves(self) -> None:
+        sync_read_only_interface(self.City.Interface)
+        city = self.City.filter(name="Berlin").first()
+        self.assertIsNotNone(city)
+        self.assertEqual(city.country.code, "DE")
+        self.assertEqual(city.country.region.code, "EU")
+
+
 class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
     """Integration tests for M2M field handling in read-only interfaces."""
 

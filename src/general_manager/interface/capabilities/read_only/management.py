@@ -525,6 +525,24 @@ class ReadOnlyManagementCapability(BaseCapability):
                 if not isinstance(raw_value, dict):
                     return raw_value
                 lookup = cast(dict[str, object], raw_value)
+
+                def _flatten_lookup(
+                    lookup_dict: dict[str, object],
+                ) -> dict[str, object]:
+                    flattened: dict[str, object] = {}
+
+                    def _walk(prefix: str, value: object) -> None:
+                        if isinstance(value, dict):
+                            for key, child in value.items():
+                                _walk(f"{prefix}__{key}", child)
+                            return
+                        flattened[prefix] = value
+
+                    for key, value in lookup_dict.items():
+                        _walk(str(key), value)
+                    return flattened
+
+                lookup = _flatten_lookup(lookup)
                 qs = remote_model.objects.filter(**lookup)
                 matches = list(qs[:2])
                 match_count = len(matches)
