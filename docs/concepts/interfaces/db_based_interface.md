@@ -72,7 +72,7 @@ class Country(GeneralManager):
         name = CharField(max_length=50)
 ```
 
-On startup the interface synchronises `_data` with the table, creating, updating, or soft-deleting entries as needed (read-only interfaces force `Meta.use_soft_delete = True`). Managers expose read operations only; write attempts raise exceptions.
+On startup the interface synchronises `_data` with the table, creating, updating, or soft-deleting entries as needed (read-only interfaces force `Meta.use_soft_delete = True`). Managers expose read operations only; write attempts raise exceptions. Foreign-key lookups in read-only `_data` accept nested dictionaries and are flattened into Django-style `__` lookups during synchronisation.
 
 ## Validation hooks
 
