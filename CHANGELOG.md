@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.26.0 (2026-01-21)
+
+### Bug Fixes
+
+- Update import path for atomic transaction in SyncDataRelationResolutionTests
+  ([`440007c`](https://github.com/TimKleindick/general_manager/commit/440007c2d208de66c844c40efad465aa10e3f7ab))
+
+### Documentation
+
+- Add section on startup hooks in tests with usage examples
+  ([`46dd881`](https://github.com/TimKleindick/general_manager/commit/46dd8819ebe5729771a0a659025c2815b5bf6362))
+
+- Enhance read-only interface to support nested foreign-key lookups during data synchronization
+  ([`dbb8d6a`](https://github.com/TimKleindick/general_manager/commit/dbb8d6a5691fe15f97d1f97d64fa1440c12ffccf))
+
+### Features
+
+- Add run_registered_startup_hooks function to execute startup hooks for managers and interfaces
+  ([`33562d0`](https://github.com/TimKleindick/general_manager/commit/33562d06a336863d75f63fc1c46e0faca42e3e29))
+
+- Implement nested foreign-key lookups in ReadOnlyManagementCapability and add corresponding
+  integration tests
+  ([`8a5c19e`](https://github.com/TimKleindick/general_manager/commit/8a5c19e5bf71415937faabed65e22a58b1286996))
+
+
 ## v0.25.0 (2025-12-18)
 
 ### Bug Fixes
