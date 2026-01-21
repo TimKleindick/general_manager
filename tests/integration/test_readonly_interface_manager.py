@@ -295,7 +295,7 @@ class ReadOnlyRelationLookupTests(GeneralManagerTransactionTestCase):
     def test_foreign_key_lookup_missing_match_fails(self):
         """
         Verifies that syncing the Packaging read-only interface fails with ReadOnlyRelationLookupError when referenced Size records are missing.
-        
+
         Runs startup hooks to ensure no Size records exist, then asserts that starting up the Packaging interface raises ReadOnlyRelationLookupError due to the missing foreign-key targets.
         """
         original_size_data = self.Size._data
@@ -330,12 +330,12 @@ class ReadOnlyNestedRelationLookupTests(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Register Region, Country, and City GeneralManager subclasses with nested read-only interfaces and seeded test data.
-        
+
         Defines three managers:
         - Region: code and name, seeded with region entries.
         - Country: code, name, and a foreign key to Region; seeded with region lookups by code.
         - City: name and a foreign key to Country; seeded with a nested country → region lookup.
-        
+
         Each manager exposes a ReadOnlyInterface and the classes are assigned to cls.Region, cls.Country, cls.City and collected in cls.general_manager_classes for use by tests.
         """
 
@@ -405,7 +405,7 @@ class ReadOnlyNestedRelationLookupTests(GeneralManagerTransactionTestCase):
     def setUp(self) -> None:
         """
         Prepare a clean test environment by removing all Region, Country, and City records.
-        
+
         Calls the superclass setup, then deletes every entry from each interface's underlying model using their `all_objects` manager.
         """
         super().setUp()
@@ -574,7 +574,7 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
     def test_m2m_with_none_value_creates_no_relations(self) -> None:
         """
         Verify that a many-to-many field set to None creates no relations.
-        
+
         Asserts that creating a Product whose `tags` value is None results in the product having zero related Tag entries.
         """
         self.Product._data = [
@@ -690,7 +690,7 @@ class ReadOnlyDependencyOrderingIntegrationTests(GeneralManagerTransactionTestCa
     def test_sync_respects_dependency_order(self) -> None:
         """
         Ensure dependent read-only interfaces are created in dependency order and their relations are resolved.
-        
+
         After running the synchronization for the City interface, asserts that Country contains 2 records, State contains 3 records, and City contains 3 records, and verifies that the "New York City" record is linked to a state with code "NY" whose country has code "US".
         """
         self.City.Interface._model.all_objects.all().delete()
@@ -730,7 +730,7 @@ class ReadOnlyDependencyOrderingIntegrationTests(GeneralManagerTransactionTestCa
     def test_circular_dependency_handling(self) -> None:
         """
         Ensure running startup hooks for an interface with circular dependencies does not fail and results in three created model objects.
-        
+
         Runs the registered startup hooks for the City interface twice (to exercise idempotence and recursion prevention) and asserts that the City model contains exactly three objects.
         """
         run_registered_startup_hooks(interfaces=[self.City.Interface])
