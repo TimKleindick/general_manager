@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.26.1 (2026-01-23)
+
+### Bug Fixes
+
+- Update Django version to 5.2.10 in dependencies
+  ([`28c2b53`](https://github.com/TimKleindick/general_manager/commit/28c2b53f63bc1b89dca3079cdd78030e9545b89b))
+
+
 ## v0.26.0 (2026-01-21)
 
 ### Bug Fixes
