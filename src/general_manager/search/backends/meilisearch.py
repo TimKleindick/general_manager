@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any, Mapping, Sequence
 
 from general_manager.search.backend import (
@@ -15,6 +17,8 @@ from general_manager.search.backend import (
 
 class MeilisearchBackend:
     """Meilisearch implementation of the SearchBackend protocol."""
+
+    _ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,511}$")
 
     def __init__(
         self,
@@ -59,7 +63,8 @@ class MeilisearchBackend:
     def delete(self, index_name: str, ids: Sequence[str]) -> None:
         index = self._get_or_create_index(index_name)
         if ids:
-            task = index.delete_documents(list(ids))
+            normalized_ids = [self._normalize_document_id(doc_id) for doc_id in ids]
+            task = index.delete_documents(normalized_ids)
             self._wait_for_task(task)
 
     def search(
@@ -90,7 +95,7 @@ class MeilisearchBackend:
         response = index.search(query, payload)
         hits = [
             SearchHit(
-                id=hit.get("id"),
+                id=hit.get("gm_document_id", hit.get("id")),
                 type=hit.get("type"),
                 identification=hit.get("identification", {}),
                 score=hit.get("_rankingScore"),
@@ -117,7 +122,8 @@ class MeilisearchBackend:
     @staticmethod
     def _document_payload(document: SearchDocument) -> dict[str, Any]:
         return {
-            "id": document.id,
+            "id": MeilisearchBackend._normalize_document_id(document.id),
+            "gm_document_id": document.id,
             "type": document.type,
             "identification": document.identification,
             "data": document.data,
@@ -207,6 +213,14 @@ class MeilisearchBackend:
             error = getattr(result, "error", None)
         if status and status != "succeeded":
             raise MeilisearchTaskFailedError(status, error)
+
+    @staticmethod
+    def _normalize_document_id(raw_id: Any) -> str:
+        value = str(raw_id)
+        if MeilisearchBackend._ID_PATTERN.match(value):
+            return value
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+        return f"gm_{digest}"
 
 
 class MeilisearchTaskFailedError(SearchBackendError):
