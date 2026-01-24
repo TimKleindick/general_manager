@@ -48,7 +48,10 @@ from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.search.backend_registry import get_search_backend
-from general_manager.search.registry import get_search_config
+from general_manager.search.registry import (
+    get_search_config,
+    validate_filter_keys,
+)
 from general_manager.utils.filter_parser import create_filter_function
 
 from django.core.exceptions import ValidationError
@@ -572,7 +575,9 @@ class GraphQL:
             query: str,
             index: str | None = None,
             types: list[str] | None = None,
-            filters: dict[str, Any] | str | None = None,
+            filters: dict[str, Any] | str | list[dict[str, Any]] | None = None,
+            sort_by: str | None = None,
+            sort_desc: bool = False,
             page: int | None = None,
             page_size: int | None = None,
         ) -> dict[str, Any]:
@@ -580,24 +585,74 @@ class GraphQL:
             limit = page_size or 10
             current_page = page or 1
             offset = max(current_page - 1, 0) * limit
-            parsed_filters = cls._parse_input(filters)
+            parsed_filters = cls._parse_search_filters(filters)
+            if parsed_filters:
+                try:
+                    validate_filter_keys(index_name, parsed_filters)
+                except ValueError as exc:
+                    raise GraphQLError(str(exc)) from exc
             backend = get_search_backend()
-            result = backend.search(
-                index_name,
-                query,
-                filters=parsed_filters,
-                limit=limit,
-                offset=offset,
-                types=types,
-            )
+            manager_classes: list[type[GeneralManager]]
+            if types:
+                manager_classes = [type_map[name] for name in types if name in type_map]
+            else:
+                manager_classes = list(type_map.values())
+
+            hits: list[tuple[float | None, Any]] = []
+            total = 0
+            took_ms: int | None = None
+            raw: list[Any] = []
+            requested_count = offset + limit
+
+            for manager_class in manager_classes:
+                type_label = manager_class.__name__
+                perm_filters = get_read_permission_filter(manager_class, info)
+                filter_groups = cls._merge_permission_filters(
+                    parsed_filters,
+                    perm_filters,
+                )
+                result = backend.search(
+                    index_name,
+                    query,
+                    filters=filter_groups,
+                    limit=requested_count,
+                    offset=0,
+                    types=[type_label],
+                    sort_by=sort_by,
+                    sort_desc=sort_desc,
+                )
+                total += result.total
+                took_ms = (
+                    result.took_ms
+                    if took_ms is None
+                    else took_ms + (result.took_ms or 0)
+                )
+                raw.append(result.raw)
+                for hit in result.hits:
+                    hits.append((hit.score, hit))
+
+            if sort_by:
+
+                def _sort_key(item: tuple[float | None, Any]) -> tuple[bool, str]:
+                    value = item[1].data.get(sort_by) if item[1].data else None
+                    return (value is None, str(value))
+
+                hits.sort(
+                    key=_sort_key,
+                    reverse=sort_desc,
+                )
+            else:
+                hits.sort(key=lambda item: (item[0] or 0), reverse=True)
+
+            sliced_hits = [hit for _, hit in hits][offset : offset + limit]
 
             items: list[GeneralManager] = []
-            for hit in result.hits:
-                manager_class = type_map.get(hit.type)
-                if manager_class is None:
+            for hit in sliced_hits:
+                hit_manager_class = type_map.get(hit.type)
+                if hit_manager_class is None:
                     continue
                 try:
-                    instance = manager_class(**hit.identification)
+                    instance = hit_manager_class(**hit.identification)
                 except (TypeError, ValueError, KeyError) as exc:
                     logger.debug(
                         "failed to instantiate search result",
@@ -614,9 +669,9 @@ class GraphQL:
 
             return {
                 "results": items,
-                "total": result.total,
-                "took_ms": result.took_ms,
-                "raw": result.raw,
+                "total": total,
+                "took_ms": took_ms,
+                "raw": raw,
             }
 
         cls._query_fields["search"] = graphene.Field(
@@ -625,6 +680,8 @@ class GraphQL:
             index=graphene.String(),
             types=graphene.List(graphene.String),
             filters=graphene.JSONString(),
+            sort_by=graphene.String(),
+            sort_desc=graphene.Boolean(),
             page=graphene.Int(),
             page_size=graphene.Int(),
             resolver=resolver,
@@ -684,6 +741,52 @@ class GraphQL:
         )
         cls._search_result_type = result_type
         return result_type
+
+    @classmethod
+    def _parse_search_filters(
+        cls,
+        filters: dict[str, Any] | str | list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        parsed: Any = filters
+        if isinstance(filters, str):
+            try:
+                parsed = json.loads(filters)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+        if isinstance(parsed, list):
+            merged: dict[str, Any] = {}
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                field = item.get("field")
+                if not field:
+                    continue
+                op = (item.get("op") or "").strip()
+                values = item.get("values")
+                value = item.get("value")
+                if values is not None and op == "":
+                    op = "in"
+                key = f"{field}__{op}" if op else field
+                merged[key] = values if values is not None else value
+            return merged
+        if isinstance(parsed, dict):
+            return parsed
+        return {}
+
+    @staticmethod
+    def _merge_permission_filters(
+        filters: dict[str, Any] | None,
+        permission_filters: list[tuple[dict[str, Any], dict[str, Any]]],
+    ) -> list[dict[str, Any]] | dict[str, Any] | None:
+        if not permission_filters:
+            return filters or None
+        groups: list[dict[str, Any]] = []
+        for perm_filter, _perm_exclude in permission_filters:
+            combined = dict(perm_filter)
+            if filters:
+                combined.update(filters)
+            groups.append(combined)
+        return groups or None
 
     @staticmethod
     def _matches_filters(
