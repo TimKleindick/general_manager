@@ -60,6 +60,7 @@ def dispatch_index_update(
     action: str,
     manager_path: str,
     identification: dict[str, Any],
+    instance: Any | None = None,
 ) -> None:
     """Dispatch index updates async when configured, otherwise run inline."""
     if _async_enabled() and CELERY_AVAILABLE:
@@ -67,6 +68,16 @@ def dispatch_index_update(
             delete_instance_task.delay(manager_path, identification)
         else:
             index_instance_task.delay(manager_path, identification)
+        return
+
+    if instance is not None:
+        from general_manager.search.indexer import SearchIndexer
+
+        indexer = SearchIndexer(get_search_backend())
+        if action == "delete":
+            indexer.delete_instance(instance)
+        else:
+            indexer.index_instance(instance)
         return
 
     if action == "delete":

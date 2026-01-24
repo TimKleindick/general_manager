@@ -175,6 +175,7 @@ def _handle_search_post_change(
             action="index",
             manager_path=manager_path,
             identification=instance.identification,
+            instance=instance,
         )
     except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning(
@@ -199,6 +200,7 @@ def _handle_search_pre_delete(
             action="delete",
             manager_path=manager_path,
             identification=instance.identification,
+            instance=instance,
         )
     except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning(
