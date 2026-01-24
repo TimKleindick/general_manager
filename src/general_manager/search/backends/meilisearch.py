@@ -67,7 +67,6 @@ class MeilisearchBackend:
     ) -> SearchResult:
         index = self._get_or_create_index(index_name)
         payload: dict[str, Any] = {
-            "q": query,
             "limit": limit,
             "offset": offset,
         }
@@ -78,7 +77,11 @@ class MeilisearchBackend:
             direction = "desc" if sort_desc else "asc"
             payload["sort"] = [f"{sort_by}:{direction}"]
 
-        response = index.search(**payload)
+        try:
+            response = index.search(query, **payload)
+        except TypeError:
+            payload["q"] = query
+            response = index.search(**payload)
         hits = [
             SearchHit(
                 id=hit.get("id"),
