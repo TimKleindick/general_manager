@@ -18,6 +18,50 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
     "Input": ("general_manager.manager.input", "Input"),
+    "FieldConfig": ("general_manager.search.config", "FieldConfig"),
+    "IndexConfig": ("general_manager.search.config", "IndexConfig"),
+    "SearchConfigProtocol": ("general_manager.search.config", "SearchConfigProtocol"),
+    "SearchConfigSpec": ("general_manager.search.config", "SearchConfigSpec"),
+    "resolve_search_config": (
+        "general_manager.search.config",
+        "resolve_search_config",
+    ),
+    "iter_index_names": ("general_manager.search.config", "iter_index_names"),
+    "SearchBackend": ("general_manager.search.backend", "SearchBackend"),
+    "SearchBackendError": ("general_manager.search.backend", "SearchBackendError"),
+    "SearchBackendNotConfiguredError": (
+        "general_manager.search.backend",
+        "SearchBackendNotConfiguredError",
+    ),
+    "SearchDocument": ("general_manager.search.backend", "SearchDocument"),
+    "SearchHit": ("general_manager.search.backend", "SearchHit"),
+    "SearchResult": ("general_manager.search.backend", "SearchResult"),
+    "SearchIndexer": ("general_manager.search.indexer", "SearchIndexer"),
+    "configure_search_backend": (
+        "general_manager.search.backend_registry",
+        "configure_search_backend",
+    ),
+    "configure_search_backend_from_settings": (
+        "general_manager.search.backend_registry",
+        "configure_search_backend_from_settings",
+    ),
+    "get_search_backend": (
+        "general_manager.search.backend_registry",
+        "get_search_backend",
+    ),
+    "DevSearchBackend": ("general_manager.search.backends.dev", "DevSearchBackend"),
+    "MeilisearchBackend": (
+        "general_manager.search.backends.meilisearch",
+        "MeilisearchBackend",
+    ),
+    "TypesenseBackend": (
+        "general_manager.search.backends.typesense",
+        "TypesenseBackend",
+    ),
+    "OpenSearchBackend": (
+        "general_manager.search.backends.opensearch",
+        "OpenSearchBackend",
+    ),
     "get_logger": ("general_manager.logging", "get_logger"),
     "CalculationInterface": (
         "general_manager.interface.interfaces.calculation",
