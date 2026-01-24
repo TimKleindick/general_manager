@@ -47,6 +47,9 @@ from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
+from general_manager.search.backend_registry import get_search_backend
+from general_manager.search.registry import get_search_config
+from general_manager.utils.filter_parser import create_filter_function
 
 from django.core.exceptions import ValidationError
 from django.db.models import NOT_PROVIDED
@@ -239,6 +242,8 @@ class GraphQL:
     graphql_type_registry: ClassVar[dict[str, type]] = {}
     graphql_filter_type_registry: ClassVar[dict[str, type]] = {}
     manager_registry: ClassVar[dict[str, type[GeneralManager]]] = {}
+    _search_union: ClassVar[type[graphene.Union] | None] = None
+    _search_result_type: ClassVar[type[graphene.ObjectType] | None] = None
     _schema: ClassVar[graphene.Schema | None] = None
 
     @staticmethod
@@ -536,6 +541,179 @@ class GraphQL:
             (graphene.Enum,),
             {option: option for option in sort_options},
         )
+
+    @classmethod
+    def register_search_query(cls) -> None:
+        """Register a global search query returning mixed manager types."""
+        if "search" in cls._query_fields:
+            return
+
+        type_map = {
+            manager_class.__name__: manager_class
+            for manager_class in cls.manager_registry.values()
+            if get_search_config(manager_class) is not None
+        }
+        if not type_map:
+            return
+
+        cls._search_union = None
+        cls._search_result_type = None
+
+        union_type = cls._create_search_union(type_map)
+        if union_type is None:
+            return
+
+        result_type = cls._create_search_result_type(union_type)
+        cls._search_result_type = result_type
+
+        def resolver(
+            _root: object,
+            info: GraphQLResolveInfo,
+            query: str,
+            index: str | None = None,
+            types: list[str] | None = None,
+            filters: dict[str, Any] | str | None = None,
+            page: int | None = None,
+            page_size: int | None = None,
+        ) -> dict[str, Any]:
+            index_name = index or "global"
+            limit = page_size or 10
+            current_page = page or 1
+            offset = max(current_page - 1, 0) * limit
+            parsed_filters = cls._parse_input(filters)
+            backend = get_search_backend()
+            result = backend.search(
+                index_name,
+                query,
+                filters=parsed_filters,
+                limit=limit,
+                offset=offset,
+                types=types,
+            )
+
+            items: list[GeneralManager] = []
+            for hit in result.hits:
+                manager_class = type_map.get(hit.type)
+                if manager_class is None:
+                    continue
+                try:
+                    instance = manager_class(**hit.identification)
+                except (TypeError, ValueError, KeyError) as exc:
+                    logger.debug(
+                        "failed to instantiate search result",
+                        context={
+                            "manager": hit.type,
+                            "identification": hit.identification,
+                        },
+                        exc_info=exc,
+                    )
+                    continue
+                if not cls._passes_permission_filters(instance, info):
+                    continue
+                items.append(instance)
+
+            return {
+                "results": items,
+                "total": result.total,
+                "took_ms": result.took_ms,
+                "raw": result.raw,
+            }
+
+        cls._query_fields["search"] = graphene.Field(
+            result_type,
+            query=graphene.String(required=True),
+            index=graphene.String(),
+            types=graphene.List(graphene.String),
+            filters=graphene.JSONString(),
+            page=graphene.Int(),
+            page_size=graphene.Int(),
+            resolver=resolver,
+        )
+
+    @classmethod
+    def _create_search_union(
+        cls, type_map: dict[str, type[GeneralManager]]
+    ) -> type[graphene.Union] | None:
+        if cls._search_union is not None:
+            return cls._search_union
+
+        types: list[type[graphene.ObjectType]] = []
+        for manager_class in type_map.values():
+            gql_type = cls.graphql_type_registry.get(manager_class.__name__)
+            if gql_type is not None:
+                types.append(gql_type)
+
+        if not types:
+            return None
+
+        meta = type("Meta", (), {"types": tuple(types)})
+
+        def resolve_type(
+            _cls: type[graphene.Union],
+            instance: object,
+            _info: GraphQLResolveInfo,
+        ) -> type[graphene.ObjectType] | None:
+            if isinstance(instance, GeneralManager):
+                return cls.graphql_type_registry.get(instance.__class__.__name__)
+            return None
+
+        union_type = type(
+            "SearchResultUnion",
+            (graphene.Union,),
+            {"Meta": meta, "resolve_type": classmethod(resolve_type)},
+        )
+        cls._search_union = union_type
+        return union_type
+
+    @classmethod
+    def _create_search_result_type(
+        cls, union_type: type[graphene.Union]
+    ) -> type[graphene.ObjectType]:
+        if cls._search_result_type is not None:
+            return cls._search_result_type
+
+        result_type = type(
+            "SearchResult",
+            (graphene.ObjectType,),
+            {
+                "results": graphene.List(union_type),
+                "total": graphene.Int(),
+                "took_ms": graphene.Int(),
+                "raw": graphene.JSONString(),
+            },
+        )
+        cls._search_result_type = result_type
+        return result_type
+
+    @staticmethod
+    def _matches_filters(
+        instance: GeneralManager,
+        filters: dict[str, Any],
+        *,
+        empty_is_match: bool = True,
+    ) -> bool:
+        if not filters:
+            return empty_is_match
+        for lookup, value in filters.items():
+            func = create_filter_function(lookup, value)
+            if not func(instance):
+                return False
+        return True
+
+    @classmethod
+    def _passes_permission_filters(
+        cls, instance: GeneralManager, info: GraphQLResolveInfo
+    ) -> bool:
+        permission_filters = get_read_permission_filter(instance.__class__, info)
+        if not permission_filters:
+            return True
+
+        for perm_filter, perm_exclude in permission_filters:
+            if cls._matches_filters(instance, perm_filter) and not cls._matches_filters(
+                instance, perm_exclude, empty_is_match=False
+            ):
+                return True
+        return False
 
     @staticmethod
     def _get_filter_options(
