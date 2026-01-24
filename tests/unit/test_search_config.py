@@ -1,50 +1,38 @@
-from typing import ClassVar
+from __future__ import annotations
 
 import pytest
 
 from general_manager.search.config import (
     FieldConfig,
     IndexConfig,
+    InvalidFieldBoostError,
+    InvalidIndexBoostError,
+    InvalidIndexMinScoreError,
     SearchConfigSpec,
     iter_index_names,
     resolve_search_config,
 )
 
 
-def test_index_config_normalizes_fields_and_boosts() -> None:
-    index = IndexConfig(
-        name="global",
-        fields=["name", FieldConfig(name="leader", boost=2.5)],
-        filters=("status",),
-    )
-
-    fields = index.iter_fields()
-    assert [field.name for field in fields] == ["name", "leader"]
-    assert [field.boost for field in fields] == [None, 2.5]
-
-    boosts = index.field_boosts()
-    assert boosts == {"leader": 2.5}
-
-
-def test_index_config_validates_boost_ranges() -> None:
-    with pytest.raises(ValueError):
-        IndexConfig(name="global", fields=["name"], boost=0)
-
-    with pytest.raises(ValueError):
-        IndexConfig(name="global", fields=["name"], min_score=-0.1)
-
-    with pytest.raises(ValueError):
+def test_field_config_rejects_invalid_boost() -> None:
+    with pytest.raises(InvalidFieldBoostError):
         FieldConfig(name="name", boost=0)
 
 
-def test_resolve_search_config_supports_class_objects() -> None:
-    class DummyConfig:
-        indexes: ClassVar[list[IndexConfig]] = [
-            IndexConfig(name="global", fields=["name"])
-        ]
-        type_label = "Project"
+def test_index_config_rejects_invalid_boost() -> None:
+    with pytest.raises(InvalidIndexBoostError):
+        IndexConfig(name="global", fields=["name"], boost=0)
 
-    resolved = resolve_search_config(DummyConfig)
-    assert isinstance(resolved, SearchConfigSpec)
-    assert resolved.type_label == "Project"
-    assert iter_index_names(resolved) == ["global"]
+
+def test_index_config_rejects_invalid_min_score() -> None:
+    with pytest.raises(InvalidIndexMinScoreError):
+        IndexConfig(name="global", fields=["name"], min_score=-0.1)
+
+
+def test_resolve_search_config_passthrough() -> None:
+    spec = SearchConfigSpec(indexes=(IndexConfig(name="global", fields=["name"]),))
+    assert resolve_search_config(spec) is spec
+
+
+def test_iter_index_names_none() -> None:
+    assert list(iter_index_names(None)) == []

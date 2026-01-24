@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+import pytest
 from django.test import SimpleTestCase
 
 from general_manager.apps import GeneralmanagerConfig
@@ -16,6 +17,8 @@ from general_manager.search.registry import (
     get_index_names,
     get_searchable_type_map,
     iter_index_configs,
+    validate_filter_keys,
+    InvalidFilterFieldError,
 )
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
@@ -90,3 +93,7 @@ class SearchRegistryTests(SimpleTestCase):
     def test_get_filterable_fields(self) -> None:
         fields = get_filterable_fields("global")
         assert "status" in fields
+
+    def test_validate_filter_keys_raises(self) -> None:
+        with pytest.raises(InvalidFilterFieldError):
+            validate_filter_keys("global", {"not_allowed": "value"})

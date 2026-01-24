@@ -71,6 +71,33 @@ def test_dispatch_index_update_inline_instance(monkeypatch: pytest.MonkeyPatch) 
     assert indexer.indexed
 
 
+def test_dispatch_index_update_inline_instance_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    indexer = _DummyIndexer()
+
+    def _noop_init(_self: SearchIndexer, _backend: object) -> None:
+        return None
+
+    monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
+    monkeypatch.setattr(SearchIndexer, "__init__", _noop_init)
+    monkeypatch.setattr(
+        SearchIndexer,
+        "delete_instance",
+        lambda _self, instance: indexer.delete_instance(instance),
+    )
+    monkeypatch.setattr(async_tasks, "CELERY_AVAILABLE", False)
+
+    async_tasks.dispatch_index_update(
+        action="delete",
+        manager_path="tests.unit.test_search_async_tasks._DummyManager",
+        identification={"id": 5},
+        instance=_DummyInstance(5),
+    )
+
+    assert indexer.deleted
+
+
 def test_dispatch_index_update_inline_by_path(monkeypatch: pytest.MonkeyPatch) -> None:
     indexer = _DummyIndexer()
 
@@ -129,3 +156,47 @@ def test_dispatch_index_update_async(monkeypatch: pytest.MonkeyPatch) -> None:
     assert delete_task.calls == [
         ("tests.unit.test_search_async_tasks._DummyManager", {"id": 4})
     ]
+
+
+def test_index_and_delete_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    indexer = _DummyIndexer()
+
+    def _noop_init(_self: SearchIndexer, _backend: object) -> None:
+        return None
+
+    monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
+    monkeypatch.setattr(SearchIndexer, "__init__", _noop_init)
+    monkeypatch.setattr(
+        SearchIndexer,
+        "index_instance",
+        lambda _self, instance: indexer.index_instance(instance),
+    )
+    monkeypatch.setattr(
+        SearchIndexer,
+        "delete_instance",
+        lambda _self, instance: indexer.delete_instance(instance),
+    )
+    monkeypatch.setattr(async_tasks, "_resolve_manager", lambda _path: _DummyManager)
+
+    import importlib
+    import sys
+    import types
+
+    fake_celery = types.SimpleNamespace(shared_task=lambda func: func)
+    sys.modules["celery"] = fake_celery
+    reloaded = importlib.reload(async_tasks)
+    try:
+        reloaded.get_search_backend = lambda: object()
+        reloaded._resolve_manager = lambda _path: _DummyManager
+        reloaded.index_instance_task(
+            "tests.unit.test_search_async_tasks._DummyManager", {"id": 10}
+        )
+        reloaded.delete_instance_task(
+            "tests.unit.test_search_async_tasks._DummyManager", {"id": 11}
+        )
+    finally:
+        sys.modules.pop("celery", None)
+        importlib.reload(async_tasks)
+
+    assert indexer.indexed
+    assert indexer.deleted

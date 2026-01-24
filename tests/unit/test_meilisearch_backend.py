@@ -124,6 +124,29 @@ def test_meilisearch_backend_normalize_document_id() -> None:
     assert backend._normalize_document_id("invalid:{id}") != "invalid:{id}"
 
 
+def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
+    class _SearchIndex(_FakeIndex):
+        def search(self, _query: str, _payload: dict[str, object]) -> dict[str, object]:
+            return {
+                "hits": [
+                    {
+                        "id": "gm_hash",
+                        "gm_document_id": 'Project:{"id": 9}',
+                        "type": "Project",
+                        "identification": {"id": 9},
+                        "data": {"name": "Alpha"},
+                        "_rankingScore": 1.0,
+                    }
+                ],
+                "estimatedTotalHits": 1,
+                "processingTimeMs": 5,
+            }
+
+    backend = MeilisearchBackend(client=_FakeClient(_SearchIndex()))
+    result = backend.search("index", "Alpha")
+    assert result.hits[0].id == 'Project:{"id": 9}'
+
+
 def test_meilisearch_backend_raises_on_failed_task() -> None:
     index = _FakeIndex()
     client = _FailingClient(index)
