@@ -15,6 +15,18 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:latest
+        ports:
+          - 7700:7700
+        env:
+          MEILI_NO_ANALYTICS: "true"
+        options: >-
+          --health-cmd="wget -qO- http://127.0.0.1:7700/health"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
 
     steps:
       - name: Checkout code
@@ -29,9 +41,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest pytest-django pytest-cov
+          pip install pytest pytest-django pytest-cov meilisearch
 
       - name: Run pytest with coverage
+        env:
+          MEILISEARCH_URL: http://127.0.0.1:7700
         run: python3 -m pytest --cov=general_manager --cov-report=xml:coverage.xml
 
       - name: Upload to Codecov
