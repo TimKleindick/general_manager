@@ -33,10 +33,13 @@ class MeilisearchBackend:
         index = self._get_or_create_index(index_name)
         searchable_fields = settings.get("searchable_fields", [])
         filterable_fields = settings.get("filterable_fields", [])
+        sortable_fields = settings.get("sortable_fields", [])
         if searchable_fields:
             index.update_settings({"searchableAttributes": list(searchable_fields)})
         if filterable_fields:
             index.update_settings({"filterableAttributes": list(filterable_fields)})
+        if sortable_fields:
+            index.update_settings({"sortableAttributes": list(sortable_fields)})
 
     def upsert(self, index_name: str, documents: Sequence[SearchDocument]) -> None:
         index = self._get_or_create_index(index_name)
@@ -54,7 +57,10 @@ class MeilisearchBackend:
         index_name: str,
         query: str,
         *,
-        filters: Mapping[str, Any] | None = None,
+        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        filter_expression: str | None = None,
+        sort_by: str | None = None,
+        sort_desc: bool = False,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -65,9 +71,12 @@ class MeilisearchBackend:
             "limit": limit,
             "offset": offset,
         }
-        filter_expr = self._build_filter_expression(filters, types)
+        filter_expr = filter_expression or self._build_filter_expression(filters, types)
         if filter_expr:
             payload["filter"] = filter_expr
+        if sort_by:
+            direction = "desc" if sort_desc else "asc"
+            payload["sort"] = [f"{sort_by}:{direction}"]
 
         response = index.search(**payload)
         hits = [
@@ -107,7 +116,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _build_filter_expression(
-        filters: Mapping[str, Any] | None,
+        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
         types: Sequence[str] | None,
     ) -> str | None:
         clauses: list[str] = []
@@ -115,12 +124,32 @@ class MeilisearchBackend:
             type_clause = " OR ".join([f'type = "{type_name}"' for type_name in types])
             clauses.append(f"({type_clause})")
         if filters:
-            for key, value in filters.items():
-                if isinstance(value, (list, tuple, set)):
-                    options = " OR ".join([f'{key} = "{item}"' for item in value])
-                    clauses.append(f"({options})")
-                else:
-                    clauses.append(f'{key} = "{value}"')
+            filter_groups = filters if isinstance(filters, (list, tuple)) else [filters]
+            group_clauses: list[str] = []
+            for group in filter_groups:
+                parts: list[str] = []
+                for key, value in group.items():
+                    if "__" in key:
+                        field_name, lookup = key.split("__", 1)
+                    else:
+                        field_name, lookup = key, "exact"
+                    if lookup == "in" and isinstance(value, (list, tuple, set)):
+                        options = " OR ".join(
+                            [f'{field_name} = "{item}"' for item in value]
+                        )
+                        parts.append(f"({options})")
+                        continue
+                    if isinstance(value, (list, tuple, set)):
+                        options = " OR ".join(
+                            [f'{field_name} = "{item}"' for item in value]
+                        )
+                        parts.append(f"({options})")
+                    else:
+                        parts.append(f'{field_name} = "{value}"')
+                if parts:
+                    group_clauses.append(" AND ".join(parts))
+            if group_clauses:
+                clauses.append(" OR ".join(f"({clause})" for clause in group_clauses))
         if not clauses:
             return None
         return " AND ".join(clauses)
