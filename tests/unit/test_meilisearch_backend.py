@@ -56,11 +56,12 @@ def test_meilisearch_backend_waits_for_tasks() -> None:
     backend = MeilisearchBackend(client=client)
 
     backend.ensure_index("test-index", {"searchable_fields": ["name"]})
+    raw_id = 'Project:{"id": 1}'
     backend.upsert(
         "test-index",
         [
             SearchDocument(
-                id='Project:{"id": 1}',
+                id=raw_id,
                 type="Project",
                 identification={"id": 1},
                 index="test-index",
@@ -71,6 +72,10 @@ def test_meilisearch_backend_waits_for_tasks() -> None:
     )
 
     assert client.waited == [1, 2]
+    assert index.added[0]["gm_document_id"] == raw_id
+    assert index.added[0]["id"] != raw_id
+    backend.delete("test-index", [raw_id])
+    assert index.deleted[0][0] == index.added[0]["id"]
 
 
 def test_meilisearch_backend_raises_on_failed_task() -> None:
