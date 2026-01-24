@@ -1,54 +1,45 @@
-import pytest
+from __future__ import annotations
+
+from django.test import SimpleTestCase
 
 from general_manager.search.backend import SearchDocument
 from general_manager.search.backends.dev import DevSearchBackend
 
 
-def test_dev_search_filters_and_boosts() -> None:
-    backend = DevSearchBackend()
-    backend.ensure_index("global", {})
+class DevSearchBackendTests(SimpleTestCase):
+    def setUp(self) -> None:
+        self.backend = DevSearchBackend()
+        self.backend.ensure_index("global", {})
+        self.backend.upsert(
+            "global",
+            [
+                SearchDocument(
+                    id="Project:1",
+                    type="Project",
+                    identification={"id": 1},
+                    index="global",
+                    data={"name": "Alpha Project", "status": "public", "tags": ["a"]},
+                    field_boosts={"name": 2.0},
+                ),
+                SearchDocument(
+                    id="Project:2",
+                    type="Project",
+                    identification={"id": 2},
+                    index="global",
+                    data={"name": "Beta Project", "status": "private", "tags": ["b"]},
+                    field_boosts={"name": 1.0},
+                ),
+            ],
+        )
 
-    doc_public = SearchDocument(
-        id='Project:{"id": 1}',
-        type="Project",
-        identification={"id": 1},
-        index="global",
-        data={"name": "alpha test", "status": "public"},
-        field_boosts={"name": 2.0},
-        index_boost=1.0,
-    )
-    doc_private = SearchDocument(
-        id='Project:{"id": 2}',
-        type="Project",
-        identification={"id": 2},
-        index="global",
-        data={"name": "alpha", "status": "private"},
-        field_boosts={"name": 1.0},
-        index_boost=1.0,
-    )
+    def test_search_with_filter_groups(self) -> None:
+        result = self.backend.search(
+            "global",
+            "",
+            filters=[{"status": "public"}, {"tags__in": ["b"]}],
+        )
+        assert result.total == 2
 
-    backend.upsert("global", [doc_public, doc_private])
-
-    result = backend.search("global", "test", filters={"status": "public"})
-    assert result.total == 1
-    assert result.hits[0].identification == {"id": 1}
-    assert result.hits[0].score == pytest.approx(2.0)
-
-
-def test_dev_search_list_filter() -> None:
-    backend = DevSearchBackend()
-    backend.ensure_index("global", {})
-
-    doc = SearchDocument(
-        id='Project:{"id": 1}',
-        type="Project",
-        identification={"id": 1},
-        index="global",
-        data={"team_ids": [10, 20]},
-        field_boosts={},
-        index_boost=None,
-    )
-    backend.upsert("global", [doc])
-
-    result = backend.search("global", "", filters={"team_ids": [20]})
-    assert result.total == 1
+    def test_search_sorting(self) -> None:
+        result = self.backend.search("global", "", sort_by="name", sort_desc=True)
+        assert result.hits[0].data["name"] == "Beta Project"

@@ -81,3 +81,22 @@ class SearchIndexerTests(SimpleTestCase):
         hit = result.hits[0]
         assert hit.identification == {"id": 1}
         assert "secret" not in hit.data
+
+    def test_indexer_delete_instance(self) -> None:
+        backend = DevSearchBackend()
+        indexer = SearchIndexer(backend)
+
+        instance = Project(id=1)
+        indexer.index_instance(instance)
+        indexer.delete_instance(instance)
+
+        result = backend.search("global", "Alpha", filters={"status": "public"})
+        assert result.total == 0
+
+    def test_indexer_reindex_manager(self) -> None:
+        backend = DevSearchBackend()
+        indexer = SearchIndexer(backend)
+
+        indexer.reindex_manager(Project)
+        result = backend.search("global", "Alpha", filters={"status": "public"})
+        assert result.total == 1
