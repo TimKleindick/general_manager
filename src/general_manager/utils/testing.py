@@ -203,6 +203,8 @@ class GMTestCaseMeta(type):
             GraphQL._page_type_registry = {}
             GraphQL.manager_registry = {}
             GraphQL._schema = None
+            GraphQL._search_union = None
+            GraphQL._search_result_type = None
 
             if fallback_app is not None:
                 handler = create_fallback_get_app(fallback_app)
