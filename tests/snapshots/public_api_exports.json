@@ -8,9 +8,17 @@
       "general_manager.interface.interfaces.database",
       "DatabaseInterface"
     ],
+    "DevSearchBackend": [
+      "general_manager.search.backends.dev",
+      "DevSearchBackend"
+    ],
     "ExistingModelInterface": [
       "general_manager.interface.interfaces.existing_model",
       "ExistingModelInterface"
+    ],
+    "FieldConfig": [
+      "general_manager.search.config",
+      "FieldConfig"
     ],
     "GeneralManager": [
       "general_manager.manager.general_manager",
@@ -20,6 +28,10 @@
       "general_manager.api.graphql",
       "GraphQL"
     ],
+    "IndexConfig": [
+      "general_manager.search.config",
+      "IndexConfig"
+    ],
     "Input": [
       "general_manager.manager.input",
       "Input"
@@ -27,6 +39,14 @@
     "ManagerBasedPermission": [
       "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
+    ],
+    "MeilisearchBackend": [
+      "general_manager.search.backends.meilisearch",
+      "MeilisearchBackend"
+    ],
+    "OpenSearchBackend": [
+      "general_manager.search.backends.opensearch",
+      "OpenSearchBackend"
     ],
     "ReadOnlyInterface": [
       "general_manager.interface.interfaces.read_only",
@@ -36,9 +56,61 @@
       "general_manager.rule.rule",
       "Rule"
     ],
+    "SearchBackend": [
+      "general_manager.search.backend",
+      "SearchBackend"
+    ],
+    "SearchBackendError": [
+      "general_manager.search.backend",
+      "SearchBackendError"
+    ],
+    "SearchBackendNotConfiguredError": [
+      "general_manager.search.backend",
+      "SearchBackendNotConfiguredError"
+    ],
+    "SearchConfigProtocol": [
+      "general_manager.search.config",
+      "SearchConfigProtocol"
+    ],
+    "SearchConfigSpec": [
+      "general_manager.search.config",
+      "SearchConfigSpec"
+    ],
+    "SearchDocument": [
+      "general_manager.search.backend",
+      "SearchDocument"
+    ],
+    "SearchHit": [
+      "general_manager.search.backend",
+      "SearchHit"
+    ],
+    "SearchIndexer": [
+      "general_manager.search.indexer",
+      "SearchIndexer"
+    ],
+    "SearchResult": [
+      "general_manager.search.backend",
+      "SearchResult"
+    ],
+    "TypesenseBackend": [
+      "general_manager.search.backends.typesense",
+      "TypesenseBackend"
+    ],
+    "configure_search_backend": [
+      "general_manager.search.backend_registry",
+      "configure_search_backend"
+    ],
+    "configure_search_backend_from_settings": [
+      "general_manager.search.backend_registry",
+      "configure_search_backend_from_settings"
+    ],
     "get_logger": [
       "general_manager.logging",
       "get_logger"
+    ],
+    "get_search_backend": [
+      "general_manager.search.backend_registry",
+      "get_search_backend"
     ],
     "graph_ql_mutation": [
       "general_manager.api.mutation",
@@ -48,6 +120,10 @@
       "general_manager.api.property",
       "graph_ql_property"
     ],
+    "iter_index_names": [
+      "general_manager.search.config",
+      "iter_index_names"
+    ],
     "permission_functions": [
       "general_manager.permission.permission_checks",
       "permission_functions"
@@ -55,6 +131,10 @@
     "register_permission": [
       "general_manager.permission.permission_checks",
       "register_permission"
+    ],
+    "resolve_search_config": [
+      "general_manager.search.config",
+      "resolve_search_config"
     ]
   },
   "general_manager.api": {
