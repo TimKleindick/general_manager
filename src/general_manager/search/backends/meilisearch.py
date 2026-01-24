@@ -77,11 +77,7 @@ class MeilisearchBackend:
             direction = "desc" if sort_desc else "asc"
             payload["sort"] = [f"{sort_by}:{direction}"]
 
-        try:
-            response = index.search(query, **payload)
-        except TypeError:
-            payload["q"] = query
-            response = index.search(**payload)
+        response = index.search(query, payload)
         hits = [
             SearchHit(
                 id=hit.get("id"),
