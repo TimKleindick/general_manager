@@ -28,6 +28,9 @@ from general_manager.interface.infrastructure.startup_hooks import (
 from general_manager.interface.infrastructure.system_checks import (
     iter_interface_system_checks,
 )
+from general_manager.search.backend_registry import (
+    configure_search_backend_from_settings,
+)
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -76,6 +79,9 @@ class GeneralmanagerConfig(AppConfig):
             GeneralManagerMeta.all_classes,
         )
         configure_audit_logger_from_settings(settings)
+        configure_search_backend_from_settings(settings)
+        from general_manager.search import indexer as _search_indexer  # noqa: F401
+
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             self.handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
 
@@ -286,6 +292,8 @@ class GeneralmanagerConfig(AppConfig):
         for general_manager_class in pending_graphql_interfaces:
             GraphQL.create_graphql_interface(general_manager_class)
             GraphQL.create_graphql_mutation(general_manager_class)
+
+        GraphQL.register_search_query()
 
         query_class = type("Query", (graphene.ObjectType,), GraphQL._query_fields)
         GraphQL._query_class = query_class
