@@ -81,6 +81,7 @@ nav:
           - concepts/architecture.md
           - concepts/models_entities.md
           - concepts/caching.md
+          - concepts/search.md
           - concepts/rules_validation.md
       - Measurement & Currency:
           - concepts/measurement/index.md
