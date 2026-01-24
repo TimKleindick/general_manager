@@ -83,5 +83,47 @@ backend of your choice.
 ## GraphQL search query
 
 When GraphQL is auto-created, a global `search` query is added. It accepts an
-`index` name, a `query` string, optional `types`, and optional `filters`, and
-returns a mixed list of managers via a GraphQL union.
+`index` name, a `query` string, optional `types`, optional `filters`, and
+optional `sort_by`/`sort_desc`, and returns a mixed list of managers via a
+GraphQL union.
+
+Search filters can be supplied as JSON (`filters`) or as typed filter items
+(`filters` as a list). Typed items use `{field, op, value}` or
+`{field, values}` with `op="in"` for list matching.
+
+## Index lifecycle
+
+Use the management command to create/update index settings and reindex data:
+
+```bash
+python manage.py search_index
+python manage.py search_index --reindex
+python manage.py search_index --index global --reindex
+python manage.py search_index --manager Project --reindex
+```
+
+## Async indexing
+
+Set `GENERAL_MANAGER["SEARCH_ASYNC"] = True` (or `SEARCH_ASYNC = True`) to
+dispatch index updates through Celery. When disabled, updates run inline.
+
+Celery is required for production async indexing; development can remain sync.
+
+## Meilisearch test recipe
+
+To run the optional Meilisearch integration test locally or in CI, start a
+Meilisearch container and provide the URL via `MEILISEARCH_URL` (and
+optionally `MEILISEARCH_API_KEY`):
+
+```bash
+docker run --rm -p 7700:7700 --name meilisearch-test \
+  -e MEILI_NO_ANALYTICS=true \
+  getmeili/meilisearch:latest
+```
+
+Then run the test with:
+
+```bash
+MEILISEARCH_URL=http://127.0.0.1:7700 python -m pytest \
+  tests/integration/test_meilisearch_search.py
+```
