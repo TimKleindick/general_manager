@@ -106,6 +106,26 @@ class GraphQLSearchTests(SimpleTestCase):
             page_size=10,
         )
 
-        assert response["total"] == 2
+        assert response["total"] == 1
         assert len(response["results"]) == 1
         assert response["results"][0].identification == {"id": 1}
+
+    def test_graphql_search_filters_list(self) -> None:
+        field = GraphQL._query_fields["search"]
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        response = field.resolver(
+            None,
+            info,
+            query="",
+            index="global",
+            types=None,
+            filters=[
+                {"field": "status", "value": "public"},
+            ],
+            page=1,
+            page_size=10,
+        )
+
+        assert len(response["results"]) == 1
