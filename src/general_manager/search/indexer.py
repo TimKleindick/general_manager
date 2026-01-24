@@ -16,6 +16,7 @@ from general_manager.search.backend import (
     SearchDocument,
 )
 from general_manager.search.backend_registry import get_search_backend
+from general_manager.search.async_tasks import dispatch_index_update
 from general_manager.search.config import SearchConfigSpec
 from general_manager.search.registry import (
     collect_index_settings,
@@ -111,6 +112,7 @@ def _ensure_index(backend: SearchBackend, index_name: str) -> None:
         {
             "searchable_fields": settings_payload.searchable_fields,
             "filterable_fields": settings_payload.filterable_fields,
+            "sortable_fields": settings_payload.sortable_fields,
             "field_boosts": settings_payload.field_boosts,
         },
     )
@@ -167,9 +169,13 @@ def _handle_search_post_change(
 ) -> None:
     if not instance or action not in {"create", "update"}:
         return
-    indexer = SearchIndexer()
+    manager_path = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
     try:
-        indexer.index_instance(instance)
+        dispatch_index_update(
+            action="index",
+            manager_path=manager_path,
+            identification=instance.identification,
+        )
     except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning(
             "search indexing failed",
@@ -187,9 +193,13 @@ def _handle_search_pre_delete(
 ) -> None:
     if instance is None or action != "delete":
         return
-    indexer = SearchIndexer()
+    manager_path = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
     try:
-        indexer.delete_instance(instance)
+        dispatch_index_update(
+            action="delete",
+            manager_path=manager_path,
+            identification=instance.identification,
+        )
     except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning(
             "search delete failed",

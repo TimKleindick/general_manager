@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
+from general_manager.utils.filter_parser import apply_lookup
 
 
 @dataclass
@@ -43,7 +44,10 @@ class DevSearchBackend:
         index_name: str,
         query: str,
         *,
-        filters: Mapping[str, Any] | None = None,
+        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+        filter_expression: str | None = None,
+        sort_by: str | None = None,
+        sort_desc: bool = False,
         limit: int = 10,
         offset: int = 0,
         types: Sequence[str] | None = None,
@@ -65,7 +69,18 @@ class DevSearchBackend:
                 continue
             results.append((document, score))
 
-        results.sort(key=lambda item: item[1], reverse=True)
+        if sort_by:
+
+            def _sort_key(item: tuple[SearchDocument, float]) -> tuple[bool, str]:
+                value = item[0].data.get(sort_by)
+                return (value is None, str(value))
+
+            results.sort(
+                key=_sort_key,
+                reverse=sort_desc,
+            )
+        else:
+            results.sort(key=lambda item: item[1], reverse=True)
         sliced = results[offset : offset + limit]
 
         hits = [
@@ -127,18 +142,28 @@ class DevSearchBackend:
         return score
 
     def _passes_filters(
-        self, document: SearchDocument, filters: Mapping[str, Any]
+        self,
+        document: SearchDocument,
+        filters: Mapping[str, Any] | Sequence[Mapping[str, Any]],
     ) -> bool:
-        for key, value in filters.items():
-            doc_value = document.data.get(key)
-            if isinstance(value, (list, tuple, set)):
+        if isinstance(filters, (list, tuple)):
+            return any(self._passes_filters(document, group) for group in filters)
+        mapping = cast(Mapping[str, Any], filters)
+        for key, value in mapping.items():
+            if "__" in key:
+                field_name, lookup = key.split("__", 1)
+            else:
+                field_name, lookup = key, "exact"
+            doc_value = document.data.get(field_name)
+            if lookup == "exact" and isinstance(value, (list, tuple, set)):
                 if isinstance(doc_value, (list, tuple, set)):
                     if not set(doc_value).intersection(value):
                         return False
                     continue
-                if doc_value not in value:
+            if lookup == "in" and isinstance(doc_value, (list, tuple, set)):
+                if not set(doc_value).intersection(value):
                     return False
-            else:
-                if doc_value != value:
-                    return False
+                continue
+            if not apply_lookup(doc_value, lookup, value):
+                return False
         return True

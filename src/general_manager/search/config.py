@@ -46,6 +46,7 @@ class IndexConfig:
     name: str
     fields: Sequence[str | FieldConfig]
     filters: Sequence[str] = field(default_factory=tuple)
+    sorts: Sequence[str] = field(default_factory=tuple)
     boost: float | None = None
     min_score: float | None = None
 
