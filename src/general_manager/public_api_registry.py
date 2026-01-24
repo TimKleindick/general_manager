@@ -28,14 +28,6 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     ),
     "iter_index_names": ("general_manager.search.config", "iter_index_names"),
     "SearchBackend": ("general_manager.search.backend", "SearchBackend"),
-    "SearchBackendError": ("general_manager.search.backend", "SearchBackendError"),
-    "SearchBackendNotConfiguredError": (
-        "general_manager.search.backend",
-        "SearchBackendNotConfiguredError",
-    ),
-    "SearchDocument": ("general_manager.search.backend", "SearchDocument"),
-    "SearchHit": ("general_manager.search.backend", "SearchHit"),
-    "SearchResult": ("general_manager.search.backend", "SearchResult"),
     "SearchIndexer": ("general_manager.search.indexer", "SearchIndexer"),
     "configure_search_backend": (
         "general_manager.search.backend_registry",
@@ -48,19 +40,6 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
     "get_search_backend": (
         "general_manager.search.backend_registry",
         "get_search_backend",
-    ),
-    "DevSearchBackend": ("general_manager.search.backends.dev", "DevSearchBackend"),
-    "MeilisearchBackend": (
-        "general_manager.search.backends.meilisearch",
-        "MeilisearchBackend",
-    ),
-    "TypesenseBackend": (
-        "general_manager.search.backends.typesense",
-        "TypesenseBackend",
-    ),
-    "OpenSearchBackend": (
-        "general_manager.search.backends.opensearch",
-        "OpenSearchBackend",
     ),
     "get_logger": ("general_manager.logging", "get_logger"),
     "CalculationInterface": (
@@ -266,6 +245,61 @@ RULE_EXPORTS: LazyExportMap = {
     "BaseRuleHandler": ("general_manager.rule.handler", "BaseRuleHandler"),
 }
 
+SEARCH_EXPORTS: LazyExportMap = {
+    "FieldConfig": ("general_manager.search.config", "FieldConfig"),
+    "IndexConfig": ("general_manager.search.config", "IndexConfig"),
+    "SearchConfigProtocol": ("general_manager.search.config", "SearchConfigProtocol"),
+    "SearchConfigSpec": ("general_manager.search.config", "SearchConfigSpec"),
+    "resolve_search_config": (
+        "general_manager.search.config",
+        "resolve_search_config",
+    ),
+    "iter_index_names": ("general_manager.search.config", "iter_index_names"),
+    "SearchBackend": ("general_manager.search.backend", "SearchBackend"),
+    "SearchBackendError": ("general_manager.search.backend", "SearchBackendError"),
+    "SearchBackendClientMissingError": (
+        "general_manager.search.backend",
+        "SearchBackendClientMissingError",
+    ),
+    "SearchBackendNotConfiguredError": (
+        "general_manager.search.backend",
+        "SearchBackendNotConfiguredError",
+    ),
+    "SearchBackendNotImplementedError": (
+        "general_manager.search.backend",
+        "SearchBackendNotImplementedError",
+    ),
+    "SearchDocument": ("general_manager.search.backend", "SearchDocument"),
+    "SearchHit": ("general_manager.search.backend", "SearchHit"),
+    "SearchResult": ("general_manager.search.backend", "SearchResult"),
+    "SearchIndexer": ("general_manager.search.indexer", "SearchIndexer"),
+    "configure_search_backend": (
+        "general_manager.search.backend_registry",
+        "configure_search_backend",
+    ),
+    "configure_search_backend_from_settings": (
+        "general_manager.search.backend_registry",
+        "configure_search_backend_from_settings",
+    ),
+    "get_search_backend": (
+        "general_manager.search.backend_registry",
+        "get_search_backend",
+    ),
+    "DevSearchBackend": ("general_manager.search.backends.dev", "DevSearchBackend"),
+    "MeilisearchBackend": (
+        "general_manager.search.backends.meilisearch",
+        "MeilisearchBackend",
+    ),
+    "TypesenseBackend": (
+        "general_manager.search.backends.typesense",
+        "TypesenseBackend",
+    ),
+    "OpenSearchBackend": (
+        "general_manager.search.backends.opensearch",
+        "OpenSearchBackend",
+    ),
+}
+
 
 EXPORT_REGISTRY: Mapping[str, LazyExportMap] = {
     "general_manager": GENERAL_MANAGER_EXPORTS,
@@ -279,4 +313,5 @@ EXPORT_REGISTRY: Mapping[str, LazyExportMap] = {
     "general_manager.bucket": BUCKET_EXPORTS,
     "general_manager.manager": MANAGER_EXPORTS,
     "general_manager.rule": RULE_EXPORTS,
+    "general_manager.search": SEARCH_EXPORTS,
 }
