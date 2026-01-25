@@ -31,6 +31,17 @@ MEILI_AVAILABLE = meilisearch is not None and bool(MEILI_URL)
 class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """
+        Prepare class-level state for the Meilisearch integration test by registering a dynamic Project GeneralManager and creating a unique index name.
+        
+        Sets the following class attributes:
+        - _orig_gm_classes: original GeneralManagerMeta.all_classes value for later restoration.
+        - index_name: a unique index name generated for the test.
+        - Project: a dynamically defined GeneralManager subclass with an Interface (name, status), permissive ManagerBasedPermission, and a SearchConfig containing an IndexConfig that uses the generated index_name.
+        - general_manager_classes: list containing the dynamic Project class.
+        
+        As a side effect, replaces GeneralManagerMeta.all_classes with the test's general_manager_classes so the test framework recognizes the dynamic manager.
+        """
         super().setUpClass()
         cls._orig_gm_classes = GeneralManagerMeta.all_classes
         cls.index_name = f"gm_test_{uuid4().hex}"
@@ -61,10 +72,20 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        """
+        Restore GeneralManagerMeta.all_classes to the value saved in setUpClass and run the superclass class-level teardown.
+        
+        This ensures any modifications to the global registry of manager classes performed by the test are reverted before the test class is torn down.
+        """
         GeneralManagerMeta.all_classes = getattr(cls, "_orig_gm_classes", [])
         super().tearDownClass()
 
     def setUp(self):
+        """
+        Prepare a Meilisearch-backed test environment for each test.
+        
+        Ensures Meilisearch is importable and reachable (skips the test if not), creates/ensures the test index, configures the search backend to use the Meilisearch instance, creates a sample Project with name "Alpha Project" and status "public", and triggers reindexing for the Project manager.
+        """
         super().setUp()
         if not MEILI_AVAILABLE:
             self.skipTest("Meilisearch not available; set MEILISEARCH_URL to run.")
@@ -81,6 +102,11 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
         indexer.reindex_manager(self.Project)
 
     def tearDown(self):
+        """
+        Clean up the test search backend and remove the test Meilisearch index if present.
+        
+        If a backend instance exists on the test case, attempts to delete the index created for the test and ignores any errors raised during deletion. Resets the configured search backend to None and invokes the superclass tearDown.
+        """
         backend = getattr(self, "backend", None)
         if backend is not None:
             with suppress(Exception):
@@ -89,6 +115,11 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
         super().tearDown()
 
     def test_graphql_search_meilisearch_backend(self):
+        """
+        Executes a GraphQL search against the Meilisearch-backed test index and verifies the expected result.
+        
+        Asserts that the GraphQL response contains no errors, that the search reports a total of 1 result, and that the first result's name is "Alpha Project".
+        """
         query = f"""
         query {{
             search(index: "{self.index_name}", query: "Alpha") {{

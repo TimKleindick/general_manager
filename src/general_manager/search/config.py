@@ -10,6 +10,11 @@ class InvalidFieldBoostError(ValueError):
     """Raised when a field boost is invalid."""
 
     def __init__(self) -> None:
+        """
+        Initialize the InvalidFieldBoostError with a standard error message.
+        
+        Sets the exception message to "FieldConfig.boost must be greater than zero."
+        """
         super().__init__("FieldConfig.boost must be greater than zero.")
 
 
@@ -17,6 +22,12 @@ class InvalidIndexBoostError(ValueError):
     """Raised when an index boost is invalid."""
 
     def __init__(self) -> None:
+        """
+        Error raised when an index boost value is not greater than zero.
+        
+        This exception is a subclass of ValueError and carries the message
+        "IndexConfig.boost must be greater than zero."
+        """
         super().__init__("IndexConfig.boost must be greater than zero.")
 
 
@@ -24,6 +35,9 @@ class InvalidIndexMinScoreError(ValueError):
     """Raised when an index min score is invalid."""
 
     def __init__(self) -> None:
+        """
+        Initialize the InvalidIndexMinScoreError indicating an index `min_score` is invalid because it must be greater than or equal to zero.
+        """
         super().__init__("IndexConfig.min_score must be non-negative.")
 
 
@@ -35,6 +49,12 @@ class FieldConfig:
     boost: float | None = None
 
     def __post_init__(self) -> None:
+        """
+        Validate the configured boost value after dataclass initialization.
+        
+        Raises:
+            InvalidFieldBoostError: If `boost` is not None and is less than or equal to zero.
+        """
         if self.boost is not None and self.boost <= 0:
             raise InvalidFieldBoostError
 
@@ -51,13 +71,27 @@ class IndexConfig:
     min_score: float | None = None
 
     def __post_init__(self) -> None:
+        """
+        Validate index-level boost and min_score after initialization.
+        
+        Raises:
+            InvalidIndexBoostError: If `boost` is not None and is less than or equal to 0.
+            InvalidIndexMinScoreError: If `min_score` is not None and is less than 0.
+        """
         if self.boost is not None and self.boost <= 0:
             raise InvalidIndexBoostError
         if self.min_score is not None and self.min_score < 0:
             raise InvalidIndexMinScoreError
 
     def iter_fields(self) -> tuple[FieldConfig, ...]:
-        """Return normalized FieldConfig entries for every configured field."""
+        """
+        Normalize this index's field entries into FieldConfig objects.
+        
+        String entries are converted to FieldConfig(name=entry); FieldConfig entries are returned unchanged. The returned tuple preserves the original field order.
+        
+        Returns:
+            tuple[FieldConfig, ...]: FieldConfig objects corresponding to this IndexConfig's fields.
+        """
         normalized: list[FieldConfig] = []
         for entry in self.fields:
             if isinstance(entry, FieldConfig):
@@ -67,7 +101,12 @@ class IndexConfig:
         return tuple(normalized)
 
     def field_boosts(self) -> dict[str, float]:
-        """Return a mapping of field names to boost values when configured."""
+        """
+        Map configured field names to their boost values.
+        
+        Returns:
+            dict[str, float]: Mapping of field name to boost for fields that have a boost configured.
+        """
         boosts: dict[str, float] = {}
         for field_config in self.iter_fields():
             if field_config.boost is not None:
@@ -97,7 +136,20 @@ class SearchConfigSpec:
 
 
 def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
-    """Normalize a SearchConfig class or spec into a SearchConfigSpec instance."""
+    """
+    Normalize a search configuration object into a SearchConfigSpec.
+    
+    If `config` is None, returns None. If `config` is already a SearchConfigSpec, returns it unchanged.
+    Otherwise, extracts the attributes `indexes`, `document_id`, `type_label`, `to_document`, and
+    `update_strategy` from `config` (using defaults when attributes are missing) and returns a new
+    SearchConfigSpec populated with those values.
+    
+    Parameters:
+        config (object | None): The configuration object or spec to normalize.
+    
+    Returns:
+        SearchConfigSpec | None: A resolved SearchConfigSpec built from `config`, or `None` if `config` is None.
+    """
     if config is None:
         return None
     if isinstance(config, SearchConfigSpec):
@@ -119,7 +171,15 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
 
 
 def iter_index_names(config: SearchConfigSpec | None) -> Iterable[str]:
-    """Yield index names from a resolved SearchConfigSpec."""
+    """
+    Return the names of indexes from a resolved SearchConfigSpec.
+    
+    Parameters:
+        config (SearchConfigSpec | None): Resolved search configuration or None.
+    
+    Returns:
+        list[str]: List of index `name` values in the same order as `config.indexes`; empty list if `config` is None.
+    """
     if config is None:
         return []
     return [index.name for index in config.indexes]

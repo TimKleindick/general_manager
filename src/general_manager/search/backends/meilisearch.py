@@ -26,6 +26,14 @@ class MeilisearchBackend:
         api_key: str | None = None,
         client: Any | None = None,
     ) -> None:
+        """
+        Initialize the backend with either a provided Meilisearch client or a newly created one.
+        
+        Parameters:
+            url (str): Base URL to use when creating a Meilisearch client if `client` is not provided.
+            api_key (str | None): Optional API key to use when creating the client.
+            client (Any | None): Optional preconfigured Meilisearch client instance to use directly. If omitted, the constructor will import the `meilisearch` package and instantiate a client with `url` and `api_key`; if the package is not available, raises SearchBackendClientMissingError("Meilisearch").
+        """
         if client is None:
             try:
                 import meilisearch  # type: ignore[import]
@@ -35,6 +43,18 @@ class MeilisearchBackend:
         self._client = client
 
     def ensure_index(self, index_name: str, settings: Mapping[str, Any]) -> None:
+        """
+        Ensure a Meilisearch index with the given name exists and apply searchable, filterable, and sortable field settings.
+        
+        Parameters:
+            index_name (str): Name of the index to retrieve or create.
+            settings (Mapping[str, Any]): Index settings mapping. Recognized keys:
+                - "searchable_fields": iterable of field names to set as searchableAttributes.
+                - "filterable_fields": iterable of field names to set as filterableAttributes.
+                - "sortable_fields": iterable of field names to set as sortableAttributes.
+        
+        This method will create the index if it does not exist and wait for each settings update task to complete before returning.
+        """
         index = self._get_or_create_index(index_name)
         searchable_fields = settings.get("searchable_fields", [])
         filterable_fields = settings.get("filterable_fields", [])
@@ -54,6 +74,16 @@ class MeilisearchBackend:
             self._wait_for_task(task)
 
     def upsert(self, index_name: str, documents: Sequence[SearchDocument]) -> None:
+        """
+        Ensure the index exists, then index or update the given documents and wait for the indexing task to complete.
+        
+        Parameters:
+        	index_name (str): Name of the Meilisearch index to upsert documents into.
+        	documents (Sequence[SearchDocument]): Sequence of documents to add or update in the index.
+        
+        Raises:
+        	MeilisearchTaskFailedError: If the Meilisearch task completes with a failed or canceled status.
+        """
         index = self._get_or_create_index(index_name)
         payload = [self._document_payload(doc) for doc in documents]
         if payload:
@@ -61,6 +91,16 @@ class MeilisearchBackend:
             self._wait_for_task(task)
 
     def delete(self, index_name: str, ids: Sequence[str]) -> None:
+        """
+        Delete documents from the specified index by their IDs.
+        
+        Parameters:
+        	index_name (str): Name of the index to delete documents from.
+        	ids (Sequence[str]): Sequence of document IDs to remove; each ID will be normalized before deletion. If empty, no action is taken.
+        
+        Raises:
+        	MeilisearchTaskFailedError: If the backend reports the deletion task failed or was canceled.
+        """
         index = self._get_or_create_index(index_name)
         if ids:
             normalized_ids = [self._normalize_document_id(doc_id) for doc_id in ids]
@@ -80,6 +120,23 @@ class MeilisearchBackend:
         offset: int = 0,
         types: Sequence[str] | None = None,
     ) -> SearchResult:
+        """
+        Execute a search against the specified Meilisearch index using query, optional filters, sorting, and pagination.
+        
+        Parameters:
+            index_name (str): Name of the index to search.
+            query (str): Full-text query string.
+            filters (Mapping[str, Any] | Sequence[Mapping[str, Any]] | None): Field-based filter(s). May be a single mapping or a sequence of mappings representing OR groups; keys may include nested lookups (e.g., "field__lookup").
+            filter_expression (str | None): Raw Meilisearch filter expression to use instead of `filters`.
+            sort_by (str | None): Field name to sort results by.
+            sort_desc (bool): If true, sort in descending order; otherwise ascending.
+            limit (int): Maximum number of results to return.
+            offset (int): Number of results to skip.
+            types (Sequence[str] | None): Sequence of document type names to restrict results to the `type` field.
+        
+        Returns:
+            SearchResult: Object containing matched hits, total hits estimate, request processing time in milliseconds, and the raw Meilisearch response.
+        """
         index = self._get_or_create_index(index_name)
         payload: dict[str, Any] = {
             "limit": limit,
@@ -112,6 +169,14 @@ class MeilisearchBackend:
         )
 
     def _get_or_create_index(self, index_name: str) -> Any:
+        """
+        Ensure a Meilisearch index with the given name exists and return it.
+        
+        If the index does not exist, create it with primary key "id" and wait for the creation task to complete.
+        
+        Returns:
+            The Meilisearch index object for the given index name.
+        """
         try:
             return self._client.get_index(index_name)
         except Exception:  # noqa: BLE001
@@ -121,6 +186,21 @@ class MeilisearchBackend:
 
     @staticmethod
     def _document_payload(document: SearchDocument) -> dict[str, Any]:
+        """
+        Build a Meilisearch-ready document payload from a SearchDocument.
+        
+        Parameters:
+            document (SearchDocument): The source document whose fields and data will be mapped into the payload.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing:
+                - `id`: normalized document id suitable for Meilisearch,
+                - `gm_document_id`: the original document id,
+                - `type`: the document type,
+                - `identification`: the document identification value,
+                - `data`: the original data mapping,
+                - additional top-level keys copied from `document.data` except reserved keys (`id`, `gm_document_id`, `type`, `identification`, `data`).
+        """
         reserved_keys = {"id", "gm_document_id", "type", "identification", "data"}
         extra_data = {
             key: value
@@ -141,6 +221,22 @@ class MeilisearchBackend:
         filters: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
         types: Sequence[str] | None,
     ) -> str | None:
+        """
+        Builds a Meilisearch-compatible filter expression from the given filters and types.
+        
+        Parameters:
+            filters (Mapping[str, Any] | Sequence[Mapping[str, Any]] | None):
+                A single filter mapping or a sequence of filter mappings.
+                Each mapping's keys are field names or lookups using `field__lookup`.
+                - Keys without `__` use exact equality.
+                - `__in` or a list/tuple/set value creates an OR group for that field.
+                Multiple fields in one mapping are combined with AND; multiple mappings are combined with OR.
+            types (Sequence[str] | None):
+                Sequence of type names to restrict results to; these are combined with OR against the `type` field.
+        
+        Returns:
+            str | None: A Meilisearch filter expression string, or `None` if no clauses were produced.
+        """
         clauses: list[str] = []
         if types:
             type_clause = " OR ".join(
@@ -185,6 +281,15 @@ class MeilisearchBackend:
         return " AND ".join(clauses)
 
     def _wait_for_task(self, task: Any) -> None:
+        """
+        Waits for a Meilisearch task to complete using the backend client.
+        
+        Parameters:
+            task (Any): A task object or task-like response from which a task UID will be extracted.
+        
+        Raises:
+            MeilisearchTaskFailedError: If the task finished with status "failed" or "canceled".
+        """
         task_uid = self._extract_task_uid(task)
         if task_uid is None:
             return
@@ -200,6 +305,19 @@ class MeilisearchBackend:
 
     @staticmethod
     def _extract_task_uid(task: Any) -> str | None:
+        """
+        Extract the Meilisearch task UID from a mapping or object.
+        
+        Checks common key names ("taskUid", "task_uid", "uid", "taskId") when `task` is a mapping,
+        or the corresponding attribute names ("task_uid", "taskUid", "uid", "task_id") when `task`
+        is an object, and returns the first matching value found.
+        
+        Parameters:
+            task (Any): A task mapping or object from which to extract the UID.
+        
+        Returns:
+            str | None: The extracted task UID if present, otherwise `None`.
+        """
         if task is None:
             return None
         if isinstance(task, Mapping):
@@ -217,6 +335,18 @@ class MeilisearchBackend:
 
     @staticmethod
     def _raise_for_failed_task(result: Any) -> None:
+        """
+        Raise MeilisearchTaskFailedError when a Meilisearch task result indicates failure or cancellation.
+        
+        Parameters:
+            result (Any): A task result object or mapping. Accepted shapes:
+                - Mapping with keys "status" and "error"
+                - Object with attributes `status` and `error`
+                If `result` is None, the function does nothing.
+        
+        Raises:
+            MeilisearchTaskFailedError: If the task `status` (case-insensitive) is "failed" or "canceled"; the exception is constructed with the observed status and error.
+        """
         if result is None:
             return
         if isinstance(result, Mapping):
@@ -231,6 +361,15 @@ class MeilisearchBackend:
 
     @staticmethod
     def _normalize_document_id(raw_id: Any) -> str:
+        """
+        Normalize a document identifier to a Meilisearch-safe string.
+        
+        Parameters:
+            raw_id (Any): Original document identifier; will be converted to string.
+        
+        Returns:
+            str: The input string if it matches the allowed ID pattern (1–511 characters: letters, digits, underscore, hyphen). Otherwise a deterministic fallback string prefixed with "gm_" derived from the input.
+        """
         value = str(raw_id)
         if MeilisearchBackend._ID_PATTERN.match(value):
             return value
@@ -239,6 +378,15 @@ class MeilisearchBackend:
 
 
 def _escape_filter_value(value: Any) -> str:
+    """
+    Escape a value for inclusion in a Meilisearch filter expression.
+    
+    Parameters:
+        value (Any): Value to be escaped; it will be converted to a string.
+    
+    Returns:
+        str: The input converted to a string with backslashes and double quotes escaped.
+    """
     escaped = str(value)
     escaped = escaped.replace("\\", "\\\\").replace('"', '\\"')
     return escaped
@@ -248,6 +396,13 @@ class MeilisearchTaskFailedError(SearchBackendError):
     """Raised when a Meilisearch task fails to complete successfully."""
 
     def __init__(self, status: str | None, error: Any | None) -> None:
+        """
+        Initializes the MeilisearchTaskFailedError with the task status and error details.
+        
+        Parameters:
+            status (str | None): Final status reported for the task (e.g., "failed", "canceled").
+            error (Any | None): Error information returned by Meilisearch for the task.
+        """
         super().__init__(
             f"Meilisearch task did not succeed (status={status}, error={error})."
         )
