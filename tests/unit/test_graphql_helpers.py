@@ -5,6 +5,7 @@ from django.test import SimpleTestCase
 from graphql.language.ast import StringValueNode
 
 from general_manager.api.graphql import (
+    GraphQL,
     InvalidGeneralManagerClassError,
     InvalidMeasurementValueError,
     MeasurementScalar,
@@ -158,3 +159,11 @@ class GraphQLHelperTests(SimpleTestCase):
         )
         assert str(MissingManagerIdentifierError()) == "id is required."
         assert str(MissingChannelLayerError()).startswith("No channel layer configured")
+
+    def test_handle_graphql_error_codes(self) -> None:
+        perm_error = GraphQL._handle_graph_ql_error(PermissionError("nope"))
+        assert perm_error.extensions["code"] == "PERMISSION_DENIED"
+        value_error = GraphQL._handle_graph_ql_error(ValueError("bad"))
+        assert value_error.extensions["code"] == "BAD_USER_INPUT"
+        runtime_error = GraphQL._handle_graph_ql_error(RuntimeError("oops"))
+        assert runtime_error.extensions["code"] == "INTERNAL_SERVER_ERROR"
