@@ -149,6 +149,10 @@ def _mask_backend_setting(setting: object) -> object:
             else:
                 masked[key] = _mask_backend_setting(value)
         return masked
+    if isinstance(setting, Sequence) and not isinstance(setting, (str, bytes)):
+        if isinstance(setting, tuple):
+            return tuple(_mask_backend_setting(item) for item in setting)
+        return [_mask_backend_setting(item) for item in setting]
     if isinstance(setting, str):
         if "://" in setting:
             try:
