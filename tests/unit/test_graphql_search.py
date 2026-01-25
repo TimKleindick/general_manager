@@ -13,6 +13,7 @@ from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.permission.base_permission import BasePermission
 from general_manager.search.backends.dev import DevSearchBackend
+from general_manager.search import backend_registry
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.config import IndexConfig
 from general_manager.search.indexer import SearchIndexer
@@ -73,6 +74,14 @@ class Project(GeneralManager):
 
 class GraphQLSearchTests(SimpleTestCase):
     def setUp(self) -> None:
+        self._orig_gm_classes = GeneralManagerMeta.all_classes
+        self._orig_backend = backend_registry._backend
+        self._orig_query_fields = GraphQL._query_fields
+        self._orig_type_registry = GraphQL.graphql_type_registry
+        self._orig_manager_registry = GraphQL.manager_registry
+        self._orig_search_union = GraphQL._search_union
+        self._orig_search_result_type = GraphQL._search_result_type
+
         GeneralManagerMeta.all_classes = [Project]
         GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
         GraphQL._query_fields = {}
@@ -89,6 +98,22 @@ class GraphQLSearchTests(SimpleTestCase):
         indexer = SearchIndexer(backend)
         indexer.index_instance(Project(id=1))
         indexer.index_instance(Project(id=2))
+
+    def tearDown(self) -> None:
+        configure_search_backend(self._orig_backend)
+        GeneralManagerMeta.all_classes = self._orig_gm_classes
+        safe_classes = [
+            manager_class
+            for manager_class in self._orig_gm_classes
+            if hasattr(manager_class, "Interface")
+        ]
+        GeneralmanagerConfig.initialize_general_manager_classes([], safe_classes)
+        GraphQL._query_fields = self._orig_query_fields
+        GraphQL.graphql_type_registry = self._orig_type_registry
+        GraphQL.manager_registry = self._orig_manager_registry
+        GraphQL._search_union = self._orig_search_union
+        GraphQL._search_result_type = self._orig_search_result_type
+        super().tearDown()
 
     def test_graphql_search_filters_by_permission(self) -> None:
         field = GraphQL._query_fields["search"]
