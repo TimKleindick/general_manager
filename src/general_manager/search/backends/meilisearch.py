@@ -121,13 +121,19 @@ class MeilisearchBackend:
 
     @staticmethod
     def _document_payload(document: SearchDocument) -> dict[str, Any]:
+        reserved_keys = {"id", "gm_document_id", "type", "identification", "data"}
+        extra_data = {
+            key: value
+            for key, value in document.data.items()
+            if key not in reserved_keys
+        }
         return {
             "id": MeilisearchBackend._normalize_document_id(document.id),
             "gm_document_id": document.id,
             "type": document.type,
             "identification": document.identification,
             "data": document.data,
-            **document.data,
+            **extra_data,
         }
 
     @staticmethod
@@ -137,7 +143,9 @@ class MeilisearchBackend:
     ) -> str | None:
         clauses: list[str] = []
         if types:
-            type_clause = " OR ".join([f'type = "{type_name}"' for type_name in types])
+            type_clause = " OR ".join(
+                [f'type = "{_escape_filter_value(type_name)}"' for type_name in types]
+            )
             clauses.append(f"({type_clause})")
         if filters:
             filter_groups = filters if isinstance(filters, (list, tuple)) else [filters]
@@ -151,17 +159,23 @@ class MeilisearchBackend:
                         field_name, lookup = key, "exact"
                     if lookup == "in" and isinstance(value, (list, tuple, set)):
                         options = " OR ".join(
-                            [f'{field_name} = "{item}"' for item in value]
+                            [
+                                f'{field_name} = "{_escape_filter_value(item)}"'
+                                for item in value
+                            ]
                         )
                         parts.append(f"({options})")
                         continue
                     if isinstance(value, (list, tuple, set)):
                         options = " OR ".join(
-                            [f'{field_name} = "{item}"' for item in value]
+                            [
+                                f'{field_name} = "{_escape_filter_value(item)}"'
+                                for item in value
+                            ]
                         )
                         parts.append(f"({options})")
                     else:
-                        parts.append(f'{field_name} = "{value}"')
+                        parts.append(f'{field_name} = "{_escape_filter_value(value)}"')
                 if parts:
                     group_clauses.append(" AND ".join(parts))
             if group_clauses:
@@ -211,7 +225,8 @@ class MeilisearchBackend:
         else:
             status = getattr(result, "status", None)
             error = getattr(result, "error", None)
-        if status and status != "succeeded":
+        normalized_status = str(status).lower() if status is not None else ""
+        if normalized_status in {"failed", "canceled"}:
             raise MeilisearchTaskFailedError(status, error)
 
     @staticmethod
@@ -221,6 +236,12 @@ class MeilisearchBackend:
             return value
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         return f"gm_{digest}"
+
+
+def _escape_filter_value(value: Any) -> str:
+    escaped = str(value)
+    escaped = escaped.replace("\\", "\\\\").replace('"', '\\"')
+    return escaped
 
 
 class MeilisearchTaskFailedError(SearchBackendError):
