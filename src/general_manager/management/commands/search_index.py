@@ -51,6 +51,16 @@ class Command(BaseCommand):
 
         if index_names:
             target_indexes = set(index_names)
+            available = set(get_index_names())
+            unknowns = target_indexes - available
+            if unknowns:
+                self.stderr.write(
+                    f"Unknown index names ignored: {', '.join(sorted(unknowns))}"
+                )
+                target_indexes = target_indexes & available
+            if not target_indexes:
+                self.stdout.write("No valid index names provided; nothing to do.")
+                return
         else:
             target_indexes = get_index_names()
 

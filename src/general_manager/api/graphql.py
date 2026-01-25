@@ -56,6 +56,7 @@ from general_manager.utils.filter_parser import create_filter_function
 
 from django.core.exceptions import ValidationError
 from django.db.models import NOT_PROVIDED
+from django.utils import timezone
 from graphql import GraphQLError
 
 
@@ -598,11 +599,12 @@ class GraphQL:
             else:
                 manager_classes = list(type_map.values())
 
-            hits: list[tuple[float | None, Any]] = []
+            hits: list[tuple[float | None, Any, GeneralManager]] = []
             total = 0
             took_ms: int | None = None
             raw: list[Any] = []
             requested_count = offset + limit
+            fetch_limit = max(requested_count, limit)
 
             for manager_class in manager_classes:
                 type_label = manager_class.__name__
@@ -611,31 +613,82 @@ class GraphQL:
                     parsed_filters,
                     perm_filters,
                 )
-                result = backend.search(
-                    index_name,
-                    query,
-                    filters=filter_groups,
-                    limit=requested_count,
-                    offset=0,
-                    types=[type_label],
-                    sort_by=sort_by,
-                    sort_desc=sort_desc,
-                )
-                total += result.total
-                took_ms = (
-                    result.took_ms
-                    if took_ms is None
-                    else took_ms + (result.took_ms or 0)
-                )
-                raw.append(result.raw)
-                for hit in result.hits:
-                    hits.append((hit.score, hit))
+                authorized_hits: list[tuple[float | None, Any, GeneralManager]] = []
+                offset_cursor = 0
+                while True:
+                    result = backend.search(
+                        index_name,
+                        query,
+                        filters=filter_groups,
+                        limit=fetch_limit,
+                        offset=offset_cursor,
+                        types=[type_label],
+                        sort_by=sort_by,
+                        sort_desc=sort_desc,
+                    )
+                    took_ms = (
+                        result.took_ms
+                        if took_ms is None
+                        else took_ms + (result.took_ms or 0)
+                    )
+                    raw.append(result.raw)
+                    if not result.hits:
+                        break
+                    offset_cursor += len(result.hits)
+                    for hit in result.hits:
+                        try:
+                            instance = manager_class(**hit.identification)
+                        except (TypeError, ValueError, KeyError) as exc:
+                            logger.debug(
+                                "failed to instantiate search result",
+                                context={
+                                    "manager": hit.type,
+                                    "identification": hit.identification,
+                                },
+                                exc_info=exc,
+                            )
+                            continue
+                        if not cls._passes_permission_filters(instance, info):
+                            continue
+                        authorized_hits.append((hit.score, hit, instance))
+                    if len(authorized_hits) >= requested_count:
+                        break
+                    if len(result.hits) < fetch_limit:
+                        break
+                total += len(authorized_hits)
+                hits.extend(authorized_hits)
 
             if sort_by:
 
-                def _sort_key(item: tuple[float | None, Any]) -> tuple[bool, str]:
+                def _normalize_sort_value(value: Any) -> Any:
+                    if value is None:
+                        return None
+                    if isinstance(value, (int, float, Decimal)):
+                        return float(value)
+                    if isinstance(value, datetime):
+                        if timezone.is_naive(value):
+                            return timezone.make_aware(value)
+                        return value
+                    if isinstance(value, date):
+                        return timezone.make_aware(
+                            datetime.combine(value, datetime.min.time())
+                        )
+                    if isinstance(value, str):
+                        try:
+                            parsed = datetime.fromisoformat(value)
+                        except ValueError:
+                            return value
+                        if timezone.is_naive(parsed):
+                            parsed = timezone.make_aware(parsed)
+                        return parsed
+                    return str(value)
+
+                def _sort_key(
+                    item: tuple[float | None, Any, GeneralManager],
+                ) -> tuple[bool, Any]:
                     value = item[1].data.get(sort_by) if item[1].data else None
-                    return (value is None, str(value))
+                    normalized = _normalize_sort_value(value)
+                    return (normalized is None, normalized)
 
                 hits.sort(
                     key=_sort_key,
@@ -644,27 +697,8 @@ class GraphQL:
             else:
                 hits.sort(key=lambda item: (item[0] or 0), reverse=True)
 
-            sliced_hits = [hit for _, hit in hits][offset : offset + limit]
-
             items: list[GeneralManager] = []
-            for hit in sliced_hits:
-                hit_manager_class = type_map.get(hit.type)
-                if hit_manager_class is None:
-                    continue
-                try:
-                    instance = hit_manager_class(**hit.identification)
-                except (TypeError, ValueError, KeyError) as exc:
-                    logger.debug(
-                        "failed to instantiate search result",
-                        context={
-                            "manager": hit.type,
-                            "identification": hit.identification,
-                        },
-                        exc_info=exc,
-                    )
-                    continue
-                if not cls._passes_permission_filters(instance, info):
-                    continue
+            for _, _hit, instance in hits[offset : offset + limit]:
                 items.append(instance)
 
             return {
@@ -782,9 +816,8 @@ class GraphQL:
             return filters or None
         groups: list[dict[str, Any]] = []
         for perm_filter, _perm_exclude in permission_filters:
-            combined = dict(perm_filter)
-            if filters:
-                combined.update(filters)
+            combined = dict(filters or {})
+            combined.update(perm_filter)
             groups.append(combined)
         return groups or None
 

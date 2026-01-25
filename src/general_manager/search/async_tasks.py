@@ -19,11 +19,13 @@ try:
 except ImportError:  # pragma: no cover - depends on optional dependency
     CELERY_AVAILABLE = False
 
-    def shared_task(*_args: Any, **_kwargs: Any):  # type: ignore[no-redef]
-        def decorator(func):
-            return func
+    def shared_task(func: Any | None = None, **_kwargs: Any):  # type: ignore[no-redef]
+        def decorator(inner):
+            return inner
 
-        return decorator
+        if func is None:
+            return decorator
+        return decorator(func)
 
 
 def _async_enabled() -> bool:

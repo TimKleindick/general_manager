@@ -52,6 +52,10 @@ class DevSearchBackend:
         offset: int = 0,
         types: Sequence[str] | None = None,
     ) -> SearchResult:
+        if filter_expression is not None:
+            raise NotImplementedError(
+                "filter_expression is not supported by the dev backend."
+            )
         start = time.perf_counter()
         store = self._indexes.setdefault(index_name, _IndexStore())
         tokens = self._tokenize_query(query)

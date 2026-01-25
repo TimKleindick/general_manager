@@ -135,7 +135,10 @@ class SearchIndexer:
         if config is None:
             return
         type_label = get_type_label(instance.__class__)
-        doc_id = build_document_id(type_label, instance.identification)
+        if config.document_id is not None:
+            doc_id = config.document_id(instance)
+        else:
+            doc_id = build_document_id(type_label, instance.identification)
         for index_config in config.indexes:
             _ensure_index(self.backend, index_config.name)
             self.backend.delete(index_config.name, [doc_id])
