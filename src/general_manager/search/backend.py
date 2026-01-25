@@ -123,11 +123,18 @@ class SearchBackendNotImplementedError(SearchBackendError):
 class SearchBackendNotConfiguredError(RuntimeError):
     """Raised when a configured backend cannot be resolved."""
 
-    def __init__(self) -> None:
+    def __init__(self, message: str | None = None) -> None:
         """
-        Initialize the error with a fixed message indicating no search backend is configured.
+        Initialize the error with a message indicating no search backend is configured.
         """
-        super().__init__("No search backend configured.")
+        super().__init__(message or "No search backend configured.")
+
+    @classmethod
+    def from_setting(cls, backend_setting: object) -> "SearchBackendNotConfiguredError":
+        message = (
+            f"Search backend could not be resolved from setting: {backend_setting!r}"
+        )
+        return cls(message)
 
 
 class SearchBackendClientMissingError(SearchBackendError):

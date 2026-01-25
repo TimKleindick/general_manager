@@ -18,6 +18,7 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         """
         Register two GeneralManager test classes (Project and ProjectTeam) on the test class and set them as the global managers.
 
@@ -238,6 +239,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
 class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         """
         Prepare test class by defining and registering a SecuredProject GeneralManager with interface, permissions, and search configuration.
 
@@ -322,6 +324,7 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
 ):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         """
         Define two test GeneralManager classes (PublicProject and InternalProject) with fields, permissions, and search indexes, and register them for use by the test class.
 
@@ -427,6 +430,7 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
 class TestSearchIndexCommandIntegration(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         """
         Define and register a CommandProject GeneralManager subclass for use by the test class.
 
