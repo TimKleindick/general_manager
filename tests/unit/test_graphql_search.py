@@ -28,10 +28,27 @@ class ProjectInterface(BaseTestInterface):
     }
 
     def get_data(self, search_date=None):
+        """
+        Retrieve the data dictionary for the current interface id.
+
+        Parameters:
+            search_date (optional): Ignored; accepted for API compatibility.
+
+        Returns:
+            dict: The data dictionary from this interface's in-memory store for the current id.
+        """
         return self.data_store[self.identification["id"]]
 
     @classmethod
     def get_attribute_types(cls):
+        """
+        Provide attribute metadata for the interface.
+
+        Returns:
+            dict: A mapping from attribute name to a metadata dictionary describing the attribute. For this class the mapping includes:
+                - "name": {"type": str}
+                - "status": {"type": str}
+        """
         return {
             "name": {"type": str},
             "status": {"type": str},
@@ -39,6 +56,12 @@ class ProjectInterface(BaseTestInterface):
 
     @classmethod
     def get_attributes(cls):
+        """
+        Provide attribute accessors for the interface.
+
+        Returns:
+            dict: Mapping of attribute names to callables that take an interface instance and return the attribute's value. Includes keys "name" and "status".
+        """
         return {
             "name": lambda interface: interface.get_data()["name"],
             "status": lambda interface: interface.get_data()["status"],
@@ -46,6 +69,15 @@ class ProjectInterface(BaseTestInterface):
 
     @classmethod
     def filter(cls, **kwargs):
+        """
+        Return a SimpleBucket of parent-class instances for the requested ids or for all stored ids when no id__in is provided.
+
+        Parameters:
+            id__in (iterable[int], optional): Iterable of ids to filter by. If omitted, all ids from the class data_store are used.
+
+        Returns:
+            SimpleBucket: A bucket containing instances of the parent class for each selected id.
+        """
         ids = kwargs.get("id__in")
         if ids is None:
             ids = list(cls.data_store.keys())
@@ -56,9 +88,25 @@ class ProjectInterface(BaseTestInterface):
 
 class ProjectPermission(BasePermission):
     def check_permission(self, action, attribute):
+        """
+        Unconditionally grant permission for any action and attribute.
+
+        Parameters:
+            action: Identifier or name of the attempted action (for example, 'read' or 'write').
+            attribute: The attribute or field being accessed.
+
+        Returns:
+            True if the action is permitted (always True), False otherwise.
+        """
         return True
 
     def get_permission_filter(self):
+        """
+        Provide permission filters that restrict results to items with status "public".
+
+        Returns:
+            permission_filters (list[dict]): A list of permission filter objects. Each object contains a "filter" dict mapping field names to required values (here {"status": "public"}) and an "exclude" dict of fields to exclude.
+        """
         return [{"filter": {"status": "public"}, "exclude": {}}]
 
 
@@ -74,6 +122,11 @@ class Project(GeneralManager):
 
 class GraphQLSearchTests(SimpleTestCase):
     def setUp(self) -> None:
+        """
+        Prepare test environment for GraphQL search tests.
+
+        Sets GeneralManager to include only Project, initializes general manager configuration, clears and reinitializes GraphQL registries and search types, creates the GraphQL interface and search query for Project, configures a development search backend, and indexes two Project instances (ids 1 and 2) for use by the tests.
+        """
         self._orig_gm_classes = GeneralManagerMeta.all_classes
         self._orig_backend = backend_registry._backend
         self._orig_query_fields = GraphQL._query_fields
@@ -100,6 +153,11 @@ class GraphQLSearchTests(SimpleTestCase):
         indexer.index_instance(Project(id=2))
 
     def tearDown(self) -> None:
+        """
+        Restore global search backend, general-manager registration, and GraphQL registries to their original state.
+
+        This reverses mutations performed in setUp by restoring the previously saved search backend, GeneralManagerMeta class list and safe-class initialization, and GraphQL query/type/manager/search-related registries and caches, then delegates to the superclass tearDown.
+        """
         configure_search_backend(self._orig_backend)
         GeneralManagerMeta.all_classes = self._orig_gm_classes
         safe_classes = [
@@ -116,6 +174,11 @@ class GraphQLSearchTests(SimpleTestCase):
         super().tearDown()
 
     def test_graphql_search_filters_by_permission(self) -> None:
+        """
+        Verify that the GraphQL search applies permission filters for an anonymous user.
+
+        Executes the registered GraphQL search resolver against the "global" index as an anonymous user and asserts that only items allowed by the permission filter are counted and returned (expected single result with id 1).
+        """
         field = GraphQL._query_fields["search"]
         info = MagicMock()
         info.context.user = AnonymousUser()
@@ -136,6 +199,11 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["results"][0].identification == {"id": 1}
 
     def test_graphql_search_filters_list(self) -> None:
+        """
+        Verifies GraphQL search respects an explicit filter list and returns only matching items.
+
+        Asserts that executing the registered 'search' query with a filter of status == "public" yields exactly one result.
+        """
         field = GraphQL._query_fields["search"]
         info = MagicMock()
         info.context.user = AnonymousUser()
@@ -211,14 +279,37 @@ class GraphQLSearchTests(SimpleTestCase):
             }
 
             def get_data(self, search_date=None):
+                """
+                Retrieve the stored data dictionary for this interface instance's id.
+
+                Parameters:
+                    search_date (optional): Ignored by this implementation; present for API compatibility.
+
+                Returns:
+                    dict: The data dictionary from the class-level `data_store` keyed by this instance's `id`.
+                """
                 return self.data_store[self.identification["id"]]
 
             @classmethod
             def get_attribute_types(cls):
+                """
+                Provide attribute type definitions for the interface.
+
+                Returns:
+                    dict: Mapping of attribute names to their type configuration. Contains:
+                        - "name": {"type": str}
+                        - "rank": {"type": int}
+                """
                 return {"name": {"type": str}, "rank": {"type": int}}
 
             @classmethod
             def get_attributes(cls):
+                """
+                Provide attribute accessors for interfaces.
+
+                Returns:
+                    dict: Mapping of attribute names ("name", "rank", "start_date") to callables that accept an interface instance and return that attribute's value.
+                """
                 return {
                     "name": lambda interface: interface.get_data()["name"],
                     "rank": lambda interface: interface.get_data()["rank"],
@@ -227,6 +318,15 @@ class GraphQLSearchTests(SimpleTestCase):
 
             @classmethod
             def filter(cls, **kwargs):
+                """
+                Return a SimpleBucket of parent-class instances corresponding to the selected ids.
+
+                Parameters:
+                    id__in (Optional[Iterable]): Optional iterable of ids to include; if omitted, all ids from the interface's data_store are used.
+
+                Returns:
+                    SimpleBucket: A SimpleBucket containing instances of the interface's parent class created with each selected id.
+                """
                 ids = kwargs.get("id__in") or list(cls.data_store.keys())
                 return SimpleBucket(
                     cls._parent_class, [cls._parent_class(id=val) for val in ids]
@@ -234,9 +334,27 @@ class GraphQLSearchTests(SimpleTestCase):
 
         class RankedPermission(BasePermission):
             def check_permission(self, action, attribute):
+                """
+                Allow any action on any attribute.
+
+                Parameters:
+                        action: Identifier or descriptor of the action being checked.
+                        attribute: Name or descriptor of the attribute the action targets.
+
+                Returns:
+                        `True` if the action is permitted (this permission always grants access), `False` otherwise.
+                """
                 return True
 
             def get_permission_filter(self):
+                """
+                Return the permission filter specifications applied to searches for this permission.
+
+                By default returns a list containing a single specification with empty "filter" and "exclude" dictionaries.
+
+                Returns:
+                    list[dict]: A list of permission filter specs where each spec is a dict with keys "filter" (dict) and "exclude" (dict).
+                """
                 return [{"filter": {}, "exclude": {}}]
 
         class RankedProject(GeneralManager):

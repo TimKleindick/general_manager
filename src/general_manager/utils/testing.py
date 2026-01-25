@@ -165,9 +165,9 @@ class GMTestCaseMeta(type):
         attrs: dict[str, object],
     ) -> type:
         """
-        Create a new test case class that injects GeneralManager-specific initialization into `setUpClass`.
+        Constructs a test case class whose setUpClass is augmented to initialize GeneralManager and GraphQL test state.
 
-        The constructed class replaces or wraps any user-defined `setUpClass` with logic that resets GraphQL and manager registries, configures an optional fallback app lookup, ensures database tables for managed models exist, initializes GeneralManager and GraphQL registrations, and then calls the standard GraphQL test setup.
+        The augmented setUpClass resets GraphQL internal registries and schema/type state, optionally installs an AppConfig fallback resolver, ensures database tables for the test's managed models (including history and related HistoricalChanges models) exist and records created tables on cls._gm_created_tables, initializes GeneralManager classes and GraphQL registrations (including startup hook runner and system checks), runs any user-defined setUpClass, and then invokes the base GraphQLTransactionTestCase.setUpClass.
 
         Parameters:
             mcs (type[GMTestCaseMeta]): Metaclass constructing the new class.
@@ -189,7 +189,7 @@ class GMTestCaseMeta(type):
             """
             Prepare the class-level test environment for GeneralManager GraphQL tests.
 
-            Resets GraphQL registries and type/schema state, optionally installs an AppConfig fallback, creates any missing database tables for the test's registered models (including their history models and related models used by HistoricalChanges) and records created table names on cls._gm_created_tables, initializes GeneralManager classes and GraphQL registrations (including installing the startup hook runner and registering system checks), and runs any user-defined setUpClass followed by the base GraphQLTransactionTestCase.setUpClass.
+            Resets GraphQL registries and schema/type state; optionally installs a fallback AppConfig lookup if configured; creates any missing database tables for models referenced by the test's GeneralManager interfaces (including their history models and models related via HistoricalChanges) and records created table names on cls._gm_created_tables; initializes GeneralManager classes and their GraphQL registrations (including installing the startup hook runner and registering system checks); clears the default GraphQL URL pattern; executes any user-defined setUpClass for the test class; and finally invokes the base GraphQLTransactionTestCase.setUpClass.
             """
             GraphQL._query_class = None
             GraphQL._mutation_class = None

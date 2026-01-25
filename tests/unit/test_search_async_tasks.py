@@ -16,26 +16,66 @@ class _DummyInstance:
 
 class _DummyManager:
     def __init__(self, **kwargs):
+        """
+        Initialize the manager with identification derived from provided keyword arguments.
+
+        Parameters:
+            **kwargs: Arbitrary identification attributes to store.
+
+        Attributes:
+            identification (dict): Mapping of provided keyword argument names to their values.
+        """
         self.identification = kwargs
 
 
 class _DummyIndexer:
     def __init__(self) -> None:
+        """
+        Initialize a dummy indexer that records indexed and deleted instances.
+
+        Attributes:
+            indexed (list[object]): Instances that have been passed to index operations, in order.
+            deleted (list[object]): Instances that have been passed to delete operations, in order.
+        """
         self.indexed: list[object] = []
         self.deleted: list[object] = []
 
     def index_instance(self, instance: object) -> None:
+        """
+        Record an instance as indexed.
+
+        Parameters:
+            instance (object): The instance to record as indexed.
+        """
         self.indexed.append(instance)
 
     def delete_instance(self, instance: object) -> None:
+        """
+        Record that an instance was deleted by appending it to this indexer's `deleted` list.
+
+        Parameters:
+            instance (object): The instance that was deleted and should be recorded.
+        """
         self.deleted.append(instance)
 
 
 class _DummyTask:
     def __init__(self) -> None:
+        """
+        Initialize the dummy task and prepare its call log.
+
+        Creates `self.calls`, a list used to record tuples of `(manager_path, identification)` each time the task's `delay` method is invoked.
+        """
         self.calls: list[tuple[str, dict]] = []
 
     def delay(self, manager_path: str, identification: dict) -> None:
+        """
+        Record a delayed task invocation by appending the manager path and identification to the calls list.
+
+        Parameters:
+            manager_path (str): Dotted import path identifying the manager to handle the task.
+            identification (dict): Mapping of fields used to identify the target instance.
+        """
         self.calls.append((manager_path, identification))
 
 
@@ -50,6 +90,13 @@ def test_dispatch_index_update_inline_instance(monkeypatch: pytest.MonkeyPatch) 
     indexer = _DummyIndexer()
 
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
+        """
+        No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
+
+        Parameters:
+            _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
+            _backend (object): The backend that would normally be used for initialization (ignored).
+        """
         return None
 
     monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
@@ -77,6 +124,13 @@ def test_dispatch_index_update_inline_instance_delete(
     indexer = _DummyIndexer()
 
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
+        """
+        No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
+
+        Parameters:
+            _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
+            _backend (object): The backend that would normally be used for initialization (ignored).
+        """
         return None
 
     monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
@@ -102,9 +156,23 @@ def test_dispatch_index_update_inline_by_path(monkeypatch: pytest.MonkeyPatch) -
     indexer = _DummyIndexer()
 
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
+        """
+        No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
+
+        Parameters:
+            _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
+            _backend (object): The backend that would normally be used for initialization (ignored).
+        """
         return None
 
     def _delete_task(_manager_path: str, identification: dict) -> None:
+        """
+        Delete the instance identified by `identification` from the dummy index.
+
+        Parameters:
+            _manager_path (str): Unused manager import path placeholder (ignored).
+            identification (dict): Keyword arguments used to construct a `_DummyManager`; that manager is passed to the indexer's `delete_instance` method.
+        """
         indexer.delete_instance(_DummyManager(**identification))
 
     monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())
@@ -162,6 +230,13 @@ def test_index_and_delete_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
     indexer = _DummyIndexer()
 
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
+        """
+        No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
+
+        Parameters:
+            _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
+            _backend (object): The backend that would normally be used for initialization (ignored).
+        """
         return None
 
     monkeypatch.setattr(async_tasks, "get_search_backend", lambda: object())

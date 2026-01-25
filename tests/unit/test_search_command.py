@@ -28,6 +28,11 @@ class SearchCommandTests(SimpleTestCase):
     def test_search_index_reindex(
         self, mock_indexer, mock_backend, mock_iter, mock_get_index_names
     ):
+        """
+        Verifies that running the `search_index` management command with `--reindex` and a specific `--index` causes the backend index to be ensured and the corresponding manager to be reindexed.
+
+        Asserts that the backend's `ensure_index` is called and that the `SearchIndexer`'s `reindex_manager` is invoked with the manager class for the requested index.
+        """
         mock_iter.return_value = [DummyManager]
         mock_get_index_names.return_value = {"global"}
         backend_instance = MagicMock()
