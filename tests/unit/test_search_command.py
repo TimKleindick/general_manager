@@ -21,11 +21,15 @@ class DummyManager(GeneralManager):
 
 
 class SearchCommandTests(SimpleTestCase):
+    @patch("general_manager.management.commands.search_index.get_index_names")
     @patch("general_manager.management.commands.search_index.iter_searchable_managers")
     @patch("general_manager.management.commands.search_index.get_search_backend")
     @patch("general_manager.management.commands.search_index.SearchIndexer")
-    def test_search_index_reindex(self, mock_indexer, mock_backend, mock_iter):
+    def test_search_index_reindex(
+        self, mock_indexer, mock_backend, mock_iter, mock_get_index_names
+    ):
         mock_iter.return_value = [DummyManager]
+        mock_get_index_names.return_value = {"global"}
         backend_instance = MagicMock()
         mock_backend.return_value = backend_instance
         indexer_instance = MagicMock()

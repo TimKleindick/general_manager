@@ -31,6 +31,8 @@ MEILI_AVAILABLE = meilisearch is not None and bool(MEILI_URL)
 class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
+        cls._orig_gm_classes = GeneralManagerMeta.all_classes
         cls.index_name = f"gm_test_{uuid4().hex}"
 
         class Project(GeneralManager):
@@ -56,6 +58,11 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
         cls.general_manager_classes = [Project]
         cls.Project = Project
         GeneralManagerMeta.all_classes = cls.general_manager_classes
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        GeneralManagerMeta.all_classes = getattr(cls, "_orig_gm_classes", [])
+        super().tearDownClass()
 
     def setUp(self):
         super().setUp()
