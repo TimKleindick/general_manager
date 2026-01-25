@@ -178,12 +178,7 @@ class MeilisearchBackend:
         Returns:
             The Meilisearch index object for the given index name.
         """
-        try:
-            return self._client.get_index(index_name)
-        except Exception:  # noqa: BLE001
-            task = self._client.create_index(index_name, {"primaryKey": "id"})
-            self._wait_for_task(task)
-            return self._client.get_index(index_name)
+        return self._client.get_or_create_index(index_name, {"primaryKey": "id"})
 
     @staticmethod
     def _document_payload(document: SearchDocument) -> dict[str, Any]:

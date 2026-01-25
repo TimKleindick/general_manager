@@ -95,6 +95,11 @@ class _FakeClient:
         self.index = index
         self.waited: list[int] = []
 
+    def get_or_create_index(
+        self, _name: str, _payload: dict[str, object]
+    ) -> _FakeIndex:
+        return self.index
+
     def get_index(self, _name: str) -> _FakeIndex:
         """
         Return the fake index instance associated with this client.
@@ -205,6 +210,11 @@ def test_meilisearch_backend_get_task_fallback() -> None:
             self.waited: list[int] = []
             self.calls = 0
             self.status_sequence = ["enqueued", "processing", "succeeded"]
+
+        def get_or_create_index(
+            self, _name: str, _payload: dict[str, object]
+        ) -> _FakeIndex:
+            return self.index
 
         def get_index(self, _name: str) -> _FakeIndex:
             """
@@ -352,6 +362,11 @@ def test_meilisearch_backend_wait_for_task_timeout(
     class _Client:
         def __init__(self) -> None:
             self.calls = 0
+
+        def get_or_create_index(
+            self, _name: str, _payload: dict[str, object]
+        ) -> _FakeIndex:
+            return _FakeIndex()
 
         def get_index(self, _name: str) -> _FakeIndex:
             return _FakeIndex()
