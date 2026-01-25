@@ -15,13 +15,13 @@ _MODULE_MAP = SEARCH_EXPORTS
 def __getattr__(name: str) -> Any:
     """
     Resolve and return a named export from this module's public API.
-    
+
     Parameters:
         name (str): Name of the export to resolve.
-    
+
     Returns:
         The exported object registered under `name`.
-    
+
     Raises:
         AttributeError: If `name` is not a registered export for this module.
     """
@@ -36,7 +36,7 @@ def __getattr__(name: str) -> Any:
 def __dir__() -> list[str]:
     """
     Provide the list of attribute names exposed by this module, including dynamically resolvable exports.
-    
+
     Returns:
         names (list[str]): Names available on the module for dir() and autocompletion.
     """

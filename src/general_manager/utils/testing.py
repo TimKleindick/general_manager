@@ -166,15 +166,15 @@ class GMTestCaseMeta(type):
     ) -> type:
         """
         Constructs a test case class whose setUpClass is augmented to initialize GeneralManager and GraphQL test state.
-        
+
         The augmented setUpClass resets GraphQL internal registries and schema/type state, optionally installs an AppConfig fallback resolver, ensures database tables for the test's managed models (including history and related HistoricalChanges models) exist and records created tables on cls._gm_created_tables, initializes GeneralManager classes and GraphQL registrations (including startup hook runner and system checks), runs any user-defined setUpClass, and then invokes the base GraphQLTransactionTestCase.setUpClass.
-        
+
         Parameters:
             mcs (type[GMTestCaseMeta]): Metaclass constructing the new class.
             name (str): Name of the class to create.
             bases (tuple[type, ...]): Base classes for the new class.
             attrs (dict[str, object]): Class namespace; may contain a user-defined `setUpClass` and `fallback_app`.
-        
+
         Returns:
             type: The newly created test case class whose `setUpClass` has been augmented for GeneralManager testing.
         """
@@ -188,7 +188,7 @@ class GMTestCaseMeta(type):
         ) -> None:
             """
             Prepare the class-level test environment for GeneralManager GraphQL tests.
-            
+
             Resets GraphQL registries and schema/type state; optionally installs a fallback AppConfig lookup if configured; creates any missing database tables for models referenced by the test's GeneralManager interfaces (including their history models and models related via HistoricalChanges) and records created table names on cls._gm_created_tables; initializes GeneralManager classes and their GraphQL registrations (including installing the startup hook runner and registering system checks); clears the default GraphQL URL pattern; executes any user-defined setUpClass for the test class; and finally invokes the base GraphQLTransactionTestCase.setUpClass.
             """
             GraphQL._query_class = None

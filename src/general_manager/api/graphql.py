@@ -508,10 +508,10 @@ class GraphQL:
     ) -> type[graphene.Enum] | None:
         """
         Create a Graphene Enum of sortable field names for a GeneralManager subclass.
-        
+
         Parameters:
             generalManagerClass (type[GeneralManager]): The GeneralManager subclass to inspect for sortable attributes and GraphQL properties.
-        
+
         Returns:
             type[graphene.Enum] | None: A Graphene Enum type whose members are the sortable field names for the manager, or `None` if no sortable fields exist.
         """
@@ -553,9 +553,9 @@ class GraphQL:
     def register_search_query(cls) -> None:
         """
         Register a global GraphQL search field that returns results across multiple manager types.
-        
+
         Creates a union type and a paginated result type for all registered manager classes that expose a search configuration, then adds a "search" field to the class query registry. If a search field is already registered or no managers provide search configuration, this method is a no-op.
-        
+
         The registered resolver accepts the arguments: `query`, `index`, `types`, `filters`, `sort_by`, `sort_desc`, `page`, and `page_size`, and returns a dict with the keys:
         - `results`: list of manager instances matching the search,
         - `total`: total matching hit count across requested manager types,
@@ -597,7 +597,7 @@ class GraphQL:
         ) -> dict[str, Any]:
             """
             Execute a cross-manager full-text search and return paginated, permission-filtered results.
-            
+
             Parameters:
                 _root: GraphQL resolver root value (unused).
                 info (GraphQLResolveInfo): Resolve info used to evaluate read permissions.
@@ -609,7 +609,7 @@ class GraphQL:
                 sort_desc (bool): Whether to sort in descending order when `sort_by` is provided.
                 page (int | None): 1-based page number to return; defaults to 1.
                 page_size (int | None): Number of items per page; defaults to 10.
-            
+
             Returns:
                 dict: A result dictionary with keys:
                     - "results": list of instantiated GeneralManager items matching the query and permissions.
@@ -701,10 +701,10 @@ class GraphQL:
                 def _normalize_sort_value(value: Any) -> Any:
                     """
                     Normalize different input types to consistent values suitable for sorting.
-                    
+
                     Parameters:
                         value (Any): Input value to normalize. Supported inputs include numbers, datetimes, dates, ISO-formatted datetime strings, None, and other arbitrary objects.
-                    
+
                     Returns:
                         Any: - `None` if input is `None`.
                              - `float` for numeric inputs.
@@ -739,10 +739,10 @@ class GraphQL:
                 ) -> tuple[bool, Any]:
                     """
                     Create a sort key that orders items by a normalized value, placing items with no value after those with a value.
-                    
+
                     Parameters:
                         item (tuple[float | None, Any, GeneralManager]): Tuple where the second element is an object with a `.data` mapping from which the sort field will be read.
-                    
+
                     Returns:
                         tuple[bool, Any]: `True` if the extracted value is `None` (ensuring it sorts after present values), otherwise `False`, followed by the normalized sort value.
                     """
@@ -787,10 +787,10 @@ class GraphQL:
     ) -> type[graphene.Union] | None:
         """
         Builds a Graphene Union type that unites the registered GraphQL object types for the provided manager classes.
-        
+
         Parameters:
             type_map (dict[str, type[GeneralManager]]): Mapping of manager identifier to GeneralManager subclass to consider when constructing the union.
-        
+
         Returns:
             type[graphene.Union] | None: A Graphene Union type composed of the registered GraphQL ObjectTypes for the given managers, or `None` if no registered types were found.
         """
@@ -815,10 +815,10 @@ class GraphQL:
         ) -> type[graphene.ObjectType] | None:
             """
             Map a GeneralManager instance to its registered GraphQL ObjectType.
-            
+
             Parameters:
                 instance: The object to resolve; if it is a GeneralManager, its manager class name is used to look up the corresponding Graphene ObjectType in the registry.
-            
+
             Returns:
                 The Graphene ObjectType registered for the instance's manager class, or `None` if the instance is not a GeneralManager or no type is registered.
             """
@@ -840,10 +840,10 @@ class GraphQL:
     ) -> type[graphene.ObjectType]:
         """
         Create or retrieve a Graphene ObjectType that represents paginated search results for the provided union type.
-        
+
         Parameters:
             union_type (type[graphene.Union]): A Graphene Union type whose member types represent individual search result item types.
-        
+
         Returns:
             result_type (type[graphene.ObjectType]): A Graphene ObjectType named "SearchResult" with the fields:
                 - results: List of the provided union_type
@@ -874,18 +874,18 @@ class GraphQL:
     ) -> dict[str, Any]:
         """
         Normalize search filters supplied as a dict, JSON string, or list of filter objects into a single lookup dict.
-        
+
         Parameters:
-        	filters (dict | str | list[dict] | None): Filters to normalize. Accepts:
-        		- dict: returned as-is.
-        		- JSON string: parsed to a dict or list; invalid JSON is treated as None.
-        		- list of dicts: each dict should contain "field" and optionally "op", "value", or "values".
-        		  For list items, entries are merged into keys of the form "field__op" (if `op` is present)
-        		  or "field" (if `op` is empty). If `values` is provided and `op` is empty, `op` is set to "in".
-        		  Non-dict items or items missing "field" are ignored.
-        
+                filters (dict | str | list[dict] | None): Filters to normalize. Accepts:
+                        - dict: returned as-is.
+                        - JSON string: parsed to a dict or list; invalid JSON is treated as None.
+                        - list of dicts: each dict should contain "field" and optionally "op", "value", or "values".
+                          For list items, entries are merged into keys of the form "field__op" (if `op` is present)
+                          or "field" (if `op` is empty). If `values` is provided and `op` is empty, `op` is set to "in".
+                          Non-dict items or items missing "field" are ignored.
+
         Returns:
-        	dict[str, Any]: A mapping of filter lookup strings to their corresponding value(s). Returns an empty dict for invalid or unsupported input.
+                dict[str, Any]: A mapping of filter lookup strings to their corresponding value(s). Returns an empty dict for invalid or unsupported input.
         """
         parsed: Any = filters
         if isinstance(filters, str):
@@ -920,11 +920,11 @@ class GraphQL:
     ) -> list[dict[str, Any]] | dict[str, Any] | None:
         """
         Combine a base filter with multiple permission-derived filter sets, producing one or more effective filter dicts.
-        
+
         Parameters:
             filters (dict[str, Any] | None): Base filter to apply to each permission set; treated as empty if None.
             permission_filters (list[tuple[dict[str, Any], dict[str, Any]]]): Sequence of (filter, exclude) permission pairs; only the filter part is used here.
-        
+
         Returns:
             list[dict[str, Any]] | dict[str, Any] | None: If permission_filters is empty, returns `filters` or None. Otherwise returns a list of dicts where each entry is `filters` merged with one permission filter; returns None if the result would be empty.
         """
@@ -946,12 +946,12 @@ class GraphQL:
     ) -> bool:
         """
         Determine whether a GeneralManager instance satisfies all provided filter conditions.
-        
+
         Parameters:
             instance (GeneralManager): The manager instance to evaluate.
             filters (dict[str, Any]): Mapping of lookup expressions to values representing filter conditions.
             empty_is_match (bool, optional): If True and `filters` is empty or falsy, treat the instance as matching. Defaults to True.
-        
+
         Returns:
             bool: `true` if the instance matches every filter condition, `false` otherwise.
         """
@@ -969,13 +969,13 @@ class GraphQL:
     ) -> bool:
         """
         Determine whether the current user may read the given manager instance according to the manager's read permission filters.
-        
+
         Checks the per-manager permission filter sets derived from the request context. If no permission filters are defined the instance is considered readable. Otherwise returns true if the instance matches at least one permission filter and does not match that filter's corresponding exclude conditions.
-        
+
         Parameters:
             instance (GeneralManager): The manager instance to evaluate.
             info (GraphQLResolveInfo): GraphQL resolver info containing the request context and user.
-        
+
         Returns:
             bool: `True` if the instance is permitted for read by the current user, `False` otherwise.
         """

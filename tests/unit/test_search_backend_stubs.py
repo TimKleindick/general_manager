@@ -25,7 +25,7 @@ class SearchBackendStubTests(SimpleTestCase):
     def test_typesense_backend_methods_raise(self) -> None:
         """
         Verify that the TypesenseBackend stub raises SearchBackendNotImplementedError for its initializer and core methods.
-        
+
         Asserts that calling __init__, ensure_index, upsert, delete, and search on an uninitialized TypesenseBackend instance raises SearchBackendNotImplementedError.
         """
         backend = object.__new__(TypesenseBackend)

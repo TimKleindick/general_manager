@@ -17,7 +17,7 @@ class _CallableBackend:
     def __call__(self) -> DevSearchBackend:
         """
         Create a new DevSearchBackend instance.
-        
+
         Returns:
             backend (DevSearchBackend): A new DevSearchBackend instance.
         """
@@ -28,7 +28,7 @@ class _ConfigurableBackend(DevSearchBackend):
     def __init__(self, *, label: str) -> None:
         """
         Initialize a configurable development search backend with a human-readable label.
-        
+
         Parameters:
             label (str): Human-readable label to attach to the backend instance.
         """
@@ -40,7 +40,7 @@ class BackendRegistryTests(SimpleTestCase):
     def tearDown(self) -> None:
         """
         Reset the configured search backend to its default state after a test.
-        
+
         Clears any test-specific search backend configuration by calling configure_search_backend(None),
         ensuring subsequent tests start with the registry unmodified.
         """

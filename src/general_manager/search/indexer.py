@@ -35,7 +35,7 @@ class MissingIndexConfigurationError(ValueError):
     def __init__(self, manager_name: str, index_name: str) -> None:
         """
         Initialize the exception for a manager missing configuration for a given index.
-        
+
         Parameters:
             manager_name (str): Name of the manager missing the index configuration.
             index_name (str): Name of the index that is not configured for the manager.
@@ -61,12 +61,12 @@ def _serialize_document(
 ) -> SearchDocument:
     """
     Serialize a GeneralManager instance into a SearchDocument for the given index.
-    
+
     Parameters:
         instance: The manager instance to serialize.
         index_name: Target index name for the resulting document.
         config: SearchConfigSpec that may supply a custom document id and/or a provided document mapping.
-    
+
     Returns:
         SearchDocument: Document including id, type label, identification, index, data, field boosts, and index boost.
     """
@@ -111,12 +111,12 @@ def _serialize_document(
 def _collect_documents_for_instance(instance: GeneralManager) -> Sequence[IndexPayload]:
     """
     Collect IndexPayloads for every search index configured for the given manager instance.
-    
+
     Each returned IndexPayload contains the index name and a single serialized SearchDocument for that index.
-    
+
     Parameters:
         instance (GeneralManager): Manager instance to serialize into search documents.
-    
+
     Returns:
         Sequence[IndexPayload]: A list of IndexPayload objects, one per configured index; returns an empty list if the manager has no search configuration.
     """
@@ -137,9 +137,9 @@ def _collect_documents_for_instance(instance: GeneralManager) -> Sequence[IndexP
 def _ensure_index(backend: SearchBackend, index_name: str) -> None:
     """
     Ensure the search index exists in the backend with the appropriate settings.
-    
+
     Collects index settings for the given index name and instructs the backend to create or update the index's searchable fields, filterable fields, sortable fields, and field boosts.
-    
+
     Parameters:
         index_name (str): Name of the index to ensure exists and be configured.
     """
@@ -161,7 +161,7 @@ class SearchIndexer:
     def __init__(self, backend: SearchBackend | None = None) -> None:
         """
         Initialize a SearchIndexer with a search backend.
-        
+
         If `backend` is None, obtains the default backend via `get_search_backend()`.
         """
         self.backend = backend or get_search_backend()
@@ -169,9 +169,9 @@ class SearchIndexer:
     def index_instance(self, instance: GeneralManager) -> None:
         """
         Index a GeneralManager instance across all configured search indexes.
-        
+
         Ensures each target index exists in the backend and upserts the instance's document(s) for every index configured for the instance's manager class. Does nothing if the manager class has no search configuration.
-        
+
         Parameters:
             instance (GeneralManager): The manager instance to index.
         """
@@ -183,9 +183,9 @@ class SearchIndexer:
     def delete_instance(self, instance: GeneralManager) -> None:
         """
         Delete an instance's search document from all configured indexes.
-        
+
         Determines the document id using the manager's configured `document_id` callable if present; otherwise builds an id from the manager type label and the instance's `identification`. For each index configured for the manager, ensures the index exists in the backend and deletes the document by id.
-        
+
         Parameters:
             instance (GeneralManager): The manager instance whose document should be removed from the search indexes.
         """
@@ -204,9 +204,9 @@ class SearchIndexer:
     def reindex_manager(self, manager_class: type[GeneralManager]) -> None:
         """
         Rebuilds all search indexes for a given manager class by collecting every instance's documents and upserting them to the backend.
-        
+
         Ensures each configured index exists, gathers serialized documents for every instance of the provided manager class, groups documents by index, and performs bulk upserts per index. If the manager class has no search configuration, the function returns without action.
-        
+
         Parameters:
             manager_class (type[GeneralManager]): The manager class whose instances will be reindexed.
         """
@@ -238,9 +238,9 @@ def _handle_search_post_change(
 ) -> None:
     """
     Dispatches an index update for a GeneralManager instance when it is created or updated.
-    
+
     If `instance` is provided and `action` is "create" or "update", schedules an index update for that instance using its identification and manager path. If dispatching fails due to backend, runtime, value, or type errors, a warning is logged.
-    
+
     Parameters:
         sender: The manager class or instance that emitted the signal.
         instance: The specific GeneralManager instance that changed; ignored when None.
@@ -273,9 +273,9 @@ def _handle_search_pre_delete(
 ) -> None:
     """
     Dispatches a delete-index update for a manager instance when a pre-delete signal is received.
-    
+
     This receiver reacts to pre-delete notifications and enqueues a search backend delete update for the given instance. If dispatching fails due to backend or runtime errors, a warning is logged.
-    
+
     Parameters:
         sender: The manager class or instance sending the signal.
         instance: The manager instance being deleted; ignored if None.

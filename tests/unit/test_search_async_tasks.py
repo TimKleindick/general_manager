@@ -18,10 +18,10 @@ class _DummyManager:
     def __init__(self, **kwargs):
         """
         Initialize the manager with identification derived from provided keyword arguments.
-        
+
         Parameters:
             **kwargs: Arbitrary identification attributes to store.
-        
+
         Attributes:
             identification (dict): Mapping of provided keyword argument names to their values.
         """
@@ -32,7 +32,7 @@ class _DummyIndexer:
     def __init__(self) -> None:
         """
         Initialize a dummy indexer that records indexed and deleted instances.
-        
+
         Attributes:
             indexed (list[object]): Instances that have been passed to index operations, in order.
             deleted (list[object]): Instances that have been passed to delete operations, in order.
@@ -43,7 +43,7 @@ class _DummyIndexer:
     def index_instance(self, instance: object) -> None:
         """
         Record an instance as indexed.
-        
+
         Parameters:
             instance (object): The instance to record as indexed.
         """
@@ -52,7 +52,7 @@ class _DummyIndexer:
     def delete_instance(self, instance: object) -> None:
         """
         Record that an instance was deleted by appending it to this indexer's `deleted` list.
-        
+
         Parameters:
             instance (object): The instance that was deleted and should be recorded.
         """
@@ -63,7 +63,7 @@ class _DummyTask:
     def __init__(self) -> None:
         """
         Initialize the dummy task and prepare its call log.
-        
+
         Creates `self.calls`, a list used to record tuples of `(manager_path, identification)` each time the task's `delay` method is invoked.
         """
         self.calls: list[tuple[str, dict]] = []
@@ -71,7 +71,7 @@ class _DummyTask:
     def delay(self, manager_path: str, identification: dict) -> None:
         """
         Record a delayed task invocation by appending the manager path and identification to the calls list.
-        
+
         Parameters:
             manager_path (str): Dotted import path identifying the manager to handle the task.
             identification (dict): Mapping of fields used to identify the target instance.
@@ -92,7 +92,7 @@ def test_dispatch_index_update_inline_instance(monkeypatch: pytest.MonkeyPatch) 
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
         """
         No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
-        
+
         Parameters:
             _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
             _backend (object): The backend that would normally be used for initialization (ignored).
@@ -126,7 +126,7 @@ def test_dispatch_index_update_inline_instance_delete(
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
         """
         No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
-        
+
         Parameters:
             _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
             _backend (object): The backend that would normally be used for initialization (ignored).
@@ -158,7 +158,7 @@ def test_dispatch_index_update_inline_by_path(monkeypatch: pytest.MonkeyPatch) -
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
         """
         No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
-        
+
         Parameters:
             _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
             _backend (object): The backend that would normally be used for initialization (ignored).
@@ -168,7 +168,7 @@ def test_dispatch_index_update_inline_by_path(monkeypatch: pytest.MonkeyPatch) -
     def _delete_task(_manager_path: str, identification: dict) -> None:
         """
         Delete the instance identified by `identification` from the dummy index.
-        
+
         Parameters:
             _manager_path (str): Unused manager import path placeholder (ignored).
             identification (dict): Keyword arguments used to construct a `_DummyManager`; that manager is passed to the indexer's `delete_instance` method.
@@ -232,7 +232,7 @@ def test_index_and_delete_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
     def _noop_init(_self: SearchIndexer, _backend: object) -> None:
         """
         No-op initializer that accepts a SearchIndexer instance and a backend but performs no initialization.
-        
+
         Parameters:
             _self (SearchIndexer): The SearchIndexer instance to initialize (ignored).
             _backend (object): The backend that would normally be used for initialization (ignored).

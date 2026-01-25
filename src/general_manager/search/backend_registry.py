@@ -22,7 +22,7 @@ _backend: SearchBackend | None = None
 def configure_search_backend(backend: SearchBackend | None) -> None:
     """
     Set the active search backend instance.
-    
+
     Parameters:
         backend (SearchBackend | None): Instance to set as the global search backend. Pass `None` to clear any configured backend.
     """
@@ -33,16 +33,16 @@ def configure_search_backend(backend: SearchBackend | None) -> None:
 def _resolve_backend(value: Any) -> SearchBackend | None:
     """
     Resolve various backend specifications into a concrete SearchBackend instance or None.
-    
+
     Accepts:
     - None: resolved as None.
     - A string: treated as an import path and imported.
     - A Mapping with keys "class" (required) and optional "options" (dict): "class" may be an import path or a direct class/callable; the resulting class/callable is invoked with the provided options to produce the backend instance.
     - A class, callable, or already-instantiated backend: classes and callables are invoked with no arguments to produce an instance; other values are returned as-is.
-    
+
     Parameters:
         value (Any): Backend specification in one of the forms described above.
-    
+
     Returns:
         SearchBackend | None: A concrete SearchBackend instance when resolution succeeds, `None` otherwise.
     """
@@ -76,9 +76,9 @@ def _resolve_backend(value: Any) -> SearchBackend | None:
 def configure_search_backend_from_settings(django_settings: Any) -> None:
     """
     Configure the active search backend using values from Django settings.
-    
+
     Reads backend configuration from the GENERAL_MANAGER mapping's SEARCH_BACKEND key if present; otherwise falls back to the top-level SEARCH_BACKEND setting. Resolves the configured value into a concrete backend instance and sets it as the active backend.
-    
+
     Parameters:
         django_settings (Any): Django settings module or object to read configuration from.
     """
@@ -96,10 +96,10 @@ def configure_search_backend_from_settings(django_settings: Any) -> None:
 def get_search_backend() -> SearchBackend:
     """
     Retrieve the active search backend, falling back to a development backend if none is configured.
-    
+
     Returns:
         SearchBackend: The configured search backend instance.
-    
+
     Raises:
         SearchBackendNotConfiguredError: If no backend can be resolved after attempting configuration and fallback.
     """

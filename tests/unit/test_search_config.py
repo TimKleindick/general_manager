@@ -22,7 +22,7 @@ def test_field_config_rejects_invalid_boost() -> None:
 def test_index_config_rejects_invalid_boost() -> None:
     """
     Verifies that creating an IndexConfig with a boost of 0 raises InvalidIndexBoostError.
-    
+
     Raises:
         InvalidIndexBoostError: if `IndexConfig` is constructed with `boost=0`.
     """

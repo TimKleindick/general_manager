@@ -10,7 +10,7 @@ class DevSearchBackendTests(SimpleTestCase):
     def setUp(self) -> None:
         """
         Prepare a DevSearchBackend with a "global" index containing two sample Project documents used by the tests.
-        
+
         The backend is instantiated, an index named "global" is ensured, and two SearchDocument entries are upserted:
         - "Project:1": name "Alpha Project", status "public", tags ["a"], name field_boost 2.0
         - "Project:2": name "Beta Project", status "private", tags ["b"], name field_boost 1.0
@@ -42,7 +42,7 @@ class DevSearchBackendTests(SimpleTestCase):
     def test_search_with_filter_groups(self) -> None:
         """
         Verify that using multiple filter groups returns documents matching any of the groups.
-        
+
         Search the "global" index with filters [{"status": "public"}, {"tags__in": ["b"]}] and assert the total number of matching documents is 2.
         """
         result = self.backend.search(

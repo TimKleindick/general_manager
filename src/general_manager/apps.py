@@ -69,7 +69,7 @@ class GeneralmanagerConfig(AppConfig):
     def ready(self) -> None:
         """
         Perform startup initialization for the general_manager Django app.
-        
+
         Runs one-time startup hook installation, registers system checks, initializes GeneralManager classes and their GraphQL wiring, configures audit and search backends from settings, and creates the GraphQL schema and URL if AUTOCREATE_GRAPHQL is enabled.
         """
         self.install_startup_hook_runner()
@@ -281,7 +281,7 @@ class GeneralmanagerConfig(AppConfig):
     ) -> None:
         """
         Generate GraphQL interfaces, mutations, and optional subscriptions for the given GeneralManager classes, build a graphene.Schema from the collected query/mutation/subscription fields, store it on GraphQL._schema, and add the HTTP and ASGI subscription routes to the project's URL configuration.
-        
+
         Parameters:
             pending_graphql_interfaces (list[Type[GeneralManager]]): GeneralManager classes to generate GraphQL interfaces and mutations for.
         """

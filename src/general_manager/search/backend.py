@@ -47,7 +47,7 @@ class SearchBackend(Protocol):
     def ensure_index(self, index_name: str, settings: Mapping[str, Any]) -> None:
         """
         Ensure the named index exists and apply the given settings.
-        
+
         Parameters:
             index_name (str): Name of the index to create or update.
             settings (Mapping[str, Any]): Configuration settings to apply to the index.
@@ -56,7 +56,7 @@ class SearchBackend(Protocol):
     def upsert(self, index_name: str, documents: Sequence[SearchDocument]) -> None:
         """
         Upsert the provided search documents into the specified index.
-        
+
         Parameters:
             index_name (str): Name of the index where documents will be stored.
             documents (Sequence[SearchDocument]): Documents to insert or update; each document's `id` is used to identify and replace existing entries when present.
@@ -65,7 +65,7 @@ class SearchBackend(Protocol):
     def delete(self, index_name: str, ids: Sequence[str]) -> None:
         """
         Delete documents from the specified index by their document IDs.
-        
+
         Parameters:
             index_name (str): Name of the index to remove documents from.
             ids (Sequence[str]): Sequence of document IDs to delete.
@@ -86,7 +86,7 @@ class SearchBackend(Protocol):
     ) -> SearchResult:
         """
         Search for documents in an index that match the given query and optional filters.
-        
+
         Parameters:
             index_name (str): Name of the index to search.
             query (str): Query string used to match documents.
@@ -97,7 +97,7 @@ class SearchBackend(Protocol):
             limit (int): Maximum number of hits to return.
             offset (int): Number of hits to skip before returning results (pagination).
             types (Sequence[str] | None): Optional list of document types to restrict the search to.
-        
+
         Returns:
             SearchResult: Container with matching hits, the total number of matches, optional elapsed time in milliseconds, and any raw backend response.
         """
@@ -113,7 +113,7 @@ class SearchBackendNotImplementedError(SearchBackendError):
     def __init__(self, backend_name: str) -> None:
         """
         Initialize the error indicating a specific search backend is not implemented.
-        
+
         Parameters:
             backend_name (str): Name of the backend used to compose the exception message.
         """
@@ -136,7 +136,7 @@ class SearchBackendClientMissingError(SearchBackendError):
     def __init__(self, backend_name: str) -> None:
         """
         Initialize the exception indicating a backend client dependency is missing.
-        
+
         Parameters:
             backend_name (str): Name of the missing backend client; used to construct the exception message advising installation of the required package.
         """

@@ -29,7 +29,7 @@ class DevSearchBackend:
     def ensure_index(self, index_name: str, settings: Mapping[str, Any]) -> None:
         """
         Ensure an index exists and update its settings.
-        
+
         Parameters:
             index_name (str): Name of the index to create or retrieve.
             settings (Mapping[str, Any]): Settings to assign to the index; replaces any existing settings.
@@ -40,9 +40,9 @@ class DevSearchBackend:
     def upsert(self, index_name: str, documents: Sequence[SearchDocument]) -> None:
         """
         Insert or update the given documents in the named in-memory index.
-        
+
         Each document is stored by its `id` in the index's document map and a per-document token index is built and stored for use by searches; existing documents with the same id are replaced.
-        
+
         Parameters:
             index_name (str): Name of the index to modify.
             documents (Sequence[SearchDocument]): Documents to insert or update.
@@ -55,9 +55,9 @@ class DevSearchBackend:
     def delete(self, index_name: str, ids: Sequence[str]) -> None:
         """
         Remove documents and their token indexes from the specified in-memory index.
-        
+
         This performs a best-effort removal: if an id is not present in the index, it is ignored.
-        
+
         Parameters:
             index_name (str): Name of the index to modify.
             ids (Sequence[str]): Document ids to remove from the index.
@@ -82,7 +82,7 @@ class DevSearchBackend:
     ) -> SearchResult:
         """
         Search an index for documents matching a query and return scored, optionally filtered and sorted hits.
-        
+
         Parameters:
             index_name (str): Name of the index to search.
             query (str): Query string to tokenize and match against indexed documents.
@@ -93,10 +93,10 @@ class DevSearchBackend:
             limit (int): Maximum number of hits to return.
             offset (int): Number of matching results to skip before collecting hits.
             types (Sequence[str] | None): If provided, restrict results to documents whose type is in this sequence.
-        
+
         Returns:
             SearchResult: Object containing `hits` (list of SearchHit), `total` (number of matching documents), and `took_ms` (search time in milliseconds).
-        
+
         Raises:
             NotImplementedError: If `filter_expression` is not None.
         """
@@ -126,10 +126,10 @@ class DevSearchBackend:
             def _sort_key(item: tuple[SearchDocument, float]) -> tuple[bool, str]:
                 """
                 Key function for sorting a (document, score) pair by a specified document field, placing documents with a missing value after those with a value.
-                
+
                 Parameters:
                     item (tuple[SearchDocument, float]): A tuple whose first element is the document to sort.
-                
+
                 Returns:
                     tuple[bool, str]: A pair where the first element is `True` if the document's field value is `None` (to send `None` values to the end), and the second element is the field value converted to `str` for lexicographic comparison.
                 """
@@ -163,10 +163,10 @@ class DevSearchBackend:
     def _tokenize_query(query: str) -> list[str]:
         """
         Split a query string into lowercase whitespace-separated tokens.
-        
+
         Parameters:
             query (str): The input query string to tokenize.
-        
+
         Returns:
             list[str]: A list of lowercase tokens extracted from the query; empty tokens are omitted.
         """
@@ -175,10 +175,10 @@ class DevSearchBackend:
     def _tokenize_document(self, document: SearchDocument) -> dict[str, set[str]]:
         """
         Create a mapping from each document field name to the set of tokens extracted from that field's value.
-        
+
         Parameters:
             document (SearchDocument): The document whose field values will be tokenized.
-        
+
         Returns:
             dict[str, set[str]]: A dictionary mapping field names to the set of lowercase tokens found in each field's value.
         """
@@ -190,10 +190,10 @@ class DevSearchBackend:
     def _tokenize_value(self, value: Any) -> set[str]:
         """
         Extract lowercase whitespace-separated tokens from a value.
-        
+
         Parameters:
             value (Any): The input to tokenize. If None, returns an empty set. Strings are split on whitespace. Iterables (list/tuple/set) are tokenized recursively; other values are converted to string before tokenization.
-        
+
         Returns:
             set[str]: A set of lowercase tokens extracted from the input.
         """
@@ -218,13 +218,13 @@ class DevSearchBackend:
     ) -> float:
         """
         Compute a relevance score for a document based on matching query tokens and configured boosts.
-        
+
         Each time a token from `tokens` is present in a field's token set the field's boost is added to the score. After summing matches across all fields, the total is multiplied by `document.index_boost` when it is set.
-        
+
         Parameters:
             tokens: The list of query tokens to match against the document's token index.
             token_index: Mapping from field name to the set of tokens present in that field (may be None).
-        
+
         Returns:
             A float score: the sum of field boosts for each matching token, multiplied by `document.index_boost` if provided.
         """
@@ -248,13 +248,13 @@ class DevSearchBackend:
     ) -> bool:
         """
         Determine whether a document satisfies the provided filter or filter groups.
-        
+
         Filters may be a mapping of field lookups to values or a sequence of such mappings. A sequence is treated as an OR of its element mappings; a mapping is treated as an AND of its key/value checks. Keys may include a lookup suffix using the form "field__lookup"; if omitted the "exact" lookup is used. For "exact" and "in" lookups, if either the document field or the filter value is a collection, the check succeeds when the two collections have any intersection. Other lookups are evaluated using apply_lookup.
-        
+
         Parameters:
             document (SearchDocument): Document to test against the filters.
             filters (Mapping[str, Any] | Sequence[Mapping[str, Any]]): A filter mapping or a sequence of filter mappings.
-        
+
         Returns:
             bool: `true` if the document matches the filters, `false` otherwise.
         """

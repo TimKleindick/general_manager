@@ -20,9 +20,10 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Register two GeneralManager test classes (Project and ProjectTeam) on the test class and set them as the global managers.
-        
+
         Both managers declare `name` and `status` fields, grant public CRUD permissions, and configure a "global" search index over `name` and `status` with `status` as a filter and `name` as a sortable field. The created manager classes are assigned to `cls.Project`, `cls.ProjectTeam`, and `cls.general_manager_classes`, and `GeneralManagerMeta.all_classes` is updated accordingly.
         """
+
         class Project(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
@@ -73,7 +74,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
     def setUp(self):
         """
         Prepare a DevSearchBackend, create sample Project and ProjectTeam records with varied statuses, and reindex both managers so the search index contains the seeded data.
-        
+
         Creates:
         - Projects: "Alpha Project" (status "public"), "Beta Project" (status "private")
         - ProjectTeams: "Alpha Team", "Beta Team", "Gamma Team" (all status "public")
@@ -93,7 +94,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
     def tearDown(self):
         """
         Reset the test search backend and perform superclass teardown.
-        
+
         This clears the configured search backend by setting it to None, then invokes the base class's teardown to complete test cleanup.
         """
         configure_search_backend(None)
@@ -155,7 +156,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
     def test_graphql_search_sorting(self):
         """
         Verify the GraphQL search returns results sorted by the `name` field in ascending order.
-        
+
         Executes a search query against the "global" index with sorting by name and asserts the returned result names match the expected ascending sequence.
         """
         query = """
@@ -239,14 +240,15 @@ class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Prepare test class by defining and registering a SecuredProject GeneralManager with interface, permissions, and search configuration.
-        
+
         Defines an inner GeneralManager subclass named `SecuredProject` with:
         - Interface fields `name` and `status`.
         - Permission that allows read only when `matches:status:public` and allows create/update/delete publicly.
         - SearchConfig that registers a "global" index on fields `name` and `status` with `status` as a filter.
-        
+
         Assigns `cls.general_manager_classes` and `cls.SecuredProject`, and sets `GeneralManagerMeta.all_classes` to include the new manager.
         """
+
         class SecuredProject(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
@@ -274,11 +276,11 @@ class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):
     def setUp(self):
         """
         Prepare the test environment by configuring a development search backend, creating one public and one private SecuredProject, and indexing them into the search backend.
-        
+
         Creates:
         - "Public Project" with status "public"
         - "Private Project" with status "private"
-        
+
         Then reindexes the SecuredProject manager into the configured DevSearchBackend so search queries operate on the seeded data.
         """
         super().setUp()
@@ -292,7 +294,7 @@ class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):
     def tearDown(self):
         """
         Reset the test search backend and perform superclass teardown.
-        
+
         This clears the configured search backend by setting it to None, then invokes the base class's teardown to complete test cleanup.
         """
         configure_search_backend(None)
@@ -322,9 +324,10 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
     def setUpClass(cls):
         """
         Define two test GeneralManager classes (PublicProject and InternalProject) with fields, permissions, and search indexes, and register them for use by the test class.
-        
+
         Each manager exposes `name` and `status` fields, a SearchConfig containing a "global" index on `name` and `status` (with `status` as a filter), and permissions that restrict read access to either `status:public` (PublicProject) or `status:internal` (InternalProject). Assigns the classes to `cls.general_manager_classes`, exposes them as `cls.PublicProject` and `cls.InternalProject`, and sets `GeneralManagerMeta.all_classes` to the list of created manager classes.
         """
+
         class PublicProject(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
@@ -373,7 +376,7 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
     def setUp(self):
         """
         Prepare the test environment by configuring a DevSearchBackend, creating sample objects for PublicProject and InternalProject, and reindexing both managers.
-        
+
         Creates sample project instances with varying statuses under the two managers and ensures the search backend is populated by reindexing PublicProject and InternalProject.
         """
         super().setUp()
@@ -390,7 +393,7 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
     def tearDown(self):
         """
         Reset the test search backend and perform superclass teardown.
-        
+
         This clears the configured search backend by setting it to None, then invokes the base class's teardown to complete test cleanup.
         """
         configure_search_backend(None)
@@ -399,7 +402,7 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
     def test_graphql_search_respects_permission_filters_per_manager(self):
         """
         Verifies that a GraphQL search applies each manager's read permission filters when querying across multiple managers.
-        
+
         Asserts the search returns only items allowed by each manager's permissions (expecting "Public Alpha" from PublicProject and "Internal Alpha" from InternalProject).
         """
         query = """
@@ -426,9 +429,10 @@ class TestSearchIndexCommandIntegration(GeneralManagerTransactionTestCase):
     def setUpClass(cls):
         """
         Define and register a CommandProject GeneralManager subclass for use by the test class.
-        
+
         This class method creates an inner GeneralManager named CommandProject with a DatabaseInterface containing `name` and `status` fields, permissive ManagerBasedPermission rules for all CRUD operations, and a SearchConfig that declares a single "global" index on `["name", "status"]` with `["status"]` as a filter. It then stores the created manager class on the test class as `CommandProject`, collects it in `general_manager_classes`, and sets GeneralManagerMeta.all_classes to that collection.
         """
+
         class CommandProject(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
@@ -465,7 +469,7 @@ class TestSearchIndexCommandIntegration(GeneralManagerTransactionTestCase):
     def tearDown(self):
         """
         Reset the test search backend and perform superclass teardown.
-        
+
         This clears the configured search backend by setting it to None, then invokes the base class's teardown to complete test cleanup.
         """
         configure_search_backend(None)

@@ -10,7 +10,7 @@ class _FakeIndex:
     def __init__(self) -> None:
         """
         Initialize the fake index's internal state for tests.
-        
+
         Attributes:
             added (list[dict[str, object]]): Documents passed to add_documents, appended in insertion order.
             deleted (list[list[str]]): Lists of document IDs passed to delete_documents, appended per call.
@@ -23,10 +23,10 @@ class _FakeIndex:
     def update_settings(self, payload: dict[str, object]) -> dict[str, int]:
         """
         Record the provided settings payload for later inspection by tests.
-        
+
         Parameters:
             payload (dict[str, object]): Settings payload to store.
-        
+
         Returns:
             dict[str, int]: A simulated task response containing `{"taskUid": 1}`.
         """
@@ -36,10 +36,10 @@ class _FakeIndex:
     def add_documents(self, payload: list[dict[str, object]]) -> dict[str, int]:
         """
         Add documents to the fake index for testing.
-        
+
         Parameters:
             payload (list[dict[str, object]]): Documents to append to the index's stored documents.
-        
+
         Returns:
             dict[str, int]: A simulated task response containing `"taskUid": 2`.
         """
@@ -49,10 +49,10 @@ class _FakeIndex:
     def delete_documents(self, ids: list[str]) -> dict[str, int]:
         """
         Record the given document IDs as deleted and return a mock task identifier.
-        
+
         Parameters:
             ids (list[str]): Sequence of document IDs to delete; the list is appended to self.deleted.
-        
+
         Returns:
             dict[str, int]: A payload containing the mock task UID, e.g. {"taskUid": 3}.
         """
@@ -62,11 +62,11 @@ class _FakeIndex:
     def search(self, _query: str, _payload: dict[str, object]) -> dict[str, object]:
         """
         Return a fixed empty search response used by the fake index in tests.
-        
+
         Parameters:
             _query (str): Ignored.
             _payload (dict[str, object]): Ignored.
-        
+
         Returns:
             dict[str, object]: A search result with keys:
                 - "hits": empty list.
@@ -80,10 +80,10 @@ class _FakeClient:
     def __init__(self, index: _FakeIndex) -> None:
         """
         Create a fake Meilisearch client bound to a fake index and initialize task wait tracking.
-        
+
         Parameters:
             index (_FakeIndex): The fake index instance this client will operate on.
-        
+
         Attributes:
             index (_FakeIndex): The provided index instance.
             waited (list[int]): List of task UIDs for which wait/get calls were recorded.
@@ -94,10 +94,10 @@ class _FakeClient:
     def get_index(self, _name: str) -> _FakeIndex:
         """
         Return the fake index instance associated with this client.
-        
+
         Parameters:
             _name (str): Ignored; present to match the expected client interface.
-        
+
         Returns:
             _FakeIndex: The associated fake index instance.
         """
@@ -106,7 +106,7 @@ class _FakeClient:
     def create_index(self, _name: str, _payload: dict[str, object]) -> dict[str, int]:
         """
         Create an index and return a task identifier.
-        
+
         Returns:
             dict: A mapping containing `'taskUid': 4`, the task identifier for the created index.
         """
@@ -115,10 +115,10 @@ class _FakeClient:
     def wait_for_task(self, task_uid: int) -> dict[str, object]:
         """
         Record the given task UID in the instance's waited list and return a succeeded status.
-        
+
         Parameters:
             task_uid (int): Task UID to record as waited-on.
-        
+
         Returns:
             dict[str, object]: A mapping with key "status" set to "succeeded".
         """
@@ -128,9 +128,9 @@ class _FakeClient:
     def get_task(self, task_uid: int) -> dict[str, object]:
         """
         Record the provided task UID and return a succeeded task status.
-        
+
         Appends the given task_uid to the instance's waited list as a side effect and returns a dictionary representing a successful task state.
-        
+
         Returns:
             dict[str, object]: A mapping containing the task status, e.g. {"status": "succeeded"}.
         """
@@ -142,7 +142,7 @@ class _FailingClient(_FakeClient):
     def wait_for_task(self, task_uid: int) -> dict[str, object]:
         """
         Record the given task UID in the client's waited list and return a failed task payload.
-        
+
         Returns:
             dict: A task result object with "status" set to "failed" and "error" containing {"message": "bad payload"}.
         """
@@ -193,7 +193,7 @@ def test_meilisearch_backend_get_task_fallback() -> None:
         def __init__(self, index: _FakeIndex) -> None:
             """
             Initialize the fake client with an associated fake index and a tracker for awaited task UIDs.
-            
+
             Parameters:
                 index (_FakeIndex): The fake index instance this client operates on. The client will delegate index-related calls to this object and record task UIDs in `waited` when wait/get methods are invoked.
             """
@@ -203,10 +203,10 @@ def test_meilisearch_backend_get_task_fallback() -> None:
         def get_index(self, _name: str) -> _FakeIndex:
             """
             Return the configured fake index instance.
-            
+
             Parameters:
                 _name (str): Ignored; present for API compatibility.
-            
+
             Returns:
                 _FakeIndex: The fake index associated with this client.
             """
@@ -217,7 +217,7 @@ def test_meilisearch_backend_get_task_fallback() -> None:
         ) -> dict[str, int]:
             """
             Simulates creating a Meilisearch index and returns a fixed task UID.
-            
+
             Returns:
                 dict[str, int]: `{'taskUid': 4}` containing the task UID for the created index.
             """
@@ -226,10 +226,10 @@ def test_meilisearch_backend_get_task_fallback() -> None:
         def get_task(self, task_uid: int) -> dict[str, object]:
             """
             Record the requested task UID and return a succeeded status for that task.
-            
+
             Parameters:
                 task_uid (int): The identifier of the task being queried; appended to the client's `waited` list.
-            
+
             Returns:
                 dict[str, object]: A mapping with `"status"` set to `"succeeded"`.
             """
@@ -255,11 +255,11 @@ def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
         def search(self, _query: str, _payload: dict[str, object]) -> dict[str, object]:
             """
             Return a fixed simulated search result containing a single Project hit.
-            
+
             Parameters:
                 _query (str): Query string (unused in this fake index).
                 _payload (dict[str, object]): Search options/payload (unused in this fake index).
-            
+
             Returns:
                 dict[str, object]: A Meilisearch-like result with:
                     - "hits": list containing one hit with keys:
