@@ -90,6 +90,8 @@ def configure_search_backend_from_settings(django_settings: Any) -> None:
         backend_setting = getattr(django_settings, _SEARCH_BACKEND_KEY, None)
 
     backend_instance = _resolve_backend(backend_setting)
+    if backend_setting is not None and backend_instance is None:
+        raise SearchBackendNotConfiguredError.from_setting(backend_setting)
     configure_search_backend(backend_instance)
 
 

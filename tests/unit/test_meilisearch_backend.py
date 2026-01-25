@@ -199,6 +199,8 @@ def test_meilisearch_backend_get_task_fallback() -> None:
             """
             self.index = index
             self.waited: list[int] = []
+            self.calls = 0
+            self.status_sequence = ["enqueued", "processing", "succeeded"]
 
         def get_index(self, _name: str) -> _FakeIndex:
             """
@@ -234,14 +236,18 @@ def test_meilisearch_backend_get_task_fallback() -> None:
                 dict[str, object]: A mapping with `"status"` set to `"succeeded"`.
             """
             self.waited.append(task_uid)
-            return {"status": "succeeded"}
+            status = self.status_sequence[
+                min(self.calls, len(self.status_sequence) - 1)
+            ]
+            self.calls += 1
+            return {"status": status}
 
     index = _FakeIndex()
     client = _Client(index)
     backend = MeilisearchBackend(client=client)
 
     backend.ensure_index("test-index", {"searchable_fields": ["name"]})
-    assert client.waited == [1]
+    assert client.waited == [1, 1, 1]
 
 
 def test_meilisearch_backend_normalize_document_id() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from typing import Any, Mapping, Sequence
 
 from general_manager.search.backend import (
@@ -300,8 +301,19 @@ class MeilisearchBackend:
             return
         get_task = getattr(self._client, "get_task", None)
         if callable(get_task):
-            result = get_task(task_uid)
-            self._raise_for_failed_task(result)
+            timeout_seconds = 5.0
+            poll_interval = 0.1
+            start = time.monotonic()
+            while True:
+                result = get_task(task_uid)
+                status = self._extract_task_status(result)
+                if status in {"succeeded", "failed", "canceled"}:
+                    self._raise_for_failed_task(result)
+                    return
+                if time.monotonic() - start >= timeout_seconds:
+                    return
+                time.sleep(poll_interval)
+                poll_interval = min(poll_interval * 1.5, 1.0)
 
     @staticmethod
     def _extract_task_uid(task: Any) -> str | None:
@@ -332,6 +344,16 @@ class MeilisearchBackend:
             if value is not None:
                 return value
         return None
+
+    @staticmethod
+    def _extract_task_status(result: Any) -> str | None:
+        if result is None:
+            return None
+        if isinstance(result, Mapping):
+            status = result.get("status")
+        else:
+            status = getattr(result, "status", None)
+        return str(status).lower() if status is not None else None
 
     @staticmethod
     def _raise_for_failed_task(result: Any) -> None:

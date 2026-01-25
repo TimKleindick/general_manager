@@ -123,23 +123,18 @@ class DevSearchBackend:
 
         if sort_by:
 
-            def _sort_key(item: tuple[SearchDocument, float]) -> tuple[bool, str]:
-                """
-                Key function for sorting a (document, score) pair by a specified document field, placing documents with a missing value after those with a value.
-
-                Parameters:
-                    item (tuple[SearchDocument, float]): A tuple whose first element is the document to sort.
-
-                Returns:
-                    tuple[bool, str]: A pair where the first element is `True` if the document's field value is `None` (to send `None` values to the end), and the second element is the field value converted to `str` for lexicographic comparison.
-                """
+            def _value_key(
+                item: tuple[SearchDocument, float],
+            ) -> tuple[int, float, str]:
                 value = item[0].data.get(sort_by)
-                return (value is None, str(value))
+                if value is None:
+                    return (2, 0.0, "")
+                if isinstance(value, (int, float)):
+                    return (0, float(value), "")
+                return (1, 0.0, str(value))
 
-            results.sort(
-                key=_sort_key,
-                reverse=sort_desc,
-            )
+            results.sort(key=_value_key, reverse=sort_desc)
+            results.sort(key=lambda item: item[0].data.get(sort_by) is None)
         else:
             results.sort(key=lambda item: item[1], reverse=True)
         sliced = results[offset : offset + limit]
