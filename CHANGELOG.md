@@ -2,6 +2,144 @@
 
 <!-- version list -->
 
+## v0.27.0 (2026-01-25)
+
+### Bug Fixes
+
+- Align meilisearch client usage in ci
+  ([`f02228e`](https://github.com/TimKleindick/general_manager/commit/f02228e1616008869634b82042583d487a043512))
+
+- Avoid async import for inline indexing
+  ([`8102cc5`](https://github.com/TimKleindick/general_manager/commit/8102cc53aba3c501b2e859bfe579a7e5fcf7ea37))
+
+- GraphQL search with total counts and permission filters
+  ([`3a21ed8`](https://github.com/TimKleindick/general_manager/commit/3a21ed8389545adb1beeb1966f232fc7cd825942))
+
+- Search backend behavior and graphql permission handling
+  ([`251b2ab`](https://github.com/TimKleindick/general_manager/commit/251b2ab679a991e2f6814a34f3aebcbec1ceefc5))
+
+- Support new meilisearch client search signature
+  ([`923223b`](https://github.com/TimKleindick/general_manager/commit/923223b3683b32ec671731d78232a0d233283fec))
+
+### Chores
+
+- Pin meilisearch image and constrain celery
+  ([`5256033`](https://github.com/TimKleindick/general_manager/commit/5256033854f6ac24f9f5e734ee636e3e73b32a78))
+
+### Continuous Integration
+
+- Run meilisearch in test workflow
+  ([`c238ea0`](https://github.com/TimKleindick/general_manager/commit/c238ea08c00dbe27c9f913c7fc04e8fe6b5bfd8c))
+
+### Documentation
+
+- Add missing docstrings
+  ([`7e48eac`](https://github.com/TimKleindick/general_manager/commit/7e48eac81a61452df317d4e375d3132fa9ed860a))
+
+- Add search ADR
+  ([`fa020e5`](https://github.com/TimKleindick/general_manager/commit/fa020e5a0e4cd33a8a6a896a9d7e8f47a7d610fb))
+
+- Add search documentation
+  ([`f638cae`](https://github.com/TimKleindick/general_manager/commit/f638cae642216df4f9af220165147b44895b7be2))
+
+- Expand search concept notes
+  ([`a47d142`](https://github.com/TimKleindick/general_manager/commit/a47d142a54ceea69ae6a73f78260a06bf0792193))
+
+- Update search docs and ADR
+  ([`97cd76e`](https://github.com/TimKleindick/general_manager/commit/97cd76ef0f69436ad7fea467c76da6bd8ccfc66b))
+
+### Features
+
+- Add dev search backend
+  ([`ba0223f`](https://github.com/TimKleindick/general_manager/commit/ba0223f383633b12e0ebb27d9eb63dbdd935c3b6))
+
+- Add graphql search query
+  ([`eda52b3`](https://github.com/TimKleindick/general_manager/commit/eda52b302b0b3d7ee33bc0c079319dcccf85298b))
+
+- Add masking for sensitive backend settings and improve error handling in Meilisearch task polling
+  ([`f8a433c`](https://github.com/TimKleindick/general_manager/commit/f8a433cd082d116dc9f148457fd1e291154f0ea1))
+
+- Add meilisearch adapter and backend stubs
+  ([`676b099`](https://github.com/TimKleindick/general_manager/commit/676b099b3ce9cfc235b4994e77f252cb4f2ec94d))
+
+- Add search core indexer and backends
+  ([`c7b008f`](https://github.com/TimKleindick/general_manager/commit/c7b008fc58f6c0e2b2f651ce6ef5de6195b19f32))
+
+- Add search core protocol and config
+  ([`3a6f0d3`](https://github.com/TimKleindick/general_manager/commit/3a6f0d3b1b74160a23b47d35a9ce17ff1bd7b2b4))
+
+- Add search indexer and signal hooks
+  ([`fd7d021`](https://github.com/TimKleindick/general_manager/commit/fd7d02149ef6de2b9f1e881486cd2ede57f4193f))
+
+- Enhance error handling and task polling in Meilisearch backend
+  ([`ab41284`](https://github.com/TimKleindick/general_manager/commit/ab41284355b5f2f5ded56113910429931c13cab0))
+
+- Enhance graphql search filters and sorting
+  ([`b5393f5`](https://github.com/TimKleindick/general_manager/commit/b5393f516170b39733b04ba983dbb577741a1e1b))
+
+- Expose search helpers in public API
+  ([`6666676`](https://github.com/TimKleindick/general_manager/commit/6666676b112360d76db633753a12112c435b6679))
+
+- Implement get_or_create_index method in Meilisearch backend and update masking for backend
+  settings
+  ([`f64dc04`](https://github.com/TimKleindick/general_manager/commit/f64dc04826cecf6f9bd33ed9586a2cf713d40bc9))
+
+- Normalize document IDs in Meilisearch backend and update tests
+  ([`a440b3a`](https://github.com/TimKleindick/general_manager/commit/a440b3a188ea428b5582457a0ea7f12930fb97b5))
+
+- Wire search backend registry
+  ([`3a131ff`](https://github.com/TimKleindick/general_manager/commit/3a131ff9715b902b90c4528bf1f2cc63aa3f9425))
+
+### Refactoring
+
+- Move search exports into search module
+  ([`7a31213`](https://github.com/TimKleindick/general_manager/commit/7a3121352903b3110cf1ee1bdaafdce87add0886))
+
+- Test documentation and formatting across multiple test files
+  ([`7e48eac`](https://github.com/TimKleindick/general_manager/commit/7e48eac81a61452df317d4e375d3132fa9ed860a))
+
+### Testing
+
+- Add async search integration and cleanup
+  ([`3f1a3da`](https://github.com/TimKleindick/general_manager/commit/3f1a3da59fd07629aa099e88cc59e338a2e9c6ab))
+
+- Add graphql search coverage
+  ([`4c3c2f7`](https://github.com/TimKleindick/general_manager/commit/4c3c2f78b996c11819a01cd298f6788fb0527cad))
+
+- Add integration tests for async task dispatching and error handling in search backend
+  ([`b71bc41`](https://github.com/TimKleindick/general_manager/commit/b71bc41402968053cd9b47a04861c3a0b61fff24))
+
+- Add integration tests for GraphQL search functionality
+  ([`b6d0703`](https://github.com/TimKleindick/general_manager/commit/b6d070389905e10550a9638df6105ce9012e6966))
+
+- Add meilisearch integration coverage
+  ([`b91712f`](https://github.com/TimKleindick/general_manager/commit/b91712f7e8cd20a042d4b3f0a67b079f7486f001))
+
+- Add search unit coverage
+  ([`ee69d45`](https://github.com/TimKleindick/general_manager/commit/ee69d455ac033cae63c5074c282008813c5e7785))
+
+- Add tests for GraphQL error handling and Meilisearch backend timeout
+  ([`4b77090`](https://github.com/TimKleindick/general_manager/commit/4b77090f322c1a8631fc6c9dc82150b117d1a8f7))
+
+- Add tests for Meilisearch backend document payload and filter expression
+  ([`d887bf6`](https://github.com/TimKleindick/general_manager/commit/d887bf6c590e9fe0ddd2df8a23cd4102187dfed2))
+
+- Add unit tests for GraphQL helpers, Meilisearch backend, and search utilities
+  ([`f8abd03`](https://github.com/TimKleindick/general_manager/commit/f8abd03e4bdf7a9e20bb01e3be9d6e79793da61d))
+
+- Cover search async and command
+  ([`d039e9f`](https://github.com/TimKleindick/general_manager/commit/d039e9f8bb0d82b5a9d9d29cc4fd202230a4d43e))
+
+- Expand graphql search integration coverage
+  ([`e48c472`](https://github.com/TimKleindick/general_manager/commit/e48c472570ba589009f5fbaf7c1bcdd09df9a285))
+
+- Implement task waiting mechanism in Meilisearch backend
+  ([`0cdc88d`](https://github.com/TimKleindick/general_manager/commit/0cdc88d9c0ff4479a454175e7c6d7e38972f94a9))
+
+- Update public api snapshot
+  ([`a6714ff`](https://github.com/TimKleindick/general_manager/commit/a6714ff4e1e2f6759b7da6f2853ec257eaa52ff0))
+
+
 ## v0.26.1 (2026-01-23)
 
 ### Bug Fixes
