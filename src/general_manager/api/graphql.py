@@ -614,6 +614,8 @@ class GraphQL:
                     perm_filters,
                 )
                 authorized_hits: list[tuple[float | None, Any, GeneralManager]] = []
+                total_hits_for_manager = 0
+                appended_hits_for_manager = 0
                 offset_cursor = 0
                 while True:
                     result = backend.search(
@@ -650,12 +652,13 @@ class GraphQL:
                             continue
                         if not cls._passes_permission_filters(instance, info):
                             continue
-                        authorized_hits.append((hit.score, hit, instance))
-                    if len(authorized_hits) >= requested_count:
-                        break
+                        total_hits_for_manager += 1
+                        if appended_hits_for_manager < requested_count:
+                            authorized_hits.append((hit.score, hit, instance))
+                            appended_hits_for_manager += 1
                     if len(result.hits) < fetch_limit:
                         break
-                total += len(authorized_hits)
+                total += total_hits_for_manager
                 hits.extend(authorized_hits)
 
             if sort_by:
