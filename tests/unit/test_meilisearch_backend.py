@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from general_manager.search.backend import SearchBackendError, SearchDocument
-from general_manager.search.backends.meilisearch import MeilisearchBackend
+from general_manager.search.backends import meilisearch as meili_module
+from general_manager.search.backends.meilisearch import (
+    MeilisearchBackend,
+    MeilisearchTaskFailedError,
+)
 
 
 class _FakeIndex:
@@ -340,6 +344,36 @@ def test_meilisearch_backend_build_filter_expression_escapes() -> None:
 
 def test_meilisearch_backend_non_terminal_status() -> None:
     MeilisearchBackend._raise_for_failed_task({"status": "processing"})
+
+
+def test_meilisearch_backend_wait_for_task_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_index(self, _name: str) -> _FakeIndex:
+            return _FakeIndex()
+
+        def create_index(
+            self, _name: str, _payload: dict[str, object]
+        ) -> dict[str, int]:
+            return {"taskUid": 1}
+
+        def get_task(self, _task_uid: int) -> dict[str, object]:
+            self.calls += 1
+            return {"status": "processing"}
+
+    client = _Client()
+    backend = MeilisearchBackend(client=client)
+
+    timeline = iter([0.0, 6.0])
+    monkeypatch.setattr(meili_module.time, "monotonic", lambda: next(timeline))
+    monkeypatch.setattr(meili_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(MeilisearchTaskFailedError, match="timeout"):
+        backend.ensure_index("test-index", {"searchable_fields": ["name"]})
 
 
 def test_meilisearch_backend_raises_on_failed_task() -> None:

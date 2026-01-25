@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
+from io import StringIO
 
 from django.core.management import call_command
 from django.test import SimpleTestCase
@@ -44,3 +45,26 @@ class SearchCommandTests(SimpleTestCase):
 
         backend_instance.ensure_index.assert_called()
         indexer_instance.reindex_manager.assert_called_with(DummyManager)
+
+    @patch("general_manager.management.commands.search_index.get_index_names")
+    @patch("general_manager.management.commands.search_index.get_search_backend")
+    @patch("general_manager.management.commands.search_index.SearchIndexer")
+    def test_search_index_unknown_names(
+        self, mock_indexer, mock_backend, mock_get_index_names
+    ):
+        mock_get_index_names.return_value = {"global"}
+        mock_backend.return_value = MagicMock()
+        mock_indexer.return_value = MagicMock()
+
+        stdout = StringIO()
+        stderr = StringIO()
+        call_command(
+            "search_index",
+            "--index",
+            "unknown",
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        assert "Unknown index names ignored" in stderr.getvalue()
+        assert "No valid index names provided" in stdout.getvalue()
