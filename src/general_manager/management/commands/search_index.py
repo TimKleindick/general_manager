@@ -22,6 +22,15 @@ class Command(BaseCommand):
     help = "Create or update search indexes and optionally reindex data."
 
     def add_arguments(self, parser) -> None:  # type: ignore[override]
+        """
+        Add CLI arguments to control index creation/update and optional reindexing.
+
+        Parameters:
+            parser: Argument parser to which the following options are added:
+                --index: repeatable; specify one or more index names to create or update.
+                --reindex: store-true flag that triggers reindexing of configured managers.
+                --manager: repeatable; specify one or more manager class names to reindex.
+        """
         parser.add_argument(
             "--index",
             action="append",
@@ -42,6 +51,18 @@ class Command(BaseCommand):
         )
 
     def handle(self, *_: Any, **options: Any) -> None:
+        """
+        Create or update search indexes and optionally reindex configured managers.
+
+        Accepts command-line options via `options`:
+        - `indexes`: iterable of index names to create or update; if omitted, all known indexes are targeted. Unknown names are reported to stderr and ignored; if none remain, the command exits early.
+        - `reindex`: truthy value to trigger reindexing of searchable managers after ensuring indexes.
+        - `managers`: iterable of manager class names to restrict which managers are reindexed when `reindex` is set.
+
+        Side effects:
+        - Ensures each target index exists and has its searchable, filterable, sortable fields and field boosts configured on the search backend.
+        - When `reindex` is true, reindexes each searchable manager (filtered by `managers` when provided) and logs completion per manager.
+        """
         index_names = options.get("indexes")
         reindex = bool(options.get("reindex"))
         manager_filters = set(options.get("managers") or [])
