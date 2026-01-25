@@ -304,14 +304,19 @@ class MeilisearchBackend:
             timeout_seconds = 5.0
             poll_interval = 0.1
             start = time.monotonic()
+            last_result: Any = None
             while True:
                 result = get_task(task_uid)
+                last_result = result
                 status = self._extract_task_status(result)
                 if status in {"succeeded", "failed", "canceled"}:
                     self._raise_for_failed_task(result)
                     return
                 if time.monotonic() - start >= timeout_seconds:
-                    return
+                    raise MeilisearchTaskFailedError(
+                        "timeout",
+                        {"task_uid": task_uid, "status": status, "result": last_result},
+                    )
                 time.sleep(poll_interval)
                 poll_interval = min(poll_interval * 1.5, 1.0)
 

@@ -131,10 +131,40 @@ class SearchBackendNotConfiguredError(RuntimeError):
 
     @classmethod
     def from_setting(cls, backend_setting: object) -> "SearchBackendNotConfiguredError":
+        masked_setting = _mask_backend_setting(backend_setting)
         message = (
-            f"Search backend could not be resolved from setting: {backend_setting!r}"
+            f"Search backend could not be resolved from setting: {masked_setting!r}"
         )
         return cls(message)
+
+
+def _mask_backend_setting(setting: object) -> object:
+    secret_keys = {"password", "secret", "api_key", "apikey", "token", "auth"}
+    if isinstance(setting, Mapping):
+        masked: dict[object, object] = {}
+        for key, value in setting.items():
+            key_str = str(key).lower()
+            if key_str in secret_keys:
+                masked[key] = "<masked>"
+            else:
+                masked[key] = _mask_backend_setting(value)
+        return masked
+    if isinstance(setting, str):
+        if "://" in setting:
+            try:
+                from urllib.parse import urlsplit
+
+                parts = urlsplit(setting)
+                host = parts.hostname or "<masked>"
+                port = f":{parts.port}" if parts.port else ""
+            except ValueError:
+                return "<masked>"
+            else:
+                return f"{parts.scheme}://{host}{port}"
+        if ":" in setting or "=" in setting:
+            return "<masked>"
+        return setting
+    return setting
 
 
 class SearchBackendClientMissingError(SearchBackendError):
