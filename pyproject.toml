@@ -33,7 +33,7 @@ classifiers = [
 ]
 dependencies = [
     "asgiref>=3.8.1",
-    "celery>=5.3.6",
+    "celery>=5.3.6,<6.0.0",  # async search indexing (docs/concepts/search.md)
     "channels>=4.1.0",
     "Django>=5.2.10",
     "django-simple-history>=3.8.0",
