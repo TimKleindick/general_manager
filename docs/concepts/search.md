@@ -49,7 +49,7 @@ These helpers are optional and only required if your adapter needs them.
 ```python
 class Project(GeneralManager):
     class SearchConfig:
-        indexes = [IndexConfig(name="global", fields=["name"]) ]
+        indexes = [IndexConfig(name="global", fields=["name"])]
         type_label = "Project"
 
         @staticmethod
@@ -118,7 +118,7 @@ optionally `MEILISEARCH_API_KEY`):
 ```bash
 docker run --rm -p 7700:7700 --name meilisearch-test \
   -e MEILI_NO_ANALYTICS=true \
-  getmeili/meilisearch:latest
+  getmeili/meilisearch:v1.30.0
 ```
 
 Then run the test with:
@@ -127,3 +127,36 @@ Then run the test with:
 MEILISEARCH_URL=http://127.0.0.1:7700 python -m pytest \
   tests/integration/test_meilisearch_search.py
 ```
+
+## Meilisearch setup (local or production)
+
+Use the Meilisearch backend by configuring the search backend and connection
+settings. The backend reads `MEILISEARCH_URL` and optional
+`MEILISEARCH_API_KEY`.
+
+```python
+GENERAL_MANAGER = {
+    "SEARCH_BACKEND": {
+        "class": "general_manager.search.backends.meilisearch.MeilisearchBackend",
+        "options": {
+            "url": "http://127.0.0.1:7700",
+            "api_key": None,
+        },
+    }
+}
+```
+
+Local Docker example (dev keyless):
+
+```bash
+docker run --rm -p 7700:7700 --name meilisearch \
+  -e MEILI_NO_ANALYTICS=true \
+  getmeili/meilisearch:v1.30.0
+```
+
+Production notes:
+- Set `MEILISEARCH_API_KEY` (or a master key) and pass the same value in your
+  deployment environment.
+- Ensure your index settings are created with `python manage.py search_index`
+  and reindex with `--reindex` after schema changes.
+- Keep the Meilisearch image pinned to a known-good version to avoid drift.

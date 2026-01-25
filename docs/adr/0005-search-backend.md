@@ -20,7 +20,7 @@ Introduce a backend-agnostic search integration based on:
 - Indexing and update hooks decoupled from database operations.
 
 Key rules:
-- Use `manager.identification` as the stable document ID for all managers.
+- Use a type-scoped document ID format for all managers: `{TypeLabel}:{identification-json}` (e.g., `Project:{"id":1}`) so IDs are stable and unique across manager types. All indexing and lookup logic that uses manager.identification, document keys, or ID construction must follow this combined format.
 - Index only configured fields (or `to_document` when provided).
 - No runtime overrides for per-index filters or boosts.
 - Respect manager permissions via `get_read_permission_filter()` in the GraphQL resolver.
