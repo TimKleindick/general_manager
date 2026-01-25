@@ -147,6 +147,50 @@ def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
     assert result.hits[0].id == 'Project:{"id": 9}'
 
 
+def test_meilisearch_backend_document_payload_reserved_keys() -> None:
+    document = SearchDocument(
+        id='Project:{"id": 5}',
+        type="Project",
+        identification={"id": 5},
+        index="index",
+        data={
+            "id": "override",
+            "gm_document_id": "override",
+            "type": "override",
+            "identification": {"id": "override"},
+            "data": {"name": "override"},
+            "name": "Alpha",
+        },
+        field_boosts={},
+    )
+    payload = MeilisearchBackend._document_payload(document)
+    assert payload["gm_document_id"] == 'Project:{"id": 5}'
+    assert payload["type"] == "Project"
+    assert payload["identification"] == {"id": 5}
+    assert payload["data"] == {
+        "id": "override",
+        "gm_document_id": "override",
+        "type": "override",
+        "identification": {"id": "override"},
+        "data": {"name": "override"},
+        "name": "Alpha",
+    }
+    assert payload["name"] == "Alpha"
+
+
+def test_meilisearch_backend_build_filter_expression_escapes() -> None:
+    expr = MeilisearchBackend._build_filter_expression(
+        {"status": 'a"b\\c'},
+        types=['Type"X'],
+    )
+    assert 'type = "Type\\"X"' in expr
+    assert 'status = "a\\"b\\\\c"' in expr
+
+
+def test_meilisearch_backend_non_terminal_status() -> None:
+    MeilisearchBackend._raise_for_failed_task({"status": "processing"})
+
+
 def test_meilisearch_backend_raises_on_failed_task() -> None:
     index = _FakeIndex()
     client = _FailingClient(index)
