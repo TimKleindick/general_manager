@@ -24,7 +24,7 @@ Start Meilisearch locally:
 ```bash
 docker run --rm -p 7700:7700 --name meilisearch \
   -e MEILI_NO_ANALYTICS=true \
-  getmeili/meilisearch:v1.30.0
+  getmeili/meilisearch:v1.34.0
 ```
 
 You can use other backends by swapping the backend class and options; ensure
