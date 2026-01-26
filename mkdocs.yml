@@ -120,6 +120,7 @@ nav:
       - howto/add_permission_rule.md
       - howto/permission_walkthrough.md
       - howto/expose_via_graphql.md
+      - howto/search.md
       - howto/cache_dependent_calculation.md
       - howto/write_custom_interface.md
       - howto/create_custom_interface_type.md
