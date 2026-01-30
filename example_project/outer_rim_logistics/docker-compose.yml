@@ -5,36 +5,84 @@ services:
       dockerfile: example_project/outer_rim_logistics/Dockerfile
     environment:
       DJANGO_DEBUG: "False"
-      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me}"
+      DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       POSTGRES_DB: "${POSTGRES_DB:-orl}"
       POSTGRES_USER: "${POSTGRES_USER:-orl}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-orl}"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
       MEILISEARCH_URL: "http://meilisearch:7700"
-      MEILISEARCH_API_KEY: "${MEILISEARCH_API_KEY:-orl-master-key}"
+      MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
       GM_SEARCH_AUTO_REINDEX: "false"
-      LOG_DIR: "/app/example_project/outer_rim_logistics/logs"
+      GM_SEARCH_ASYNC: "true"
+      STATIC_ROOT: "/static"
+      LOG_DIR: "/var/log/outer-rim"
       ORL_SEED_ON_START: "${ORL_SEED_ON_START:-true}"
-    ports:
-      - "8000:8000"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+      REDIS_URL: "redis://redis:6379/0"
+      DJANGO_SECURE_SSL_REDIRECT: "true"
+      DJANGO_SECURE_HSTS_SECONDS: "31536000"
+      DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS: "true"
+      DJANGO_SECURE_HSTS_PRELOAD: "true"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "https://localhost:8443"
     volumes:
-      - ./logs:/app/example_project/outer_rim_logistics/logs
+      - ./logs:/var/log/outer-rim
+      - orl-static:/static
     depends_on:
       - db
       - meilisearch
       - prometheus
+      - redis
+    secrets:
+      - django_secret_key
+      - meilisearch_api_key
+      - postgres_password
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/metrics/', timeout=2)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8000:80"
+      - "8443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - orl-static:/static:ro
+      - ./docker/certs:/etc/nginx/certs:ro
+      - ./logs:/var/log/outer-rim
+    depends_on:
+      - web
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-orl}"
       POSTGRES_USER: "${POSTGRES_USER:-orl}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-orl}"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
     ports:
       - "5432:5432"
     volumes:
       - orl-postgres:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orl}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   meilisearch:
     image: getmeili/meilisearch:v1.34.0
@@ -45,6 +93,11 @@ services:
       - "7700:7700"
     volumes:
       - orl-meili:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7700/health > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   prometheus:
     image: prom/prometheus:v2.52.0
@@ -52,12 +105,17 @@ services:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   grafana:
     image: grafana/grafana:11.0.0
     environment:
       GF_SECURITY_ADMIN_USER: "admin"
-      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD_FILE: "/run/secrets/grafana_admin_password"
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana-data:/var/lib/grafana
@@ -66,8 +124,96 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+      - loki
+    secrets:
+      - grafana_admin_password
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  loki:
+    image: grafana/loki:3.2.0
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      - ./docker/loki.yml:/etc/loki/config.yml:ro
+      - orl-loki:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./docker/promtail.yml:/etc/promtail/config.yml:ro
+      - ./logs:/var/log/outer-rim:ro
+    depends_on:
+      - loki
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - orl-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  celery-worker:
+    build:
+      context: ../../
+      dockerfile: example_project/outer_rim_logistics/Dockerfile
+    entrypoint: ""
+    command: celery -A orl worker -l info
+    environment:
+      DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "${POSTGRES_DB:-orl}"
+      POSTGRES_USER: "${POSTGRES_USER:-orl}"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
+      MEILISEARCH_URL: "http://meilisearch:7700"
+      MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
+      GM_SEARCH_AUTO_REINDEX: "false"
+      GM_SEARCH_ASYNC: "true"
+      LOG_DIR: "/var/log/outer-rim"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+      REDIS_URL: "redis://redis:6379/0"
+    volumes:
+      - ./logs:/var/log/outer-rim
+    depends_on:
+      - db
+      - meilisearch
+      - redis
+    secrets:
+      - django_secret_key
+      - meilisearch_api_key
+      - postgres_password
 
 volumes:
   orl-postgres:
   orl-meili:
   grafana-data:
+  orl-static:
+  orl-loki:
+  orl-redis:
+
+secrets:
+  django_secret_key:
+    file: ./docker/secrets/django_secret_key.txt
+  postgres_password:
+    file: ./docker/secrets/postgres_password.txt
+  meilisearch_api_key:
+    file: ./docker/secrets/meilisearch_api_key.txt
+  grafana_admin_password:
+    file: ./docker/secrets/grafana_admin_password.txt

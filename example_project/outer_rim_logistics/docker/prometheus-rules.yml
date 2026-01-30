@@ -1,0 +1,62 @@
+groups:
+  - name: orl-availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Target down"
+          description: "{{ $labels.job }} is down"
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres exporter down"
+          description: "postgres-exporter is not reporting"
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis exporter down"
+          description: "redis-exporter is not reporting"
+      - alert: NginxExporterDown
+        expr: nginx_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nginx exporter down"
+          description: "nginx-exporter is not reporting"
+      - alert: CeleryExporterDown
+        expr: up{job="celery-exporter"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery exporter down"
+          description: "celery-exporter is not reporting"
+
+  - name: orl-capacity
+    rules:
+      - alert: PostgresConnectionsHigh
+        expr: pg_stat_database_numbackends > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres connections high"
+          description: "Postgres connections are high ({{ $value }})"
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Redis memory usage above 85%"

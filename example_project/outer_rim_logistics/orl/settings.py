@@ -5,7 +5,21 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+def _read_secret_file(path: str) -> str | None:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
 def _env(name: str, default: str | None = None) -> str | None:
+    file_var = f"{name}_FILE"
+    file_path = os.environ.get(file_var)
+    if file_path:
+        file_value = _read_secret_file(file_path)
+        if file_value is not None:
+            return file_value
     return os.environ.get(name, default)
 
 
@@ -26,6 +40,7 @@ def _env_list(name: str, default: list[str]) -> list[str]:
 SECRET_KEY = _env("DJANGO_SECRET_KEY", "dev-secret-key-outer-rim-logistics")
 DEBUG = _env_bool("DJANGO_DEBUG", True)
 ALLOWED_HOSTS: list[str] = _env_list("DJANGO_ALLOWED_HOSTS", ["*"])
+CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -106,6 +121,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = Path(_env("STATIC_ROOT", str(BASE_DIR / "staticfiles")))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CACHES = {
@@ -163,6 +179,7 @@ else:
 GENERAL_MANAGER = {
     "SEARCH_BACKEND": search_backend,
     "SEARCH_AUTO_REINDEX": _env_bool("GM_SEARCH_AUTO_REINDEX", True),
+    "SEARCH_ASYNC": _env_bool("GM_SEARCH_ASYNC", False),
     "AUDIT_LOGGER": {
         "class": "general_manager.permission.audit.FileAuditLogger",
         "options": {
@@ -173,3 +190,27 @@ GENERAL_MANAGER = {
 
 AUTOCREATE_GRAPHQL = True
 GRAPHQL_URL = "graphql/"
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = _env_bool("DJANGO_SECURE_SSL_REDIRECT", False)
+SECURE_HSTS_SECONDS = int(_env("DJANGO_SECURE_HSTS_SECONDS", "0") or 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool(
+    "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", False
+)
+SECURE_HSTS_PRELOAD = _env_bool("DJANGO_SECURE_HSTS_PRELOAD", False)
+
+CELERY_BROKER_URL = _env("CELERY_BROKER_URL")
+CELERY_RESULT_BACKEND = _env("CELERY_RESULT_BACKEND")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+
+if _env("REDIS_URL"):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [_env("REDIS_URL")]},
+        }
+    }
+else:
+    CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
