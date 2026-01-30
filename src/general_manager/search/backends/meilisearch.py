@@ -15,6 +15,11 @@ from general_manager.search.backend import (
     SearchResult,
 )
 
+try:
+    from meilisearch.errors import MeilisearchApiError  # type: ignore[import]
+except ImportError:  # pragma: no cover - only needed when backend is unused
+    MeilisearchApiError = None  # type: ignore[assignment]
+
 
 class MeilisearchBackend:
     """Meilisearch implementation of the SearchBackend protocol."""
@@ -178,7 +183,23 @@ class MeilisearchBackend:
         Returns:
             The Meilisearch index object for the given index name.
         """
-        return self._client.get_or_create_index(index_name, {"primaryKey": "id"})
+        if hasattr(self._client, "get_or_create_index"):
+            return self._client.get_or_create_index(index_name, {"primaryKey": "id"})
+        if MeilisearchApiError is None:  # pragma: no cover - defensive fallback
+            return self._client.get_index(index_name)
+        try:
+            return self._client.get_index(index_name)
+        except MeilisearchApiError as exc:
+            if not _is_meilisearch_not_found(exc):
+                raise
+        try:
+            task = self._client.create_index(index_name, {"primaryKey": "id"})
+        except MeilisearchApiError as exc:
+            if not _is_meilisearch_already_exists(exc):
+                raise
+            return self._client.get_index(index_name)
+        self._wait_for_task(task)
+        return self._client.get_index(index_name)
 
     @staticmethod
     def _document_payload(document: SearchDocument) -> dict[str, Any]:
@@ -397,6 +418,34 @@ class MeilisearchBackend:
             return value
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         return f"gm_{digest}"
+
+
+def _meilisearch_error_code(error: Exception) -> str:
+    for attr in ("error_code", "code", "errorCode"):
+        value = getattr(error, attr, None)
+        if value:
+            return str(value).lower()
+    return ""
+
+
+def _meilisearch_status_code(error: Exception) -> int | None:
+    for attr in ("status_code", "statusCode", "http_status", "status"):
+        value = getattr(error, attr, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _is_meilisearch_not_found(error: Exception) -> bool:
+    code = _meilisearch_error_code(error)
+    status = _meilisearch_status_code(error)
+    return status == 404 or "not_found" in code
+
+
+def _is_meilisearch_already_exists(error: Exception) -> bool:
+    code = _meilisearch_error_code(error)
+    status = _meilisearch_status_code(error)
+    return status == 409 or "already_exists" in code
 
 
 def _escape_filter_value(value: Any) -> str:

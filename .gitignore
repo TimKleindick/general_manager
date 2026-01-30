@@ -61,6 +61,9 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Example project logs
+example_project/outer_rim_logistics/logs/
+
 # Flask stuff:
 instance/
 .webassets-cache

@@ -1,0 +1,73 @@
+services:
+  web:
+    build:
+      context: ../../
+      dockerfile: example_project/outer_rim_logistics/Dockerfile
+    environment:
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me}"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "${POSTGRES_DB:-orl}"
+      POSTGRES_USER: "${POSTGRES_USER:-orl}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-orl}"
+      MEILISEARCH_URL: "http://meilisearch:7700"
+      MEILISEARCH_API_KEY: "${MEILISEARCH_API_KEY:-orl-master-key}"
+      GM_SEARCH_AUTO_REINDEX: "false"
+      LOG_DIR: "/app/example_project/outer_rim_logistics/logs"
+      ORL_SEED_ON_START: "${ORL_SEED_ON_START:-true}"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/example_project/outer_rim_logistics/logs
+    depends_on:
+      - db
+      - meilisearch
+      - prometheus
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-orl}"
+      POSTGRES_USER: "${POSTGRES_USER:-orl}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-orl}"
+    ports:
+      - "5432:5432"
+    volumes:
+      - orl-postgres:/var/lib/postgresql/data
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.34.0
+    environment:
+      MEILI_MASTER_KEY: "${MEILISEARCH_API_KEY:-orl-master-key}"
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "7700:7700"
+    volumes:
+      - orl-meili:/meili_data
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  orl-postgres:
+  orl-meili:
+  grafana-data:
