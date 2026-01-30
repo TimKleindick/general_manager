@@ -108,7 +108,6 @@ services:
 
   db:
     image: postgres:16-alpine
-    user: "0:0"
     command:
       [
         "postgres",
@@ -385,6 +384,8 @@ services:
       GM_SEARCH_AUTO_REINDEX: "false"
       GM_SEARCH_ASYNC: "true"
       LOG_DIR: "/var/log/outer-rim/app"
+      CELERY_PUSHGATEWAY_URL: "http://pushgateway:9091"
+      CELERY_PUSHGATEWAY_ENABLED: "true"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
       REDIS_URL: "redis://redis:6379/0"
@@ -457,8 +458,9 @@ services:
       - backend
 
   db-init:
-    image: alpine:3.19
-    command: ["sh", "-c", "chown -R 999:999 /var/lib/postgresql/data"]
+    image: postgres:16-alpine
+    user: "0:0"
+    command: ["sh", "-c", "chown -R postgres:postgres /var/lib/postgresql/data"]
     volumes:
       - orl-postgres:/var/lib/postgresql/data
     restart: "no"
@@ -466,8 +468,13 @@ services:
       - backend
 
   db-extensions:
-    image: alpine:3.19
-    command: ["sh", "-c", "until pg_isready -h db -U ${POSTGRES_USER:-orl}; do sleep 1; done; PGPASSWORD=$$(cat /run/secrets/postgres_password) psql -h db -U ${POSTGRES_USER:-orl} -d ${POSTGRES_DB:-orl} -c \"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\""]
+    image: postgres:16-alpine
+    command:
+      [
+        "sh",
+        "-c",
+        "until pg_isready -h db -U ${POSTGRES_USER:-orl}; do sleep 1; done; PGPASSWORD=$$(cat /run/secrets/postgres_password) psql -h db -U ${POSTGRES_USER:-orl} -d ${POSTGRES_DB:-orl} -c \"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\"",
+      ]
     secrets:
       - postgres_password
     depends_on:
