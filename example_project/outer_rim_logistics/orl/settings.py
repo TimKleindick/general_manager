@@ -43,6 +43,7 @@ ALLOWED_HOSTS: list[str] = _env_list("DJANGO_ALLOWED_HOSTS", ["*"])
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
 
 INSTALLED_APPS = [
+    "django_prometheus",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -58,6 +59,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -65,6 +67,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 ROOT_URLCONF = "orl.urls"
@@ -90,7 +93,7 @@ ASGI_APPLICATION = "orl.asgi.application"
 if _env("POSTGRES_HOST"):
     DATABASES = {
         "default": {
-            "ENGINE": "django.db.backends.postgresql",
+            "ENGINE": "django_prometheus.db.backends.postgresql",
             "NAME": _env("POSTGRES_DB", "orl"),
             "USER": _env("POSTGRES_USER", "orl"),
             "PASSWORD": _env("POSTGRES_PASSWORD", "orl"),
@@ -101,7 +104,7 @@ if _env("POSTGRES_HOST"):
 else:
     DATABASES = {
         "default": {
-            "ENGINE": "django.db.backends.sqlite3",
+            "ENGINE": "django_prometheus.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
         }
     }
@@ -124,16 +127,27 @@ STATIC_URL = "static/"
 STATIC_ROOT = Path(_env("STATIC_ROOT", str(BASE_DIR / "staticfiles")))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "outer-rim-logistics",
-        "OPTIONS": {
-            "MAX_ENTRIES": 10000,
-            "CULL_FREQUENCY": 3,
-        },
+if _env("REDIS_URL"):
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": _env("REDIS_URL"),
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "outer-rim-logistics",
+            "OPTIONS": {
+                "MAX_ENTRIES": 10000,
+                "CULL_FREQUENCY": 3,
+            },
+        }
+    }
 
 LOG_DIR = Path(_env("LOG_DIR", str(BASE_DIR / "logs")))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -144,13 +158,17 @@ LOGGING = {
     "formatters": {
         "standard": {
             "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
-        }
+        },
+        "json": {
+            "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+            "fmt": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
     },
     "handlers": {
         "gm_file": {
             "class": "logging.FileHandler",
             "filename": LOG_DIR / "general_manager.log",
-            "formatter": "standard",
+            "formatter": "json",
         }
     },
     "loggers": {
