@@ -1,0 +1,18 @@
+[project]
+name = "outer-rim-logistics"
+version = "0.0.0"
+description = "Outer Rim Logistics example project for GeneralManager."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "Django>=5.1",
+    "general-manager",
+    "daphne>=4.1",
+    "meilisearch>=0.34",
+    "prometheus-client>=0.20",
+    "psycopg[binary]>=3.2",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

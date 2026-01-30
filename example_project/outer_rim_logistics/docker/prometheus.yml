@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["prometheus:9090"]
+  - job_name: "orl-web"
+    metrics_path: "/metrics/"
+    static_configs:
+      - targets: ["web:8000"]
+  - job_name: "meilisearch"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["meilisearch:7700"]
