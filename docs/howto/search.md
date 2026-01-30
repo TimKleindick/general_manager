@@ -108,7 +108,21 @@ GENERAL_MANAGER = {
 Run a Celery worker so index updates can be dispatched. When async is disabled,
 updates run inline.
 
-## Step 6: Non-GraphQL usage
+## Step 6: Auto-reindex in development (optional)
+
+The dev search backend is in-memory, so indexes are empty on every process
+start. To automatically reindex once per runserver process, enable:
+
+```python
+GENERAL_MANAGER = {
+    **GENERAL_MANAGER,
+    "SEARCH_AUTO_REINDEX": True,
+}
+```
+
+This runs `search_index --reindex` on the first request when `DEBUG=True`.
+
+## Step 7: Non-GraphQL usage
 
 You can call the backend directly in Python:
 
@@ -127,7 +141,7 @@ from general_manager.search.indexer import SearchIndexer
 SearchIndexer().reindex_manager(Project)
 ```
 
-## Step 7: Production checklist
+## Step 8: Production checklist
 
 - Pin your Meilisearch version and set `MEILISEARCH_API_KEY`.
 - Reindex after search schema changes.

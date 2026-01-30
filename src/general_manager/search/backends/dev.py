@@ -214,7 +214,7 @@ class DevSearchBackend:
         """
         Compute a relevance score for a document based on matching query tokens and configured boosts.
 
-        Each time a token from `tokens` is present in a field's token set the field's boost is added to the score. After summing matches across all fields, the total is multiplied by `document.index_boost` when it is set.
+        Each time a token from `tokens` is present in a field's token set (or is a prefix of a field token) the field's boost is added to the score. After summing matches across all fields, the total is multiplied by `document.index_boost` when it is set.
 
         Parameters:
             tokens: The list of query tokens to match against the document's token index.
@@ -230,7 +230,9 @@ class DevSearchBackend:
         for field_name, field_tokens in token_index.items():
             field_boost = document.field_boosts.get(field_name, 1.0)
             for token in tokens:
-                if token in field_tokens:
+                if token in field_tokens or any(
+                    field_token.startswith(token) for field_token in field_tokens
+                ):
                     score += field_boost
         if document.index_boost:
             score *= document.index_boost
