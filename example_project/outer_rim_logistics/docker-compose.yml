@@ -1,13 +1,18 @@
 x-security-defaults: &security-defaults
   security_opt:
     - no-new-privileges:true
+  cap_drop:
+    - ALL
 
 services:
   web:
+    <<: *security-defaults
     build:
       context: ../../
       dockerfile: example_project/outer_rim_logistics/Dockerfile
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
       DJANGO_DEBUG: "False"
       DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
       POSTGRES_HOST: db
@@ -20,7 +25,7 @@ services:
       GM_SEARCH_AUTO_REINDEX: "false"
       GM_SEARCH_ASYNC: "true"
       STATIC_ROOT: "/static"
-      LOG_DIR: "/var/log/outer-rim"
+      LOG_DIR: "/var/log/outer-rim/app"
       ORL_SEED_ON_START: "${ORL_SEED_ON_START:-true}"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
@@ -29,27 +34,36 @@ services:
       DJANGO_SECURE_HSTS_SECONDS: "31536000"
       DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS: "true"
       DJANGO_SECURE_HSTS_PRELOAD: "true"
-      DJANGO_CSRF_TRUSTED_ORIGINS: "https://localhost:8443"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "https://localhost:${ORL_HTTPS_PORT:-8443}"
+    user: "1000:1000"
     volumes:
       - ./logs:/var/log/outer-rim
       - orl-static:/static
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
-      - db
-      - meilisearch
-      - prometheus
-      - redis
-    networks:
-  backend:
-
-secrets:
+      app-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    secrets:
       - django_secret_key
       - meilisearch_api_key
       - postgres_password
+    networks:
+      - backend
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/metrics/', timeout=2)\"",
+          "python -c \"import urllib.request; req=urllib.request.Request('http://localhost:8000/metrics/', headers={'X-Forwarded-Proto':'https'}); urllib.request.urlopen(req, timeout=2)\"",
         ]
       interval: 30s
       timeout: 5s
@@ -62,23 +76,39 @@ secrets:
       context: .
       dockerfile: docker/nginx.Dockerfile
     ports:
-      - "8000:80"
-      - "8443:443"
+      - "${ORL_HTTPS_PORT:-8443}:443"
+    entrypoint: ["/bin/sh", "/etc/nginx/nginx-entrypoint.sh"]
     volumes:
       - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
       - orl-static:/static:ro
-      - ./docker/certs:/etc/nginx/certs:ro
+      - ./docker/certs:/etc/nginx/certs
+      - ./docker/nginx-entrypoint.sh:/etc/nginx/nginx-entrypoint.sh:ro
       - ./logs:/var/log/outer-rim
     depends_on:
       - web
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+      - /var/cache/nginx:uid=101,gid=101,mode=755
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ > /dev/null"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS --insecure https://localhost/nginx-healthz > /dev/null",
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
+    networks:
+      - frontend
+      - backend
 
   db:
     image: postgres:16-alpine
+    user: "0:0"
     command:
       [
         "postgres",
@@ -93,43 +123,75 @@ secrets:
       POSTGRES_DB: "${POSTGRES_DB:-orl}"
       POSTGRES_USER: "${POSTGRES_USER:-orl}"
       POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
-    ports:
-      - "5432:5432"
     volumes:
       - orl-postgres:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql:uid=999,gid=999,mode=775
     secrets:
       - postgres_password
-    networks:
-      - backend
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orl}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   meilisearch:
-    image: getmeili/meilisearch:v1.34.0
+    <<: *security-defaults
+    build:
+      context: .
+      dockerfile: docker/meilisearch.Dockerfile
     environment:
       MEILI_MASTER_KEY: "${MEILISEARCH_API_KEY:-orl-master-key}"
       MEILI_NO_ANALYTICS: "true"
-    ports:
-      - "7700:7700"
+      MEILI_EXPERIMENTAL_METRICS: "true"
+      MEILI_EXPERIMENTAL_ENABLE_METRICS: "true"
     volumes:
       - orl-meili:/meili_data
+    user: "1000:1000"
+    depends_on:
+      meili-init:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:7700/health > /dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7700/health > /dev/null"]
       interval: 30s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   prometheus:
-    image: prom/prometheus:v2.52.0
+    <<: *security-defaults
+    build:
+      context: .
+      dockerfile: docker/prometheus.Dockerfile
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.route-prefix=/prometheus"
+      - "--web.external-url=https://localhost:${ORL_HTTPS_PORT:-8443}/prometheus"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "9090:9090"
+      - ./docker/prometheus-rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus-data:/prometheus
+    secrets:
+      - meilisearch_api_key
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy > /dev/null"]
+      test:
+        [
+          "CMD-SHELL",
+          "/bin/busybox wget -qO- http://localhost:9090/-/healthy > /dev/null || /bin/busybox wget -qO- http://localhost:9090/prometheus/-/healthy > /dev/null",
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -151,10 +213,7 @@ secrets:
     entrypoint: ["/bin/sh", "/etc/postgres-exporter/entrypoint.sh"]
     environment:
       PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres-exporter/queries.yml"
-    networks:
-  backend:
-
-secrets:
+    secrets:
       - postgres_password
     volumes:
       - ./docker/postgres-exporter-entrypoint.sh:/etc/postgres-exporter/entrypoint.sh:ro
@@ -208,72 +267,113 @@ secrets:
       - backend
 
   grafana:
+    <<: *security-defaults
     image: grafana/grafana:11.0.0
     environment:
       GF_SECURITY_ADMIN_USER: "admin"
       GF_SECURITY_ADMIN_PASSWORD_FILE: "/run/secrets/grafana_admin_password"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "https://localhost:${ORL_HTTPS_PORT:-8443}/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SERVER_DOMAIN: "localhost"
+      GF_SERVER_ENFORCE_DOMAIN: "false"
+      GF_SERVER_REDIRECT_TO_HTTPS: "false"
+    user: "472:472"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-    ports:
-      - "3000:3000"
+      - ./docker/grafana/dashboards:/etc/grafana/dashboards:ro
     depends_on:
-      - prometheus
-      - loki
-    networks:
-  backend:
-
-secrets:
+      grafana-init:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_healthy
+    secrets:
       - grafana_admin_password
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/log/grafana
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health > /dev/null"]
       interval: 30s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   loki:
+    <<: *security-defaults
     image: grafana/loki:3.2.0
     command: -config.file=/etc/loki/config.yml
+    user: "10001:10001"
     volumes:
       - ./docker/loki.yml:/etc/loki/config.yml:ro
       - orl-loki:/loki
-    ports:
-      - "3100:3100"
+    depends_on:
+      loki-init:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready > /dev/null"]
       interval: 30s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - backend
 
   promtail:
+    <<: *security-defaults
     image: grafana/promtail:3.2.0
     command: -config.file=/etc/promtail/config.yml
     volumes:
       - ./docker/promtail.yml:/etc/promtail/config.yml:ro
       - ./logs:/var/log/outer-rim:ro
     depends_on:
-      - loki
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
 
   redis:
+    <<: *security-defaults
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    depends_on:
+      redis-init:
+        condition: service_completed_successfully
+    user: "999:999"
     volumes:
       - orl-redis:/data
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   celery-worker:
+    <<: *security-defaults
     build:
       context: ../../
       dockerfile: example_project/outer_rim_logistics/Dockerfile
     entrypoint: ""
     command: celery -A orl worker -l info
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
       DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
@@ -285,21 +385,25 @@ secrets:
       GM_SEARCH_AUTO_REINDEX: "false"
       GM_SEARCH_ASYNC: "true"
       LOG_DIR: "/var/log/outer-rim/app"
-      CELERY_PUSHGATEWAY_URL: "http://pushgateway:9091"
-      CELERY_PUSHGATEWAY_ENABLED: "true"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
       REDIS_URL: "redis://redis:6379/0"
+    user: "1000:1000"
     volumes:
       - ./logs:/var/log/outer-rim
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
-      - db
-      - meilisearch
-      - redis
-    networks:
-  backend:
-
-secrets:
+      app-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    secrets:
       - django_secret_key
       - meilisearch_api_key
       - postgres_password
@@ -353,9 +457,8 @@ secrets:
       - backend
 
   db-init:
-    image: postgres:16-alpine
-    user: "0:0"
-    command: ["sh", "-c", "chown -R postgres:postgres /var/lib/postgresql/data"]
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 999:999 /var/lib/postgresql/data"]
     volumes:
       - orl-postgres:/var/lib/postgresql/data
     restart: "no"
@@ -363,17 +466,9 @@ secrets:
       - backend
 
   db-extensions:
-    image: postgres:16-alpine
-    command:
-      [
-        "sh",
-        "-c",
-        "until pg_isready -h db -U ${POSTGRES_USER:-orl}; do sleep 1; done; PGPASSWORD=$$(cat /run/secrets/postgres_password) psql -h db -U ${POSTGRES_USER:-orl} -d ${POSTGRES_DB:-orl} -c \"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\"",
-      ]
-    networks:
-  backend:
-
-secrets:
+    image: alpine:3.19
+    command: ["sh", "-c", "until pg_isready -h db -U ${POSTGRES_USER:-orl}; do sleep 1; done; PGPASSWORD=$$(cat /run/secrets/postgres_password) psql -h db -U ${POSTGRES_USER:-orl} -d ${POSTGRES_DB:-orl} -c \"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\""]
+    secrets:
       - postgres_password
     depends_on:
       db:
@@ -410,13 +505,11 @@ volumes:
   orl-postgres:
   orl-meili:
   grafana-data:
+  prometheus-data:
   orl-static:
   orl-loki:
   orl-redis:
   db-backups:
-
-networks:
-  backend:
 
 secrets:
   django_secret_key:
@@ -427,3 +520,8 @@ secrets:
     file: ./docker/secrets/meilisearch_api_key.txt
   grafana_admin_password:
     file: ./docker/secrets/grafana_admin_password.txt
+
+networks:
+  frontend:
+  backend:
+    internal: true

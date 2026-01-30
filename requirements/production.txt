@@ -1,3 +1,8 @@
 -r base.txt
 
+django-prometheus==2.4.1
+django-redis==5.4.0
+prometheus-client==0.21.1
+python-json-logger==2.0.7
+
 celery>=5.6.2,<6.0  # Python >=3.12 compatibility (Celery 5.6.2+)

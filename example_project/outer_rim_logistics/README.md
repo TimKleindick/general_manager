@@ -24,16 +24,23 @@ centralized log collection.
 
 ```bash
 cp .env.example .env
-# create TLS certs + secrets (see docker/certs/README.md and docker/secrets/README.md)
+# create secrets (see docker/secrets/README.md)
+# TLS certs are auto-generated for localhost if missing
 docker compose up --build
 ```
 
-Services:
-- App (via Nginx): `https://localhost:8443/graphql/`
-- Metrics: `https://localhost:8443/metrics/`
-- Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (default login: `admin` / `admin`)
-- Loki (log storage): `http://localhost:3100`
+Services (all via Nginx):
+- App: `https://localhost:${ORL_HTTPS_PORT}/graphql/`
+- Metrics: `https://localhost:${ORL_HTTPS_PORT}/metrics/`
+- Prometheus: `https://localhost:${ORL_HTTPS_PORT}/prometheus/` (protected by Nginx basic auth)
+- Grafana: `https://localhost:${ORL_HTTPS_PORT}/grafana/` (Grafana login; default login: `admin` / `admin`)
+- Grafana dashboards are provisioned from `docker/grafana/provisioning/dashboards`.
+- Prometheus scrapes app metrics, Meilisearch, Postgres exporter, Redis exporter, Nginx exporter, and Celery exporter.
+
+Nginx basic auth uses `docker/htpasswd/observability`. A template exists at
+`docker/htpasswd/observability.example` (default user: `orl_admin`, password:
+`changeme`).
+- Loki: `https://localhost:${ORL_HTTPS_PORT}/loki/`
 
 Logs are written to `example_project/outer_rim_logistics/logs/`.
 
