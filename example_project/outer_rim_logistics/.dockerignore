@@ -1,0 +1,17 @@
+.git
+.gitignore
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+__pycache__
+build
+dist
+site
+coverage.xml
+*.sqlite3
+*.log
+logs/
+docker/certs/*.crt
+docker/certs/*.key
+docker/htpasswd/observability
