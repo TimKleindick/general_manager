@@ -189,6 +189,20 @@ dispatch index updates through Celery. When disabled, updates run inline.
 
 Celery is required for production async indexing; development can remain sync.
 
+## Development auto-reindex (optional)
+
+To avoid manual reindexing when using the in-memory dev backend, enable:
+
+```python
+GENERAL_MANAGER = {
+    "SEARCH_AUTO_REINDEX": True,
+}
+```
+
+When enabled (and `DEBUG=True`), GeneralManager reindexes once on the first
+request in the runserver process. This keeps dev search results available
+without running `search_index --reindex` manually.
+
 ## Backends
 
 ### DevSearch backend (service-free)

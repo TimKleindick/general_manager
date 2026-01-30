@@ -11,6 +11,8 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.checks import register
 from django.core.management.base import BaseCommand
+from django.core.management import call_command
+from django.core.signals import request_started
 from django.urls import path, re_path
 from graphene_django.views import GraphQLView  # type: ignore[import]
 
@@ -61,6 +63,48 @@ if TYPE_CHECKING:
 
 logger = get_logger("apps")
 
+_SEARCH_REINDEXED = False
+
+
+def _should_auto_reindex(django_settings: Any) -> bool:
+    config = getattr(django_settings, "GENERAL_MANAGER", {})
+    auto_reindex = False
+    if isinstance(config, dict):
+        auto_reindex = bool(config.get("SEARCH_AUTO_REINDEX", False))
+    auto_reindex = bool(
+        auto_reindex or getattr(django_settings, "SEARCH_AUTO_REINDEX", False)
+    )
+    return bool(auto_reindex and getattr(django_settings, "DEBUG", False))
+
+
+def _normalize_graphql_path(raw_path: str) -> str:
+    if not raw_path.startswith("/"):
+        raw_path = f"/{raw_path}"
+    if not raw_path.endswith("/"):
+        raw_path = f"{raw_path}/"
+    return raw_path
+
+
+def _auto_reindex_search(*_args: object, **kwargs: object) -> None:
+    global _SEARCH_REINDEXED
+    environ = kwargs.get("environ")
+    if not isinstance(environ, dict):
+        return
+    request_path = environ.get("PATH_INFO")
+    if not isinstance(request_path, str):
+        return
+    graphql_path = _normalize_graphql_path(getattr(settings, "GRAPHQL_URL", "graphql"))
+    if _normalize_graphql_path(request_path) != graphql_path:
+        return
+    if _SEARCH_REINDEXED:
+        return
+    _SEARCH_REINDEXED = True
+    try:
+        call_command("search_index", reindex=True)
+        logger.info("auto reindex complete", context={"component": "search"})
+    except Exception:  # pragma: no cover - defensive log
+        logger.exception("auto reindex failed", context={"component": "search"})
+
 
 class GeneralmanagerConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
@@ -82,8 +126,24 @@ class GeneralmanagerConfig(AppConfig):
         configure_search_backend_from_settings(settings)
         from general_manager.search import indexer as _search_indexer  # noqa: F401
 
+        self.install_search_auto_reindex()
+
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             self.handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
+
+    @staticmethod
+    def install_search_auto_reindex() -> None:
+        """
+        Optionally reindex search data once on first request in development.
+
+        Enabled via GENERAL_MANAGER["SEARCH_AUTO_REINDEX"] (or SEARCH_AUTO_REINDEX).
+        """
+        if not _should_auto_reindex(settings):
+            return
+        request_started.connect(
+            _auto_reindex_search,
+            dispatch_uid="general_manager_auto_reindex_search",
+        )
 
     @staticmethod
     def register_system_checks() -> None:
