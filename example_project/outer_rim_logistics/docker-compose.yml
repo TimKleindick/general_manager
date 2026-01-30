@@ -1,3 +1,7 @@
+x-security-defaults: &security-defaults
+  security_opt:
+    - no-new-privileges:true
+
 services:
   web:
     build:
@@ -34,7 +38,10 @@ services:
       - meilisearch
       - prometheus
       - redis
-    secrets:
+    networks:
+  backend:
+
+secrets:
       - django_secret_key
       - meilisearch_api_key
       - postgres_password
@@ -72,6 +79,16 @@ services:
 
   db:
     image: postgres:16-alpine
+    command:
+      [
+        "postgres",
+        "-c",
+        "shared_preload_libraries=pg_stat_statements",
+        "-c",
+        "pg_stat_statements.max=10000",
+        "-c",
+        "pg_stat_statements.track=all",
+      ]
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-orl}"
       POSTGRES_USER: "${POSTGRES_USER:-orl}"
@@ -82,6 +99,8 @@ services:
       - orl-postgres:/var/lib/postgresql/data
     secrets:
       - postgres_password
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orl}"]
       interval: 10s
@@ -114,6 +133,79 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
+
+  pushgateway:
+    <<: *security-defaults
+    image: prom/pushgateway:v1.9.0
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
+
+  postgres-exporter:
+    <<: *security-defaults
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    entrypoint: ["/bin/sh", "/etc/postgres-exporter/entrypoint.sh"]
+    environment:
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres-exporter/queries.yml"
+    networks:
+  backend:
+
+secrets:
+      - postgres_password
+    volumes:
+      - ./docker/postgres-exporter-entrypoint.sh:/etc/postgres-exporter/entrypoint.sh:ro
+      - ./docker/postgres-exporter-queries.yml:/etc/postgres-exporter/queries.yml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
+
+  redis-exporter:
+    <<: *security-defaults
+    image: oliver006/redis_exporter:v1.63.0
+    command: ["--redis.addr=redis://redis:6379"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
+
+  celery-exporter:
+    <<: *security-defaults
+    image: ghcr.io/danihodovic/celery-exporter:latest
+    command: ["--broker-url=redis://redis:6379/0", "--port=9808"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
+
+  nginx-exporter:
+    <<: *security-defaults
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    command: ["-nginx.scrape-uri=http://nginx/nginx_status"]
+    depends_on:
+      nginx:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
 
   grafana:
     image: grafana/grafana:11.0.0
@@ -129,7 +221,10 @@ services:
     depends_on:
       - prometheus
       - loki
-    secrets:
+    networks:
+  backend:
+
+secrets:
       - grafana_admin_password
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health > /dev/null"]
@@ -201,10 +296,115 @@ services:
       - db
       - meilisearch
       - redis
-    secrets:
+    networks:
+  backend:
+
+secrets:
       - django_secret_key
       - meilisearch_api_key
       - postgres_password
+    networks:
+      - backend
+
+  meili-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 1000:1000 /meili_data"]
+    volumes:
+      - orl-meili:/meili_data
+    restart: "no"
+    networks:
+      - backend
+
+  app-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "mkdir -p /var/log/outer-rim/app && chown -R 1000:1000 /var/log/outer-rim/app /static"]
+    volumes:
+      - ./logs:/var/log/outer-rim
+      - orl-static:/static
+    restart: "no"
+    networks:
+      - backend
+
+  grafana-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 472:472 /var/lib/grafana"]
+    volumes:
+      - grafana-data:/var/lib/grafana
+    restart: "no"
+    networks:
+      - backend
+
+  redis-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 999:999 /data"]
+    volumes:
+      - orl-redis:/data
+    restart: "no"
+    networks:
+      - backend
+
+  loki-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 10001:10001 /loki"]
+    volumes:
+      - orl-loki:/loki
+    restart: "no"
+    networks:
+      - backend
+
+  db-init:
+    image: postgres:16-alpine
+    user: "0:0"
+    command: ["sh", "-c", "chown -R postgres:postgres /var/lib/postgresql/data"]
+    volumes:
+      - orl-postgres:/var/lib/postgresql/data
+    restart: "no"
+    networks:
+      - backend
+
+  db-extensions:
+    image: postgres:16-alpine
+    command:
+      [
+        "sh",
+        "-c",
+        "until pg_isready -h db -U ${POSTGRES_USER:-orl}; do sleep 1; done; PGPASSWORD=$$(cat /run/secrets/postgres_password) psql -h db -U ${POSTGRES_USER:-orl} -d ${POSTGRES_DB:-orl} -c \"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\"",
+      ]
+    networks:
+  backend:
+
+secrets:
+      - postgres_password
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
+
+  db-backup:
+    <<: *security-defaults
+    image: postgres:16-alpine
+    command:
+      [
+        "sh",
+        "-c",
+        "apk add --no-cache curl >/dev/null 2>&1; while true; do ts=$$(date +%s); file=/backups/orl_$$(date +%F_%H%M%S).sql; if PGPASSWORD=$$(cat /run/secrets/postgres_password) pg_dump -h db -U ${POSTGRES_USER:-orl} ${POSTGRES_DB:-orl} > \"$$file\"; then size=$$(wc -c < \"$$file\" | tr -d ' '); printf 'db_backup_last_success_timestamp_seconds %s\\ndb_backup_last_size_bytes %s\\n' \"$$ts\" \"$$size\" | curl -sS --data-binary @- http://pushgateway:9091/metrics/job/db_backup; else printf 'db_backup_last_failure_timestamp_seconds %s\\n' \"$$ts\" | curl -sS --data-binary @- http://pushgateway:9091/metrics/job/db_backup; fi; sleep 86400; done",
+      ]
+    volumes:
+      - db-backups:/backups
+    secrets:
+      - postgres_password
+    depends_on:
+      db:
+        condition: service_healthy
+      pushgateway:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - backend
 
 volumes:
   orl-postgres:
@@ -213,6 +413,10 @@ volumes:
   orl-static:
   orl-loki:
   orl-redis:
+  db-backups:
+
+networks:
+  backend:
 
 secrets:
   django_secret_key:

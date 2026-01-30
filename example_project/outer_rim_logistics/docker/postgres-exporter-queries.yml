@@ -1,0 +1,43 @@
+pg_stat_statements:
+  query: |
+    SELECT
+      userid::text AS userid,
+      dbid::text AS dbid,
+      queryid::text AS queryid,
+      query,
+      calls,
+      total_exec_time,
+      mean_exec_time,
+      max_exec_time,
+      rows
+    FROM pg_stat_statements
+    ORDER BY total_exec_time DESC
+    LIMIT 20;
+  metrics:
+    - userid:
+        usage: "LABEL"
+        description: "User ID"
+    - dbid:
+        usage: "LABEL"
+        description: "Database ID"
+    - queryid:
+        usage: "LABEL"
+        description: "Query ID"
+    - query:
+        usage: "LABEL"
+        description: "Normalized query text"
+    - calls:
+        usage: "COUNTER"
+        description: "Number of query calls"
+    - total_exec_time:
+        usage: "COUNTER"
+        description: "Total execution time in milliseconds"
+    - mean_exec_time:
+        usage: "GAUGE"
+        description: "Mean execution time in milliseconds"
+    - max_exec_time:
+        usage: "GAUGE"
+        description: "Max execution time in milliseconds"
+    - rows:
+        usage: "COUNTER"
+        description: "Rows returned"
