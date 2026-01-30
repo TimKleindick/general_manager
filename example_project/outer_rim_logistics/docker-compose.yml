@@ -197,7 +197,7 @@ secrets:
   nginx-exporter:
     <<: *security-defaults
     image: nginx/nginx-prometheus-exporter:1.3.0
-    command: ["-nginx.scrape-uri=http://nginx/nginx_status"]
+    command: ["--nginx.scrape-uri=http://nginx/nginx_status"]
     depends_on:
       nginx:
         condition: service_started
