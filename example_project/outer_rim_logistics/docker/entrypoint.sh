@@ -38,4 +38,6 @@ if [ "${ORL_SEED_ON_START:-true}" = "true" ]; then
   python manage.py seed_outer_rim
 fi
 
+python manage.py collectstatic --noinput
+
 exec daphne -b 0.0.0.0 -p 8000 orl.asgi:application
