@@ -63,6 +63,8 @@ db.sqlite3-journal
 
 # Example project logs
 example_project/outer_rim_logistics/logs/
+example_project/outer_rim_logistics/docker/certs/*.crt
+example_project/outer_rim_logistics/docker/certs/*.key
 
 # Flask stuff:
 instance/
