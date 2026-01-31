@@ -57,17 +57,21 @@ def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | No
 
 def _default_graphql_url_clear() -> None:
     """
-    Remove the first root URLconf pattern whose view class is named "GraphQLView".
+    Remove the first root URLconf pattern whose view class is a GraphQL view.
 
-    Searches the project's ROOT_URLCONF urlpatterns and removes the first pattern whose callback exposes a `view_class` attribute with the name "GraphQLView". This is used to reset GraphQL URL configuration between tests.
+    Searches the project's ROOT_URLCONF urlpatterns and removes the first pattern
+    whose callback exposes a `view_class` attribute with the name "GraphQLView" or
+    "GeneralManagerGraphQLView". This is used to reset GraphQL URL configuration
+    between tests.
     """
     urlconf = import_module(settings.ROOT_URLCONF)
     for pattern in urlconf.urlpatterns:
-        if (
-            hasattr(pattern, "callback")
-            and hasattr(pattern.callback, "view_class")
-            and pattern.callback.view_class.__name__ == "GraphQLView"
+        if not hasattr(pattern, "callback") or not hasattr(
+            pattern.callback, "view_class"
         ):
+            continue
+        view_name = getattr(pattern.callback.view_class, "__name__", "")
+        if view_name in {"GraphQLView", "GeneralManagerGraphQLView"}:
             urlconf.urlpatterns.remove(pattern)
             break
 
