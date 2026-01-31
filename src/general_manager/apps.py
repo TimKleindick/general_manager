@@ -14,7 +14,8 @@ from django.core.management.base import BaseCommand
 from django.core.management import call_command
 from django.core.signals import request_started
 from django.urls import path, re_path
-from graphene_django.views import GraphQLView  # type: ignore[import]
+from general_manager.api.graphql_view import GeneralManagerGraphQLView
+from general_manager.metrics import build_graphql_middleware
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.property import graph_ql_property
@@ -413,10 +414,14 @@ class GeneralmanagerConfig(AppConfig):
         if not root_url_conf_path:
             raise MissingRootUrlconfError()
         urlconf = import_module(root_url_conf_path)
+        middleware = build_graphql_middleware()
+        view_kwargs: dict[str, Any] = {"graphiql": True, "schema": schema}
+        if middleware is not None:
+            view_kwargs["middleware"] = middleware
         urlconf.urlpatterns.append(
             path(
                 graph_ql_url,
-                GraphQLView.as_view(graphiql=True, schema=schema),
+                GeneralManagerGraphQLView.as_view(**view_kwargs),
             )
         )
         GeneralmanagerConfig._ensure_asgi_subscription_route(graph_ql_url)
