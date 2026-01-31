@@ -35,6 +35,9 @@ services:
       DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS: "true"
       DJANGO_SECURE_HSTS_PRELOAD: "true"
       DJANGO_CSRF_TRUSTED_ORIGINS: "https://localhost:${ORL_HTTPS_PORT:-8443}"
+      GENERAL_MANAGER_GRAPHQL_METRICS_ENABLED: "true"
+      GENERAL_MANAGER_GRAPHQL_METRICS_BACKEND: "prometheus"
+      GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING: "true"
     user: "1000:1000"
     volumes:
       - ./logs:/var/log/outer-rim
@@ -491,7 +494,7 @@ services:
       [
         "sh",
         "-c",
-        "apk add --no-cache curl >/dev/null 2>&1; while true; do ts=$$(date +%s); file=/backups/orl_$$(date +%F_%H%M%S).sql; if PGPASSWORD=$$(cat /run/secrets/postgres_password) pg_dump -h db -U ${POSTGRES_USER:-orl} ${POSTGRES_DB:-orl} > \"$$file\"; then size=$$(wc -c < \"$$file\" | tr -d ' '); printf 'db_backup_last_success_timestamp_seconds %s\\ndb_backup_last_size_bytes %s\\n' \"$$ts\" \"$$size\" | curl -sS --data-binary @- http://pushgateway:9091/metrics/job/db_backup; else printf 'db_backup_last_failure_timestamp_seconds %s\\n' \"$$ts\" | curl -sS --data-binary @- http://pushgateway:9091/metrics/job/db_backup; fi; sleep 86400; done",
+        "while true; do ts=$$(date +%s); file=/backups/orl_$$(date +%F_%H%M%S).sql; if PGPASSWORD=$$(cat /run/secrets/postgres_password) pg_dump -h db -U ${POSTGRES_USER:-orl} ${POSTGRES_DB:-orl} > \"$$file\"; then size=$$(wc -c < \"$$file\" | tr -d ' '); printf 'db_backup_last_success_timestamp_seconds %s\\ndb_backup_last_size_bytes %s\\n' \"$$ts\" \"$$size\" | /bin/busybox wget -qO- --post-file=- http://pushgateway:9091/metrics/job/db_backup > /dev/null; else printf 'db_backup_last_failure_timestamp_seconds %s\\n' \"$$ts\" | /bin/busybox wget -qO- --post-file=- http://pushgateway:9091/metrics/job/db_backup > /dev/null; fi; sleep 86400; done",
       ]
     volumes:
       - db-backups:/backups
