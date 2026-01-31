@@ -28,4 +28,5 @@ GeneralManager emits structured events for logs, audits, and cache changes so yo
 
 - [Logging & Observability](logging.md): complete guide to logger names, configuration, and emitted fields.
 - [Permission audit logging](audit_logging.md): configure persistent trails for granted and denied permission checks.
+- [GraphQL metrics](graphql_metrics.md): enable request and resolver metrics for Prometheus/Grafana.
 - [Caching internals](../caching.md): understand how dependency tracking and invalidation signals keep cached resolvers fresh.
