@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime
+from types import SimpleNamespace
 
 from general_manager.interface.capabilities.orm import (
     OrmPersistenceSupportCapability,
@@ -286,6 +287,54 @@ class TestOrmHistoryCapability:
             )
 
             mock_history_manager.filter.assert_called_once()
+            assert result is mock_historical
+
+    def test_get_historical_record_falls_back_to_model_history(self):
+        """Test that get_historical_record can use the model history manager when the instance lacks one."""
+        capability = OrmHistoryCapability()
+
+        search_date = datetime.now()
+        mock_historical = Mock()
+
+        mock_history_qs = Mock()
+        mock_history_qs.order_by = Mock(return_value=mock_history_qs)
+        mock_history_qs.last = Mock(return_value=mock_historical)
+
+        mock_history_manager = Mock()
+        mock_history_manager.filter = Mock(return_value=mock_history_qs)
+
+        mock_meta = Mock()
+        mock_meta.pk = Mock()
+        mock_meta.pk.name = "customer_id"
+
+        mock_model = type(
+            "MockHistoryModel",
+            (),
+            {
+                "_meta": mock_meta,
+                "history": mock_history_manager,
+            },
+        )
+
+        interface_cls = Mock()
+        interface_cls._model = mock_model
+
+        instance = SimpleNamespace(pk=123)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.history.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_database_alias = Mock(return_value=None)
+            mock_get_support.return_value = mock_support
+
+            result = capability.get_historical_record(
+                interface_cls, instance, search_date
+            )
+
+            mock_history_manager.filter.assert_called_once_with(
+                customer_id=123, history_date__lte=search_date
+            )
             assert result is mock_historical
 
     def test_get_historical_record_by_pk_returns_none_without_search_date(self):

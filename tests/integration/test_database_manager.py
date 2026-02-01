@@ -334,6 +334,28 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(historical_view.name, "Historian")
 
+    def test_get_historical_record_after_delete_with_manager_lookup(self):
+        historical_human = self.TestHuman.create(
+            creator_id=self.User1.pk,
+            name="Historian",
+            ignore_permission=True,
+        )
+        human_id = historical_human.identification["id"]
+        snapshot = timezone.now()
+
+        historical_human.delete(
+            creator_id=self.User1.pk,
+            history_comment="cleanup",
+            ignore_permission=True,
+        )
+
+        with patch(
+            "django.utils.timezone.now", return_value=snapshot + timedelta(seconds=10)
+        ):
+            historical_view = self.TestHuman(id=human_id, search_date=snapshot)
+
+        self.assertEqual(historical_view.name, "Historian")
+
     def test_bucket_operations(self):
         """
         Verify many-to-many relationship bucket behavior: read bucket contents, add a related item through the bucket update, and confirm the forward and reverse relations reflect the change.

@@ -11,6 +11,7 @@ from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.utils.database_interface_protocols import (
     SupportsHistory,
+    SupportsHistoryQuery,
 )
 
 from .support import get_support_capability
@@ -41,16 +42,45 @@ class OrmHistoryCapability(BaseCapability):
         Returns:
             Any | None: The historical model instance that was current at `search_date`, or `None` if no matching historical record exists or the instance does not support history.
         """
-        if not isinstance(instance, SupportsHistory):
-            return None
-        history_manager = cast(SupportsHistory, instance).history
+        history_manager: SupportsHistoryQuery
+        pk_filter: dict[str, Any] | None = None
+        if isinstance(instance, SupportsHistory):
+            history_manager = cast(SupportsHistory, instance).history
+        else:
+            pk_value = None
+            if hasattr(instance, "pk"):
+                pk_value = instance.pk
+            elif hasattr(instance, "id"):
+                pk_value = instance.id
+            elif hasattr(instance, "identification"):
+                identification = getattr(instance, "identification", None)
+                if isinstance(identification, dict):
+                    pk_value = identification.get("id")
+            if pk_value is None:
+                return None
+            model = getattr(interface_cls, "_model", None)
+            if (
+                model is None
+                or not isinstance(model, type)
+                or not hasattr(model, "history")
+            ):
+                return None
+            pk_field = getattr(getattr(model, "_meta", None), "pk", None)
+            pk_name = getattr(pk_field, "name", "id")
+            if not isinstance(pk_name, str):
+                pk_name = "id"
+            pk_filter = {pk_name: pk_value}
+            history_manager = cast(SupportsHistory, model).history
         database_alias = get_support_capability(interface_cls).get_database_alias(
             interface_cls
         )
         if database_alias:
             history_manager = history_manager.using(database_alias)
+        filter_kwargs = {"history_date__lte": search_date}
+        if pk_filter is not None:
+            filter_kwargs.update(pk_filter)
         historical = (
-            cast(models.QuerySet, history_manager.filter(history_date__lte=search_date))
+            cast(models.QuerySet, history_manager.filter(**filter_kwargs))
             .order_by("history_date")
             .last()
         )
