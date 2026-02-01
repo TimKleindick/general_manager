@@ -11,6 +11,8 @@ from prometheus_client import CollectorRegistry, Counter, Histogram, push_to_gat
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "orl.settings")
 
+_logger = logging.getLogger(__name__)
+
 app = Celery("orl")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
@@ -22,7 +24,6 @@ try:
 except Exception:  # pragma: no cover - avoid startup failure if tasks are absent
     _logger.exception("Failed to import orl.tasks for Celery registration")
 
-_logger = logging.getLogger(__name__)
 _task_start_times: dict[str, float] = {}
 _task_lock = threading.Lock()
 

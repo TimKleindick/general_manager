@@ -7,5 +7,6 @@ if [ ! -f "$password_file" ]; then
   exit 1
 fi
 
-export DATA_SOURCE_NAME="postgresql://${POSTGRES_USER:-orl}:$(cat "$password_file")@db:5432/${POSTGRES_DB:-orl}?sslmode=disable"
+IFS= read -r password < "$password_file"
+export DATA_SOURCE_NAME="postgresql://${POSTGRES_USER:-orl}:$password@db:5432/${POSTGRES_DB:-orl}?sslmode=disable"
 exec /bin/postgres_exporter

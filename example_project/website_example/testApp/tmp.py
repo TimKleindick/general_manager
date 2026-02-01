@@ -1,10 +1,22 @@
 import os
 import sys
 from pathlib import Path
+
 import django
 
-project_root = Path(__file__).resolve().parents[2]
-sys.path.append(str(project_root / "website"))
+
+def _find_project_root(start: Path) -> Path:
+    for parent in (start, *start.parents):
+        if (parent / "website").is_dir():
+            return parent
+    raise RuntimeError(
+        f"Unable to locate 'website' directory searching from {start!s}"
+    )
+
+
+project_root = _find_project_root(Path(__file__).resolve())
+website_path = project_root / "website"
+sys.path.insert(0, str(website_path))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "website.settings")
 
 django.setup()

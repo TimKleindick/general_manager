@@ -18,6 +18,8 @@ class CrewPermissionTests(TestCase):
             managers=[JobRoleCatalog, ShipClassCatalog, ShipStatusCatalog]
         )
         self.role = JobRoleCatalog.filter(code="DM").first()
+        if self.role is None:
+            raise AssertionError("JobRoleCatalog data missing for DM")
         ship_class = ShipClassCatalog.filter(code="CC").first()
         ship_status = ShipStatusCatalog.filter(code="active").first()
         if ship_class is None or ship_status is None:

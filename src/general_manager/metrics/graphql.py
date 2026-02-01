@@ -258,8 +258,12 @@ def build_graphql_middleware() -> list[Any] | None:
     from graphene_django.settings import graphene_settings
 
     middleware: list[Any] = list(graphene_settings.MIDDLEWARE or [])
-    if graphql_metrics_resolver_timing_enabled():
-        middleware.append(GraphQLResolverTimingMiddleware)
+    if graphql_metrics_resolver_timing_enabled() and not any(
+        entry is GraphQLResolverTimingMiddleware
+        or isinstance(entry, GraphQLResolverTimingMiddleware)
+        for entry in middleware
+    ):
+        middleware.append(GraphQLResolverTimingMiddleware())
     return middleware
 
 

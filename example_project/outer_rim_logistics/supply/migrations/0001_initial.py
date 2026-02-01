@@ -92,7 +92,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 "verbose_name": "historical hazard class",
-                "verbose_name_plural": "historical hazard classs",
+                "verbose_name_plural": "historical hazard classes",
                 "ordering": ("-history_date", "-history_id"),
                 "get_latest_by": ("history_date", "history_id"),
             },
