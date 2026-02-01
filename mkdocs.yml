@@ -52,8 +52,7 @@ plugins:
           paths:
             - .
             - src
-          load_external_modules:
-            - docs.api._django_setup
+          load_external_modules: true
           options:
             show_source: false
             docstring_style: google
@@ -140,6 +139,7 @@ nav:
       - examples/audit_logger_custom.md
       - examples/existing_model_interface.md
       - examples/custom_capability_examples.md
+      - examples/startup_hooks.md
   - API-Reference:
       - api/core.md
       - api/measurement.md
@@ -151,3 +151,4 @@ nav:
       - adr/0002-capability-configuration.md
       - adr/0003-capability-overrides-via-settings.md
       - adr/0004-startup-hooks.md
+      - adr/0005-search-backend.md
