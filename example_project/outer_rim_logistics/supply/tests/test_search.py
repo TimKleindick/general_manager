@@ -15,6 +15,7 @@ class SearchIndexTests(TestCase):
             managers=[HazardClass, PartCatalog, VendorCatalog]
         )
         call_command("seed_outer_rim")
+        call_command("search_index", reindex=True)
 
     def test_global_search_returns_hits(self) -> None:
         backend = get_search_backend()

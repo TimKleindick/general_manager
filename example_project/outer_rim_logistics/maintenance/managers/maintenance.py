@@ -33,6 +33,7 @@ def _work_order_due_ok(order: "WorkOrder") -> bool:
         return True
     if order.opened_on is None:
         return True
+    # Higher severity implies more complex work, so we allow a longer window.
     severity_days = max(1, order.severity) * 7
     return order.due_by <= order.opened_on + timedelta(days=severity_days)
 

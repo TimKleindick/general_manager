@@ -12,7 +12,7 @@ from .schedule import MissionSchedule
 from general_manager.measurement import Measurement
 
 
-def _mission_as_of_values(ship: Module | None = None) -> list[date]:
+def _mission_as_of_values(ship: Ship | None = None) -> list[date]:
     schedules = list(MissionSchedule.all())
     if schedules:
         return [schedule.window_start for schedule in schedules]

@@ -5,23 +5,47 @@ from datetime import date
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from maintenance.managers import Module, ModuleSpec, Ship, WorkOrder
+from maintenance.managers import (
+    Module,
+    ModuleSpec,
+    Ship,
+    ShipClassCatalog,
+    ShipStatusCatalog,
+    WorkOrder,
+)
 from general_manager.utils.testing import run_registered_startup_hooks
 
 
 class RuleValidationTests(TestCase):
     def setUp(self) -> None:
         super().setUp()
-        run_registered_startup_hooks(managers=[ModuleSpec])
+        run_registered_startup_hooks(
+            managers=[ModuleSpec, ShipClassCatalog, ShipStatusCatalog]
+        )
         spec = ModuleSpec.all().first()
         if spec is None:
             raise AssertionError("ModuleSpec data missing")
+        ship_class = ShipClassCatalog.all().first()
+        if ship_class is None:
+            ship_class = ShipClassCatalog.create(
+                ignore_permission=True,
+                name="Test Frame",
+                code="TF",
+                description="Test ship class",
+            )
+        status = ShipStatusCatalog.all().first()
+        if status is None:
+            status = ShipStatusCatalog.create(
+                ignore_permission=True,
+                name="Active",
+                code="active",
+            )
         ship = Ship.create(
             ignore_permission=True,
             name="Test Runner",
             registry="ORL-TST",
-            ship_class="Test Frame",
-            status="active",
+            ship_class=ship_class,
+            status=status,
         )
         self.module = Module.create(
             ignore_permission=True,

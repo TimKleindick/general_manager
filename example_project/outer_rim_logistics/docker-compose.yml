@@ -37,7 +37,7 @@ services:
       DJANGO_CSRF_TRUSTED_ORIGINS: "https://localhost:${ORL_HTTPS_PORT:-8443}"
       GENERAL_MANAGER_GRAPHQL_METRICS_ENABLED: "true"
       GENERAL_MANAGER_GRAPHQL_METRICS_BACKEND: "prometheus"
-      GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING: "true"
+      GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING: "false"
     user: "1000:1000"
     volumes:
       - ./logs:/var/log/outer-rim
@@ -154,7 +154,7 @@ services:
       MEILI_EXPERIMENTAL_METRICS: "true"
       MEILI_EXPERIMENTAL_ENABLE_METRICS: "true"
     volumes:
-      - orl-meili:/meili_data
+      - orl-meili-1-34-3:/meili_data
     user: "1000:1000"
     depends_on:
       meili-init:
@@ -163,7 +163,11 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:7700/health > /dev/null"]
+      test:
+        [
+          "CMD-SHELL",
+          "/bin/busybox wget -qO- --header=\"X-Meili-API-Key: $${MEILI_MASTER_KEY}\" http://localhost:7700/health > /dev/null",
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -418,7 +422,7 @@ services:
     image: alpine:3.19
     command: ["sh", "-c", "chown -R 1000:1000 /meili_data"]
     volumes:
-      - orl-meili:/meili_data
+      - orl-meili-1-34-3:/meili_data
     restart: "no"
     networks:
       - backend
@@ -513,7 +517,7 @@ services:
 
 volumes:
   orl-postgres:
-  orl-meili:
+  orl-meili-1-34-3:
   grafana-data:
   prometheus-data:
   orl-static:
