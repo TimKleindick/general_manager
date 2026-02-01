@@ -337,6 +337,118 @@ class TestOrmHistoryCapability:
             )
             assert result is mock_historical
 
+    def test_get_historical_record_falls_back_to_id_attribute(self):
+        """Test fallback to instance.id with database alias support."""
+        capability = OrmHistoryCapability()
+
+        search_date = datetime.now()
+        mock_historical = Mock()
+
+        mock_history_qs = Mock()
+        mock_history_qs.order_by = Mock(return_value=mock_history_qs)
+        mock_history_qs.last = Mock(return_value=mock_historical)
+
+        mock_history_manager = Mock()
+        mock_using_manager = Mock()
+        mock_using_manager.filter = Mock(return_value=mock_history_qs)
+        mock_history_manager.using = Mock(return_value=mock_using_manager)
+
+        mock_meta = Mock()
+        mock_meta.pk = Mock()
+        mock_meta.pk.name = "id"
+
+        mock_model = type(
+            "MockHistoryModel",
+            (),
+            {
+                "_meta": mock_meta,
+                "history": mock_history_manager,
+            },
+        )
+
+        interface_cls = Mock()
+        interface_cls._model = mock_model
+
+        instance = SimpleNamespace(id=5)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.history.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_database_alias = Mock(return_value="replica")
+            mock_get_support.return_value = mock_support
+
+            result = capability.get_historical_record(
+                interface_cls, instance, search_date
+            )
+
+            mock_history_manager.using.assert_called_once_with("replica")
+            mock_using_manager.filter.assert_called_once_with(
+                id=5, history_date__lte=search_date
+            )
+            assert result is mock_historical
+
+    def test_get_historical_record_falls_back_to_identification_dict(self):
+        """Test fallback to identification dict and default id field name."""
+        capability = OrmHistoryCapability()
+
+        search_date = datetime.now()
+        mock_historical = Mock()
+
+        mock_history_qs = Mock()
+        mock_history_qs.order_by = Mock(return_value=mock_history_qs)
+        mock_history_qs.last = Mock(return_value=mock_historical)
+
+        mock_history_manager = Mock()
+        mock_history_manager.filter = Mock(return_value=mock_history_qs)
+
+        mock_meta = Mock()
+        mock_meta.pk = Mock()
+        mock_meta.pk.name = 123
+
+        mock_model = type(
+            "MockHistoryModel",
+            (),
+            {
+                "_meta": mock_meta,
+                "history": mock_history_manager,
+            },
+        )
+
+        interface_cls = Mock()
+        interface_cls._model = mock_model
+
+        instance = SimpleNamespace(identification={"id": 7})
+
+        with patch(
+            "general_manager.interface.capabilities.orm.history.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_database_alias = Mock(return_value=None)
+            mock_get_support.return_value = mock_support
+
+            result = capability.get_historical_record(
+                interface_cls, instance, search_date
+            )
+
+            mock_history_manager.filter.assert_called_once_with(
+                id=7, history_date__lte=search_date
+            )
+            assert result is mock_historical
+
+    def test_get_historical_record_returns_none_without_identifier(self):
+        """Test that get_historical_record returns None when no identifier is present."""
+        capability = OrmHistoryCapability()
+
+        interface_cls = Mock()
+        instance = SimpleNamespace()
+
+        result = capability.get_historical_record(
+            interface_cls, instance, datetime.now()
+        )
+
+        assert result is None
+
     def test_get_historical_record_by_pk_returns_none_without_search_date(self):
         """Test that get_historical_record_by_pk returns None without search_date."""
         capability = OrmHistoryCapability()
@@ -381,6 +493,45 @@ class TestOrmHistoryCapability:
 
             mock_history_manager.filter.assert_called_once_with(
                 id=123, history_date__lte=search_date
+            )
+            assert result is mock_historical
+
+    def test_get_historical_record_by_pk_uses_database_alias(self):
+        """Test that get_historical_record_by_pk applies database alias when provided."""
+        capability = OrmHistoryCapability()
+
+        search_date = datetime.now()
+        mock_historical = Mock()
+
+        mock_history_qs = Mock()
+        mock_history_qs.order_by = Mock(return_value=mock_history_qs)
+        mock_history_qs.last = Mock(return_value=mock_historical)
+
+        mock_history_manager = Mock()
+        mock_using_manager = Mock()
+        mock_using_manager.filter = Mock(return_value=mock_history_qs)
+        mock_history_manager.using = Mock(return_value=mock_using_manager)
+
+        mock_model = Mock()
+        mock_model.history = mock_history_manager
+
+        interface_cls = Mock()
+        interface_cls._model = mock_model
+
+        with patch(
+            "general_manager.interface.capabilities.orm.history.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_database_alias = Mock(return_value="replica")
+            mock_get_support.return_value = mock_support
+
+            result = capability.get_historical_record_by_pk(
+                interface_cls, 42, search_date
+            )
+
+            mock_history_manager.using.assert_called_once_with("replica")
+            mock_using_manager.filter.assert_called_once_with(
+                id=42, history_date__lte=search_date
             )
             assert result is mock_historical
 
