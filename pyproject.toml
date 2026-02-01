@@ -126,7 +126,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["E402"]
 "**/conftest.py" = ["E402"]
-"example_project/manage.py" = ["TRY003"]
+"example_project/website_example/manage.py" = ["TRY003"]
 "example_project/**/migrations/*.py" = ["RUF012"]
 
 [tool.ruff.format]
