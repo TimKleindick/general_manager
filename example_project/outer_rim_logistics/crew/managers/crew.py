@@ -15,6 +15,7 @@ from django.db.models import (
 )
 
 from general_manager import FieldConfig, IndexConfig
+from factory.declarations import LazyAttribute, LazyFunction
 from general_manager.factory import (
     lazy_boolean,
     lazy_choice,
@@ -27,6 +28,13 @@ from general_manager.interface import DatabaseInterface, ReadOnlyInterface
 from general_manager.manager import GeneralManager
 from general_manager.permission import ManagerBasedPermission, register_permission
 from general_manager.rule import Rule
+from orl.factory_utils import (
+    random_clearance_level,
+    random_medical_hold,
+    random_optional_module_for_ship,
+    random_role,
+    random_ship,
+)
 
 
 @register_permission("isCommander")
@@ -157,9 +165,18 @@ class CrewMember(GeneralManager):
         class Factory:
             name = lazy_faker_name()
             rank = lazy_choice(["Lieutenant", "Commander", "Chief", "Specialist"])
-            clearance_level = lazy_integer(1, 5)
+            role = LazyFunction(random_role)
+            clearance_level = LazyAttribute(
+                lambda obj: random_clearance_level(obj.role.clearance_level)
+            )
+            ship = LazyFunction(random_ship)
+            assigned_module = LazyAttribute(
+                lambda obj: random_optional_module_for_ship(obj.ship, 0.6)
+            )
             on_duty = lazy_boolean(0.8)
-            medical_hold = lazy_boolean(0.1)
+            medical_hold = LazyAttribute(
+                lambda obj: random_medical_hold(obj.on_duty, 0.1)
+            )
             last_medical_check = lazy_date_between(
                 date(2222, 1, 1), date(2222, 12, 31)
             )

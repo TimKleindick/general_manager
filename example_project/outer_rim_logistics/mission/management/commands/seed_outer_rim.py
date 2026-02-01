@@ -151,15 +151,29 @@ class Command(BaseCommand):
         ships = list(Ship.all())
         if not roles or not ships:
             return
+        modules_by_ship: dict[str, list[Module]] = {}
+        for module in modules:
+            modules_by_ship.setdefault(module.ship.identification["id"], []).append(
+                module
+            )
+        for ship_modules in modules_by_ship.values():
+            ship_modules.sort(key=lambda module: module.name)
+        def _module_for_ship(ship: Ship, index: int) -> Optional[Module]:
+            ship_modules = modules_by_ship.get(ship.identification["id"], [])
+            if not ship_modules:
+                return None
+            return ship_modules[index % len(ship_modules)]
         existing_names = {member.name for member in CrewMember.all()}
+        primary_ship = ships[0]
+        secondary_ship = ships[1] if len(ships) > 1 else ships[0]
         roster = [
             {
                 "name": "Aren Voss",
                 "rank": "Commander",
                 "role": roles.get("FC"),
                 "clearance_level": 5,
-                "ship": ships[0],
-                "assigned_module": modules[0] if modules else None,
+                "ship": primary_ship,
+                "assigned_module": _module_for_ship(primary_ship, 0),
                 "on_duty": True,
                 "medical_hold": False,
                 "last_medical_check": date(2222, 6, 14),
@@ -170,8 +184,8 @@ class Command(BaseCommand):
                 "rank": "Chief",
                 "role": roles.get("CE"),
                 "clearance_level": 4,
-                "ship": ships[0],
-                "assigned_module": modules[1] if len(modules) > 1 else None,
+                "ship": primary_ship,
+                "assigned_module": _module_for_ship(primary_ship, 1),
                 "on_duty": True,
                 "medical_hold": False,
                 "last_medical_check": date(2222, 5, 2),
@@ -182,8 +196,8 @@ class Command(BaseCommand):
                 "rank": "Lieutenant",
                 "role": roles.get("QM"),
                 "clearance_level": 3,
-                "ship": ships[1] if len(ships) > 1 else ships[0],
-                "assigned_module": modules[2] if len(modules) > 2 else None,
+                "ship": secondary_ship,
+                "assigned_module": _module_for_ship(secondary_ship, 2),
                 "on_duty": True,
                 "medical_hold": False,
                 "last_medical_check": date(2222, 3, 18),
@@ -194,8 +208,8 @@ class Command(BaseCommand):
                 "rank": "Specialist",
                 "role": roles.get("SO"),
                 "clearance_level": 4,
-                "ship": ships[0],
-                "assigned_module": modules[0] if modules else None,
+                "ship": primary_ship,
+                "assigned_module": _module_for_ship(primary_ship, 0),
                 "on_duty": False,
                 "medical_hold": True,
                 "last_medical_check": date(2222, 7, 3),
@@ -246,11 +260,6 @@ class Command(BaseCommand):
         ]
         rank_cycle = ["Lieutenant", "Commander", "Chief", "Specialist", "Ensign"]
         role_list = [role for role in roles.values()]
-        modules_by_ship = {}
-        for module in modules:
-            modules_by_ship.setdefault(module.ship.identification["id"], []).append(
-                module
-            )
         for idx in range(target_crew - crew_count):
             ship = ships[idx % len(ships)]
             role = role_list[idx % len(role_list)]

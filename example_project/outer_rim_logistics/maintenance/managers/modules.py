@@ -11,12 +11,25 @@ from django.db.models import (
     SET_NULL,
 )
 
+from factory.declarations import LazyAttribute, LazyAttributeSequence, LazyFunction
 from general_manager import FieldConfig, IndexConfig
+from general_manager.factory import (
+    lazy_choice,
+    lazy_integer,
+    lazy_measurement,
+    lazy_project_name,
+)
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission import ManagerBasedPermission
 from general_manager.rule import Rule
+from orl.factory_utils import (
+    random_module_spec,
+    random_ship,
+    random_ship_class,
+    random_ship_status,
+)
 
 
 class ModuleSpec(GeneralManager):
@@ -114,6 +127,12 @@ class Ship(GeneralManager):
         ship_class = ForeignKey("maintenance.ShipClassCatalog", on_delete=CASCADE)
         status = ForeignKey("maintenance.ShipStatusCatalog", on_delete=CASCADE)
 
+        class Factory:
+            name = lazy_project_name()
+            registry = LazyAttributeSequence(lambda _obj, idx: f"ORL-{9000 + idx}")
+            ship_class = LazyFunction(random_ship_class)
+            status = LazyFunction(random_ship_status)
+
     class Permission(ManagerBasedPermission):
         __read__ = ["public"]
         __create__ = ["isCommander"]
@@ -168,6 +187,23 @@ class Module(GeneralManager):
                     lambda x: x.oxygen_reserve >= "50 kg"
                 ),
             ]
+
+        class Factory:
+            name = LazyAttributeSequence(lambda _obj, idx: f"ORL-MOD-{1000 + idx}")
+            ship = LazyFunction(random_ship)
+            spec = LazyFunction(random_module_spec)
+            status = lazy_choice(["operational", "maintenance", "offline"])
+            life_support_uptime = lazy_integer(80, 99)
+            oxygen_reserve = lazy_measurement(60, 180, "kg")
+            battery_capacity = lazy_measurement(320, 680, "kWh")
+            hazard_limit = LazyAttribute(lambda obj: obj.spec.hazard_limit)
+            notes = lazy_choice(
+                [
+                    "Outer Rim Logistics operational module",
+                    "Routine inspection pending",
+                    "Emergency systems verified",
+                ]
+            )
 
     class Permission(ManagerBasedPermission):
         __read__ = ["public"]
