@@ -14,6 +14,7 @@ from django.db.models import (
 )
 
 from general_manager import FieldConfig, IndexConfig
+from factory.declarations import LazyFunction
 from general_manager.factory import (
     lazy_boolean,
     lazy_choice,
@@ -27,6 +28,11 @@ from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission import ManagerBasedPermission
 from general_manager.rule import Rule
+from orl.factory_utils import (
+    random_module,
+    random_part,
+    random_vendor,
+)
 
 
 class InventoryItem(GeneralManager):
@@ -61,7 +67,9 @@ class InventoryItem(GeneralManager):
 
         class Factory:
             serial = lazy_sequence(start=1000, step=7)
+            part = LazyFunction(random_part)
             quantity = lazy_integer(0, 200)
+            location = LazyFunction(lambda: random_module())
             received_on = lazy_date_between(date(2222, 1, 1), date(2222, 12, 31))
             expires_on = lazy_date_between(date(2223, 1, 1), date(2224, 12, 31))
             reserved = lazy_boolean(0.2)
@@ -122,7 +130,9 @@ class CargoManifest(GeneralManager):
 
         class Factory:
             tracking_code = lazy_sequence(start=5000, step=11)
+            vendor = LazyFunction(random_vendor)
             eta_date = lazy_date_between(date(2222, 1, 1), date(2223, 12, 31))
+            destination_module = LazyFunction(lambda: random_module())
             status = lazy_choice(["enroute", "docked", "delayed", "unloading"])
             priority = lazy_boolean(0.25)
             total_mass = lazy_measurement(800, 2400, "kg")

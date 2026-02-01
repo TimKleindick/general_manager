@@ -13,6 +13,7 @@ from django.db.models import (
     SET_NULL,
 )
 
+from factory.declarations import LazyAttribute, LazyFunction
 from general_manager.factory import (
     lazy_boolean,
     lazy_choice,
@@ -24,6 +25,7 @@ from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.permission import ManagerBasedPermission
 from general_manager.rule import Rule
+from orl.factory_utils import random_crew_member, random_due_by, random_module
 
 
 def _work_order_due_ok(order: "WorkOrder") -> bool:
@@ -69,10 +71,12 @@ class WorkOrder(GeneralManager):
 
         class Factory:
             title = lazy_faker_sentence(5)
+            module = LazyFunction(random_module)
+            assigned_to = LazyFunction(lambda: random_crew_member())
             severity = lazy_integer(1, 5)
             status = lazy_choice(["open", "in_progress", "blocked", "closed"])
             opened_on = lazy_date_between(date(2222, 1, 1), date(2222, 12, 31))
-            due_by = lazy_date_between(date(2222, 1, 1), date(2223, 6, 1))
+            due_by = LazyAttribute(lambda obj: random_due_by(obj.opened_on, obj.severity))
             requires_eva = lazy_boolean(0.15)
 
     class Permission(ManagerBasedPermission):
@@ -104,6 +108,7 @@ class IncidentReport(GeneralManager):
             ]
 
         class Factory:
+            module = LazyFunction(random_module)
             severity = lazy_integer(1, 5)
             occurred_on = lazy_date_between(date(2222, 1, 1), date(2222, 12, 31))
             resolved = lazy_boolean(0.4)
