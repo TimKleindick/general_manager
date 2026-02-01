@@ -14,6 +14,7 @@ COPY --from=busybox /lib /lib
 
 SHELL ["/bin/busybox", "sh", "-c"]
 
+# shellcheck shell=sh
 RUN mkdir -p /meili_data \
     && chown -R 1000:1000 /meili_data
 

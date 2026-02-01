@@ -76,7 +76,8 @@ def _celery_task_prerun(task_id: str, **_kwargs) -> None:
 
 
 @task_success.connect
-def _celery_task_success(sender=None, task_id: str | None = None, **_kwargs) -> None:
+def _celery_task_success(sender=None, **_kwargs) -> None:
+    task_id = getattr(getattr(sender, "request", None), "id", None)
     if task_id is None:
         return
     with _task_lock:
@@ -95,7 +96,8 @@ def _celery_task_success(sender=None, task_id: str | None = None, **_kwargs) -> 
 
 
 @task_failure.connect
-def _celery_task_failure(sender=None, task_id: str | None = None, **_kwargs) -> None:
+def _celery_task_failure(sender=None, **_kwargs) -> None:
+    task_id = getattr(getattr(sender, "request", None), "id", None)
     if task_id is None:
         return
     with _task_lock:

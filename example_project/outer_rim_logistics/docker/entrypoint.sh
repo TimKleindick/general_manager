@@ -33,6 +33,8 @@ if postgres_host:
 meili_url = os.environ.get("MEILISEARCH_URL")
 if meili_url:
     parsed = urlparse(meili_url)
+    if not parsed.scheme:
+        parsed = urlparse(f"//{meili_url}")
     host = parsed.hostname or "meilisearch"
     port = parsed.port or 7700
     wait_for(host, port, "Meilisearch")
