@@ -478,7 +478,7 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
             expected_type=OrmHistoryCapability,
         )
         res = handler.get_historical_record(PersonInterface, dummy, None)
-        mock.filter.assert_called_once_with(history_date__lte=None)
+        mock.filter.assert_called_once_with()
         history_qs.order_by.assert_called_once_with("history_date")
         self.assertIsNone(res)
 

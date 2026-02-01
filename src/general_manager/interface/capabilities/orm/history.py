@@ -76,7 +76,9 @@ class OrmHistoryCapability(BaseCapability):
         )
         if database_alias:
             history_manager = history_manager.using(database_alias)
-        filter_kwargs = {"history_date__lte": search_date}
+        filter_kwargs: dict[str, Any] = {}
+        if search_date is not None:
+            filter_kwargs["history_date__lte"] = search_date
         if pk_filter is not None:
             filter_kwargs.update(pk_filter)
         historical = (
