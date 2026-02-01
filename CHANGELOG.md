@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.27.1 (2026-02-01)
+
+### Bug Fixes
+
+- Enhance test coverage
+  ([`b3ec343`](https://github.com/TimKleindick/general_manager/commit/b3ec3432c1127cad0e4125adaa80e46481a9f23f))
+
+- Handle None search_date in OrmHistoryCapability filter
+  ([`ef1f4ac`](https://github.com/TimKleindick/general_manager/commit/ef1f4ac5a5de7de80d3e4d204f958bb8a87b1a8f))
+
+- Historical record retrieval in OrmHistoryCapability and add comprehensive tests
+  ([`0f81cd8`](https://github.com/TimKleindick/general_manager/commit/0f81cd891a09300fec3ce141c45c0d58bb7aa007))
+
+### Documentation
+
+- Improved search tutorial & documentation
+  ([`be49ae9`](https://github.com/TimKleindick/general_manager/commit/be49ae92e36ce49b48f9222dd1765b0b3b852ffb))
+
+- Update Meilisearch version in search tutorial to v1.34.0
+  ([`d74ecb5`](https://github.com/TimKleindick/general_manager/commit/d74ecb5b25e131715d9f365c8b37f07ebeb762f6))
+
+
 ## v0.27.0 (2026-01-25)
 
 ### Bug Fixes
