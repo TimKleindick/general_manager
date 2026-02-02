@@ -74,6 +74,7 @@ services:
   nginx:
     security_opt:
       - no-new-privileges:true
+    hostname: nginx
     build:
       context: .
       dockerfile: docker/nginx.Dockerfile
@@ -87,6 +88,8 @@ services:
       - ./docker/nginx-entrypoint.sh:/etc/nginx/nginx-entrypoint.sh:ro
       - ./logs:/var/log/outer-rim
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       web:
         condition: service_healthy
     cap_add:
@@ -111,8 +114,10 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - frontend
-      - backend
+      frontend:
+      backend:
+        aliases:
+          - nginx
 
   db:
     image: postgres:16-alpine
@@ -193,6 +198,7 @@ services:
     build:
       context: .
       dockerfile: docker/prometheus.Dockerfile
+    entrypoint: ["/bin/sh", "/etc/prometheus/prometheus-entrypoint.sh"]
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--web.route-prefix=/prometheus"
@@ -200,7 +206,12 @@ services:
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./docker/prometheus-rules.yml:/etc/prometheus/rules.yml:ro
+      - ./docker/certs:/etc/prometheus/certs:ro
+      - ./docker/prometheus-entrypoint.sh:/etc/prometheus/prometheus-entrypoint.sh:ro
       - prometheus-data:/prometheus
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
     secrets:
       - meilisearch_api_key
     read_only: true
@@ -392,7 +403,7 @@ services:
     build:
       context: ../../
       dockerfile: example_project/outer_rim_logistics/Dockerfile
-    entrypoint: ""
+    entrypoint: ["/bin/sh", "/app/example_project/outer_rim_logistics/docker/entrypoint-celery.sh"]
     command: celery -A orl worker -l info
     user: "1000:1000"
     environment:
@@ -440,6 +451,23 @@ services:
     command: ["sh", "-c", "chown -R 1000:1000 /meili_data"]
     volumes:
       - orl-meili-1-34-3:/meili_data
+    restart: "no"
+    networks:
+      - backend
+
+  cert-init:
+    build:
+      context: .
+      dockerfile: docker/nginx.Dockerfile
+    command:
+      [
+        "sh",
+        "-c",
+        "if [ ! -f /certs/tls.crt ] || [ ! -f /certs/tls.key ]; then openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /certs/tls.key -out /certs/tls.crt -subj \"/CN=localhost\" -config /tmp/openssl.cnf -extensions v3_req; else echo \"TLS certs already exist\"; fi",
+      ]
+    volumes:
+      - ./docker/certs:/certs
+      - ./docker/certs/openssl.cnf:/tmp/openssl.cnf:ro
     restart: "no"
     networks:
       - backend

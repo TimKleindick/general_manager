@@ -5,7 +5,7 @@ from django.apps import AppConfig
 
 class MaintenanceConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
-    name = "maintenance"
+    name = "outer_rim_logistics.maintenance"
 
     def ready(self) -> None:
-        from . import managers  # noqa: F401
+        from . import managers  # import triggers manager registration

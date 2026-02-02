@@ -24,7 +24,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && pip install -e /app/example_project/outer_rim_logistics[redis]
 
 WORKDIR /app/example_project/outer_rim_logistics
-RUN chmod +x /app/example_project/outer_rim_logistics/docker/entrypoint.sh
+RUN chmod +x /app/example_project/outer_rim_logistics/docker/entrypoint.sh \
+    /app/example_project/outer_rim_logistics/docker/entrypoint-celery.sh
 
 EXPOSE 8000
 

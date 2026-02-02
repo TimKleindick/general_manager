@@ -5,9 +5,9 @@ from datetime import date, timedelta
 from general_manager.interface import CalculationInterface
 from general_manager.manager import GeneralManager, Input, graph_ql_property
 
-from crew.managers import CrewMember, JobRoleCatalog
-from maintenance.managers import IncidentReport, Module, Ship, WorkOrder
-from supply.managers import CargoManifest, InventoryItem, PartCatalog
+from outer_rim_logistics.crew.managers import CrewMember, JobRoleCatalog
+from outer_rim_logistics.maintenance.managers import IncidentReport, Module, Ship, WorkOrder
+from outer_rim_logistics.supply.managers import CargoManifest, InventoryItem, PartCatalog
 from .schedule import MissionSchedule
 from general_manager.measurement import Measurement
 

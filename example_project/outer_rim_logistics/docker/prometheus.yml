@@ -14,7 +14,7 @@ scrape_configs:
     scheme: https
     metrics_path: "/metrics/"
     tls_config:
-      insecure_skip_verify: true
+      ca_file: /etc/prometheus/certs/tls.crt
     static_configs:
       - targets: ["nginx:443"]
   - job_name: "meilisearch"

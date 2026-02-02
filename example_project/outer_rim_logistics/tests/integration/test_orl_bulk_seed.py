@@ -4,8 +4,8 @@ from django.core.management import call_command
 
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
-from crew.managers import CrewMember, JobRoleCatalog
-from maintenance.managers import (
+from outer_rim_logistics.crew.managers import CrewMember, JobRoleCatalog
+from outer_rim_logistics.maintenance.managers import (
     IncidentReport,
     Module,
     ModuleSpec,
@@ -14,8 +14,23 @@ from maintenance.managers import (
     ShipStatusCatalog,
     WorkOrder,
 )
-from mission.managers import MissionSchedule
-from supply.managers import (
+from outer_rim_logistics.mission.managers import (
+    CrewFatigue,
+    CrewReadiness,
+    InventoryHealth,
+    MissionReadiness,
+    MissionSchedule,
+    ModuleHealth,
+    OxygenBurnRate,
+    ResupplyWindowRisk,
+    ScheduleFeasibility,
+    ShipCrewLoad,
+    ShipInventoryCoverage,
+    ShipMaintenanceBacklog,
+    ShipOxygenReserve,
+    ShipReadiness,
+)
+from outer_rim_logistics.supply.managers import (
     CargoManifest,
     HazardClass,
     InventoryItem,
@@ -44,6 +59,19 @@ class TestORLBulkSeed(GeneralManagerTransactionTestCase):
             WorkOrder,
             IncidentReport,
             MissionSchedule,
+            CrewReadiness,
+            InventoryHealth,
+            ModuleHealth,
+            ScheduleFeasibility,
+            MissionReadiness,
+            CrewFatigue,
+            OxygenBurnRate,
+            ResupplyWindowRisk,
+            ShipCrewLoad,
+            ShipInventoryCoverage,
+            ShipMaintenanceBacklog,
+            ShipOxygenReserve,
+            ShipReadiness,
         ]
 
     def test_bulk_seed_command_creates_targets(self) -> None:

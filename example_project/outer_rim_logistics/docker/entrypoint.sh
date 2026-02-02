@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+log_dir="${LOG_DIR:-/app/example_project/outer_rim_logistics/logs}"
+mkdir -p "$log_dir"
+
 python - <<'PY'
 import os
 import socket
