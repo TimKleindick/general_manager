@@ -17,10 +17,25 @@
   "panels": [
     {
       "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
       "targets": [
         {
           "expr": "sum by (status) (rate(graphql_requests_total[5m]))",
@@ -33,10 +48,25 @@
     },
     {
       "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "id": 2,
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le) (rate(graphql_request_duration_seconds_bucket[5m])))",
@@ -49,10 +79,25 @@
     },
     {
       "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 7},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "errors/s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
       "id": 3,
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
       "targets": [
         {
           "expr": "sum by (code) (rate(graphql_errors_total[5m]))",
@@ -65,10 +110,25 @@
     },
     {
       "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 7},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
       "id": 4,
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
       "targets": [
         {
           "expr": "topk(5, sum by (operation_name) (rate(graphql_requests_total[5m])))",
@@ -81,10 +141,25 @@
     },
     {
       "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 14},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
       "id": 5,
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, field_name) (rate(graphql_resolver_duration_seconds_bucket[5m])))",
@@ -99,9 +174,17 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["outer-rim", "graphql"],
-  "templating": {"list": []},
-  "time": {"from": "now-1h", "to": "now"},
+  "tags": [
+    "outer-rim",
+    "graphql"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timezone": "",
   "title": "ORL GraphQL",
   "uid": "orl-graphql",

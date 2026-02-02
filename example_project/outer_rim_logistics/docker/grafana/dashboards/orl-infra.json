@@ -31,7 +31,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "bool"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -63,7 +65,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "bool"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -95,7 +99,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "bool"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -140,7 +146,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "connections"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -169,7 +177,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "bytes"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -198,7 +208,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "ms"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -227,7 +239,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "ms/s"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -256,7 +270,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "percentunit"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -285,7 +301,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "locks"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -314,7 +332,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -343,7 +363,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "connections"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -421,7 +443,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "clients"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -450,7 +474,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "percentunit"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -479,7 +505,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "keys/s"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -521,7 +549,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "req/s"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -550,7 +580,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "connections"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -592,7 +624,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "series"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -634,7 +668,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "tasks"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -680,7 +716,8 @@
                 "value": 10
               }
             ]
-          }
+          },
+          "unit": "tasks"
         },
         "overrides": []
       },
@@ -710,7 +747,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "workers"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -739,7 +778,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "processes"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -768,7 +809,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "s"
+        },
         "overrides": []
       },
       "gridPos": {
@@ -797,7 +840,9 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "failures/s"
+        },
         "overrides": []
       },
       "gridPos": {

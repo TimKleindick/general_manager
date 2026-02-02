@@ -17,35 +17,69 @@
   "panels": [
     {
       "datasource": "Loki",
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logs/5m"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
-        "legend": {"displayMode": "list", "placement": "bottom"},
-        "tooltip": {"mode": "single"}
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
       },
       "targets": [
-        {"expr": "sum by (job) (count_over_time({job=~\"orl|nginx\"}[5m]))", "refId": "A"}
+        {
+          "expr": "sum by (job) (count_over_time({job=~\"orl|nginx\"}[5m]))",
+          "refId": "A"
+        }
       ],
       "title": "Log Volume (last 5m)",
       "type": "timeseries"
     },
     {
       "datasource": "Loki",
-      "gridPos": {"h": 12, "w": 12, "x": 0, "y": 8},
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "id": 2,
       "targets": [
-        {"expr": "{job=\"orl\"}", "refId": "A"}
+        {
+          "expr": "{job=\"orl\"}",
+          "refId": "A"
+        }
       ],
       "title": "App Logs",
       "type": "logs"
     },
     {
       "datasource": "Loki",
-      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 8},
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "id": 3,
       "targets": [
-        {"expr": "{job=\"nginx\"}", "refId": "A"}
+        {
+          "expr": "{job=\"nginx\"}",
+          "refId": "A"
+        }
       ],
       "title": "Nginx Logs",
       "type": "logs"
@@ -54,9 +88,17 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["outer-rim", "logs"],
-  "templating": {"list": []},
-  "time": {"from": "now-1h", "to": "now"},
+  "tags": [
+    "outer-rim",
+    "logs"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timezone": "",
   "title": "ORL Logs",
   "uid": "orl-logs",

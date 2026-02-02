@@ -159,6 +159,9 @@ def ensure_log_dir_exists() -> None:
         return
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+
+ensure_log_dir_exists()
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
