@@ -27,6 +27,15 @@ def _ship_values() -> list[Ship]:
     return list(Ship.all())
 
 
+def _select_schedule(schedules: list[MissionSchedule]) -> MissionSchedule:
+    schedules_sorted = sorted(schedules, key=lambda schedule: schedule.window_start)
+    today = date.today()
+    for schedule in schedules_sorted:
+        if schedule.window_start >= today:
+            return schedule
+    return schedules_sorted[0]
+
+
 class CrewReadiness(GeneralManager):
     as_of: date
     ship: Ship | None
@@ -142,7 +151,7 @@ class ScheduleFeasibility(GeneralManager):
         schedules = list(MissionSchedule.all())
         if not schedules:
             return Measurement(0, "percent")
-        schedule = schedules[0]
+        schedule = _select_schedule(schedules)
         window_days = (schedule.window_start - date.today()).days
         window_penalty = min(20, max(0, -window_days))
         resupply_risk = 0
@@ -226,7 +235,7 @@ class ResupplyWindowRisk(GeneralManager):
         manifests = list(manifests_query)
         if not schedules or not manifests:
             return Measurement(0, "percent")
-        schedule = schedules[0]
+        schedule = _select_schedule(schedules)
         lateness = sum(
             1 for manifest in manifests if manifest.eta_date > schedule.window_end
         )

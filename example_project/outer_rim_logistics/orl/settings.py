@@ -152,7 +152,12 @@ else:
     }
 
 LOG_DIR = Path(_env("LOG_DIR", str(BASE_DIR / "logs")))
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_log_dir_exists() -> None:
+    if LOG_DIR.exists():
+        return
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOGGING = {
     "version": 1,

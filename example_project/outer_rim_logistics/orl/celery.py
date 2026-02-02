@@ -33,6 +33,11 @@ _pushgateway_enabled = os.environ.get("CELERY_PUSHGATEWAY_ENABLED", "true").lowe
     "true",
     "yes",
 }
+_pushgateway_timeout_raw = os.environ.get("CELERY_PUSHGATEWAY_TIMEOUT", "5")
+try:
+    _pushgateway_timeout = float(_pushgateway_timeout_raw)
+except ValueError:
+    _pushgateway_timeout = 5.0
 
 _celery_registry = CollectorRegistry()
 _celery_task_duration = Histogram(
@@ -64,6 +69,7 @@ def _record_task_metrics(*, task_name: str, status: str, duration: float, worker
             job="celery_tasks",
             registry=_celery_registry,
             grouping_key={"worker": worker},
+            timeout=_pushgateway_timeout,
         )
     except Exception:  # pragma: no cover - avoid task failures on metrics push
         _logger.exception("Failed to push Celery metrics to Pushgateway")

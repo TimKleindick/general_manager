@@ -28,6 +28,7 @@ from supply.managers import (
 class TestORLFactories(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        super().setUpClass()
         cls.general_manager_classes = [
             HazardClass,
             VendorCatalog,
