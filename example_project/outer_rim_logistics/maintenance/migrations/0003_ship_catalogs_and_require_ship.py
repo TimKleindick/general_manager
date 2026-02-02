@@ -21,9 +21,8 @@ def _seed_ship_catalogs(apps, _schema_editor):
     }
     status_map = {
         "active": "active",
-        "Active": "active",
-        "Docked": "docked",
-        "Maintenance": "maintenance",
+        "docked": "docked",
+        "maintenance": "maintenance",
     }
 
     for name, code in class_map.items():
@@ -47,7 +46,9 @@ def _seed_ship_catalogs(apps, _schema_editor):
                 next(iter(class_lookup.values())),
             )
         if ship.status_ref_id is None:
-            status_key = status_map.get(getattr(ship, "status", ""), "active")
+            raw_status = getattr(ship, "status", "")
+            normalized_status = raw_status.lower() if isinstance(raw_status, str) else ""
+            status_key = status_map.get(normalized_status, "active")
             ship.status_ref = status_lookup.get(
                 status_key, next(iter(status_lookup.values()))
             )

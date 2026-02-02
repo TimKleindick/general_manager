@@ -20,5 +20,5 @@ redis = ["channels-redis>=4.2"]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["orl", "crew", "mission", "maintenance", "supply"]
+[tool.setuptools.packages.find]
+include = ["orl*", "crew*", "mission*", "maintenance*", "supply*"]

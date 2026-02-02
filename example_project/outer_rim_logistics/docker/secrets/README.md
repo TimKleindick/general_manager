@@ -11,6 +11,7 @@ Notes:
 
 - `docker/secrets/meilisearch_api_key.txt.example` is provided as a template.
   Copy it to `docker/secrets/meilisearch_api_key.txt` and replace the value.
-- `docker/secrets/postgres_password.txt` and
-  `docker/secrets/grafana_admin_password.txt` contain placeholder values that
+- `docker/secrets/postgres_password.txt.example` is provided as a template.
+  Copy it to `docker/secrets/postgres_password.txt` and replace the value.
+- `docker/secrets/grafana_admin_password.txt` contains a placeholder value that
   should be replaced before use outside local development.

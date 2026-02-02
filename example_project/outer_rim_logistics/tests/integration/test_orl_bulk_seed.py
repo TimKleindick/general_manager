@@ -27,6 +27,7 @@ from supply.managers import (
 class TestORLBulkSeed(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        super().setUpClass()
         cls.general_manager_classes = [
             HazardClass,
             VendorCatalog,

@@ -96,7 +96,7 @@ class Migration(migrations.Migration):
             model_name="crewmember",
             name="role",
             field=models.ForeignKey(
-                on_delete=django.db.models.deletion.CASCADE, to="crew.jobrolecatalog"
+                on_delete=django.db.models.deletion.PROTECT, to="crew.jobrolecatalog"
             ),
         ),
     ]
