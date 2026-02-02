@@ -38,7 +38,6 @@ services:
       GENERAL_MANAGER_GRAPHQL_METRICS_ENABLED: "true"
       GENERAL_MANAGER_GRAPHQL_METRICS_BACKEND: "prometheus"
       GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING: "false"
-    user: "1000:1000"
     volumes:
       - ./logs:/var/log/outer-rim
       - orl-static:/static
@@ -88,16 +87,20 @@ services:
       - ./docker/nginx-entrypoint.sh:/etc/nginx/nginx-entrypoint.sh:ro
       - ./logs:/var/log/outer-rim
     depends_on:
-      - web
+      web:
+        condition: service_healthy
     cap_add:
       - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     read_only: true
     tmpfs:
       - /tmp
       - /var/run
-      - /var/cache/nginx:uid=101,gid=101,mode=755
+      - /var/cache/nginx:mode=1777
     healthcheck:
       test:
         [
@@ -259,7 +262,7 @@ services:
 
   celery-exporter:
     <<: *security-defaults
-    image: ghcr.io/danihodovic/celery-exporter:v0.12.2
+    image: danihodovic/celery-exporter:0.12.2
     command: ["--broker-url=redis://redis:6379/0", "--port=9808"]
     depends_on:
       redis:
@@ -289,6 +292,9 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: "admin"
       GF_SECURITY_ADMIN_PASSWORD_FILE: "/run/secrets/grafana_admin_password"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_CHECK_FOR_UPDATES: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_ROOT_URL: "https://localhost:${ORL_HTTPS_PORT:-8443}/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
@@ -388,6 +394,7 @@ services:
       dockerfile: example_project/outer_rim_logistics/Dockerfile
     entrypoint: ""
     command: celery -A orl worker -l info
+    user: "1000:1000"
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
@@ -407,7 +414,6 @@ services:
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
       REDIS_URL: "redis://redis:6379/0"
-    user: "1000:1000"
     volumes:
       - ./logs:/var/log/outer-rim
     read_only: true
@@ -440,7 +446,12 @@ services:
 
   app-init:
     image: alpine:3.19
-    command: ["sh", "-c", "mkdir -p /var/log/outer-rim/app && chown -R 1000:1000 /var/log/outer-rim/app /static"]
+    command:
+      [
+        "sh",
+        "-c",
+        "mkdir -p /var/log/outer-rim/app /static && chown -R 1000:1000 /var/log/outer-rim/app /static && chmod -R a+rwX /var/log/outer-rim/app /static",
+      ]
     volumes:
       - ./logs:/var/log/outer-rim
       - orl-static:/static

@@ -10,6 +10,9 @@ COPY pyproject.toml /app/pyproject.toml
 COPY requirements/base.txt /app/requirements/base.txt
 COPY requirements/production.txt /app/requirements/production.txt
 
+RUN groupadd -g 1000 appuser \
+    && useradd -u 1000 -g 1000 -m -d /home/appuser appuser
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
     && pip install -r /app/requirements/production.txt
