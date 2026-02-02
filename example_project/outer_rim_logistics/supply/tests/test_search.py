@@ -3,17 +3,20 @@ from __future__ import annotations
 from django.core.management import call_command
 from django.test import TestCase
 
+from general_manager.interface.capabilities.read_only.management import (
+    ReadOnlyManagementCapability,
+)
 from general_manager.search.backend_registry import get_search_backend
-from general_manager.utils.testing import run_registered_startup_hooks
-from supply.managers import HazardClass, PartCatalog, VendorCatalog
+from outer_rim_logistics.supply.managers import HazardClass, PartCatalog, VendorCatalog
 
 
 class SearchIndexTests(TestCase):
     @classmethod
     def setUpTestData(cls) -> None:
-        run_registered_startup_hooks(
-            managers=[HazardClass, PartCatalog, VendorCatalog]
-        )
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(HazardClass.Interface)
+        capability.sync_data(PartCatalog.Interface)
+        capability.sync_data(VendorCatalog.Interface)
         call_command("seed_outer_rim")
         call_command("search_index", reindex=True)
 

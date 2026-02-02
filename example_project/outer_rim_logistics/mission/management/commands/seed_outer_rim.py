@@ -6,8 +6,13 @@ from typing import Optional
 from django.core.management.base import BaseCommand
 from django.core.management import call_command
 
-from crew.managers import CrewMember, JobRoleCatalog
-from maintenance.managers import (
+from general_manager.apps import GeneralmanagerConfig
+from general_manager.interface.capabilities.read_only.management import (
+    ReadOnlyManagementCapability,
+)
+from general_manager.manager.meta import GeneralManagerMeta
+from outer_rim_logistics.crew.managers import CrewMember, JobRoleCatalog
+from outer_rim_logistics.maintenance.managers import (
     IncidentReport,
     Module,
     ModuleSpec,
@@ -16,8 +21,14 @@ from maintenance.managers import (
     ShipStatusCatalog,
     WorkOrder,
 )
-from mission.managers import MissionSchedule
-from supply.managers import CargoManifest, InventoryItem, PartCatalog, VendorCatalog
+from outer_rim_logistics.mission.managers import MissionSchedule
+from outer_rim_logistics.supply.managers import (
+    CargoManifest,
+    HazardClass,
+    InventoryItem,
+    PartCatalog,
+    VendorCatalog,
+)
 
 
 class Command(BaseCommand):
@@ -26,6 +37,8 @@ class Command(BaseCommand):
     def handle(self, *_args, **_options) -> None:
         self._random = random.Random(42)
         self.stdout.write("Seeding Outer Rim Logistics data...")
+        self._initialize_managers()
+        self._sync_catalogs()
         self._seed_ships()
         self._seed_modules()
         self._seed_crew()
@@ -36,6 +49,22 @@ class Command(BaseCommand):
         self._seed_manifests()
         call_command("search_index", reindex=True)
         self.stdout.write(self.style.SUCCESS("Seeding complete."))
+
+    def _initialize_managers(self) -> None:
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.all_classes,
+        )
+
+    def _sync_catalogs(self) -> None:
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(ModuleSpec.Interface)
+        capability.sync_data(ShipClassCatalog.Interface)
+        capability.sync_data(ShipStatusCatalog.Interface)
+        capability.sync_data(JobRoleCatalog.Interface)
+        capability.sync_data(HazardClass.Interface)
+        capability.sync_data(PartCatalog.Interface)
+        capability.sync_data(VendorCatalog.Interface)
 
     def _seed_ships(self) -> None:
         target_ships = 20

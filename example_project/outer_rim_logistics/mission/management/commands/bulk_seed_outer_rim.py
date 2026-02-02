@@ -10,8 +10,8 @@ from general_manager.interface.capabilities.read_only.management import (
     ReadOnlyManagementCapability,
 )
 
-from crew.managers import CrewMember, JobRoleCatalog
-from maintenance.managers import (
+from outer_rim_logistics.crew.managers import CrewMember, JobRoleCatalog
+from outer_rim_logistics.maintenance.managers import (
     IncidentReport,
     Module,
     ModuleSpec,
@@ -20,8 +20,8 @@ from maintenance.managers import (
     ShipStatusCatalog,
     WorkOrder,
 )
-from mission.managers import MissionSchedule
-from supply.managers import (
+from outer_rim_logistics.mission.managers import MissionSchedule
+from outer_rim_logistics.supply.managers import (
     CargoManifest,
     HazardClass,
     InventoryItem,

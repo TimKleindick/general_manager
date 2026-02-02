@@ -5,7 +5,7 @@ from django.core.management import call_command
 
 from general_manager.search.backend_registry import get_search_backend
 
-pytestmark = pytest.mark.perf
+pytestmark = [pytest.mark.perf, pytest.mark.django_db]
 
 
 def test_global_search_latency() -> None:

@@ -22,37 +22,37 @@ def _random_manager_instance(
 
 
 def random_ship_class():
-    from maintenance.managers import ShipClassCatalog
+    from outer_rim_logistics.maintenance.managers import ShipClassCatalog
 
     return _random_manager_instance(lambda: ShipClassCatalog, "ShipClassCatalog")
 
 
 def random_ship_status():
-    from maintenance.managers import ShipStatusCatalog
+    from outer_rim_logistics.maintenance.managers import ShipStatusCatalog
 
     return _random_manager_instance(lambda: ShipStatusCatalog, "ShipStatusCatalog")
 
 
 def random_module_spec():
-    from maintenance.managers import ModuleSpec
+    from outer_rim_logistics.maintenance.managers import ModuleSpec
 
     return _random_manager_instance(lambda: ModuleSpec, "ModuleSpec")
 
 
 def random_ship():
-    from maintenance.managers import Ship
+    from outer_rim_logistics.maintenance.managers import Ship
 
     return _random_manager_instance(lambda: Ship, "Ship")
 
 
 def random_module():
-    from maintenance.managers import Module
+    from outer_rim_logistics.maintenance.managers import Module
 
     return _random_manager_instance(lambda: Module, "Module")
 
 
 def random_module_for_ship(ship):
-    from maintenance.managers import Module
+    from outer_rim_logistics.maintenance.managers import Module
 
     ship_id = ship.identification.get("id")
     candidates = [
@@ -102,24 +102,24 @@ def random_due_by(opened_on, severity: int):
 
 
 def random_role():
-    from crew.managers import JobRoleCatalog
+    from outer_rim_logistics.crew.managers import JobRoleCatalog
 
     return _random_manager_instance(lambda: JobRoleCatalog, "JobRoleCatalog")
 
 
 def random_crew_member():
-    from crew.managers import CrewMember
+    from outer_rim_logistics.crew.managers import CrewMember
 
     return _random_manager_instance(lambda: CrewMember, "CrewMember")
 
 
 def random_part():
-    from supply.managers import PartCatalog
+    from outer_rim_logistics.supply.managers import PartCatalog
 
     return _random_manager_instance(lambda: PartCatalog, "PartCatalog")
 
 
 def random_vendor():
-    from supply.managers import VendorCatalog
+    from outer_rim_logistics.supply.managers import VendorCatalog
 
     return _random_manager_instance(lambda: VendorCatalog, "VendorCatalog")

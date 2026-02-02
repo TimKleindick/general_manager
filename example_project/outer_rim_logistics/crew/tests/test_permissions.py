@@ -5,8 +5,8 @@ from datetime import date
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from crew.managers import CrewMember, JobRoleCatalog
-from maintenance.managers import Ship, ShipClassCatalog, ShipStatusCatalog
+from outer_rim_logistics.crew.managers import CrewMember, JobRoleCatalog
+from outer_rim_logistics.maintenance.managers import Ship, ShipClassCatalog, ShipStatusCatalog
 from general_manager.permission.base_permission import PermissionCheckError
 from general_manager.utils.testing import run_registered_startup_hooks
 

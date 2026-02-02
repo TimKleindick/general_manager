@@ -5,7 +5,12 @@ from datetime import date
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from maintenance.managers import (
+from general_manager.apps import GeneralmanagerConfig
+from general_manager.interface.capabilities.read_only.management import (
+    ReadOnlyManagementCapability,
+)
+from general_manager.manager.meta import GeneralManagerMeta
+from outer_rim_logistics.maintenance.managers import (
     Module,
     ModuleSpec,
     Ship,
@@ -13,15 +18,19 @@ from maintenance.managers import (
     ShipStatusCatalog,
     WorkOrder,
 )
-from general_manager.utils.testing import run_registered_startup_hooks
 
 
 class RuleValidationTests(TestCase):
     def setUp(self) -> None:
         super().setUp()
-        run_registered_startup_hooks(
-            managers=[ModuleSpec, ShipClassCatalog, ShipStatusCatalog]
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.all_classes,
         )
+        capability = ReadOnlyManagementCapability()
+        capability.sync_data(ModuleSpec.Interface)
+        capability.sync_data(ShipClassCatalog.Interface)
+        capability.sync_data(ShipStatusCatalog.Interface)
         spec = ModuleSpec.all().first()
         if spec is None:
             raise AssertionError("ModuleSpec data missing")
