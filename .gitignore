@@ -67,6 +67,8 @@ example_project/outer_rim_logistics/logs/
 example_project/outer_rim_logistics/docker/certs/*.crt
 example_project/outer_rim_logistics/docker/certs/*.key
 example_project/outer_rim_logistics/docker/htpasswd/observability
+example_project/outer_rim_logistics/docker/secrets/*
+!example_project/outer_rim_logistics/docker/secrets/*.example
 
 # Flask stuff:
 instance/
