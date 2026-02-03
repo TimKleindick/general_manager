@@ -29,4 +29,6 @@ RUN chmod +x /app/example_project/outer_rim_logistics/docker/entrypoint.sh \
 
 EXPOSE 8000
 
+USER appuser
+
 ENTRYPOINT ["/app/example_project/outer_rim_logistics/docker/entrypoint.sh"]

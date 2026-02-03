@@ -54,8 +54,14 @@ def _seed_ship_catalogs(apps, _schema_editor):
             )
         ship.save(update_fields=["ship_class_ref", "status_ref"])
 
-    first_ship = Ship.objects.first()
-    if first_ship:
+    if Module.objects.filter(ship__isnull=True).exists():
+        first_ship = Ship.objects.first()
+        if not first_ship:
+            raise RuntimeError(
+                "Module rows are missing ships, but no Ship exists. "
+                "Create a Ship record or add a migration that inserts a "
+                "placeholder Ship before enforcing NOT NULL on Module.ship."
+            )
         Module.objects.filter(ship__isnull=True).update(ship=first_ship)
 
 
