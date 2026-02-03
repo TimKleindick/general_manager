@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 
 from django.core.asgi import get_asgi_application
+from orl.settings import ensure_log_dir_exists
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "orl.settings")
 
+ensure_log_dir_exists()
 django_asgi_app = get_asgi_application()
 
 try:

@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
                 "get_latest_by": ("history_date", "history_id"),
                 "ordering": ("-history_date", "-history_id"),
                 "verbose_name": "historical hazard class",
-                "verbose_name_plural": "historical hazard classs",
+                "verbose_name_plural": "historical hazard classes",
             },
         ),
     ]

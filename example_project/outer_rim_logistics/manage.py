@@ -8,6 +8,7 @@ import sys
 def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "orl.settings")
     try:
+        from orl.settings import ensure_log_dir_exists
         from django.core.management import execute_from_command_line
     except ImportError as exc:
         raise ImportError(
@@ -15,6 +16,7 @@ def main() -> None:
             "available on your PYTHONPATH environment variable? Did you "
             "forget to activate a virtual environment?"
         ) from exc
+    ensure_log_dir_exists()
     execute_from_command_line(sys.argv)
 
 
