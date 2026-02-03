@@ -326,3 +326,25 @@ class TestingUtilityDependencyOrderingTests(SimpleTestCase):
         )
 
         self.assertEqual(sorted(execution_log), ["A", "B"])
+
+    def test_run_hooks_calls_registered_startup_hooks(self) -> None:
+        """Verify _run_registered_startup_hooks forwards managers list."""
+        from general_manager.utils import testing as testing_module
+        from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+        calls: list[list[type]] = []
+
+        def _record_hooks(*, managers: list[type]) -> None:
+            calls.append(managers)
+
+        class FakeTestCase(GeneralManagerTransactionTestCase):
+            general_manager_classes: ClassVar[list[type]] = [object]
+
+        original = testing_module.run_registered_startup_hooks
+        testing_module.run_registered_startup_hooks = _record_hooks
+        try:
+            FakeTestCase._run_registered_startup_hooks()
+        finally:
+            testing_module.run_registered_startup_hooks = original
+
+        self.assertEqual(calls, [[object]])

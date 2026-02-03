@@ -7,6 +7,10 @@ from general_manager.search.backends import meilisearch as meili_module
 from general_manager.search.backends.meilisearch import (
     MeilisearchBackend,
     MeilisearchTaskFailedError,
+    _is_meilisearch_already_exists,
+    _is_meilisearch_not_found,
+    _meilisearch_error_code,
+    _meilisearch_status_code,
 )
 
 
@@ -410,3 +414,43 @@ def test_meilisearch_backend_raises_on_failed_task() -> None:
                 )
             ],
         )
+
+
+def test_meilisearch_backend_build_filter_expression_in_lookup() -> None:
+    expr = MeilisearchBackend._build_filter_expression(
+        {"status__in": ["ready", "paused"], "team": "alpha"},
+        types=None,
+    )
+    assert 'status = "ready"' in expr
+    assert 'status = "paused"' in expr
+    assert 'team = "alpha"' in expr
+
+
+def test_meilisearch_backend_build_filter_expression_groups() -> None:
+    expr = MeilisearchBackend._build_filter_expression(
+        [{"status": "ready"}, {"status": "paused"}],
+        types=["TypeA", "TypeB"],
+    )
+    assert 'type = "TypeA"' in expr
+    assert 'type = "TypeB"' in expr
+    assert 'status = "ready"' in expr
+    assert 'status = "paused"' in expr
+
+
+def test_meilisearch_backend_build_filter_expression_empty() -> None:
+    assert MeilisearchBackend._build_filter_expression(None, None) is None
+
+
+def test_meilisearch_error_helpers() -> None:
+    class _Error(Exception):
+        def __init__(self, code: str | None, status: int | None) -> None:
+            self.error_code = code
+            self.status_code = status
+
+    not_found = _Error("not_found", 404)
+    assert _meilisearch_error_code(not_found) == "not_found"
+    assert _meilisearch_status_code(not_found) == 404
+    assert _is_meilisearch_not_found(not_found) is True
+
+    exists = _Error("already_exists", 409)
+    assert _is_meilisearch_already_exists(exists) is True

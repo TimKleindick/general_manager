@@ -1,8 +1,13 @@
 import unittest
-
+from types import SimpleNamespace
 from django.test import SimpleTestCase, override_settings
+from graphql.error import GraphQLError
 
 from general_manager.metrics.graphql import (
+    GraphQLResolverTimingMiddleware,
+    _build_field_name,
+    build_graphql_middleware,
+    extract_error_code,
     normalize_error_code,
     normalize_field_name,
     normalize_operation_name,
@@ -46,6 +51,52 @@ class GraphQLMetricsNormalizationTests(SimpleTestCase):
 
     def test_field_name_normalization(self):
         self.assertEqual(normalize_field_name("Query.my field"), "Query.my_field")
+
+
+def test_build_graphql_middleware_adds_resolver_timing(settings, monkeypatch):
+    settings.GENERAL_MANAGER_GRAPHQL_METRICS_ENABLED = True
+    settings.GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING = True
+    from graphene_django.settings import graphene_settings
+
+    monkeypatch.setattr(graphene_settings, "MIDDLEWARE", [])
+    middleware = build_graphql_middleware()
+    assert any(
+        isinstance(entry, GraphQLResolverTimingMiddleware) for entry in middleware
+    )
+
+
+def test_build_graphql_middleware_deduplicates(settings, monkeypatch):
+    settings.GENERAL_MANAGER_GRAPHQL_METRICS_ENABLED = True
+    settings.GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING = True
+    from graphene_django.settings import graphene_settings
+
+    existing = GraphQLResolverTimingMiddleware()
+    monkeypatch.setattr(graphene_settings, "MIDDLEWARE", [existing])
+    middleware = build_graphql_middleware()
+    assert middleware == [existing]
+
+
+def test_resolve_operation_type_invalid_query():
+    assert resolve_operation_type("query {", None) == "unknown"
+
+
+def test_extract_error_code_from_graphql_error():
+    error = GraphQLError("bad", extensions={"code": "BAD"})
+    assert extract_error_code(error) == "BAD"
+
+
+def test_build_field_name_variants():
+    info = SimpleNamespace(
+        parent_type=SimpleNamespace(name="Query"),
+        field_name="status",
+    )
+    assert _build_field_name(info) == "Query.status"
+
+    info_no_parent = SimpleNamespace(parent_type=None, field_name="status")
+    assert _build_field_name(info_no_parent) == "status"
+
+    info_missing = SimpleNamespace(parent_type=None, field_name=None)
+    assert _build_field_name(info_missing) == "unknown"
 
 
 if __name__ == "__main__":
