@@ -32,3 +32,4 @@ class AppsUtilitiesTests(SimpleTestCase):
         gm_apps._SEARCH_REINDEXED = False
         gm_apps._auto_reindex_search()
         gm_apps._auto_reindex_search(environ={"PATH_INFO": None})
+        assert gm_apps._SEARCH_REINDEXED is False
