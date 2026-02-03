@@ -2,6 +2,113 @@
 
 <!-- version list -->
 
+## v0.28.0 (2026-02-03)
+
+### Bug Fixes
+
+- Clear GeneralManager GraphQL view in test URL cleanup
+  ([`88bf1d4`](https://github.com/TimKleindick/general_manager/commit/88bf1d43febe99cf3c08380c5f5b77225630766a))
+
+- Harden orl startup and migrations
+  ([`b6d42bd`](https://github.com/TimKleindick/general_manager/commit/b6d42bd23ce4436c3f0ca5a8ba7b3a1a161d1f56))
+
+- Stabilize docker services and update grafana dashboard units
+  ([`963b68e`](https://github.com/TimKleindick/general_manager/commit/963b68ef05b20d0536421e07ac5f8fb510157ecf))
+
+- Stabilize orl docker and test setup
+  ([`d602edd`](https://github.com/TimKleindick/general_manager/commit/d602edde085d840cad21fcad9c0f6eee1243d9d9))
+
+- Update foreign key on crewmember role to use PROTECT on deletion; normalize ship status handling;
+  ensure log directory exists; adjust setuptools package inclusion
+  ([`a26f307`](https://github.com/TimKleindick/general_manager/commit/a26f307afdbf895c51daa85addb91aee868f78bb))
+
+- **orl**: Adjust nginx exporter flag
+  ([`555aaac`](https://github.com/TimKleindick/general_manager/commit/555aaacd1cda3ec0ec4997ccf9dd80a9d95cc4ce))
+
+- **orl**: Declare packages for setuptools
+  ([`a11114c`](https://github.com/TimKleindick/general_manager/commit/a11114cd5cfb7eb7085c71c141c12474e94d066e))
+
+- **orl**: Scrape Prometheus via /prometheus prefix
+  ([`6fc6699`](https://github.com/TimKleindick/general_manager/commit/6fc66994f3106189bc03f2ad1ed03fe574e64fb3))
+
+- **orl**: Stabilize docker dev stack and migrations
+  ([`42ea858`](https://github.com/TimKleindick/general_manager/commit/42ea8581ad1d3b9319820425835332aa17d83935))
+
+### Chores
+
+- Add GraphQL metrics configuration to environment example
+  ([`2833bd6`](https://github.com/TimKleindick/general_manager/commit/2833bd612ea2181921cc2128343a624e866f2fce))
+
+- Bump typing-extensions and dev deps
+  ([`7e621a4`](https://github.com/TimKleindick/general_manager/commit/7e621a413806467fea7652d58817f4bb8d9dd152))
+
+- Move example website into its own folder
+  ([`c4222a0`](https://github.com/TimKleindick/general_manager/commit/c4222a0a65df641b27fda50c82de405c9b070b09))
+
+- Update mkdocs configuration to enable external module loading and adjust navigation
+  ([`077cf3f`](https://github.com/TimKleindick/general_manager/commit/077cf3fbd5b244b8753dc5f5797cc1059dd0b535))
+
+- **orl**: Align with github branch content
+  ([`4fbb5b8`](https://github.com/TimKleindick/general_manager/commit/4fbb5b884a1d89bb9776a0e821951eda7a9c6ac2))
+
+- **orl**: Deployment notes + compose hardening + ignore task.md
+  ([`b1b524b`](https://github.com/TimKleindick/general_manager/commit/b1b524b0abf52b081adc850d7a04d233989e5f49))
+
+### Documentation
+
+- Document GraphQL metrics and add to nav
+  ([`7ef84ee`](https://github.com/TimKleindick/general_manager/commit/7ef84ee58a34a78e6f6b8b73dfef19d735fb13a8))
+
+### Features
+
+- Add GraphQL metrics backend and view instrumentation
+  ([`c3d0f62`](https://github.com/TimKleindick/general_manager/commit/c3d0f624473ca81950d33f739ae76e4f83e9f274))
+
+- Enhance Docker setup and entrypoint for Meilisearch, improve Celery task handling
+  ([`b62236f`](https://github.com/TimKleindick/general_manager/commit/b62236f8adf6d22407d20a202f0b00764bb17419))
+
+- **orl**: Add GraphQL Grafana dashboard
+  ([`945b116`](https://github.com/TimKleindick/general_manager/commit/945b116824d03a3e2ac22d15340a03e5520f23ef))
+
+- **orl**: Add observability stack + dashboards
+  ([`b54718e`](https://github.com/TimKleindick/general_manager/commit/b54718eaceeb2fd4a8f5a39030ee5e73a7ae30e6))
+
+- **orl**: Add Outer Rim Logistics example app
+  ([`0b7a353`](https://github.com/TimKleindick/general_manager/commit/0b7a35313b12b5c34c030cb62cb72b6863cb25c0))
+
+- **orl**: Enable GraphQL metrics and configure backend settings
+  ([`7b60938`](https://github.com/TimKleindick/general_manager/commit/7b6093832e473637e5ea0914019ea008167f8623))
+
+- **orl**: Enable ORL search + reindex behavior
+  ([`2561520`](https://github.com/TimKleindick/general_manager/commit/25615201f0725ce49dce1db6e578645f82d7e8b8))
+
+- **orl**: Enable pg_stat_statements metrics
+  ([`5c27bc6`](https://github.com/TimKleindick/general_manager/commit/5c27bc67d82305731cc0bbd74f43efededd6e551))
+
+- **orl**: Export celery task metrics
+  ([`dfb4ce9`](https://github.com/TimKleindick/general_manager/commit/dfb4ce972d3fce0d604a3d769147b3a48490f648))
+
+- **orl**: Implement bulk seeding command and enhance factory utilities for ORL
+  ([`1a1ab2b`](https://github.com/TimKleindick/general_manager/commit/1a1ab2b08dea96c50a1c29c1926445e9c3c63ff7))
+
+- **orl**: Update nginx proxy/logging + exporter status
+  ([`4de60c7`](https://github.com/TimKleindick/general_manager/commit/4de60c766d006e94f63fe096f7a6b051caf13a61))
+
+### Testing
+
+- Add GraphQL metrics coverage
+  ([`2708aa2`](https://github.com/TimKleindick/general_manager/commit/2708aa2c2cb81ad5d6cc8a65dee8e06366226eae))
+
+- Add unit test for auto reindex search on GraphQL path
+  ([`3581b35`](https://github.com/TimKleindick/general_manager/commit/3581b3531b47f7ec850ef213dd2bb6f062af217b))
+
+- Add unit tests for GraphQL metrics and Meilisearch backend functionality
+  ([`8422391`](https://github.com/TimKleindick/general_manager/commit/8422391cceb415549cf34a479e7cc85065a4d00f))
+
+- Assert auto reindex skip
+  ([`de7a65e`](https://github.com/TimKleindick/general_manager/commit/de7a65ea525e44b8546d0ec877406e2404e44138))
+
+
 ## v0.27.1 (2026-02-01)
 
 ### Bug Fixes
