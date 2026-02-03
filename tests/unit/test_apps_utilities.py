@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
+from unittest.mock import patch
 
 from general_manager import apps as gm_apps
 
@@ -33,3 +34,11 @@ class AppsUtilitiesTests(SimpleTestCase):
         gm_apps._auto_reindex_search()
         gm_apps._auto_reindex_search(environ={"PATH_INFO": None})
         assert gm_apps._SEARCH_REINDEXED is False
+
+    def test_auto_reindex_search_triggers_on_graphql_path(self) -> None:
+        gm_apps._SEARCH_REINDEXED = False
+        with patch("general_manager.apps.call_command") as call_command:
+            gm_apps._auto_reindex_search(environ={"PATH_INFO": "/graphql"})
+            call_command.assert_called_once_with("search_index", reindex=True)
+            assert gm_apps._SEARCH_REINDEXED is True
+        gm_apps._SEARCH_REINDEXED = False
