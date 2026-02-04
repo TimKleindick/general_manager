@@ -356,6 +356,71 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(historical_view.name, "Historian")
 
+    def test_get_historical_record_scopes_to_pk(self):
+        base_time = timezone.now() - timedelta(days=10)
+
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human_a = self.TestHuman.create(
+                creator_id=None,
+                name="Alice Base",
+                ignore_permission=True,
+            )
+            human_b = self.TestHuman.create(
+                creator_id=None,
+                name="Bob Base",
+                ignore_permission=True,
+            )
+
+        human_a_id = human_a.identification["id"]
+
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            human_a = human_a.update(
+                name="Alice Updated",
+                ignore_permission=True,
+            )
+
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=2)
+        ):
+            human_b.update(
+                name="Bob Updated",
+                ignore_permission=True,
+            )
+
+        search_date = base_time + timedelta(hours=3)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=search_date + timedelta(seconds=10),
+        ):
+            historical_view = self.TestHuman(id=human_a_id, search_date=search_date)
+
+        self.assertEqual(historical_view.name, "Alice Updated")
+        self.assertEqual(historical_view.identification["id"], human_a_id)
+
+    def test_get_data_raises_when_historical_missing_for_active_instance(self):
+        base_time = timezone.now() - timedelta(days=10)
+
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Time Traveler",
+                ignore_permission=True,
+            )
+
+        search_date = base_time - timedelta(days=1)
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=base_time + timedelta(seconds=10),
+        ):
+            with self.assertRaises(self.TestHuman.Interface._model.DoesNotExist):  # type: ignore[attr-defined]
+                self.TestHuman(
+                    id=human.identification["id"],
+                    search_date=search_date,
+                )
+
     def test_bucket_operations(self):
         """
         Verify many-to-many relationship bucket behavior: read bucket contents, add a related item through the bucket update, and confirm the forward and reverse relations reflect the change.

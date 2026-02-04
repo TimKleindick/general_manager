@@ -257,6 +257,9 @@ class OrmReadCapability(BaseCapability):
                         )
                     if historical is not None:
                         return historical
+                    if missing_error is not None:
+                        raise missing_error
+                    raise model_cls.DoesNotExist  # type: ignore[attr-defined]
             if instance is not None:
                 return instance
             if missing_error is not None:
