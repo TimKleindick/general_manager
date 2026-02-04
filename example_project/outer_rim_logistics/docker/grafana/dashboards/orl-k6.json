@@ -38,19 +38,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (status) (rate(django_http_responses_total_by_status_total{job=\"orl-web\"}[5m]) or rate(django_http_responses_total_by_status{job=\"orl-web\"}[5m]))",
-          "legendFormat": "{{status}}",
-          "refId": "A"
+          "expr": "sum(rate(k6_http_reqs[5m]))",
+          "refId": "A",
+          "legendFormat": "req/s"
         }
       ],
-      "title": "HTTP Responses by Status",
+      "title": "k6 Request Rate",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "req/s"
         },
         "overrides": []
       },
@@ -69,19 +69,19 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(django_http_requests_latency_including_middlewares_seconds_bucket{job=\"orl-web\"}[5m]) or rate(django_http_request_duration_seconds_bucket{job=\"orl-web\"}[5m]) or rate(django_http_request_latency_seconds_bucket{job=\"orl-web\"}[5m])))",
-          "legendFormat": "p95",
-          "refId": "A"
+          "expr": "sum(rate(k6_http_req_failed[5m]))",
+          "refId": "A",
+          "legendFormat": "failed/s"
         }
       ],
-      "title": "Request Duration p95",
+      "title": "k6 HTTP Fail Rate",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "req/s"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -100,19 +100,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (view, method) (rate(django_http_requests_total_by_view_transport_method_total{job=\"orl-web\"}[5m]) or rate(django_http_requests_total_by_view_method_total{job=\"orl-web\"}[5m]) or rate(django_http_requests_total_by_view_method{job=\"orl-web\"}[5m]))",
-          "legendFormat": "{{view}} {{method}}",
-          "refId": "A"
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(k6_http_req_duration_bucket[5m]))) or max_over_time(k6_http_req_duration{quantile=\"0.95\"}[5m])",
+          "refId": "A",
+          "legendFormat": "p95"
         }
       ],
-      "title": "Requests by View",
+      "title": "k6 HTTP Req Duration p95",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "cores"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -131,19 +131,19 @@
       },
       "targets": [
         {
-          "expr": "rate(process_cpu_seconds_total{job=\"orl-web\"}[5m])",
-          "legendFormat": "cpu",
-          "refId": "A"
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(k6_http_req_duration_bucket[5m]))) or max_over_time(k6_http_req_duration{quantile=\"0.99\"}[5m])",
+          "refId": "A",
+          "legendFormat": "p99"
         }
       ],
-      "title": "App CPU (rate)",
+      "title": "k6 HTTP Req Duration p99",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -162,19 +162,19 @@
       },
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{job=\"orl-web\"}",
-          "legendFormat": "rss",
-          "refId": "A"
+          "expr": "max(k6_vus)",
+          "refId": "A",
+          "legendFormat": "vus"
         }
       ],
-      "title": "App Memory (RSS)",
+      "title": "k6 VUs",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "collections/s"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -193,19 +193,19 @@
       },
       "targets": [
         {
-          "expr": "rate(python_gc_collections_total{job=\"orl-web\"}[5m])",
-          "legendFormat": "gen{{generation}}",
-          "refId": "A"
+          "expr": "sum(rate(k6_data_sent[5m]))",
+          "refId": "A",
+          "legendFormat": "sent"
         }
       ],
-      "title": "Python GC Collections",
+      "title": "k6 Data Sent (rate)",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "req/s"
+          "unit": "Bps"
         },
         "overrides": []
       },
@@ -224,19 +224,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (function) (rate(gm_cache_hits_total[5m]))",
-          "legendFormat": "{{function}}",
-          "refId": "A"
+          "expr": "sum(rate(k6_data_received[5m]))",
+          "refId": "A",
+          "legendFormat": "recv"
         }
       ],
-      "title": "GM Cache Hits (rate)",
+      "title": "k6 Data Received (rate)",
       "type": "timeseries"
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "unit": "req/s"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -255,12 +255,43 @@
       },
       "targets": [
         {
-          "expr": "sum by (function) (rate(gm_cache_misses_total[5m]))",
-          "legendFormat": "{{function}}",
-          "refId": "A"
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(k6_http_req_duration_bucket{kind=\"graphql\"}[5m])))",
+          "refId": "A",
+          "legendFormat": "{{op}}"
         }
       ],
-      "title": "GM Cache Misses (rate)",
+      "title": "k6 Per-Op p95 (GraphQL)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, op) (rate(k6_http_req_duration_bucket{kind=\"graphql\"}[5m])))",
+          "refId": "A",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "title": "k6 Per-Op p99 (GraphQL)",
       "type": "timeseries"
     }
   ],
@@ -269,7 +300,7 @@
   "style": "dark",
   "tags": [
     "outer-rim",
-    "app"
+    "k6"
   ],
   "templating": {
     "list": []
@@ -279,7 +310,7 @@
     "to": "now"
   },
   "timezone": "",
-  "title": "ORL App",
-  "uid": "orl-app",
-  "version": 2
+  "title": "ORL k6",
+  "uid": "orl-k6",
+  "version": 1
 }

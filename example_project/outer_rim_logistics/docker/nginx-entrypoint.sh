@@ -50,4 +50,26 @@ tail -n 0 -F /var/log/outer-rim/nginx/nginx_access.log /var/log/outer-rim/nginx/
 mkdir -p /var/cache/nginx/client_temp
 chmod 1777 /var/cache/nginx /var/cache/nginx/client_temp
 
+template="/tmp/nginx.conf.template"
+if [ -f "$template" ]; then
+  rate="${GRAPHQL_LIMIT_RATE:-10r/s}"
+  burst="${GRAPHQL_LIMIT_BURST:-20}"
+  enabled="${GRAPHQL_LIMIT_ENABLED:-1}"
+  if [ "$enabled" = "0" ] || [ "$enabled" = "false" ]; then
+    rate="1000000r/s"
+    burst="1000000"
+    limit_directive=""
+  else
+    limit_directive="limit_req zone=graphql_limit burst=${burst} nodelay;"
+  fi
+  sed -e "s|__GRAPHQL_LIMIT_RATE__|${rate}|g" \
+      -e "s|__GRAPHQL_LIMIT_BURST__|${burst}|g" \
+      -e "s|__GRAPHQL_LIMIT_DIRECTIVE__|${limit_directive}|g" \
+      "$template" > /tmp/nginx.conf
+  if [ "$enabled" = "0" ] || [ "$enabled" = "false" ]; then
+    sed -i '/limit_req/d' /tmp/nginx.conf
+  fi
+  exec nginx -c /tmp/nginx.conf -g "daemon off;"
+fi
+
 exec nginx -g "daemon off;"

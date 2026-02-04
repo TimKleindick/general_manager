@@ -16,6 +16,25 @@ from graphql import (
 
 from general_manager.api.graphql import GraphQL
 
+try:
+    from prometheus_client import Counter, Gauge
+except ImportError:  # pragma: no cover - optional metrics
+    Counter = None
+    Gauge = None
+
+_ws_connections = None
+_ws_disconnects = None
+if Counter is not None and Gauge is not None:
+    _ws_connections = Gauge(
+        "graphql_ws_connections",
+        "Active GraphQL websocket connections.",
+    )
+    _ws_disconnects = Counter(
+        "graphql_ws_disconnects_total",
+        "GraphQL websocket disconnects.",
+        ["code"],
+    )
+
 
 RECOVERABLE_SUBSCRIPTION_ERRORS: tuple[type[Exception], ...] = (
     RuntimeError,
@@ -53,6 +72,8 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
             "graphql-transport-ws" if "graphql-transport-ws" in subprotocols else None
         )
         await self.accept(subprotocol=selected_subprotocol)
+        if _ws_connections is not None:
+            _ws_connections.inc()
 
     async def disconnect(self, code: int) -> None:
         """
@@ -71,6 +92,10 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self.active_subscriptions.clear()
+        if _ws_connections is not None:
+            _ws_connections.dec()
+        if _ws_disconnects is not None:
+            _ws_disconnects.labels(code=str(code)).inc()
 
     async def receive_json(self, content: dict[str, Any], **_: Any) -> None:
         """

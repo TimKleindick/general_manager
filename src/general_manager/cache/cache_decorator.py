@@ -11,6 +11,26 @@ from general_manager.cache.model_dependency_collector import ModelDependencyColl
 from general_manager.logging import get_logger
 from general_manager.utils.make_cache_key import make_cache_key
 
+try:
+    from prometheus_client import Counter
+except ImportError:  # pragma: no cover - optional metrics
+    Counter = None
+
+_cache_hit_counter = None
+_cache_miss_counter = None
+
+if Counter is not None:
+    _cache_hit_counter = Counter(
+        "gm_cache_hits_total",
+        "GeneralManager cache hits.",
+        ["function"],
+    )
+    _cache_miss_counter = Counter(
+        "gm_cache_misses_total",
+        "GeneralManager cache misses.",
+        ["function"],
+    )
+
 
 class CacheBackend(Protocol):
     def get(self, key: str, default: Optional[Any] = None) -> Any:
@@ -73,6 +93,8 @@ def cached(
 
             cached_result = cache_backend.get(key, _SENTINEL)
             if cached_result is not _SENTINEL:
+                if _cache_hit_counter is not None:
+                    _cache_hit_counter.labels(function=func.__qualname__).inc()
                 # saved dependencies are added to the current tracker
                 cached_deps = cache_backend.get(deps_key)
                 if cached_deps:
@@ -88,6 +110,8 @@ def cached(
                 )
                 return cached_result
 
+            if _cache_miss_counter is not None:
+                _cache_miss_counter.labels(function=func.__qualname__).inc()
             with DependencyTracker() as dependencies:
                 result = func(*args, **kwargs)
                 ModelDependencyCollector.add_args(dependencies, args, kwargs)

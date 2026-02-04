@@ -78,11 +78,15 @@ services:
     build:
       context: .
       dockerfile: docker/nginx.Dockerfile
+    environment:
+      GRAPHQL_LIMIT_RATE: "${GRAPHQL_LIMIT_RATE:-10r/s}"
+      GRAPHQL_LIMIT_BURST: "${GRAPHQL_LIMIT_BURST:-20}"
+      GRAPHQL_LIMIT_ENABLED: "${GRAPHQL_LIMIT_ENABLED:-1}"
     ports:
       - "${ORL_HTTPS_PORT:-8443}:443"
     entrypoint: ["/bin/sh", "/etc/nginx/nginx-entrypoint.sh"]
     volumes:
-      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx.conf.template:/tmp/nginx.conf.template:ro
       - orl-static:/static:ro
       - ./docker/certs:/etc/nginx/certs:ro
       - ./docker/nginx-entrypoint.sh:/etc/nginx/nginx-entrypoint.sh:ro
@@ -203,6 +207,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--web.route-prefix=/prometheus"
       - "--web.external-url=https://localhost:${ORL_HTTPS_PORT:-8443}/prometheus"
+      - "--web.enable-remote-write-receiver"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./docker/prometheus-rules.yml:/etc/prometheus/rules.yml:ro
@@ -375,6 +380,30 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    networks:
+      - backend
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["load"]
+    entrypoint: ["k6", "run", "/scripts/orl_k6.js"]
+    environment:
+      ORL_BASE_URL: "https://nginx"
+      K6_INSECURE: "true"
+      K6_OUT: "${K6_OUT:-}"
+      K6_OUT_FILE: "${K6_OUT_FILE:-}"
+      ORL_SUPERUSER: "${ORL_SUPERUSER:-admin}"
+      ORL_PASSWORD: "${ORL_SUPERUSER_PASSWORD:-admin}"
+      RATE: "${K6_RATE:-30}"
+      DURATION: "${K6_DURATION:-5m}"
+      SUB_VUS: "${K6_SUB_VUS:-2}"
+      SUB_DURATION: "${K6_SUB_DURATION:-5m}"
+      SUB_BURST: "${K6_SUB_BURST:-3}"
+    volumes:
+      - ./k6:/scripts:ro
+    depends_on:
+      nginx:
+        condition: service_healthy
     networks:
       - backend
 
