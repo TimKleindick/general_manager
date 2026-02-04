@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import Mock, patch
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
+
+from django.utils import timezone
 
 from general_manager.interface.capabilities.orm import (
     OrmPersistenceSupportCapability,
@@ -211,6 +213,62 @@ class TestOrmReadCapability:
                 ):
                     with pytest.raises(DoesNotExist, match="Not found"):
                         capability.get_data(mock_instance)
+
+    def test_get_data_raises_when_historical_missing_for_active_instance(self):
+        """Test that get_data raises DoesNotExist when historical record is missing."""
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        mock_model = Mock()
+        mock_model.DoesNotExist = DoesNotExist
+
+        fixed_now = timezone.now()
+
+        mock_instance = Mock()
+        mock_instance.pk = 1
+        mock_instance._search_date = fixed_now - timedelta(days=1)
+        mock_instance.__class__ = Mock()
+        mock_instance.__class__._model = mock_model
+        mock_instance.__class__.historical_lookup_buffer_seconds = 0
+
+        mock_manager = Mock()
+        mock_manager.get = Mock(return_value=mock_instance)
+
+        mock_history_capability = Mock()
+        mock_history_capability.get_historical_record = Mock(return_value=None)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_manager = Mock(return_value=mock_manager)
+            mock_get_support.return_value = mock_support
+
+            with patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ):
+                with patch(
+                    "general_manager.interface.capabilities.orm.support._history_capability_for",
+                    return_value=mock_history_capability,
+                ):
+                    with patch(
+                        "general_manager.interface.capabilities.orm.support.timezone.now",
+                        return_value=fixed_now,
+                    ):
+                        with patch(
+                            "general_manager.interface.capabilities.orm.with_observability",
+                            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                        ):
+                            with pytest.raises(DoesNotExist):
+                                capability.get_data(mock_instance)
+        mock_history_capability.get_historical_record.assert_called_once_with(
+            mock_instance.__class__,
+            mock_instance,
+            mock_instance._search_date,
+        )
 
     def test_get_attribute_types_returns_field_metadata(self):
         """Test that get_attribute_types returns field descriptors as metadata."""

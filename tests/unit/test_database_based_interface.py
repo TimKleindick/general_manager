@@ -782,7 +782,8 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
             "general_manager.interface.capabilities.orm.OrmHistoryCapability.get_historical_record",
             return_value=None,
         ) as mock_hist:
-            DummyManager(self.person.pk, search_date=old_date)
+            with self.assertRaises(PersonModel.DoesNotExist):
+                DummyManager(self.person.pk, search_date=old_date)
             mock_hist.assert_called_once()
 
     def test_database_bucket_integration(self):
