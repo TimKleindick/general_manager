@@ -7,7 +7,7 @@ from general_manager.interface.capabilities.core.utils import (
 )
 from simple_history.utils import update_change_reason as update_change_reason
 
-from .history import OrmHistoryCapability
+from .history import HistoryNotSupportedError, OrmHistoryCapability
 from .lifecycle import OrmLifecycleCapability
 from .mutations import (
     OrmCreateCapability,
@@ -26,6 +26,7 @@ from .support import (
 )
 
 __all__ = [
+    "HistoryNotSupportedError",
     "OrmCreateCapability",
     "OrmDeleteCapability",
     "OrmHistoryCapability",

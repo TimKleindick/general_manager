@@ -20,6 +20,13 @@ if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.orm_interface import OrmInterfaceBase
 
 
+class HistoryNotSupportedError(RuntimeError):
+    """Raised when historical lookups are requested but not supported."""
+
+    def __init__(self, interface_name: str) -> None:
+        super().__init__(f"{interface_name} does not support historical queries.")
+
+
 class OrmHistoryCapability(BaseCapability):
     """Lookup historical records for ORM-backed interfaces."""
 
@@ -121,6 +128,30 @@ class OrmHistoryCapability(BaseCapability):
             .last()
         )
         return historical
+
+    def get_historical_queryset(
+        self,
+        interface_cls: type["OrmInterfaceBase"],
+        search_date: datetime,
+    ) -> models.QuerySet:
+        """
+        Retrieve a queryset representing the historical state as of the given date.
+
+        Parameters:
+            interface_cls (type["OrmInterfaceBase"]): ORM interface whose underlying model provides the historical manager.
+            search_date (datetime): Cutoff datetime for historical snapshot lookup.
+
+        Returns:
+            models.QuerySet: QuerySet representing the state at `search_date`.
+
+        Raises:
+            HistoryNotSupportedError: If the model does not expose a history manager.
+        """
+        if not hasattr(interface_cls._model, "history"):
+            raise HistoryNotSupportedError(interface_cls.__name__)
+        history_manager = interface_cls._model.history  # type: ignore[attr-defined]
+        history_manager = self._apply_database_alias(interface_cls, history_manager)
+        return cast(models.QuerySet, history_manager.as_of(search_date))
 
     def get_historical_record_by_pk(
         self,

@@ -1,5 +1,7 @@
 # type: ignore
 
+from datetime import datetime
+
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.db.models import functions
@@ -12,7 +14,7 @@ from general_manager.api.property import graph_ql_property
 
 # Dummy interface class to satisfy GeneralManager requirements
 class DummyInterface(InterfaceBase):
-    def __init__(self, pk):
+    def __init__(self, pk, **_kwargs):
         # Simulate identification attribute as dict with 'id'
         """
         Initializes the manager with a primary key and sets the identification attribute.
@@ -77,6 +79,7 @@ class DummyInterface(InterfaceBase):
         Returns:
             A DatabaseBucket wrapping UserManager instances for the filtered users.
         """
+        kwargs.pop("search_date", None)
         return DatabaseBucket(User.objects.filter(**kwargs), UserManager)
 
     @classmethod
@@ -142,11 +145,11 @@ class UserManager(GeneralManager):
     Simple GeneralManager subclass for wrapping User PKs.
     """
 
-    def __init__(self, pk):
+    def __init__(self, pk, **kwargs):
         """
         Initializes the UserManager with the given primary key.
         """
-        super().__init__(pk)
+        super().__init__(pk, **kwargs)
 
     @graph_ql_property(
         filterable=True, sortable=True, query_annotation=functions.Length("username")
@@ -164,11 +167,21 @@ class AnotherManager(GeneralManager):
     Another GeneralManager subclass to test type mismatches.
     """
 
-    def __init__(self, pk):
+    def __init__(self, pk, **kwargs):
         """
         Initializes the UserManager with the given primary key.
         """
-        super().__init__(pk)
+        super().__init__(pk, **kwargs)
+
+
+class SearchDateManager(GeneralManager):
+    """
+    GeneralManager subclass capturing search_date for testing.
+    """
+
+    def __init__(self, pk, **kwargs):
+        self.received_search_date = kwargs.get("search_date")
+        super().__init__(pk, **kwargs)
 
 
 class DatabaseBucketTestCase(TestCase):
@@ -180,6 +193,7 @@ class DatabaseBucketTestCase(TestCase):
         """
         UserManager.Interface = DummyInterface  # Set the interface for UserManager
         AnotherManager.Interface = DummyInterface
+        SearchDateManager.Interface = DummyInterface
         DummyInterface._parent_class = UserManager
         # Create some test users
         self.u1 = User.objects.create(username="alice")
@@ -218,6 +232,20 @@ class DatabaseBucketTestCase(TestCase):
         empty = DatabaseBucket(User.objects.none(), UserManager)
         self.assertIsNone(empty.first())
         self.assertIsNone(empty.last())
+
+    def test_search_date_is_passed_to_manager(self):
+        """
+        Tests that search_date is propagated to manager instances.
+        """
+        search_date = datetime(2024, 1, 1)
+        bucket = DatabaseBucket(
+            User.objects.all(),
+            SearchDateManager,
+            search_date=search_date,
+        )
+        first_mgr = bucket.first()
+        self.assertIsInstance(first_mgr, SearchDateManager)
+        self.assertEqual(first_mgr.received_search_date, search_date)
 
     def test_get(self):
         """

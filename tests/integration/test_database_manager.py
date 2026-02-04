@@ -213,6 +213,42 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(len(us_country), 1)
         self.assertEqual(us_country[0].name, "United States")
 
+    def test_filter_with_search_date_returns_historical_state(self):
+        base_time = timezone.now() - timedelta(days=10)
+
+        with patch("django.utils.timezone.now", return_value=base_time):
+            human = self.TestHuman.create(
+                creator_id=None,
+                name="Chrono Base",
+                ignore_permission=True,
+            )
+
+        with patch(
+            "django.utils.timezone.now", return_value=base_time + timedelta(hours=1)
+        ):
+            human.update(
+                name="Chrono Updated",
+                ignore_permission=True,
+            )
+
+        search_date = base_time + timedelta(minutes=30)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=search_date + timedelta(seconds=10),
+        ):
+            historical_bucket = self.TestHuman.filter(
+                name="Chrono Base",
+                search_date=search_date,
+            )
+            self.assertEqual(len(historical_bucket), 1)
+            self.assertEqual(historical_bucket[0].name, "Chrono Base")
+
+            empty_bucket = self.TestHuman.filter(
+                name="Chrono Updated",
+                search_date=search_date,
+            )
+            self.assertEqual(len(empty_bucket), 0)
+
     def test_first_and_last_operations(self):
         """
         Test first() and last() operations on QuerySets.

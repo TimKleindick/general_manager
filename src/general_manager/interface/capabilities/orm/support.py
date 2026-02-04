@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, TYPE_CHECKING, Callable, ClassVar, Type, cast
 
 from django.db import models
@@ -336,10 +336,41 @@ class OrmReadCapability(BaseCapability):
         return type(field)
 
 
+class InvalidSearchDateTypeError(TypeError):
+    """Raised when a search_date does not match the expected type."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class SearchDateNormalizationError(TypeError):
+    """Raised when a normalized search_date is not a datetime."""
+
+    def __init__(self) -> None:
+        super().__init__("search_date must be a datetime instance after normalization.")
+
+
+class SearchDateInputError(TypeError):
+    """Raised when a search_date input is not a datetime or date."""
+
+    def __init__(self) -> None:
+        super().__init__("search_date must be a datetime or date instance.")
+
+
 class OrmQueryCapability(BaseCapability):
     """Expose DatabaseBucket operations via the capability configuration."""
 
     name: ClassVar[CapabilityName] = "query"
+
+    @staticmethod
+    def _ensure_search_date_input(search_date: Any) -> None:
+        if not isinstance(search_date, (datetime, date)):
+            raise SearchDateInputError
+
+    @staticmethod
+    def _ensure_search_date_normalized(search_date: Any) -> None:
+        if not isinstance(search_date, datetime):
+            raise SearchDateNormalizationError
 
     def filter(
         self,
@@ -351,7 +382,7 @@ class OrmQueryCapability(BaseCapability):
 
         Parameters:
             interface_cls (type[OrmInterfaceBase]): Interface class whose model and configuration determine queryset construction.
-            **kwargs: Lookup expressions passed through the payload normalizer; may include the special key `include_inactive` to include inactive/soft-deleted records.
+            **kwargs: Lookup expressions passed through the payload normalizer; may include `include_inactive` to include inactive/soft-deleted records and `search_date` to scope results to a historical snapshot.
 
         Returns:
             DatabaseBucket: A container holding the resulting Django queryset (cast to the model's queryset type), the interface's parent class, and the normalized filter kwargs.
@@ -365,11 +396,14 @@ class OrmQueryCapability(BaseCapability):
             Returns:
                 DatabaseBucket: A bucket containing the resulting Django queryset, the interface's parent class, and the normalized filter kwargs.
             """
-            include_flag, normalized = self._normalize_kwargs(interface_cls, kwargs)
+            include_flag, normalized, search_date = self._normalize_kwargs(
+                interface_cls, kwargs
+            )
             return self._build_bucket(
                 interface_cls,
                 include_inactive=include_flag,
                 normalized_kwargs=normalized,
+                search_date=search_date,
             )
 
         return call_with_observability(
@@ -389,7 +423,7 @@ class OrmQueryCapability(BaseCapability):
 
         Parameters:
                 interface_cls (type[OrmInterfaceBase]): The ORM interface class whose model and metadata are used to construct the queryset.
-                **kwargs: Filter lookup expressions to apply as exclusion criteria. May include the special key `include_inactive` (bool) to control whether inactive/soft-deleted records are considered.
+                **kwargs: Filter lookup expressions to apply as exclusion criteria. May include `include_inactive` (bool) to control whether inactive/soft-deleted records are considered and `search_date` to scope results historically.
 
         Returns:
                 DatabaseBucket: A container holding the resulting Django queryset, the interface's parent class, and the normalized filter dictionary used for the exclusion.
@@ -405,12 +439,15 @@ class OrmQueryCapability(BaseCapability):
             Returns:
                 DatabaseBucket: The bucket containing the queryset (with excluded matches) and associated metadata.
             """
-            include_flag, normalized = self._normalize_kwargs(interface_cls, kwargs)
+            include_flag, normalized, search_date = self._normalize_kwargs(
+                interface_cls, kwargs
+            )
             return self._build_bucket(
                 interface_cls,
                 include_inactive=include_flag,
                 normalized_kwargs=normalized,
                 exclude=True,
+                search_date=search_date,
             )
 
         return call_with_observability(
@@ -424,7 +461,7 @@ class OrmQueryCapability(BaseCapability):
         self,
         interface_cls: type["OrmInterfaceBase"],
         kwargs: dict[str, Any],
-    ) -> tuple[bool, dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any], datetime | None]:
         """
         Extracts an `include_inactive` flag from the provided kwargs and returns it alongside the remaining filter kwargs normalized for the interface's model.
 
@@ -433,14 +470,24 @@ class OrmQueryCapability(BaseCapability):
             kwargs (dict[str, Any]): Filter keyword arguments; may include the key `"include_inactive"`.
 
         Returns:
-            tuple: A pair where the first item is `True` if `"include_inactive"` was set in `kwargs`, `False` otherwise; the second item is a dict of the remaining filter kwargs after normalization.
+            tuple: A tuple containing: (1) a boolean indicating whether inactive records are included, (2) the normalized filter kwargs, and (3) an optional `search_date` used to scope historical lookups.
         """
         payload = dict(kwargs)
         include_inactive = bool(payload.pop("include_inactive", False))
+        search_date = payload.pop("search_date", None)
+        if search_date is not None:
+            self._ensure_search_date_input(search_date)
+        if isinstance(search_date, date) and not isinstance(search_date, datetime):
+            search_date = datetime.combine(search_date, time.min)
+        normalize_date = getattr(interface_cls, "normalize_search_date", None)
+        if callable(normalize_date):
+            search_date = normalize_date(search_date)
+        if search_date is not None:
+            self._ensure_search_date_normalized(search_date)
         support = get_support_capability(interface_cls)
         normalizer = support.get_payload_normalizer(interface_cls)
         normalized_kwargs = normalizer.normalize_filter_kwargs(payload)
-        return include_inactive, normalized_kwargs
+        return include_inactive, normalized_kwargs, search_date
 
     def _build_bucket(
         self,
@@ -449,6 +496,7 @@ class OrmQueryCapability(BaseCapability):
         include_inactive: bool,
         normalized_kwargs: dict[str, Any],
         exclude: bool = False,
+        search_date: datetime | None = None,
     ) -> DatabaseBucket:
         """
         Builds a DatabaseBucket containing a queryset for the given interface class filtered or excluded by the provided normalized query kwargs.
@@ -469,6 +517,19 @@ class OrmQueryCapability(BaseCapability):
                 interface_cls,
                 only_active=False,
             ).all()
+        if search_date is not None and search_date <= timezone.now() - timedelta(
+            seconds=interface_cls.historical_lookup_buffer_seconds
+        ):
+            from .history import HistoryNotSupportedError
+
+            try:
+                history_handler = _history_capability_for(interface_cls)
+            except NotImplementedError as error:
+                raise HistoryNotSupportedError(interface_cls.__name__) from error
+            queryset_base = history_handler.get_historical_queryset(
+                interface_cls,
+                search_date,
+            )
         queryset = (
             queryset_base.exclude(**normalized_kwargs)
             if exclude
@@ -478,6 +539,7 @@ class OrmQueryCapability(BaseCapability):
             cast(models.QuerySet[models.Model], queryset),
             interface_cls._parent_class,
             dict(normalized_kwargs),
+            search_date=search_date,
         )
 
 

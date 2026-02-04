@@ -1,6 +1,7 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
+from datetime import date, datetime
 from typing import Any, Generator, Type, TypeVar
 
 from django.core.exceptions import FieldError
@@ -43,6 +44,27 @@ class DatabaseBucketManagerMismatchError(TypeError):
         """
         super().__init__(
             f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
+        )
+
+
+class DatabaseBucketSearchDateMismatchError(ValueError):
+    """Raised when combining buckets with different search dates."""
+
+    def __init__(
+        self,
+        search_date: datetime | date | None,
+        other_search_date: datetime | date | None,
+    ) -> None:
+        """
+        Raised when attempting to combine buckets with different search dates.
+
+        Parameters:
+            search_date (Any | None): The search date on the first bucket.
+            other_search_date (Any | None): The search date on the second bucket.
+        """
+        super().__init__(
+            "Cannot combine buckets with different search_date values: "
+            f"{search_date!r} vs {other_search_date!r}."
         )
 
 
@@ -125,6 +147,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         manager_class: Type[GeneralManagerType],
         filter_definitions: dict[str, list[Any]] | None = None,
         exclude_definitions: dict[str, list[Any]] | None = None,
+        *,
+        search_date: datetime | date | None = None,
     ) -> None:
         """
         Instantiate a database-backed bucket with optional filter state.
@@ -134,6 +158,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             manager_class (type[GeneralManagerType]): GeneralManager subclass used to wrap rows.
             filter_definitions (dict[str, list[Any]] | None): Pre-existing filter expressions captured from parent buckets.
             exclude_definitions (dict[str, list[Any]] | None): Pre-existing exclusion expressions captured from parent buckets.
+            search_date (datetime | date | None): Optional timestamp applied when instantiating manager instances.
 
         Returns:
             None
@@ -142,6 +167,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self._manager_class = manager_class
         self.filters = {**(filter_definitions or {})}
         self.excludes = {**(exclude_definitions or {})}
+        self._search_date = search_date
+
+    def _build_manager(self, pk: Any) -> GeneralManagerType:
+        if self._search_date is None:
+            return self._manager_class(pk)
+        return self._manager_class(pk, search_date=self._search_date)
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
@@ -151,7 +182,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
         for item in self._data:
-            yield self._manager_class(item.pk)
+            yield self._build_manager(item.pk)
 
     def __or__(
         self,
@@ -172,7 +203,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(
-                self._manager_class.filter(id__in=[other.identification["id"]])
+                self._manager_class.filter(
+                    id__in=[other.identification["id"]],
+                    search_date=self._search_date,
+                )
             )
         if not isinstance(other, self.__class__):
             raise DatabaseBucketTypeMismatchError(self.__class__, type(other))
@@ -180,10 +214,15 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise DatabaseBucketManagerMismatchError(
                 self._manager_class, other._manager_class
             )
+        if self._search_date != other._search_date:
+            raise DatabaseBucketSearchDateMismatchError(
+                self._search_date, other._search_date
+            )
         return self.__class__(
             self._data | other._data,
             self._manager_class,
             {},
+            search_date=self._search_date,
         )
 
     def __merge_filter_definitions(
@@ -263,7 +302,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         ids: list[int] = []
         for obj in query_set:
-            inst = self._manager_class(obj.pk)
+            inst = self._build_manager(obj.pk)
             keep = True
             for k, val, root in python_filters:
                 lookup = k.split("__", 1)[1] if "__" in k else ""
@@ -290,6 +329,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             InvalidQueryAnnotationTypeError: If a query-annotation callback returns a non-QuerySet.
             QuerysetFilteringError: If the ORM rejects the filter arguments or filtering fails.
         """
+        search_date = kwargs.pop("search_date", self._search_date)
         annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
@@ -314,7 +354,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.filter(pk__in=ids)
 
         merged_filter = self.__merge_filter_definitions(self.filters, **kwargs)
-        return self.__class__(qs, self._manager_class, merged_filter, self.excludes)
+        return self.__class__(
+            qs,
+            self._manager_class,
+            merged_filter,
+            self.excludes,
+            search_date=search_date,
+        )
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
         """
@@ -331,6 +377,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Raises:
             InvalidQueryAnnotationTypeError: If an annotation callable is applied and does not return a Django QuerySet.
         """
+        search_date = kwargs.pop("search_date", self._search_date)
         annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
@@ -352,7 +399,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.exclude(pk__in=ids)
 
         merged_exclude = self.__merge_filter_definitions(self.excludes, **kwargs)
-        return self.__class__(qs, self._manager_class, self.filters, merged_exclude)
+        return self.__class__(
+            qs,
+            self._manager_class,
+            self.filters,
+            merged_exclude,
+            search_date=search_date,
+        )
 
     def first(self) -> GeneralManagerType | None:
         """
@@ -364,7 +417,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         first_element = self._data.first()
         if first_element is None:
             return None
-        return self._manager_class(first_element.pk)
+        return self._build_manager(first_element.pk)
 
     def last(self) -> GeneralManagerType | None:
         """
@@ -376,7 +429,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         first_element = self._data.last()
         if first_element is None:
             return None
-        return self._manager_class(first_element.pk)
+        return self._build_manager(first_element.pk)
 
     def count(self) -> int:
         """
@@ -394,7 +447,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             DatabaseBucket: Bucket encapsulating `self._data.all()`.
         """
-        return self.__class__(self._data.all(), self._manager_class)
+        return self.__class__(
+            self._data.all(),
+            self._manager_class,
+            search_date=self._search_date,
+        )
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
         """
@@ -411,7 +468,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             models.MultipleObjectsReturned: Propagated when multiple rows satisfy the lookup.
         """
         element = self._data.get(**kwargs)
-        return self._manager_class(element.pk)
+        return self._build_manager(element.pk)
 
     def __getitem__(self, item: int | slice) -> GeneralManagerType | DatabaseBucket:
         """
@@ -424,8 +481,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | DatabaseBucket: Manager instance for single indices or bucket wrapping the sliced queryset.
         """
         if isinstance(item, slice):
-            return self.__class__(self._data[item], self._manager_class)
-        return self._manager_class(self._data[item].pk)
+            return self.__class__(
+                self._data[item],
+                self._manager_class,
+                search_date=self._search_date,
+            )
+        return self._build_manager(self._data[item].pk)
 
     def __len__(self) -> int:
         """
@@ -521,7 +582,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             objs = list(qs)
 
             def key_func(obj: models.Model) -> tuple[object, ...]:
-                inst = self._manager_class(obj.pk)
+                inst = self._build_manager(obj.pk)
                 values = []
                 for k in key:
                     if k in properties:
@@ -547,7 +608,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             except (FieldError, TypeError, ValueError) as error:
                 raise QuerysetOrderingError(error) from error
 
-        return self.__class__(qs, self._manager_class)
+        return self.__class__(qs, self._manager_class, search_date=self._search_date)
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:
         """

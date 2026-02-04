@@ -10,13 +10,14 @@ from types import SimpleNamespace
 from django.utils import timezone
 
 from general_manager.interface.capabilities.orm import (
-    OrmPersistenceSupportCapability,
-    OrmReadCapability,
+    HistoryNotSupportedError,
     OrmHistoryCapability,
-    OrmQueryCapability,
-    OrmValidationCapability,
-    OrmMutationCapability,
     OrmLifecycleCapability,
+    OrmMutationCapability,
+    OrmPersistenceSupportCapability,
+    OrmQueryCapability,
+    OrmReadCapability,
+    OrmValidationCapability,
     SoftDeleteCapability,
 )
 
@@ -646,6 +647,7 @@ class TestOrmQueryCapability:
         mock_parent = Mock()
         interface_cls = Mock()
         interface_cls._parent_class = mock_parent
+        interface_cls.normalize_search_date = None
 
         support = Mock()
         queryset = Mock()
@@ -673,7 +675,10 @@ class TestOrmQueryCapability:
 
                     queryset.filter.assert_called_once_with(name="test", value=42)
                     mock_bucket.assert_called_once_with(
-                        filtered_qs, mock_parent, {"name": "test", "value": 42}
+                        filtered_qs,
+                        mock_parent,
+                        {"name": "test", "value": 42},
+                        search_date=None,
                     )
                     assert result is mock_bucket.return_value
 
@@ -683,6 +688,7 @@ class TestOrmQueryCapability:
 
         interface_cls = Mock()
         interface_cls._parent_class = Mock()
+        interface_cls.normalize_search_date = None
 
         support = Mock()
         queryset = Mock()
@@ -710,7 +716,10 @@ class TestOrmQueryCapability:
 
                     queryset.exclude.assert_called_once_with(status="inactive")
                     mock_bucket.assert_called_once_with(
-                        excluded_qs, interface_cls._parent_class, {"status": "inactive"}
+                        excluded_qs,
+                        interface_cls._parent_class,
+                        {"status": "inactive"},
+                        search_date=None,
                     )
                     assert result is mock_bucket.return_value
 
@@ -720,6 +729,7 @@ class TestOrmQueryCapability:
 
         interface_cls = Mock()
         interface_cls._parent_class = Mock()
+        interface_cls.normalize_search_date = None
 
         support = Mock()
         queryset = Mock()
@@ -752,9 +762,124 @@ class TestOrmQueryCapability:
                     )
                     manager.all.assert_called_once_with()
                     mock_bucket.assert_called_once_with(
-                        queryset, interface_cls._parent_class, {}
+                        queryset,
+                        interface_cls._parent_class,
+                        {},
+                        search_date=None,
                     )
                     assert result is mock_bucket.return_value
+
+    def test_filter_with_search_date_uses_history_as_of(self):
+        """Test that filter uses history.as_of when a search_date is provided."""
+        capability = OrmQueryCapability()
+
+        interface_cls = type("MockInterface", (), {})
+        interface_cls._parent_class = Mock()
+        interface_cls._model = Mock()
+        interface_cls.historical_lookup_buffer_seconds = 0
+        interface_cls.normalize_search_date = Mock(side_effect=lambda value: value)
+
+        search_date = timezone.now() - timedelta(days=1)
+        now_time = search_date + timedelta(seconds=10)
+
+        history_qs = Mock()
+        filtered_qs = Mock()
+        history_qs.filter.return_value = filtered_qs
+        history_manager = Mock()
+        history_manager.as_of.return_value = history_qs
+        interface_cls._model.history = history_manager
+
+        history_capability = Mock()
+        history_capability.get_historical_queryset = Mock(return_value=history_qs)
+
+        support = Mock()
+        support.get_queryset.return_value = Mock()
+        support.get_database_alias.return_value = None
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = {"name": "Historian"}
+        support.get_payload_normalizer.return_value = normalizer
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=support,
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                return_value=history_capability,
+            ):
+                with patch(
+                    "general_manager.interface.capabilities.orm.support.DatabaseBucket"
+                ) as mock_bucket:
+                    mock_bucket.return_value = Mock()
+
+                    with patch(
+                        "general_manager.interface.capabilities.orm.support.timezone.now",
+                        return_value=now_time,
+                    ):
+                        with patch(
+                            "general_manager.interface.capabilities.orm.with_observability",
+                            side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                        ):
+                            result = capability.filter(
+                                interface_cls,
+                                name="Historian",
+                                search_date=search_date,
+                            )
+
+                            history_capability.get_historical_queryset.assert_called_once_with(
+                                interface_cls,
+                                search_date,
+                            )
+                            history_qs.filter.assert_called_once_with(name="Historian")
+                            mock_bucket.assert_called_once_with(
+                                filtered_qs,
+                                interface_cls._parent_class,
+                                {"name": "Historian"},
+                                search_date=search_date,
+                            )
+                            assert result is mock_bucket.return_value
+
+    def test_filter_with_search_date_requires_history_capability(self):
+        """Test that filter raises when history capability is missing."""
+        capability = OrmQueryCapability()
+
+        interface_cls = type("MockInterface", (), {})
+        interface_cls._parent_class = Mock()
+        interface_cls._model = Mock()
+        interface_cls.historical_lookup_buffer_seconds = 0
+        interface_cls.normalize_search_date = Mock(side_effect=lambda value: value)
+
+        search_date = timezone.now() - timedelta(days=1)
+        now_time = search_date + timedelta(seconds=10)
+
+        support = Mock()
+        support.get_queryset.return_value = Mock()
+        support.get_database_alias.return_value = None
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.return_value = {}
+        support.get_payload_normalizer.return_value = normalizer
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=support,
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=NotImplementedError("missing history"),
+            ):
+                with patch(
+                    "general_manager.interface.capabilities.orm.support.timezone.now",
+                    return_value=now_time,
+                ):
+                    with patch(
+                        "general_manager.interface.capabilities.orm.with_observability",
+                        side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                    ):
+                        with pytest.raises(HistoryNotSupportedError):
+                            capability.filter(
+                                interface_cls,
+                                search_date=search_date,
+                            )
 
 
 class TestOrmValidationCapability:
