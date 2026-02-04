@@ -40,6 +40,8 @@ material.update(
 )
 ```
 
+To inspect historical state across many rows, pass `search_date=...` to `filter()` or `exclude()` so the query resolves to the snapshot at that point in time.
+
 ### Soft deletes
 
 New database-backed managers perform hard deletes by default. Add `use_soft_delete = True` to the interface's `Meta` class to keep the historical `is_active` flag and route `delete()` calls through a soft delete. When enabled GeneralManager automatically injects filtered managers (`objects` returns active rows, `all_objects` includes inactive ones), honours explicit `filter(is_active=…)` lookups, and preserves the existing history comments (`"… (deactivated)"`). Pass `include_inactive=True` to `filter()`/`exclude()` when you need the full dataset without touching the model's managers directly.

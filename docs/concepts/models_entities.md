@@ -25,6 +25,7 @@ class Project(GeneralManager):
 All collection-returning APIs produce a `Bucket`. Buckets behave like Python iterables while preserving metadata such as applied filters and ordering. You can:
 
 - Call `filter()` and `exclude()` to refine the dataset using Django-style lookups.
+- Pass `search_date=...` to `filter()` or `exclude()` to query historical state at a specific point in time.
 - Chain `sort()` calls for deterministic ordering.
 - Slice (`bucket[0:10]`) or iterate lazily.
 - Merge buckets with the union operator (`bucket_a | bucket_b`).
