@@ -25,6 +25,63 @@ class OrmHistoryCapability(BaseCapability):
 
     name: ClassVar[CapabilityName] = "history"
 
+    @staticmethod
+    def _get_instance_pk_filter(instance: Any) -> dict[str, Any] | None:
+        pk_value = None
+        if hasattr(instance, "pk"):
+            pk_value = instance.pk
+        elif hasattr(instance, "id"):
+            pk_value = instance.id
+        if pk_value is None:
+            return None
+        pk_name = "id"
+        instance_meta = getattr(instance, "_meta", None)
+        instance_pk = getattr(instance_meta, "pk", None)
+        instance_pk_name = getattr(instance_pk, "name", None)
+        if isinstance(instance_pk_name, str):
+            pk_name = instance_pk_name
+        return {pk_name: pk_value}
+
+    @staticmethod
+    def _get_model_pk_filter(
+        interface_cls: type["OrmInterfaceBase"], instance: Any
+    ) -> dict[str, Any] | None:
+        pk_value = None
+        if hasattr(instance, "pk"):
+            pk_value = instance.pk
+        elif hasattr(instance, "id"):
+            pk_value = instance.id
+        elif hasattr(instance, "identification"):
+            identification = getattr(instance, "identification", None)
+            if isinstance(identification, dict):
+                pk_value = identification.get("id")
+        if pk_value is None:
+            return None
+        model = getattr(interface_cls, "_model", None)
+        if (
+            model is None
+            or not isinstance(model, type)
+            or not hasattr(model, "history")
+        ):
+            return None
+        pk_field = getattr(getattr(model, "_meta", None), "pk", None)
+        pk_name = getattr(pk_field, "name", "id")
+        if not isinstance(pk_name, str):
+            pk_name = "id"
+        return {pk_name: pk_value}
+
+    @staticmethod
+    def _apply_database_alias(
+        interface_cls: type["OrmInterfaceBase"],
+        history_manager: SupportsHistoryQuery,
+    ) -> SupportsHistoryQuery:
+        database_alias = get_support_capability(interface_cls).get_database_alias(
+            interface_cls
+        )
+        if database_alias:
+            return history_manager.using(database_alias)
+        return history_manager
+
     def get_historical_record(
         self,
         interface_cls: type["OrmInterfaceBase"],
@@ -43,39 +100,16 @@ class OrmHistoryCapability(BaseCapability):
             Any | None: The historical model instance that was current at `search_date`, or `None` if no matching historical record exists or the instance does not support history.
         """
         history_manager: SupportsHistoryQuery
-        pk_filter: dict[str, Any] | None = None
+        pk_filter: dict[str, Any] | None
         if isinstance(instance, SupportsHistory):
             history_manager = cast(SupportsHistory, instance).history
+            pk_filter = self._get_instance_pk_filter(instance)
         else:
-            pk_value = None
-            if hasattr(instance, "pk"):
-                pk_value = instance.pk
-            elif hasattr(instance, "id"):
-                pk_value = instance.id
-            elif hasattr(instance, "identification"):
-                identification = getattr(instance, "identification", None)
-                if isinstance(identification, dict):
-                    pk_value = identification.get("id")
-            if pk_value is None:
+            pk_filter = self._get_model_pk_filter(interface_cls, instance)
+            if pk_filter is None:
                 return None
-            model = getattr(interface_cls, "_model", None)
-            if (
-                model is None
-                or not isinstance(model, type)
-                or not hasattr(model, "history")
-            ):
-                return None
-            pk_field = getattr(getattr(model, "_meta", None), "pk", None)
-            pk_name = getattr(pk_field, "name", "id")
-            if not isinstance(pk_name, str):
-                pk_name = "id"
-            pk_filter = {pk_name: pk_value}
-            history_manager = cast(SupportsHistory, model).history
-        database_alias = get_support_capability(interface_cls).get_database_alias(
-            interface_cls
-        )
-        if database_alias:
-            history_manager = history_manager.using(database_alias)
+            history_manager = cast(SupportsHistory, interface_cls._model).history
+        history_manager = self._apply_database_alias(interface_cls, history_manager)
         filter_kwargs: dict[str, Any] = {}
         if search_date is not None:
             filter_kwargs["history_date__lte"] = search_date
