@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.29.0 (2026-02-05)
+
+### Bug Fixes
+
+- Raise when historical lookup misses
+  ([`52f78be`](https://github.com/TimKleindick/general_manager/commit/52f78be5086aaa5cecb93edf3133f09c6bdc3efd))
+
+- Scope history lookup by pk
+  ([`ff52a41`](https://github.com/TimKleindick/general_manager/commit/ff52a41bf079f87a9f2662ef8cb098b824b7c103))
+
+### Features
+
+- Add search_date to filter
+  ([`739f9c9`](https://github.com/TimKleindick/general_manager/commit/739f9c9590539a90b04fe501f3a6091f26eb70d9))
+
+
 ## v0.28.0 (2026-02-03)
 
 ### Bug Fixes
