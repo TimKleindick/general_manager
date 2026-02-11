@@ -81,6 +81,18 @@ class DependencyTracker:
                 dep_set.add((class_name, operation, identifier))
 
     @staticmethod
+    def is_tracking() -> bool:
+        """
+        Return whether dependency tracking is currently active in this thread.
+
+        Returns:
+            bool: True when inside a DependencyTracker context, else False.
+        """
+        return hasattr(_dependency_storage, "dependencies") and bool(
+            _dependency_storage.dependencies
+        )
+
+    @staticmethod
     def reset_thread_local_storage() -> None:
         """
         Clear all dependency tracking data from thread-local storage.

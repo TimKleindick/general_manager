@@ -1,6 +1,8 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
+import hashlib
+import json
 from types import UnionType
 from typing import (
     Any,
@@ -17,6 +19,9 @@ from typing import (
 )
 from operator import attrgetter
 from copy import deepcopy
+from django.core.cache import cache
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import record_dependencies
 from general_manager.interface.base_interface import (
     generalManagerClassName,
     GeneralManagerType,
@@ -180,6 +185,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self.exclude_definitions = (
             {} if exclude_definitions is None else exclude_definitions
         )
+        # Keep base Bucket filter/exclude state aligned for dependency collection.
+        self.filters = self.filter_definitions.copy()
+        self.excludes = self.exclude_definitions.copy()
 
         properties = self._manager_class.Interface.get_graph_ql_properties()
         possible_values = self.transform_properties_to_input_fields(
@@ -460,38 +468,101 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             list[dict[str, Any]]: Cached list of input dictionaries satisfying filters, excludes, and ordering.
         """
+        if self._data is None:
+            self._data = self._generate_combinations_from_dependency_cache()
+        return self._data
+
+    def _generate_combinations_from_dependency_cache(self) -> List[dict[str, Any]]:
+        """
+        Resolve combinations through the GeneralManager dependency-aware cache.
+
+        Returns:
+            list[dict[str, Any]]: Generated combinations from cache or fresh computation.
+        """
+        if not DependencyTracker.is_tracking():
+            # Shared dependency cache is only valuable when a parent tracker is active
+            # and can consume propagated dependencies. Otherwise compute directly to
+            # avoid stale global combinations and unnecessary cache churn.
+            return self._build_combinations()
+
+        cache_key = self._combination_cache_key()
+        deps_key = f"{cache_key}:deps"
+        cached_data = cache.get(cache_key)
+        if isinstance(cached_data, list):
+            cached_dependencies = cache.get(deps_key)
+            if cached_dependencies:
+                for class_name, operation, identifier in cached_dependencies:
+                    DependencyTracker.track(class_name, operation, identifier)
+            return cached_data
+
+        with DependencyTracker() as dependencies:
+            combinations = self._build_combinations()
+            cache.set(cache_key, combinations, None)
+            cache.set(deps_key, dependencies, None)
+            if dependencies:
+                record_dependencies(cache_key, dependencies)
+        return combinations
+
+    def _build_combinations(self) -> List[dict[str, Any]]:
+        """Build combinations without consulting local or shared caches."""
 
         def key_func(manager_obj: GeneralManagerType) -> tuple:
             getters = [attrgetter(key) for key in sort_key]
             return tuple(getter(manager_obj) for getter in getters)
 
-        if self._data is None:
-            sorted_inputs = self.topological_sort_inputs()
-            sorted_filters = self._sort_filters(sorted_inputs)
-            current_combinations = self._generate_input_combinations(
-                sorted_inputs,
-                sorted_filters["input_filters"],
-                sorted_filters["input_excludes"],
-            )
-            manager_combinations = self._generate_prop_combinations(
-                current_combinations,
-                sorted_filters["prop_filters"],
-                sorted_filters["prop_excludes"],
-            )
+        sorted_inputs = self.topological_sort_inputs()
+        sorted_filters = self._sort_filters(sorted_inputs)
+        current_combinations = self._generate_input_combinations(
+            sorted_inputs,
+            sorted_filters["input_filters"],
+            sorted_filters["input_excludes"],
+        )
+        manager_combinations = self._generate_prop_combinations(
+            current_combinations,
+            sorted_filters["prop_filters"],
+            sorted_filters["prop_excludes"],
+        )
 
-            if self.sort_key is not None:
-                sort_key = self.sort_key
-                if isinstance(sort_key, str):
-                    sort_key = (sort_key,)
-                manager_combinations = sorted(
-                    manager_combinations,
-                    key=key_func,
-                )
-            if self.reverse:
-                manager_combinations.reverse()
-            self._data = [manager.identification for manager in manager_combinations]
+        if self.sort_key is not None:
+            sort_key = self.sort_key
+            if isinstance(sort_key, str):
+                sort_key = (sort_key,)
+            manager_combinations = sorted(
+                manager_combinations,
+                key=key_func,
+            )
+        if self.reverse:
+            manager_combinations.reverse()
+        return [manager.identification for manager in manager_combinations]
 
-        return self._data
+    def _combination_cache_key(self) -> str:
+        payload = {
+            "manager": self._manager_class.__qualname__,
+            "filters": self.filter_definitions,
+            "excludes": self.exclude_definitions,
+            "sort_key": self.sort_key,
+            "reverse": self.reverse,
+            "input_signature": self._input_signature(),
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
+        return f"gm:calculation_bucket:{digest}"
+
+    def _input_signature(self) -> dict[str, dict[str, Any]]:
+        """Return a deterministic signature of declared inputs for cache-key stability."""
+        signature: dict[str, dict[str, Any]] = {}
+        for name, input_field in sorted(self.input_fields.items()):
+            depends_on = tuple(input_field.depends_on) if input_field.depends_on else ()
+            signature[name] = {
+                "type": getattr(
+                    input_field.type, "__qualname__", str(input_field.type)
+                ),
+                "depends_on": depends_on,
+                "possible_values": repr(input_field.possible_values),
+            }
+        return signature
 
     def topological_sort_inputs(self) -> List[str]:
         """

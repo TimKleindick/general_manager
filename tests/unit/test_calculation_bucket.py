@@ -2,6 +2,7 @@
 from django.test import TestCase
 from unittest.mock import patch
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import Input
 from general_manager.manager import GeneralManager
@@ -239,6 +240,66 @@ class TestCalculationBucket(TestCase):
         # New bucket has updated sort settings
         self.assertEqual(sorted_bucket.sort_key, "a")
         self.assertTrue(sorted_bucket.reverse)
+
+    @patch("general_manager.bucket.calculation_bucket.cache")
+    @patch("general_manager.bucket.calculation_bucket.DependencyTracker.track")
+    def test_generate_combinations_cache_hit_tracks_dependencies(
+        self, mock_track, mock_cache, _mock_parse
+    ):
+        """
+        Tests that cache hits return cached combinations and re-track cached dependencies.
+        """
+        cached_rows = [{"value": 1}]
+        cached_deps = {("DummyGeneralManager", "filter", "{'x': 1}")}
+        mock_cache.get.side_effect = [cached_rows, cached_deps]
+
+        bucket = CalculationBucket(DummyGeneralManager)
+        with DependencyTracker():
+            with patch.object(
+                bucket, "_combination_cache_key", return_value="gm:test:key"
+            ):
+                result = bucket.generate_combinations()
+
+        self.assertEqual(result, cached_rows)
+        mock_track.assert_called_once_with(
+            "DummyGeneralManager",
+            "filter",
+            "{'x': 1}",
+        )
+
+    @patch("general_manager.bucket.calculation_bucket.record_dependencies")
+    @patch("general_manager.bucket.calculation_bucket.cache")
+    def test_generate_combinations_cache_miss_records_dependencies(
+        self, mock_cache, mock_record_dependencies, _mock_parse
+    ):
+        """
+        Tests that cache misses store combinations and register dependency-map metadata.
+        """
+        mock_cache.get.return_value = None
+        dependency = ("DummyGeneralManager", "filter", "{'x': 1}")
+
+        bucket = CalculationBucket(DummyGeneralManager)
+
+        def _build_with_dependency():
+            from general_manager.cache.cache_tracker import DependencyTracker
+
+            DependencyTracker.track(*dependency)
+            return [{}]
+
+        with patch.object(
+            bucket, "_build_combinations", side_effect=_build_with_dependency
+        ):
+            with DependencyTracker():
+                with patch.object(
+                    bucket, "_combination_cache_key", return_value="gm:test:key"
+                ):
+                    result = bucket.generate_combinations()
+
+        self.assertEqual(result, [{}])
+        mock_cache.set.assert_any_call("gm:test:key", [{}], None)
+        self.assertEqual(mock_cache.set.call_count, 2)
+        recorded_deps = mock_record_dependencies.call_args.args[1]
+        self.assertIn(dependency, recorded_deps)
 
 
 @patch("general_manager.bucket.calculation_bucket.parse_filters", return_value={})
