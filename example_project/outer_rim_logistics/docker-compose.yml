@@ -15,15 +15,23 @@ services:
       PYTHONUNBUFFERED: "1"
       DJANGO_DEBUG: "False"
       DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: "5432"
       POSTGRES_DB: "${POSTGRES_DB:-orl}"
       POSTGRES_USER: "${POSTGRES_USER:-orl}"
       POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
+      POSTGRES_CONN_MAX_AGE: "${POSTGRES_CONN_MAX_AGE:-60}"
       MEILISEARCH_URL: "http://meilisearch:7700"
       MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
       GM_SEARCH_AUTO_REINDEX: "false"
       GM_SEARCH_ASYNC: "true"
+      GM_CACHE_WARMUP_ENABLED: "${GM_CACHE_WARMUP_ENABLED:-true}"
+      GM_CACHE_WARMUP_ASYNC: "${GM_CACHE_WARMUP_ASYNC:-true}"
+      GM_CACHE_WARMUP_MIN_HITS: "${GM_CACHE_WARMUP_MIN_HITS:-5}"
+      GM_CACHE_WARMUP_HOT_WINDOW_SECONDS: "${GM_CACHE_WARMUP_HOT_WINDOW_SECONDS:-300}"
+      GM_CACHE_WARMUP_COOLDOWN_SECONDS: "${GM_CACHE_WARMUP_COOLDOWN_SECONDS:-15}"
+      GM_CACHE_WARMUP_METADATA_TTL_SECONDS: "${GM_CACHE_WARMUP_METADATA_TTL_SECONDS:-1800}"
+      GM_CACHE_WARMUP_LOCK_TIMEOUT_SECONDS: "${GM_CACHE_WARMUP_LOCK_TIMEOUT_SECONDS:-20}"
       STATIC_ROOT: "/static"
       LOG_DIR: "/var/log/outer-rim/app"
       ORL_SEED_ON_START: "${ORL_SEED_ON_START:-true}"
@@ -45,10 +53,12 @@ services:
     tmpfs:
       - /tmp
     depends_on:
-      app-init:
+      django-init:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       meilisearch:
         condition: service_healthy
       prometheus:
@@ -154,6 +164,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
+
+  pgbouncer:
+    <<: *security-defaults
+    image: edoburu/pgbouncer:latest
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: "${POSTGRES_DB:-orl}"
+      DB_USER: "${POSTGRES_USER:-orl}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD:-CHANGE_ME_POSTGRES}"
+      AUTH_TYPE: plain
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "${PGBOUNCER_MAX_CLIENT_CONN:-1200}"
+      DEFAULT_POOL_SIZE: "${PGBOUNCER_DEFAULT_POOL_SIZE:-80}"
+      RESERVE_POOL_SIZE: "${PGBOUNCER_RESERVE_POOL_SIZE:-20}"
+      RESERVE_POOL_TIMEOUT: "${PGBOUNCER_RESERVE_POOL_TIMEOUT:-3}"
+      SERVER_RESET_QUERY: "DISCARD ALL"
+      SERVER_IDLE_TIMEOUT: "${PGBOUNCER_SERVER_IDLE_TIMEOUT:-60}"
+      SERVER_LIFETIME: "${PGBOUNCER_SERVER_LIFETIME:-3600}"
+      QUERY_WAIT_TIMEOUT: "${PGBOUNCER_QUERY_WAIT_TIMEOUT:-120}"
+      IGNORE_STARTUP_PARAMETERS: "extra_float_digits,options"
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - backend
 
@@ -401,6 +437,7 @@ services:
       SUB_BURST: "${K6_SUB_BURST:-3}"
     volumes:
       - ./k6:/scripts:ro
+      - ./k6/results:/results
     depends_on:
       nginx:
         condition: service_healthy
@@ -439,15 +476,23 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
       DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: "5432"
       POSTGRES_DB: "${POSTGRES_DB:-orl}"
       POSTGRES_USER: "${POSTGRES_USER:-orl}"
       POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
+      POSTGRES_CONN_MAX_AGE: "${POSTGRES_CONN_MAX_AGE:-60}"
       MEILISEARCH_URL: "http://meilisearch:7700"
       MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
       GM_SEARCH_AUTO_REINDEX: "false"
       GM_SEARCH_ASYNC: "true"
+      GM_CACHE_WARMUP_ENABLED: "${GM_CACHE_WARMUP_ENABLED:-true}"
+      GM_CACHE_WARMUP_ASYNC: "${GM_CACHE_WARMUP_ASYNC:-true}"
+      GM_CACHE_WARMUP_MIN_HITS: "${GM_CACHE_WARMUP_MIN_HITS:-5}"
+      GM_CACHE_WARMUP_HOT_WINDOW_SECONDS: "${GM_CACHE_WARMUP_HOT_WINDOW_SECONDS:-300}"
+      GM_CACHE_WARMUP_COOLDOWN_SECONDS: "${GM_CACHE_WARMUP_COOLDOWN_SECONDS:-15}"
+      GM_CACHE_WARMUP_METADATA_TTL_SECONDS: "${GM_CACHE_WARMUP_METADATA_TTL_SECONDS:-1800}"
+      GM_CACHE_WARMUP_LOCK_TIMEOUT_SECONDS: "${GM_CACHE_WARMUP_LOCK_TIMEOUT_SECONDS:-20}"
       LOG_DIR: "/var/log/outer-rim/app"
       CELERY_PUSHGATEWAY_URL: "http://pushgateway:9091"
       CELERY_PUSHGATEWAY_ENABLED: "true"
@@ -460,10 +505,12 @@ services:
     tmpfs:
       - /tmp
     depends_on:
-      app-init:
+      django-init:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       meilisearch:
         condition: service_healthy
       redis:
@@ -512,6 +559,47 @@ services:
     volumes:
       - ./logs:/var/log/outer-rim
       - orl-static:/static
+    restart: "no"
+    networks:
+      - backend
+
+  django-init:
+    <<: *security-defaults
+    build:
+      context: ../../
+      dockerfile: example_project/outer_rim_logistics/Dockerfile
+    entrypoint: ["/bin/bash", "/app/example_project/outer_rim_logistics/docker/init-entrypoint.sh"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      DJANGO_DEBUG: "False"
+      DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
+      POSTGRES_HOST: "${ORL_INIT_POSTGRES_HOST:-db}"
+      POSTGRES_PORT: "${ORL_INIT_POSTGRES_PORT:-5432}"
+      POSTGRES_DB: "${POSTGRES_DB:-orl}"
+      POSTGRES_USER: "${POSTGRES_USER:-orl}"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
+      MEILISEARCH_URL: "http://meilisearch:7700"
+      MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
+      GM_SEARCH_AUTO_REINDEX: "false"
+      GM_SEARCH_ASYNC: "true"
+      STATIC_ROOT: "/static"
+      LOG_DIR: "/var/log/outer-rim/app"
+      ORL_SEED_ON_START: "${ORL_SEED_ON_START:-true}"
+    volumes:
+      - ./logs:/var/log/outer-rim
+      - orl-static:/static
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    secrets:
+      - django_secret_key
+      - meilisearch_api_key
+      - postgres_password
     restart: "no"
     networks:
       - backend

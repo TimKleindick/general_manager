@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-log_dir="${LOG_DIR:-/app/example_project/outer_rim_logistics/logs}"
-mkdir -p "$log_dir"
-
 python - <<'PY'
 import os
 import socket
@@ -22,7 +19,7 @@ def wait_for(host: str, port: int, name: str, timeout: int = 45) -> None:
     raise SystemExit(f"Timed out waiting for {name} at {host}:{port}")
 
 
-postgres_host = os.environ.get("POSTGRES_HOST")
+postgres_host = os.environ.get("POSTGRES_HOST", "db")
 postgres_port_raw = os.environ.get("POSTGRES_PORT", "5432")
 try:
     postgres_port = int(postgres_port_raw)
@@ -30,8 +27,7 @@ except ValueError as exc:
     raise SystemExit(
         f"Invalid POSTGRES_PORT value {postgres_port_raw!r}; expected an integer."
     ) from exc
-if postgres_host:
-    wait_for(postgres_host, postgres_port, "Postgres")
+wait_for(postgres_host, postgres_port, "Postgres")
 
 meili_url = os.environ.get("MEILISEARCH_URL")
 if meili_url:
@@ -43,4 +39,10 @@ if meili_url:
     wait_for(host, port, "Meilisearch")
 PY
 
-exec daphne -b 0.0.0.0 -p 8000 orl.asgi:application
+python manage.py migrate --noinput
+
+if [ "${ORL_SEED_ON_START:-true}" = "true" ]; then
+  python manage.py seed_outer_rim
+fi
+
+python manage.py collectstatic --noinput
