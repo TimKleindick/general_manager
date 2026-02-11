@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+RUN_SUBSCRIPTIONS=${RUN_SUBSCRIPTIONS:-true}
+READ_WEIGHT=${READ_WEIGHT:-90}
+WRITE_WEIGHT=${WRITE_WEIGHT:-10}
+
 GRAPHQL_LIMIT_ENABLED=${GRAPHQL_LIMIT_ENABLED:-0} \
-docker compose --profile load run --rm --no-deps k6
+docker compose --profile load run --rm --no-deps \
+  -e READ_WEIGHT="${READ_WEIGHT}" \
+  -e WRITE_WEIGHT="${WRITE_WEIGHT}" \
+  -e RUN_SUBSCRIPTIONS="${RUN_SUBSCRIPTIONS}" \
+  k6

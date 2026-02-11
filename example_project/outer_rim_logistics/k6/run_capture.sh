@@ -3,14 +3,16 @@ set -euo pipefail
 
 RUN_LABEL=${RUN_LABEL:-"k6-run"}
 OUT_DIR=${OUT_DIR:-"./k6/results"}
+CONTAINER_OUT_DIR=${CONTAINER_OUT_DIR:-"/results"}
 RUN_TS=$(date -u +"%Y%m%dT%H%M%SZ")
 
 mkdir -p "${OUT_DIR}"
 
 RUN_LABEL="${RUN_LABEL}" ./k6/record_run.sh
 
-K6_OUT_FILE="${OUT_DIR}/${RUN_TS}-${RUN_LABEL}.json"
-export K6_OUT_FILE
+HOST_OUT_FILE="${OUT_DIR}/${RUN_TS}-${RUN_LABEL}.json"
+K6_OUT_FILE="${CONTAINER_OUT_DIR}/${RUN_TS}-${RUN_LABEL}.json"
+export K6_OUT_FILE HOST_OUT_FILE
 K6_OUT_EXTRA=${K6_OUT_EXTRA:-""}
 if [[ -n "${K6_OUT_EXTRA}" ]]; then
   export K6_OUT="json=${K6_OUT_FILE},${K6_OUT_EXTRA}"
@@ -24,6 +26,6 @@ else
   "$@"
 fi
 
-if [[ -f "${K6_OUT_FILE}" ]]; then
-  python ./k6/summarize_k6.py "${K6_OUT_FILE}" || true
+if [[ -f "${HOST_OUT_FILE}" ]]; then
+  python ./k6/summarize_k6.py "${HOST_OUT_FILE}" || true
 fi

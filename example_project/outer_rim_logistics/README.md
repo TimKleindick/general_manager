@@ -45,29 +45,23 @@ GRAPHQL_LIMIT_RATE=1000r/s GRAPHQL_LIMIT_BURST=1000 docker compose up --build
 Load testing (k6) via docker-compose profile:
 
 ```bash
-./k6/run_baseline.sh
+./k6/run_queries_only.sh
+./k6/run_queries_mutations_only.sh
 ./k6/run_mix.sh
 ./k6/run_heavy_calc.sh
-./k6/run_stress.sh
-./k6/run_spike.sh
-./k6/run_soak.sh
-./k6/run_queries_only.sh
-./k6/run_subscriptions_only.sh
-./k6/run_mix_scaled.sh
-./k6/run_scale_suite.sh
 ```
 
 Optional k6 tuning:
 
 ```bash
-# heavy calculations pack
-HEAVY_CALC=true HEAVY_RATE=0.1 HEAVY_PAGE_SIZE=3 ./k6/run_mix.sh
+# 90/10 mix with subscriptions (default for run_mix.sh)
+READ_WEIGHT=90 WRITE_WEIGHT=10 RUN_SUBSCRIPTIONS=true ./k6/run_mix.sh
+
+# heavy read with writes to trigger invalidation
+HEAVY_RATE=1.0 HEAVY_PAGE_SIZE=3 READ_WEIGHT=80 WRITE_WEIGHT=20 ./k6/run_heavy_calc.sh
 
 # fixed RNG seed for repeatability
 K6_SEED=1337 ./k6/run_mix.sh
-
-# scale suite (override defaults)
-SCALE_LEVELS="1 2 4 6" RATE_1=30 RATE_2=50 RATE_4=70 RATE_6=90 DURATION=10m ./k6/run_scale_suite.sh
 ```
 
 Run metadata capture (repeatability):
@@ -80,12 +74,6 @@ Capture run metadata + JSON output (k6):
 
 ```bash
 RUN_LABEL="baseline" ./k6/run_capture.sh ./k6/run_mix.sh
-```
-
-Capture metadata + JSON output for scale suite:
-
-```bash
-RUN_LABEL="scale-suite" ./k6/run_scale_capture.sh
 ```
 
 Results are stored in `k6/results/` along with a short README.

@@ -6,7 +6,6 @@ This folder stores k6 JSON output and metadata captured by helper scripts.
 
 ```bash
 RUN_LABEL="baseline" ./k6/run_capture.sh ./k6/run_mix.sh
-RUN_LABEL="scale-suite" ./k6/run_scale_capture.sh
 ```
 
 ## Summaries
