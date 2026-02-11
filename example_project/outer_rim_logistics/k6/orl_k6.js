@@ -9,12 +9,8 @@ const WS_URL = GRAPHQL_URL.replace(/^http/, 'ws');
 
 const READ_WEIGHT = Number(__ENV.READ_WEIGHT || 90);
 const WRITE_WEIGHT = Number(__ENV.WRITE_WEIGHT || 10);
-const BASELINE_ENABLED = __ENV.BASELINE === 'true';
 const RUN_READ_WRITE = __ENV.RUN_READ_WRITE !== 'false';
 const RUN_SUBSCRIPTIONS = __ENV.RUN_SUBSCRIPTIONS !== 'false';
-const RUN_STRESS = __ENV.RUN_STRESS === 'true';
-const RUN_SPIKE = __ENV.RUN_SPIKE === 'true';
-const RUN_SOAK = __ENV.RUN_SOAK === 'true';
 const HEAVY_CALC = __ENV.HEAVY_CALC === 'true';
 const HEAVY_RATE = Number(__ENV.HEAVY_RATE || 0.1);
 const HEAVY_PAGE_SIZE = Number(__ENV.HEAVY_PAGE_SIZE || 3);
@@ -83,71 +79,6 @@ if (RUN_SUBSCRIPTIONS) {
   };
 }
 
-if (BASELINE_ENABLED) {
-  scenarios.baseline_read = {
-    executor: 'constant-arrival-rate',
-    rate: Number(__ENV.BASELINE_RATE || 5),
-    timeUnit: '1s',
-    duration: __ENV.BASELINE_DURATION || '2m',
-    preAllocatedVUs: Number(__ENV.BASELINE_VUS || 5),
-    maxVUs: Number(__ENV.BASELINE_MAX_VUS || 10),
-    exec: 'baselineRead',
-    startTime: __ENV.BASELINE_START || '0s',
-  };
-}
-
-if (RUN_STRESS) {
-  scenarios.stress_step = {
-    executor: 'ramping-arrival-rate',
-    startRate: Number(__ENV.STRESS_START_RATE || 5),
-    timeUnit: '1s',
-    preAllocatedVUs: Number(__ENV.STRESS_VUS || 30),
-    maxVUs: Number(__ENV.STRESS_MAX_VUS || 120),
-    exec: 'readWriteMix',
-    stages: JSON.parse(
-      __ENV.STRESS_STAGES ||
-        JSON.stringify([
-          { target: 10, duration: '5m' },
-          { target: 20, duration: '5m' },
-          { target: 30, duration: '5m' },
-          { target: 40, duration: '5m' },
-          { target: 50, duration: '5m' },
-        ])
-    ),
-  };
-}
-
-if (RUN_SPIKE) {
-  scenarios.spike_read = {
-    executor: 'ramping-arrival-rate',
-    startRate: Number(__ENV.SPIKE_BASE_RATE || 5),
-    timeUnit: '1s',
-    preAllocatedVUs: Number(__ENV.SPIKE_VUS || 20),
-    maxVUs: Number(__ENV.SPIKE_MAX_VUS || 120),
-    exec: 'readWriteMix',
-    stages: JSON.parse(
-      __ENV.SPIKE_STAGES ||
-        JSON.stringify([
-          { target: 10, duration: '2m' },
-          { target: 60, duration: '1m' },
-          { target: 10, duration: '2m' },
-        ])
-    ),
-  };
-}
-
-if (RUN_SOAK) {
-  scenarios.soak_read_write = {
-    executor: 'constant-arrival-rate',
-    rate: Number(__ENV.SOAK_RATE || 20),
-    timeUnit: '1s',
-    duration: __ENV.SOAK_DURATION || '6h',
-    preAllocatedVUs: Number(__ENV.SOAK_VUS || 50),
-    maxVUs: Number(__ENV.SOAK_MAX_VUS || 200),
-    exec: 'readWriteMix',
-  };
-}
-
 export const options = {
   thresholds: {
     'http_req_failed{kind:graphql}': ['rate<0.01'],
@@ -179,27 +110,30 @@ function graphqlRequest(query, variables, jar, csrf, extraTags = {}) {
     console.error(`graphql non-200 status: ${res.status}`);
     console.error(res.body);
   }
+  const errors = res.json('errors');
+  const hasAppErrors = Array.isArray(errors) && errors.length > 0;
   check(res, {
     'graphql status 200': (r) => r.status === 200,
-    'graphql no errors': (r) => !r.json('errors'),
+    'graphql no errors': () => !hasAppErrors,
   });
   return res;
 }
 graphqlRequest._loggedFailure = false;
 
 function getCsrf(jar) {
-  http.get(GRAPHQL_URL, {
+  const csrfUrl = `${BASE_URL.replace(/\/$/, '')}/admin/login/`;
+  http.get(csrfUrl, {
     headers: {
-      Referer: `${BASE_URL.replace(/\/$/, '')}/`,
+      Referer: csrfUrl,
       Origin: BASE_URL.replace(/\/$/, ''),
     },
     jar,
   });
-  const cookies = jar.cookiesForURL(GRAPHQL_URL);
+  const cookies = jar.cookiesForURL(csrfUrl);
   let csrf = cookies && cookies.csrftoken ? cookies.csrftoken[0] : '';
   if (!csrf) {
     csrf = randomToken();
-    jar.set(GRAPHQL_URL, 'csrftoken', csrf);
+    jar.set(csrfUrl, 'csrftoken', csrf);
   }
   return csrf;
 }
@@ -218,7 +152,7 @@ function loginSession(jar) {
     csrfmiddlewaretoken: csrf,
     next: '/admin/',
   };
-  http.post(loginUrl, form, {
+  const loginRes = http.post(loginUrl, form, {
     headers: {
       Referer: loginUrl,
       Origin: BASE_URL.replace(/\/$/, ''),
@@ -226,9 +160,15 @@ function loginSession(jar) {
     redirects: 0,
     jar,
   });
+  if (!loginSession._loggedFailure && loginRes.status >= 400) {
+    loginSession._loggedFailure = true;
+    console.error(`login failed with status=${loginRes.status}`);
+    console.error(loginRes.body);
+  }
   const postCookies = jar.cookiesForURL(loginUrl);
   return postCookies && postCookies.csrftoken ? postCookies.csrftoken[0] : csrf;
 }
+loginSession._loggedFailure = false;
 
 function pickIds(jar, csrf) {
   const shipRes = graphqlRequest(
@@ -338,12 +278,15 @@ function doWriteMix(jar, csrf, ids) {
   if (!USERNAME || !PASSWORD) {
     return;
   }
+  const statusCycle = ['open', 'in_progress', 'blocked'];
+  const status = statusCycle[(__VU + __ITER) % statusCycle.length];
+  const quantity = ((__VU * 17 + __ITER) % 97) + 3;
   const writeOps = [
     () =>
       ids.workorderId &&
       graphqlRequest(
         MUTATIONS.updateWorkOrderStatus,
-        { id: Number(ids.workorderId), status: 'in_progress' },
+        { id: Number(ids.workorderId), status },
         jar,
         csrf,
         { op: 'updateWorkOrderStatus' }
@@ -352,7 +295,7 @@ function doWriteMix(jar, csrf, ids) {
       ids.inventoryId &&
       graphqlRequest(
         MUTATIONS.updateInventoryQty,
-        { id: Number(ids.inventoryId), quantity: 5 },
+        { id: Number(ids.inventoryId), quantity },
         jar,
         csrf,
         { op: 'updateInventoryQty' }
@@ -379,17 +322,6 @@ export function readWriteMix() {
   } else {
     doWriteMix(jar, csrf, ids);
   }
-  sleep(1);
-}
-
-export function baselineRead() {
-  const jar = http.cookieJar();
-  let csrf = getCsrf(jar);
-  if (USERNAME && PASSWORD) {
-    csrf = loginSession(jar) || csrf;
-  }
-  const ids = pickIds(jar, csrf);
-  doReadMix(jar, csrf, ids);
   sleep(1);
 }
 
