@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Protocol
 
 from django.conf import settings
@@ -399,10 +400,15 @@ def _build_field_name(info: Any) -> str:
     parent_name = getattr(parent, "name", None)
     field = getattr(info, "field_name", None)
     if parent_name and field:
-        return normalize_field_name(f"{parent_name}.{field}")
+        return _cached_normalize_field_name(str(parent_name), str(field))
     if field:
         return normalize_field_name(str(field))
     return UNKNOWN_LABEL
+
+
+@lru_cache(maxsize=1024)
+def _cached_normalize_field_name(parent_name: str, field_name: str) -> str:
+    return normalize_field_name(f"{parent_name}.{field_name}")
 
 
 def _safe_record_resolver_duration(
