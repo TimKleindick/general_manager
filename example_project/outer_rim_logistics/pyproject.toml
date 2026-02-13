@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "Django>=5.1",
+    "django-cachalot>=2.7.0",
     "GeneralManager",
     "daphne>=4.1",
     "meilisearch>=0.34",

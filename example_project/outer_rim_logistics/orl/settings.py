@@ -48,6 +48,7 @@ CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
 
 INSTALLED_APPS = [
     "django_prometheus",
+    "cachalot",
     "daphne",
     "channels",
     "django.contrib.admin",
@@ -154,6 +155,9 @@ else:
             },
         }
     }
+
+CACHALOT_ENABLED = _env_bool("CACHALOT_ENABLED", True)
+CACHALOT_CACHE = "default"
 
 LOG_DIR = Path(_env("LOG_DIR", str(BASE_DIR / "logs")))
 

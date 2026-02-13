@@ -76,6 +76,12 @@ Capture run metadata + JSON output (k6):
 RUN_LABEL="baseline" ./k6/run_capture.sh ./k6/run_mix.sh
 ```
 
+Capture k6 mix plus GM pre/post overhead profiling (CSV artifacts):
+
+```bash
+RUN_LABEL="mix-gm" GM_PROFILE_ITERS=120 ./k6/run_mix_with_gm_profile.sh
+```
+
 Results are stored in `k6/results/` along with a short README.
 
 Services (all via Nginx):
