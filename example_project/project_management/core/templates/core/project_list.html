@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Projects</title>
+  <style>
+    :root {
+      --bg-1: #f4f7f2;
+      --bg-2: #dee8d6;
+      --ink: #1f2d1d;
+      --muted: #5b6d58;
+      --card: #ffffff;
+      --line: #d6e0cf;
+      --accent: #2e6b3a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 10% 10%, var(--bg-2), var(--bg-1) 45%);
+    }
+
+    .layout {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 24px 16px 64px;
+    }
+
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      backdrop-filter: blur(8px);
+      background: color-mix(in srgb, var(--bg-1) 80%, transparent);
+      border-bottom: 1px solid var(--line);
+      padding: 12px 0;
+      margin-bottom: 14px;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 1.5rem;
+      letter-spacing: 0.02em;
+    }
+
+    .meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .controls {
+      margin-top: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .controls select,
+    .controls label {
+      font: inherit;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 4px 16px rgba(21, 39, 14, 0.07);
+    }
+
+    .row-1 {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .name {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .badge {
+      font-size: 0.8rem;
+      color: var(--accent);
+      background: #ebf5ea;
+      border: 1px solid #cce0c8;
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+
+    .grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .details-toggle {
+      margin-top: 10px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid #b8ceb6;
+      background: #f3faf0;
+      color: var(--accent);
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .details {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--line);
+      display: none;
+      gap: 12px;
+    }
+
+    .details.open {
+      display: grid;
+    }
+
+    .topic-list,
+    .derivative-list {
+      background: #fbfdf9;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 0.88rem;
+    }
+
+    .curve-box {
+      background: #fbfdf9;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 0.88rem;
+    }
+
+    .curve-meta {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: #4e6050;
+      margin-bottom: 8px;
+    }
+
+    .curve-svg {
+      width: 100%;
+      height: 120px;
+      display: block;
+      background: #f3f8ef;
+      border: 1px solid #d5e2d1;
+      border-radius: 8px;
+    }
+
+    .section-title {
+      margin: 0 0 8px;
+      font-size: 0.9rem;
+      color: #2a4226;
+    }
+
+    .row {
+      margin: 0 0 6px;
+      color: #324430;
+    }
+
+    .sub-list {
+      margin: 6px 0 10px 14px;
+      padding: 0;
+      color: #4e6050;
+    }
+
+    .status {
+      margin: 16px 0 8px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    #sentinel {
+      height: 1px;
+    }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <header class="header">
+      <h1 class="title">Project List</h1>
+      <div class="meta" id="meta">Loading...</div>
+      <div class="controls">
+        <label for="sortBy">Sort by</label>
+        <select id="sortBy">
+          <option value="id">id</option>
+          <option value="name" selected>name</option>
+          <option value="total_volume">total_volume</option>
+          <option value="probability_of_nomination">probability_of_nomination</option>
+          <option value="customer_volume_flex">customer_volume_flex</option>
+          <option value="earliest_sop">earliest_sop</option>
+          <option value="latest_eop">latest_eop</option>
+        </select>
+        <label>
+          <input type="checkbox" id="reverse">
+          Reverse
+        </label>
+      </div>
+    </header>
+
+    <section id="list" class="list"></section>
+    <p id="status" class="status"></p>
+    <div id="sentinel" aria-hidden="true"></div>
+  </main>
+
+  <script>
+    const PAGE_SIZE = 25;
+    const query = `
+      query ProjectList(
+        $page: Int!,
+        $pageSize: Int!,
+        $sortBy: ProjectSortByOptions,
+        $reverse: Boolean
+      ) {
+        projectList(
+          page: $page,
+          pageSize: $pageSize,
+          sortBy: $sortBy,
+          reverse: $reverse
+        ) {
+          items {
+            id
+            name
+            totalVolume
+            probabilityOfNomination
+            earliestSop
+            latestEop
+            projectPhaseType { id name }
+            customer { companyName groupName }
+          }
+          pageInfo {
+            totalCount
+            currentPage
+            pageSize
+            totalPages
+          }
+        }
+      }
+    `;
+
+    const detailQuery = `
+      query ProjectDetail($id: ID!) {
+        project(id: $id) {
+          id
+          name
+          projectteamList(pageSize: 100) {
+            items {
+              active
+              projectUserRole { id name }
+              responsibleUser { id fullName }
+            }
+          }
+          derivativeList(pageSize: 500) {
+            items {
+              id
+              name
+              derivativeType { id name }
+              Plant { id name }
+              customervolumeList(pageSize: 500) {
+                items {
+                  sop
+                  eop
+                  usedVolume
+                  projectPhaseType { id name }
+                }
+              }
+            }
+          }
+        }
+        projectvolumecurve(projectId: $id) {
+          curveJson
+        }
+      }
+    `;
+
+    let page = 1;
+    let loading = false;
+    let hasNext = true;
+    let total = 0;
+    const list = document.getElementById("list");
+    const meta = document.getElementById("meta");
+    const status = document.getElementById("status");
+    const sentinel = document.getElementById("sentinel");
+    const sortByEl = document.getElementById("sortBy");
+    const reverseEl = document.getElementById("reverse");
+
+    function itemCard(project) {
+      const node = document.createElement("article");
+      node.className = "card";
+
+      const prob = project.probabilityOfNomination == null
+        ? "-"
+        : `${Math.round(project.probabilityOfNomination * 100)}%`;
+
+      node.innerHTML = `
+        <div class="row-1">
+          <h2 class="name">#${project.id} ${project.name || "(no name)"}</h2>
+          <span class="badge">${project.projectPhaseType?.name || "n/a"}</span>
+        </div>
+        <div class="grid">
+          <div><strong>Customer</strong><br>${project.customer?.companyName || "-"} (${project.customer?.groupName || "-"})</div>
+          <div><strong>Total Volume</strong><br>${Number(project.totalVolume || 0).toLocaleString()}</div>
+          <div><strong>Nomination</strong><br>${prob}</div>
+          <div><strong>Earliest SOP</strong><br>${project.earliestSop || "-"}</div>
+          <div><strong>Latest EOP</strong><br>${project.latestEop || "-"}</div>
+        </div>
+        <button class="details-toggle" type="button">Show details</button>
+        <div class="details" id="details-${project.id}"></div>
+      `;
+
+      const toggle = node.querySelector(".details-toggle");
+      const detailContainer = node.querySelector(`#details-${project.id}`);
+      let detailsLoaded = false;
+
+      toggle.addEventListener("click", async () => {
+        const open = detailContainer.classList.contains("open");
+        if (open) {
+          detailContainer.classList.remove("open");
+          toggle.textContent = "Show details";
+          return;
+        }
+
+        if (!detailsLoaded) {
+          toggle.disabled = true;
+          toggle.textContent = "Loading details...";
+          try {
+            const detail = await loadProjectDetail(project.id);
+            renderProjectDetail(detailContainer, detail);
+            detailsLoaded = true;
+          } catch (err) {
+            detailContainer.innerHTML = `<p class="row">Failed to load details: ${err.message}</p>`;
+          } finally {
+            toggle.disabled = false;
+          }
+        }
+        detailContainer.classList.add("open");
+        toggle.textContent = "Hide details";
+      });
+
+      return node;
+    }
+
+    async function loadProjectDetail(projectId) {
+      const response = await fetch("/graphql/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: detailQuery,
+          variables: { id: String(projectId) },
+        }),
+      });
+      const payload = await response.json();
+      if (payload.errors?.length) {
+        throw new Error(payload.errors[0].message);
+      }
+      return {
+        project: payload.data.project,
+        curveJson: payload.data.projectvolumecurve?.curveJson || "[]",
+      };
+    }
+
+    function renderProjectDetail(container, detailPayload) {
+      const project = detailPayload.project;
+      const teams = project.projectteamList?.items || [];
+      const derivatives = project.derivativeList?.items || [];
+      const activeTeams = teams.filter((t) => t.active);
+
+      const topicRows = activeTeams.length
+        ? activeTeams
+            .map(
+              (team) => `<p class="row"><strong>${team.projectUserRole?.name || "Unknown role"}:</strong> ${team.responsibleUser?.fullName || "n/a"}</p>`
+            )
+            .join("")
+        : `<p class="row">No active topic responsibility assignments.</p>`;
+
+      const derivativeRows = derivatives.length
+        ? derivatives
+            .map((der) => {
+              const volumeItems = der.customervolumeList?.items || [];
+              const volumeRows = volumeItems.length
+                ? volumeItems
+                    .map(
+                      (v) =>
+                        `<li>SOP ${v.sop || "-"} · EOP ${v.eop || "-"} · used=${v.usedVolume ? "yes" : "no"} · phase=${v.projectPhaseType?.name || "-"}</li>`
+                    )
+                    .join("")
+                : "<li>No volume entries.</li>";
+
+              return `
+                <div class="row">
+                  <strong>${der.name || "(unnamed derivative)"}</strong>
+                  <br>Type: ${der.derivativeType?.name || "-"} · Plant: ${der.Plant?.name || "-"}
+                  <ul class="sub-list">${volumeRows}</ul>
+                </div>
+              `;
+            })
+            .join("")
+        : `<p class="row">No derivatives on this project.</p>`;
+
+      const curveMarkup = renderCurve(detailPayload.curveJson);
+
+      container.innerHTML = `
+        <section class="curve-box">
+          <h3 class="section-title">Project Volume Curve</h3>
+          ${curveMarkup}
+        </section>
+        <section class="topic-list">
+          <h3 class="section-title">Responsible By Topic</h3>
+          ${topicRows}
+        </section>
+        <section class="derivative-list">
+          <h3 class="section-title">Derivatives With SOP/EOP</h3>
+          ${derivativeRows}
+        </section>
+      `;
+    }
+
+    function renderCurve(curveJson) {
+      let points = [];
+      try {
+        points = JSON.parse(curveJson || "[]");
+      } catch (_err) {
+        points = [];
+      }
+      if (!Array.isArray(points) || points.length === 0) {
+        return `<p class="row">No curve data available.</p>`;
+      }
+
+      const totalValues = points.map((p) => Number(p.total_volume ?? 0));
+      const usedValues = points.map((p) => Number(p.used_volume ?? 0));
+      const values = totalValues.some((v) => v > 0) ? totalValues : usedValues;
+      const max = Math.max(...values, 1);
+      const min = Math.min(...values, 0);
+      const width = 680;
+      const height = 120;
+      const padX = 14;
+      const padY = 12;
+      const innerW = width - padX * 2;
+      const innerH = height - padY * 2;
+      const denom = Math.max(1, values.length - 1);
+
+      const coords = values.map((v, i) => {
+        const x = padX + (i / denom) * innerW;
+        const y = padY + (1 - v / max) * innerH;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      });
+
+      return `
+        <div class="curve-meta">
+          <span><strong>Points:</strong> ${values.length}</span>
+          <span><strong>Min:</strong> ${min.toLocaleString()}</span>
+          <span><strong>Max:</strong> ${max.toLocaleString()}</span>
+        </div>
+        <svg class="curve-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Project volume curve">
+          <polyline
+            points="${coords.join(" ")}"
+            fill="none"
+            stroke="#2e6b3a"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      `;
+    }
+
+    async function loadNextPage() {
+      if (loading || !hasNext) return;
+      loading = true;
+      status.textContent = "Loading more projects...";
+
+      try {
+        const response = await fetch("/graphql/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            variables: {
+              page,
+              pageSize: PAGE_SIZE,
+              sortBy: sortByEl.value,
+              reverse: reverseEl.checked,
+            },
+          }),
+        });
+        const payload = await response.json();
+        if (payload.errors?.length) {
+          throw new Error(payload.errors[0].message);
+        }
+
+        const pageData = payload.data.projectList;
+        total = pageData.pageInfo.totalCount;
+        for (const project of pageData.items) {
+          list.appendChild(itemCard(project));
+        }
+
+        hasNext = pageData.pageInfo.currentPage < pageData.pageInfo.totalPages;
+        page += 1;
+
+        meta.textContent = `${list.children.length} of ${total} projects loaded · page size ${PAGE_SIZE}`;
+        status.textContent = hasNext ? "Scroll down to load more." : "All projects loaded.";
+      } catch (err) {
+        status.textContent = `Failed to load projects: ${err.message}`;
+        hasNext = false;
+      } finally {
+        loading = false;
+      }
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        loadNextPage();
+      }
+    }, { rootMargin: "1400px" });
+
+    observer.observe(sentinel);
+
+    function resetAndReload() {
+      page = 1;
+      hasNext = true;
+      loading = false;
+      list.innerHTML = "";
+      loadNextPage();
+    }
+
+    sortByEl.addEventListener("change", resetAndReload);
+    reverseEl.addEventListener("change", resetAndReload);
+
+    loadNextPage();
+  </script>
+</body>
+</html>
