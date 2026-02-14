@@ -125,7 +125,7 @@ class GeneralmanagerConfig(AppConfig):
         )
         configure_audit_logger_from_settings(settings)
         configure_search_backend_from_settings(settings)
-        from general_manager.search import indexer as _search_indexer  # noqa: F401
+        import general_manager.search.indexer as _search_indexer  # noqa: F401
 
         self.install_search_auto_reindex()
 

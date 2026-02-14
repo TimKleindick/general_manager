@@ -182,20 +182,26 @@ class _FieldDescriptorBuilder:
         Iterates the model's many-to-many and reverse (one-to-many) relations and registers a collection descriptor for each, deriving descriptor names from each relation's base name and accessor name.
         """
         for m2m_field in _iter_many_to_many_fields(self.model):
-            self._register_collection_field(
-                field=m2m_field,
-                base_name=m2m_field.name,
-                accessor_name=m2m_field.name,
-            )
+            try:
+                self._register_collection_field(
+                    field=m2m_field,
+                    base_name=m2m_field.name,
+                    accessor_name=m2m_field.name,
+                )
+            except DuplicateFieldNameError:
+                continue
         for reverse_relation in _iter_reverse_relations(self.model):
             accessor_name = (
                 reverse_relation.get_accessor_name() or reverse_relation.name
             )
-            self._register_collection_field(
-                field=reverse_relation,
-                base_name=reverse_relation.name,
-                accessor_name=accessor_name,
-            )
+            try:
+                self._register_collection_field(
+                    field=reverse_relation,
+                    base_name=reverse_relation.name,
+                    accessor_name=accessor_name,
+                )
+            except DuplicateFieldNameError:
+                continue
 
     def _register_collection_field(
         self,

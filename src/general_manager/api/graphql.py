@@ -68,6 +68,11 @@ if TYPE_CHECKING:
 logger = get_logger("api.graphql")
 
 
+def _is_subclass(candidate: object, parent: type | tuple[type, ...]) -> bool:
+    """Return True when candidate is a class and a subclass of parent."""
+    return isinstance(candidate, type) and issubclass(candidate, parent)
+
+
 @dataclass(slots=True)
 class SubscriptionEvent:
     """Payload delivered to GraphQL subscription resolvers."""
@@ -521,7 +526,7 @@ class GraphQL:
             field_info,
         ) in generalManagerClass.Interface.get_attribute_types().items():
             field_type = field_info["type"]
-            if issubclass(field_type, GeneralManager):
+            if _is_subclass(field_type, GeneralManager):
                 continue
             else:
                 sort_options.append(field_name)
@@ -1014,6 +1019,8 @@ class GraphQL:
                 or `None` when no Graphene input type should be exposed (for example, nested
                 GeneralManager references).
         """
+        normalized_type = attribute_type if isinstance(attribute_type, type) else str
+
         number_options = ["exact", "gt", "gte", "lt", "lte"]
         string_options = [
             "exact",
@@ -1024,29 +1031,29 @@ class GraphQL:
             "endswith",
         ]
 
-        if issubclass(attribute_type, GeneralManager):
+        if issubclass(normalized_type, GeneralManager):
             yield attribute_name, None
-        elif issubclass(attribute_type, Measurement):
+        elif issubclass(normalized_type, Measurement):
             yield attribute_name, MeasurementScalar()
             for option in number_options:
                 yield f"{attribute_name}__{option}", MeasurementScalar()
         else:
             yield (
                 attribute_name,
-                GraphQL._map_field_to_graphene_read(attribute_type, attribute_name),
+                GraphQL._map_field_to_graphene_read(normalized_type, attribute_name),
             )
-            if issubclass(attribute_type, (int, float, Decimal, date, datetime)):
+            if issubclass(normalized_type, (int, float, Decimal, date, datetime)):
                 for option in number_options:
                     yield (
                         f"{attribute_name}__{option}",
                         (
                             GraphQL._map_field_to_graphene_read(
-                                attribute_type, attribute_name
+                                normalized_type, attribute_name
                             )
                         ),
                     )
-            elif issubclass(attribute_type, str):
-                base_type = GraphQL._map_field_to_graphene_base_type(attribute_type)
+            elif issubclass(normalized_type, str):
+                base_type = GraphQL._map_field_to_graphene_base_type(normalized_type)
                 for option in string_options:
                     if option == "in":
                         yield f"{attribute_name}__in", graphene.List(base_type)
@@ -1055,7 +1062,7 @@ class GraphQL:
                             f"{attribute_name}__{option}",
                             (
                                 GraphQL._map_field_to_graphene_read(
-                                    attribute_type, attribute_name
+                                    normalized_type, attribute_name
                                 )
                             ),
                         )
@@ -1128,9 +1135,9 @@ class GraphQL:
         Returns:
             Any: Graphene field or type configured for the attribute.
         """
-        if issubclass(field_type, Measurement):
+        if _is_subclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
-        elif issubclass(field_type, GeneralManager):
+        elif _is_subclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
                 attributes: dict[str, Any] = {
                     "reverse": graphene.Boolean(),
@@ -1452,11 +1459,11 @@ class GraphQL:
 
         For fields ending with `_list` referencing a `GeneralManager` subclass, provides a resolver supporting pagination and filtering. For `Measurement` fields, returns a resolver that handles unit conversion and permission checks. For all other fields, returns a standard resolver with permission enforcement.
         """
-        if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
+        if field_name.endswith("_list") and _is_subclass(field_type, GeneralManager):
             return cls._create_list_resolver(
                 lambda self: getattr(self, field_name), field_type
             )
-        if issubclass(field_type, Measurement):
+        if _is_subclass(field_type, Measurement):
             return cls._create_measurement_resolver(field_name)
         return cls._create_normal_resolver(field_name)
 
@@ -1512,7 +1519,7 @@ class GraphQL:
             input_field_name,
             input_field,
         ) in generalManagerClass.Interface.input_fields.items():
-            if issubclass(input_field.type, GeneralManager):
+            if _is_subclass(input_field.type, GeneralManager):
                 key = f"{input_field_name}_id"
                 identification_fields[key] = graphene.Argument(
                     graphene.ID, required=True
@@ -1806,7 +1813,7 @@ class GraphQL:
             input_name,
             input_field,
         ) in interface_cls.input_fields.items():
-            if not issubclass(input_field.type, GeneralManager):
+            if not _is_subclass(input_field.type, GeneralManager):
                 continue
 
             raw_value = instance._interface.identification.get(input_name)
@@ -2060,7 +2067,7 @@ class GraphQL:
             default = info["default"]
 
             fld: Any
-            if issubclass(typ, GeneralManager):
+            if _is_subclass(typ, GeneralManager):
                 if name.endswith("_list"):
                     fld = graphene.List(
                         graphene.ID,

@@ -120,6 +120,10 @@ class ExistingModelResolutionCapability(BaseCapability):
 
             If the model's _meta already exposes the simple_history manager attribute, no action is taken. Otherwise, collects the model's local many-to-many field names and registers the model with simple_history including those m2m fields.
             """
+            if interface_cls is not None:
+                meta_class = getattr(interface_cls, "Meta", None)
+                if bool(getattr(meta_class, "skip_history_registration", False)):
+                    return
             if hasattr(model._meta, "simple_history_manager_attribute"):
                 return
             m2m_fields = [field.name for field in model._meta.local_many_to_many]
