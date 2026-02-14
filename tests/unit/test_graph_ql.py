@@ -7,6 +7,7 @@ import graphene
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
+from django.core.cache import cache
 from typing import ClassVar
 
 from general_manager.api.graphql import (
@@ -38,6 +39,14 @@ class GraphQLPropertyTests(TestCase):
 
         prop = GraphQLProperty(mock_getter)
         self.assertEqual(prop.graphql_type_hint, str)
+        self.assertFalse(prop.warm_up)
+
+    def test_graphql_property_warm_up_flag(self):
+        def mock_getter() -> str:
+            return "test"
+
+        prop = GraphQLProperty(mock_getter, warm_up=True)
+        self.assertTrue(prop.warm_up)
 
 
 class MeasurementTypeTests(TestCase):
@@ -48,6 +57,7 @@ class MeasurementTypeTests(TestCase):
 
 class GraphQLTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.general_manager_class = MagicMock(spec=GeneralManagerMeta)
         self.general_manager_class.__name__ = "TestManager"
         self.info = MagicMock()
@@ -232,6 +242,41 @@ class GraphQLTests(TestCase):
         first = GraphQL._create_filter_options(DummyManager2)
         second = GraphQL._create_filter_options(DummyManager2)
         self.assertIs(first, second)
+
+    def test_apply_query_parameters_applies_filter_exclude_sort_directly(self):
+        class _Bucket:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, object]] = []
+
+            def filter(self, **kwargs):
+                self.calls.append(("filter", kwargs))
+                return self
+
+            def exclude(self, **kwargs):
+                self.calls.append(("exclude", kwargs))
+                return self
+
+            def sort(self, key, reverse: bool = False):
+                self.calls.append(("sort", (key, reverse)))
+                return self
+
+        bucket = _Bucket()
+        result = GraphQL._apply_query_parameters(
+            bucket,  # type: ignore[arg-type]
+            {"score__gte": 5},
+            {"score__lt": 1},
+            "score",  # type: ignore[arg-type]
+            True,
+        )
+        self.assertIs(result, bucket)
+        self.assertEqual(
+            bucket.calls,
+            [
+                ("filter", {"score__gte": 5}),
+                ("exclude", {"score__lt": 1}),
+                ("sort", ("score", True)),
+            ],
+        )
 
 
 class TestGetReadPermissionFilter(TestCase):

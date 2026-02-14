@@ -25,6 +25,7 @@ class GraphQLProperty(property):
 
     sortable: bool
     filterable: bool
+    warm_up: bool
     query_annotation: Any | None
 
     def __init__(
@@ -34,6 +35,7 @@ class GraphQLProperty(property):
         *,
         sortable: bool = False,
         filterable: bool = False,
+        warm_up: bool = False,
         query_annotation: Any | None = None,
     ) -> None:
         """
@@ -44,6 +46,7 @@ class GraphQLProperty(property):
             doc (str | None): Optional documentation string exposed on the descriptor.
             sortable (bool): Whether the property should be considered for sorting.
             filterable (bool): Whether the property should be considered for filtering.
+            warm_up (bool): Whether this property should be warmed up during startup.
             query_annotation (Any | None): Optional annotation to apply when querying/queryset construction.
 
         Raises:
@@ -57,6 +60,7 @@ class GraphQLProperty(property):
 
         self.sortable = sortable
         self.filterable = filterable
+        self.warm_up = warm_up
         self.query_annotation = query_annotation
 
         orig = getattr(
@@ -115,6 +119,7 @@ def graph_ql_property(
     *,
     sortable: bool = False,
     filterable: bool = False,
+    warm_up: bool = False,
     query_annotation: Any | None = None,
 ) -> Callable[[T], GraphQLProperty]: ...
 
@@ -124,6 +129,7 @@ def graph_ql_property(
     *,
     sortable: bool = False,
     filterable: bool = False,
+    warm_up: bool = False,
     query_annotation: Any | None = None,
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
     from general_manager.cache.cache_decorator import cached
@@ -135,6 +141,7 @@ def graph_ql_property(
         func (Callable[..., Any] | None): Resolver function when used without arguments.
         sortable (bool): Whether the property can participate in sorting.
         filterable (bool): Whether the property can be used in filtering.
+        warm_up (bool): Whether this property should be warmed up during startup.
         query_annotation (Any | None): Optional queryset annotation callable or expression.
 
     Returns:
@@ -145,6 +152,7 @@ def graph_ql_property(
         return GraphQLProperty(
             cached()(f),
             sortable=sortable,
+            warm_up=warm_up,
             query_annotation=query_annotation,
             filterable=filterable,
         )

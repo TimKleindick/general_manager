@@ -1247,17 +1247,15 @@ class GraphQL:
             The queryset after applying filters, exclusions, and sorting.
         """
         filters = GraphQL._parse_input(filter_input)
+        excludes = GraphQL._parse_input(exclude_input)
+        sort_by_str = cast(str, getattr(sort_by, "value", sort_by)) if sort_by else None
+
         if filters:
             queryset = queryset.filter(**filters)
-
-        excludes = GraphQL._parse_input(exclude_input)
         if excludes:
             queryset = queryset.exclude(**excludes)
-
-        if sort_by:
-            sort_by_str = cast(str, getattr(sort_by, "value", sort_by))
+        if sort_by_str:
             queryset = queryset.sort(sort_by_str, reverse=reverse)
-
         return queryset
 
     @staticmethod
@@ -1351,7 +1349,13 @@ class GraphQL:
                 base_queryset, "_manager_class", fallback_manager_class
             )
             qs = GraphQL._apply_permission_filters(base_queryset, manager_class, info)
-            qs = GraphQL._apply_query_parameters(qs, filter, exclude, sort_by, reverse)
+            qs = GraphQL._apply_query_parameters(
+                qs,
+                filter,
+                exclude,
+                sort_by,
+                reverse,
+            )
             qs = GraphQL._apply_grouping(qs, group_by)
 
             total_count = len(qs)
@@ -1375,7 +1379,9 @@ class GraphQL:
 
     @staticmethod
     def _apply_pagination(
-        queryset: Bucket[GeneralManager], page: int | None, page_size: int | None
+        queryset: Bucket[GeneralManager],
+        page: int | None,
+        page_size: int | None,
     ) -> Bucket[GeneralManager]:
         """
         Returns a paginated subset of the queryset based on the given page number and page size.
@@ -1393,12 +1399,15 @@ class GraphQL:
             page = page or 1
             page_size = page_size or 10
             offset = (page - 1) * page_size
-            queryset = cast(Bucket, queryset[offset : offset + page_size])
+            queryset = cast(
+                Bucket[GeneralManager], queryset[offset : offset + page_size]
+            )
         return queryset
 
     @staticmethod
     def _apply_grouping(
-        queryset: Bucket[GeneralManager], group_by: list[str] | None
+        queryset: Bucket[GeneralManager],
+        group_by: list[str] | None,
     ) -> Bucket[GeneralManager]:
         """
         Groups the queryset by the specified fields.

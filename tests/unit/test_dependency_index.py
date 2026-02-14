@@ -1296,7 +1296,7 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        expected_calls = [call("EXC"), call("EXC")]
+        expected_calls = [call("EXC")]
         self.assertEqual(mock_invalidate.call_args_list, expected_calls)
         self.assertEqual(mock_remove.call_args_list, expected_calls)
 

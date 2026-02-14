@@ -564,6 +564,9 @@ def generic_cache_invalidation(
                     return True
         return False
 
+    invalidated_dependencies: set[Dependency] = set()
+    processed_cache_keys: set[str] = set()
+
     for action in ACTIONS:
         model_section = idx[action].get(manager_name)
         if not isinstance(model_section, dict):
@@ -617,6 +620,12 @@ def generic_cache_invalidation(
                             else (new_match or old_match)
                         )
                         if should_invalidate:
+                            if ck in processed_cache_keys:
+                                continue
+                            processed_cache_keys.add(ck)
+                            cached_dependencies = cache.get(f"{ck}:deps")
+                            if cached_dependencies:
+                                invalidated_dependencies.update(cached_dependencies)
                             logger.info(
                                 "invalidating cache key",
                                 context={
@@ -642,6 +651,12 @@ def generic_cache_invalidation(
                             else (old_match != new_match)
                         )
                         if should_invalidate:
+                            if ck in processed_cache_keys:
+                                continue
+                            processed_cache_keys.add(ck)
+                            cached_dependencies = cache.get(f"{ck}:deps")
+                            if cached_dependencies:
+                                invalidated_dependencies.update(cached_dependencies)
                             logger.info(
                                 "invalidating cache key",
                                 context={
@@ -654,3 +669,16 @@ def generic_cache_invalidation(
                             )
                             invalidate_cache_key(ck)
                             remove_cache_key_from_index(ck)
+
+    if invalidated_dependencies:
+        try:
+            from general_manager.api.warmup_async import (
+                dispatch_graphql_warmup_for_dependencies,
+            )
+
+            dispatch_graphql_warmup_for_dependencies(invalidated_dependencies)
+        except Exception:
+            logger.exception(
+                "failed to dispatch warm-up after cache invalidation",
+                context={"manager": manager_name},
+            )

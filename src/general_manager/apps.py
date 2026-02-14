@@ -4,7 +4,7 @@ import importlib.abc
 import os
 import sys
 from importlib import import_module, util
-from typing import TYPE_CHECKING, Any, Callable, Type
+from typing import TYPE_CHECKING, Any, Callable, Type, Iterable
 
 import graphene  # type: ignore[import]
 from django.apps import AppConfig
@@ -19,6 +19,8 @@ from general_manager.metrics import build_graphql_middleware
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.property import graph_ql_property
+from general_manager.api.warmup import warm_up_graphql_properties, warmup_enabled
+from general_manager.api.warmup_async import dispatch_graphql_warmup
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -27,6 +29,7 @@ from general_manager.permission.audit import configure_audit_logger_from_setting
 from general_manager.interface.infrastructure.startup_hooks import (
     registered_startup_hook_entries,
     order_interfaces_by_dependency,
+    register_startup_hook,
 )
 from general_manager.interface.infrastructure.system_checks import (
     iter_interface_system_checks,
@@ -65,6 +68,8 @@ if TYPE_CHECKING:
 logger = get_logger("apps")
 
 _SEARCH_REINDEXED = False
+_GRAPHQL_WARMUP_RAN = False
+_GRAPHQL_WARMUP_MANAGERS: tuple[Type[GeneralManager], ...] = ()
 
 
 def _should_auto_reindex(django_settings: Any) -> bool:
@@ -105,6 +110,28 @@ def _auto_reindex_search(*_args: object, **kwargs: object) -> None:
         logger.info("auto reindex complete", context={"component": "search"})
     except Exception:  # pragma: no cover - defensive log
         logger.exception("auto reindex failed", context={"component": "search"})
+
+
+def _run_graphql_warmup_once(*_args: object, **_kwargs: object) -> None:
+    """
+    Execute GraphQL warmup once after Django startup has completed.
+
+    This avoids database access during app initialization (AppConfig.ready).
+    """
+    global _GRAPHQL_WARMUP_RAN
+    if _GRAPHQL_WARMUP_RAN:
+        return
+    if not warmup_enabled():
+        return
+    _GRAPHQL_WARMUP_RAN = True
+    if not _GRAPHQL_WARMUP_MANAGERS:
+        return
+    try:
+        enqueued = dispatch_graphql_warmup(_GRAPHQL_WARMUP_MANAGERS)
+        if not enqueued:
+            GeneralmanagerConfig.warm_up_graphql_properties(_GRAPHQL_WARMUP_MANAGERS)
+    except Exception:
+        logger.exception("graphql warm-up hook failed")
 
 
 class GeneralmanagerConfig(AppConfig):
@@ -390,6 +417,40 @@ class GeneralmanagerConfig(AppConfig):
         schema = graphene.Schema(**schema_kwargs)
         GraphQL._schema = schema
         GeneralmanagerConfig.add_graphql_url(schema)
+        GeneralmanagerConfig.schedule_graphql_warm_up(pending_graphql_interfaces)
+
+    @staticmethod
+    def schedule_graphql_warm_up(
+        manager_classes: Iterable[Type[GeneralManager]],
+    ) -> None:
+        """
+        Schedule GraphQL property warmup via startup hooks.
+
+        Startup hooks mirror the ReadOnlyInterface sync lifecycle and run before
+        management commands continue (e.g. `runserver` main process).
+        """
+        global _GRAPHQL_WARMUP_MANAGERS
+        if not warmup_enabled():
+            return
+        _GRAPHQL_WARMUP_MANAGERS = tuple(manager_classes)
+        for manager_class in _GRAPHQL_WARMUP_MANAGERS:
+            interface_cls = getattr(manager_class, "Interface", None)
+            if interface_cls is None:
+                continue
+            register_startup_hook(interface_cls, _run_graphql_warmup_once)
+            break
+
+    @staticmethod
+    def warm_up_graphql_properties(
+        manager_classes: Iterable[Type[GeneralManager]],
+    ) -> None:
+        """
+        Warm up GraphQL property caches for properties declared with ``warm_up=True``.
+
+        Parameters:
+            manager_classes (Iterable[type[GeneralManager]]): Manager classes to inspect.
+        """
+        warm_up_graphql_properties(manager_classes)
 
     @staticmethod
     def add_graphql_url(schema: graphene.Schema) -> None:

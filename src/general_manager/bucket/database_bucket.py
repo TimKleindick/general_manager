@@ -1,12 +1,17 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
+import hashlib
+import json
 from typing import Any, Generator, Type, TypeVar
 
 from django.core.exceptions import FieldError
+from django.core.cache import cache
 from django.db import models
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import Dependency, record_dependencies
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
 
@@ -142,6 +147,206 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self._manager_class = manager_class
         self.filters = {**(filter_definitions or {})}
         self.excludes = {**(exclude_definitions or {})}
+
+    def _query_fingerprint(self, query_set: models.QuerySet) -> str:
+        """
+        Build a deterministic fingerprint for queryset-scoped cache entries.
+
+        Parameters:
+            query_set (models.QuerySet): QuerySet whose SQL state should be represented.
+
+        Returns:
+            str: Stable hash digest representing manager type, queryset SQL, and bucket filters.
+        """
+        payload = {
+            "manager": self._manager_class.__qualname__,
+            "db": query_set.db,
+            "sql": str(query_set.query),
+            "filters": self.filters,
+            "excludes": self.excludes,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
+
+    def _replay_dependencies(self, cached_dependencies: Any) -> None:
+        """
+        Replay tracked dependencies from cache into the current dependency tracker context.
+
+        Parameters:
+            cached_dependencies (Any): Cached dependency payload previously stored by this bucket.
+        """
+        if not cached_dependencies:
+            return
+        for class_name, operation, identifier in cached_dependencies:
+            DependencyTracker.track(class_name, operation, identifier)
+
+    def _store_cached_dependency_value(
+        self,
+        *,
+        key: str,
+        value: Any,
+        dependencies: set[Dependency],
+    ) -> None:
+        """
+        Store value and dependencies and register dependency index links.
+
+        Parameters:
+            key (str): Primary cache key.
+            value (Any): Value to store under `key`.
+            dependencies (set[Dependency]): Dependency set gathered while computing value.
+        """
+        deps_key = f"{key}:deps"
+        cache.set(key, value, None)
+        cache.set(deps_key, dependencies, None)
+        if dependencies:
+            record_dependencies(key, dependencies)
+
+    def _cached_python_filter_ids(
+        self,
+        query_set: models.QuerySet,
+        python_filters: list[tuple[str, Any, str]],
+    ) -> list[int]:
+        """
+        Resolve Python-only filter IDs using dependency-aware cache.
+
+        Parameters:
+            query_set (models.QuerySet): QuerySet already narrowed by ORM lookups.
+            python_filters (list[tuple[str, Any, str]]): Python-evaluated filters.
+
+        Returns:
+            list[int]: Primary keys that satisfy all Python filter conditions.
+        """
+        payload = {
+            "fingerprint": self._query_fingerprint(query_set),
+            "python_filters": python_filters,
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
+        cache_key = f"gm:database_bucket:python_filter_ids:{digest}"
+        deps_key = f"{cache_key}:deps"
+
+        cached_ids = cache.get(cache_key)
+        if isinstance(cached_ids, list):
+            self._replay_dependencies(cache.get(deps_key))
+            return [int(pk) for pk in cached_ids]
+
+        with DependencyTracker() as dependencies:
+            # Keep dependency links to the original query shape.
+            dependencies.add(
+                (self._manager_class.__name__, "filter", repr(self.filters))
+            )
+            dependencies.add(
+                (self._manager_class.__name__, "exclude", repr(self.excludes))
+            )
+            ids = self.__parse_python_filters(query_set, python_filters)
+            self._store_cached_dependency_value(
+                key=cache_key,
+                value=ids,
+                dependencies=dependencies,
+            )
+        return ids
+
+    def _cached_python_sort_order_ids(
+        self,
+        query_set: models.QuerySet,
+        key: tuple[str, ...],
+        properties: dict[str, Any],
+        python_keys: list[str],
+        reverse: bool,
+    ) -> list[int]:
+        """
+        Resolve Python fallback sort order IDs using dependency-aware cache.
+
+        Parameters:
+            query_set (models.QuerySet): QuerySet to order.
+            key (tuple[str, ...]): Sort keys in order.
+            properties (dict[str, Any]): GraphQL property definitions.
+            python_keys (list[str]): Property keys requiring Python evaluation.
+            reverse (bool): Descending order when True.
+
+        Returns:
+            list[int]: Ordered primary keys.
+        """
+        payload_base = {
+            "fingerprint": self._query_fingerprint(query_set),
+            "sort_keys": key,
+            "python_keys": python_keys,
+        }
+        payload_asc = {**payload_base, "reverse": False}
+        payload_desc = {**payload_base, "reverse": True}
+
+        digest_asc = hashlib.sha256(
+            json.dumps(payload_asc, sort_keys=True, default=str).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
+        digest_desc = hashlib.sha256(
+            json.dumps(payload_desc, sort_keys=True, default=str).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
+        asc_cache_key = f"gm:database_bucket:python_sort_ids:{digest_asc}"
+        desc_cache_key = f"gm:database_bucket:python_sort_ids:{digest_desc}"
+        target_cache_key = desc_cache_key if reverse else asc_cache_key
+        target_deps_key = f"{target_cache_key}:deps"
+
+        cached_ids = cache.get(target_cache_key)
+        if isinstance(cached_ids, list):
+            self._replay_dependencies(cache.get(target_deps_key))
+            return [int(pk) for pk in cached_ids]
+
+        counterpart_cache_key = asc_cache_key if reverse else desc_cache_key
+        counterpart_deps_key = f"{counterpart_cache_key}:deps"
+        counterpart_cached_ids = cache.get(counterpart_cache_key)
+        if isinstance(counterpart_cached_ids, list):
+            counterpart_dependencies = cache.get(counterpart_deps_key)
+            self._replay_dependencies(counterpart_dependencies)
+            mirrored_ids = [int(pk) for pk in counterpart_cached_ids][::-1]
+            cache.set(target_cache_key, mirrored_ids, None)
+            cache.set(target_deps_key, counterpart_dependencies, None)
+            if counterpart_dependencies:
+                record_dependencies(target_cache_key, counterpart_dependencies)
+            return mirrored_ids
+
+        with DependencyTracker() as dependencies:
+            dependencies.add(
+                (self._manager_class.__name__, "filter", repr(self.filters))
+            )
+            dependencies.add(
+                (self._manager_class.__name__, "exclude", repr(self.excludes))
+            )
+            objs = list(query_set)
+            scored: list[tuple[int, tuple[object, ...]]] = []
+            for obj in objs:
+                inst = self._manager_class(obj.pk)
+                values: list[object] = []
+                for k in key:
+                    if k in properties:
+                        if k in python_keys:
+                            values.append(getattr(inst, k))
+                        else:
+                            values.append(getattr(obj, k))
+                    else:
+                        values.append(getattr(obj, k))
+                scored.append((obj.pk, tuple(values)))
+            scored_asc = sorted(scored, key=lambda entry: entry[1], reverse=False)
+            scored_desc = sorted(scored, key=lambda entry: entry[1], reverse=True)
+            ordered_ids_asc = [pk for pk, _values in scored_asc]
+            ordered_ids_desc = [pk for pk, _values in scored_desc]
+            ordered_ids = ordered_ids_desc if reverse else ordered_ids_asc
+            self._store_cached_dependency_value(
+                key=asc_cache_key,
+                value=ordered_ids_asc,
+                dependencies=dependencies,
+            )
+            self._store_cached_dependency_value(
+                key=desc_cache_key,
+                value=ordered_ids_desc,
+                dependencies=dependencies,
+            )
+        return ordered_ids
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
@@ -310,7 +515,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise QuerysetFilteringError(error) from error
 
         if python_filters:
-            ids = self.__parse_python_filters(qs, python_filters)
+            ids = self._cached_python_filter_ids(qs, python_filters)
             qs = qs.filter(pk__in=ids)
 
         merged_filter = self.__merge_filter_definitions(self.filters, **kwargs)
@@ -348,7 +553,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         qs = qs.exclude(**orm_kwargs)
 
         if python_filters:
-            ids = self.__parse_python_filters(qs, python_filters)
+            ids = self._cached_python_filter_ids(qs, python_filters)
             qs = qs.exclude(pk__in=ids)
 
         merged_exclude = self.__merge_filter_definitions(self.excludes, **kwargs)
@@ -518,23 +723,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             qs = qs.annotate(**annotations)
 
         if python_keys:
-            objs = list(qs)
-
-            def key_func(obj: models.Model) -> tuple[object, ...]:
-                inst = self._manager_class(obj.pk)
-                values = []
-                for k in key:
-                    if k in properties:
-                        if k in python_keys:
-                            values.append(getattr(inst, k))
-                        else:
-                            values.append(getattr(obj, k))
-                    else:
-                        values.append(getattr(obj, k))
-                return tuple(values)
-
-            objs.sort(key=key_func, reverse=reverse)
-            ordered_ids = [obj.pk for obj in objs]
+            ordered_ids = self._cached_python_sort_order_ids(
+                qs, key, properties, python_keys, reverse
+            )
             case = models.Case(
                 *[models.When(pk=pk, then=pos) for pos, pk in enumerate(ordered_ids)],
                 output_field=models.IntegerField(),

@@ -3,6 +3,8 @@
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.db.models import functions
+from django.core.cache import cache
+from unittest.mock import patch
 
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.manager.general_manager import GeneralManager
@@ -187,6 +189,11 @@ class DatabaseBucketTestCase(TestCase):
         self.u3 = User.objects.create(username="carol")
         # Base bucket with all users
         self.bucket = DatabaseBucket(User.objects.all(), UserManager)
+        cache.clear()
+
+    def tearDown(self) -> None:
+        cache.clear()
+        super().tearDown()
 
     def test_iter_and_len_and_count(self):
         # __iter__ yields UserManager instances
@@ -356,6 +363,17 @@ class DatabaseBucketTestCase(TestCase):
         sorted_bucket = bucket.sort("negative_length")
         first_id = sorted_bucket.first().identification["id"]
         self.assertIn(first_id, [self.u1.id, self.u3.id])
+
+    def test_python_property_filter_uses_dependency_cache(self):
+        with patch.object(
+            DatabaseBucket,
+            "_DatabaseBucket__parse_python_filters",
+            wraps=self.bucket._DatabaseBucket__parse_python_filters,
+        ) as parse_mock:
+            first = self.bucket.filter(negative_length__lte=-3)
+            second = self.bucket.filter(negative_length__lte=-3)
+            self.assertEqual(parse_mock.call_count, 1)
+            self.assertEqual(first.count(), second.count())
 
     def test_getitem_negative_and_out_of_range(self):
         """

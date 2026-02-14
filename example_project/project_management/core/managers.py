@@ -202,7 +202,9 @@ def _generate_customer_volume_curve_points(
     volumes = [
         max(
             0,
-            round((generated_total_volume * weight / weight_sum) * _RNG.uniform(0.9, 1.1)),
+            round(
+                (generated_total_volume * weight / weight_sum) * _RNG.uniform(0.9, 1.1)
+            ),
         )
         for weight in raw_weights
     ]
@@ -584,7 +586,7 @@ class Project(GeneralManager):
                     latest = volume.eop
         return latest
 
-    @graph_ql_property(sortable=True, filterable=True)
+    @graph_ql_property(sortable=True, filterable=True, warm_up=True)
     def total_volume(self) -> int:
         project_id = _resolve_project_id(self)
         if project_id is None:
