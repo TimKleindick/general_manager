@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from math import exp
+from random import SystemRandom
 from typing import Any, ClassVar, Optional
 
+from factory import Sequence
+from factory.declarations import LazyAttribute, LazyFunction
+from django.contrib.auth.hashers import make_password
 from django.db.models import (
     BigIntegerField,
     BooleanField,
     CharField,
     DateField,
-    DateTimeField,
     FloatField,
     ForeignKey,
     IntegerField,
@@ -25,29 +29,35 @@ from django.db import transaction
 from general_manager.interface import (
     CalculationInterface,
     DatabaseInterface,
+    ExistingModelInterface,
     ReadOnlyInterface,
+)
+from general_manager.factory import (
+    lazy_boolean,
+    lazy_choice,
+    lazy_date_between,
+    lazy_delta_date,
+    lazy_decimal,
+    lazy_faker_sentence,
+    lazy_integer,
 )
 from general_manager.manager import GeneralManager, Input, graph_ql_property
 from general_manager.permission import ManagerBasedPermission, register_permission
+from django.contrib.auth import get_user_model
 
 
-LEGACY_CREATE_ALLOWED_MICROSOFT_IDS: set[str] = {
-    "test1234-5678-90ab-cdef12345678",
-    "test2345-6789-0abc-def123456789",
+LEGACY_CREATE_ALLOWED_IDENTIFIERS: set[str] = {
+    "seed_user_1",
+    "pm_admin",
 }
 
-LEGACY_MANAGEMENT_MICROSOFT_IDS: set[str] = {
-    "test1234-5678-90ab-cdef12345678",
-    "test2345-6789-0abc-def123456789",
-    "test3456-7890-1bcd-ef1234567890",
-    "test4567-8901-2cde-f12345678901",
-    "test5678-9012-3cde-123456789012",
-    "test6789-0123-4def-234567890123",
-    "test7890-1234-5ef0-345678901234",
-    "test8901-2345-6f01-456789012345",
+LEGACY_MANAGEMENT_IDENTIFIERS: set[str] = {
+    "seed_user_1",
+    "pm_admin",
 }
 
 PHASE_IDS_WITH_FIXED_NOMINATION_PROBABILITY: set[int] = {3, 4, 5, 6, 7, 8}
+_RNG = SystemRandom()
 
 
 class ProjectCreationManagerAssignmentError(RuntimeError):
@@ -142,6 +152,78 @@ def _resolve_project_phase_type_id(instance: object) -> int | None:
     ) or _extract_related_id(getattr(instance, "project_phase_type", None))
 
 
+def _resolve_user_identifier(instance: object) -> str | None:
+    for field_name in ("microsoft_id", "username", "email"):
+        value = getattr(instance, field_name, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _generate_customer_volume_curve_points(
+    *,
+    customer_volume: object,
+    datapoints: int | None = None,
+    min_volume: int = 100,
+    max_volume: int = 15000,
+    total_volume: int | None = None,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
+    if min_volume > max_volume:
+        min_volume, max_volume = max_volume, min_volume
+
+    sop = getattr(customer_volume, "sop", None)
+    eop = getattr(customer_volume, "eop", None)
+    if not isinstance(sop, date):
+        sop = date.today()
+    if not isinstance(eop, date) or eop < sop:
+        eop = sop
+
+    total_days = max(0, (eop - sop).days)
+    suggested_points = max(2, eop.year - sop.year + 1)
+    requested_points = suggested_points if datapoints is None else int(datapoints)
+    normalized_datapoints = max(2, min(requested_points, total_days + 1))
+
+    generated_total_volume = total_volume
+    if generated_total_volume is None:
+        generated_total_volume = _RNG.randint(
+            min_volume * normalized_datapoints,
+            max_volume * normalized_datapoints,
+        )
+
+    center = (normalized_datapoints - 1) / 2
+    spread = max(normalized_datapoints / 3, 1.0)
+    raw_weights = [
+        exp(-(((index - center) ** 2) / (2 * (spread**2))))
+        for index in range(normalized_datapoints)
+    ]
+    weight_sum = sum(raw_weights) or 1.0
+
+    volumes = [
+        max(
+            0,
+            round((generated_total_volume * weight / weight_sum) * _RNG.uniform(0.9, 1.1)),
+        )
+        for weight in raw_weights
+    ]
+    delta = generated_total_volume - sum(volumes)
+    peak_index = normalized_datapoints // 2
+    volumes[peak_index] = max(0, volumes[peak_index] + delta)
+
+    curve_points: list[dict[str, Any]] = []
+    for index in range(normalized_datapoints):
+        day_offset = round((index * total_days) / (normalized_datapoints - 1))
+        curve_points.append(
+            {
+                **kwargs,
+                "customer_volume": customer_volume,
+                "volume_date": sop + timedelta(days=day_offset),
+                "volume": volumes[index],
+            }
+        )
+    return curve_points
+
+
 @register_permission("isProjectRoleAny")
 def _permission_is_project_role_any(instance, user, config: list[str]) -> bool:
     user_id = _request_user_id(user)
@@ -189,10 +271,10 @@ def _permission_is_legacy_project_create_allowed(
         return False
 
     user_manager = User.filter(id=user_id).first()
-    microsoft_id = getattr(user_manager, "microsoft_id", None)
-    if microsoft_id in LEGACY_CREATE_ALLOWED_MICROSOFT_IDS:
+    identifier = _resolve_user_identifier(user_manager)
+    if identifier in LEGACY_CREATE_ALLOWED_IDENTIFIERS:
         return True
-    if microsoft_id in LEGACY_MANAGEMENT_MICROSOFT_IDS:
+    if identifier in LEGACY_MANAGEMENT_IDENTIFIERS:
         return True
 
     for customer in Customer.all():
@@ -321,43 +403,41 @@ class DerivativeType(GeneralManager):
 
 
 class User(GeneralManager):
-    microsoft_id: str
+    username: str
     last_login: Optional[datetime]
     first_name: Optional[str]
     last_name: Optional[str]
-    email: Optional[str]
-    job_title: Optional[str]
-    office_location_name: Optional[str]
-    cost_center: Optional[int]
-    employee_identification_number: Optional[int]
-    is_employed: bool
-    supervisor_microsoft_id: Optional[str]
-    allow_everybody_to_see_my_absence: bool
+    email: str
+    is_active: bool
 
-    class Interface(DatabaseInterface):
-        microsoft_id = CharField(max_length=36, unique=True)
-        last_login = DateTimeField(null=True, blank=True)
-        first_name = CharField(max_length=255, null=True, blank=True)
-        last_name = CharField(max_length=255, null=True, blank=True)
-        email = CharField(max_length=255, null=True, blank=True)
-        job_title = CharField(max_length=255, null=True, blank=True)
-        office_location_name = CharField(max_length=255, null=True, blank=True)
-        cost_center = IntegerField(null=True, blank=True)
-        employee_identification_number = IntegerField(null=True, blank=True)
-        is_employed = BooleanField(default=True)
-        supervisor_microsoft_id = CharField(max_length=36, null=True, blank=True)
-        allow_everybody_to_see_my_absence = BooleanField(default=True)
+    class Interface(ExistingModelInterface):
+        model = get_user_model()
+
+        class Meta:
+            skip_history_registration = True
+
+    class Factory:
+        username = Sequence(lambda index: f"pm_user_{index + 1:04d}")
+        email = LazyAttribute(lambda obj: f"{obj.username}@example.local")
+        first_name = lazy_choice(
+            ["Alex", "Jordan", "Taylor", "Morgan", "Casey", "Sam", "Riley"]
+        )
+        last_name = lazy_choice(
+            ["Miller", "Nguyen", "Brown", "Schmidt", "Garcia", "Patel", "Kim"]
+        )
+        is_active = lazy_boolean(0.92)
+        password = LazyFunction(lambda: make_password("test-pass-123"))
 
     @graph_ql_property(sortable=True, filterable=True)
     def full_name(self) -> str:
         first = (self.first_name or "").strip()
         last = (self.last_name or "").strip()
-        full_name = f"{first} {last}".strip()
+        full_name = f"{first} {last}".strip() or (self.username or "").strip()
         if not full_name:
             return "Unknown User"
-        if self.is_employed:
+        if self.is_active:
             return full_name
-        return f"{full_name} (left company)"
+        return f"{full_name} (inactive)"
 
 
 class AccountNumber(GeneralManager):
@@ -370,6 +450,11 @@ class AccountNumber(GeneralManager):
         is_project_account = BooleanField(default=True)
         network_number = BigIntegerField(null=True, blank=True)
 
+    class Factory:
+        number = Sequence(lambda index: f"AC{index + 100000:08d}")
+        is_project_account = lazy_boolean(0.7)
+        network_number = lazy_integer(100_000_000, 999_999_999)
+
 
 class Customer(GeneralManager):
     company_name: str
@@ -381,14 +466,14 @@ class Customer(GeneralManager):
         company_name = CharField(max_length=255)
         group_name = CharField(max_length=255)
         key_account = ForeignKey(
-            "User",
+            get_user_model(),
             on_delete=SET_NULL,
             null=True,
             blank=True,
             related_name="key_account_for_customers",
         )
         sales_responsible = ManyToManyField(
-            "User",
+            get_user_model(),
             blank=True,
             related_name="sales_responsible_for_customers",
         )
@@ -402,6 +487,11 @@ class Customer(GeneralManager):
                 ),
             )
 
+    class Factory:
+        company_name = Sequence(lambda index: f"Customer Company {index + 1:04d}")
+        group_name = Sequence(lambda index: f"Group {index + 1:04d}")
+        number = Sequence(lambda index: 10_000 + index)
+
 
 class Plant(GeneralManager):
     name: str
@@ -413,14 +503,14 @@ class Plant(GeneralManager):
     class Interface(DatabaseInterface):
         name = CharField(max_length=255, unique=True)
         plant_officer = ForeignKey(
-            "User",
+            get_user_model(),
             on_delete=SET_NULL,
             null=True,
             blank=True,
             related_name="plant_officer_for",
         )
         plant_deputy_officer = ForeignKey(
-            "User",
+            get_user_model(),
             on_delete=SET_NULL,
             null=True,
             blank=True,
@@ -428,6 +518,11 @@ class Plant(GeneralManager):
         )
         work_pattern_name = CharField(max_length=255, null=True, blank=True)
         _plant_image_group_id = BigIntegerField(null=True, blank=True)
+
+    class Factory:
+        name = Sequence(lambda index: f"Plant-{index + 1:03d}")
+        work_pattern_name = lazy_choice(["2-shift", "3-shift", "weekend support"])
+        _plant_image_group_id = lazy_integer(1_000, 9_999_999)
 
 
 class Project(GeneralManager):
@@ -465,6 +560,11 @@ class Project(GeneralManager):
         customer = ForeignKey("Customer", on_delete=PROTECT)
         probability_of_nomination = FloatField(null=True, blank=True)
         customer_volume_flex = FloatField(null=True, blank=True)
+
+    class Factory:
+        name = Sequence(lambda index: f"Project {index + 1:04d}")
+        probability_of_nomination = lazy_decimal(0.01, 0.99, 4)
+        customer_volume_flex = lazy_decimal(0.0, 0.4, 4)
 
     @graph_ql_property(sortable=True, filterable=True)
     def earliest_sop(self) -> Optional[date]:
@@ -652,9 +752,16 @@ class Derivative(GeneralManager):
                 ),
             )
 
+    class Factory:
+        name = Sequence(lambda index: f"Derivative-{index + 1:04d}")
+        pieces_per_car_set = lazy_integer(1, 8)
+        max_daily_quantity = lazy_integer(300, 6500)
+        norm_daily_quantity = lazy_integer(100, 4200)
+        volume_description = lazy_faker_sentence(7)
+
 
 class CustomerVolume(GeneralManager):
-    derivative_: Derivative
+    derivative: Derivative
     project_phase_type: Optional[ProjectPhaseType]
     sop: date
     eop: date
@@ -663,7 +770,7 @@ class CustomerVolume(GeneralManager):
     is_volume_in_vehicles: bool
 
     class Interface(DatabaseInterface):
-        derivative_ = ForeignKey(
+        derivative = ForeignKey(
             "Derivative",
             on_delete=PROTECT,
         )
@@ -678,6 +785,13 @@ class CustomerVolume(GeneralManager):
         description = TextField(null=True, blank=True)
         used_volume = BooleanField(default=False)
         is_volume_in_vehicles = BooleanField(default=False)
+
+    class Factory:
+        sop = lazy_date_between(date(2026, 1, 1), date(2031, 12, 31))
+        eop = lazy_delta_date(365 * 5, "sop")
+        description = lazy_faker_sentence(8)
+        used_volume = lazy_boolean(0.7)
+        is_volume_in_vehicles = lazy_boolean(0.35)
 
 
 class CustomerVolumeCurvePoint(GeneralManager):
@@ -698,6 +812,11 @@ class CustomerVolumeCurvePoint(GeneralManager):
                 ),
             )
 
+    class Factory:
+        volume_date = LazyAttribute(lambda obj: obj.customer_volume.sop)
+        volume = lazy_integer(100, 15000)
+        _adjustmentMethod = staticmethod(_generate_customer_volume_curve_points)
+
 
 class ProjectTeam(GeneralManager):
     project: Project
@@ -708,7 +827,11 @@ class ProjectTeam(GeneralManager):
     class Interface(DatabaseInterface):
         project = ForeignKey("Project", on_delete=PROTECT)
         project_user_role = ForeignKey("ProjectUserRole", on_delete=PROTECT)
-        responsible_user = ForeignKey("User", on_delete=PROTECT)
+        responsible_user = ForeignKey(
+            get_user_model(),
+            on_delete=PROTECT,
+            related_name="responsible_for_project_teams",
+        )
         active = BooleanField(default=True)
 
         class Meta:
@@ -718,6 +841,9 @@ class ProjectTeam(GeneralManager):
                     name="unique_project_role_entry",
                 ),
             )
+
+    class Factory:
+        active = lazy_boolean(0.9)
 
 
 class ProjectVolumeCurve(GeneralManager):
