@@ -91,6 +91,19 @@ def _normalize_graphql_path(raw_path: str) -> str:
     return raw_path
 
 
+def _should_run_graphql_warmup(django_settings: Any) -> bool:
+    """
+    Return whether startup-triggered GraphQL warmup should execute in this process.
+
+    In development (`DEBUG=True`), warmup runs only for `runserver` to avoid
+    slowing down unrelated management commands. In non-development environments
+    warmup remains enabled for startup hooks on any command.
+    """
+    if not getattr(django_settings, "DEBUG", False):
+        return True
+    return len(sys.argv) > 1 and sys.argv[1] == "runserver"
+
+
 def _auto_reindex_search(*_args: object, **kwargs: object) -> None:
     global _SEARCH_REINDEXED
     environ = kwargs.get("environ")
@@ -122,6 +135,8 @@ def _run_graphql_warmup_once(*_args: object, **_kwargs: object) -> None:
     if _GRAPHQL_WARMUP_RAN:
         return
     if not warmup_enabled():
+        return
+    if not _should_run_graphql_warmup(settings):
         return
     _GRAPHQL_WARMUP_RAN = True
     if not _GRAPHQL_WARMUP_MANAGERS:
