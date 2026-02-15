@@ -183,20 +183,21 @@ class TestRelationFieldValue(TestCase):
             if hasattr(M, "_general_manager_class"):
                 delattr(M, "_general_manager_class")
 
-    def test_fk_with_factory_new_instance(self):
-        # 1) _general_manager_class.Factory returns an object directly
-        dummy = DummyForeignKey(name="foo")
+    def test_fk_with_factory_and_no_existing_instances_raises(self):
+        field = DummyModel._meta.get_field("dummy_fk")
 
         class GMC:
             pass
 
-        GMC.Factory = lambda **_kwargs: dummy  # type: ignore
+        GMC.Factory = lambda **_kwargs: DummyForeignKey(name="foo")  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
-        with patch("general_manager.factory.factories._RNG.choice", return_value=True):
-            field = DummyModel._meta.get_field("dummy_fk")
-            result = get_field_value(field)
-            # In this branch we expect the factory result directly, not a LazyFunction
-            self.assertIs(result, dummy)
+        with (
+            patch.object(DummyForeignKey.objects, "all", return_value=[]),
+            self.assertRaisesMessage(
+                ValueError, "No factory found for DummyForeignKey"
+            ),
+        ):
+            get_field_value(field)
 
     def test_fk_with_factory_existing_instance(self):
         """
@@ -213,30 +214,29 @@ class TestRelationFieldValue(TestCase):
         GMC.Factory = lambda **_kwargs: dummy1  # type: ignore
         DummyForeignKey._general_manager_class = GMC  # type: ignore
 
-        with (
-            patch(
-                "general_manager.factory.factories._RNG.choice",
-                return_value=False,
-            ),
-            patch.object(DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]),
+        with patch.object(
+            DummyForeignKey.objects, "all", return_value=[dummy1, dummy2]
         ):
             decl = get_field_value(field)
             self.assertIsInstance(decl, LazyFunction)
         inst = decl.evaluate(None, None, None)  # type: ignore
         self.assertIn(inst, (dummy1, dummy2))
 
-    def test_one_to_one_with_factory(self):
-        dummy = DummyForeignKey2(name="bar")
+    def test_one_to_one_with_factory_and_no_existing_instances_raises(self):
+        field = DummyModel._meta.get_field("dummy_one_to_one")
 
         class GMC2:
             pass
 
-        GMC2.Factory = lambda **_kwargs: dummy  # type: ignore
+        GMC2.Factory = lambda **_kwargs: DummyForeignKey2(name="bar")  # type: ignore
         DummyForeignKey2._general_manager_class = GMC2  # type: ignore
-
-        field = DummyModel._meta.get_field("dummy_one_to_one")
-        result = get_field_value(field)
-        self.assertIs(result, dummy)
+        with (
+            patch.object(DummyForeignKey2.objects, "all", return_value=[]),
+            self.assertRaisesMessage(
+                ValueError, "No factory found for DummyForeignKey2"
+            ),
+        ):
+            get_field_value(field)
 
     def test_fk_without_factory_with_existing_instances(self):
         # 2) No factory but existing objects → expect LazyFunction

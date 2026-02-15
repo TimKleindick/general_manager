@@ -83,7 +83,7 @@ def get_field_value(
     """
     Generate a realistic sample value appropriate for the given Django model field or relation.
 
-    This returns a value suitable for assignment to the field: common scalar and text fields produce Faker-generated values; Decimal/Float/Integer/Boolean/Date/DateTime/UUID/Duration/GUID/IP/Email/URL fields return matching scalar values; CharField respects max_length and RegexValidator (generates a matching string when a regex is present); MeasurementField returns a LazyFunction that produces a Measurement in the field's base unit; relational fields (OneToOneField, ForeignKey, Many-to-many via other helpers) return model instances or LazyFunction wrappers that either create instances via a GeneralManager factory or select existing related instances. If the field is nullable there is a 10% chance this will return None.
+    This returns a value suitable for assignment to the field: common scalar and text fields produce Faker-generated values; Decimal/Float/Integer/Boolean/Date/DateTime/UUID/Duration/GUID/IP/Email/URL fields return matching scalar values; CharField respects max_length and RegexValidator (generates a matching string when a regex is present); MeasurementField returns a LazyFunction that produces a Measurement in the field's base unit; relational fields (OneToOneField, ForeignKey, Many-to-many via other helpers) return existing related model instances via LazyFunction wrappers. If the field is nullable there is a 10% chance this will return None.
 
     Parameters:
         field (models.Field | models.ForeignObjectRel): The Django model field or relation to generate a value for.
@@ -191,39 +191,20 @@ def get_field_value(
             return cast(str, Faker("text", max_nb_chars=max_length))
     elif isinstance(field, models.OneToOneField):
         related_model = get_related_model(field)
-        if hasattr(related_model, "_general_manager_class"):
-            related_factory = related_model._general_manager_class.Factory  # type: ignore
-            return _ensure_model_instance(related_factory())
-        else:
-            # If no factory exists, pick a random existing instance
-            related_instances = list(related_model.objects.all())
-            if related_instances:
-                return LazyFunction(lambda: _RNG.choice(related_instances))
-            if field.null:
-                return None
-            raise MissingFactoryOrInstancesError(related_model)
+        related_instances = list(related_model.objects.all())
+        if related_instances:
+            return LazyFunction(lambda: _RNG.choice(related_instances))
+        if field.null:
+            return None
+        raise MissingFactoryOrInstancesError(related_model)
     elif isinstance(field, models.ForeignKey):
         related_model = get_related_model(field)
-        # Create or get an instance of the related model
-        if hasattr(related_model, "_general_manager_class"):
-            create_a_new_instance = _RNG.choice([True, True, False])
-            if not create_a_new_instance:
-                existing_instances = list(related_model.objects.all())
-                if existing_instances:
-                    # Pick a random existing instance
-                    return LazyFunction(lambda: _RNG.choice(existing_instances))
-
-            related_factory = related_model._general_manager_class.Factory  # type: ignore
-            return _ensure_model_instance(related_factory())
-
-        else:
-            # If no factory exists, pick a random existing instance
-            related_instances = list(related_model.objects.all())
-            if related_instances:
-                return LazyFunction(lambda: _RNG.choice(related_instances))
-            if field.null:
-                return None
-            raise MissingFactoryOrInstancesError(related_model)
+        related_instances = list(related_model.objects.all())
+        if related_instances:
+            return LazyFunction(lambda: _RNG.choice(related_instances))
+        if field.null:
+            return None
+        raise MissingFactoryOrInstancesError(related_model)
     else:
         return None
 

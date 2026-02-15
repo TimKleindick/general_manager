@@ -170,6 +170,30 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(instance.description, "Test Description")  # type: ignore
         self.assertEqual(instance.dummy_model, dummy_model_instance)  # type: ignore
 
+    def test_generate_instance_with_related_field_id(self):
+        """
+        Tests that passing a relation as ``<field>_id`` is treated as an explicit FK value.
+        """
+        dummy_model_instance = self.factory_class.create()
+        instance = self.factory_class2.create(
+            description="Test Description",
+            dummy_model_id=dummy_model_instance.pk,
+        )
+        self.assertIsInstance(instance, DummyModel2)
+        self.assertEqual(instance.dummy_model_id, dummy_model_instance.pk)
+
+    def test_generate_instance_with_related_field_id_from_model(self):
+        """
+        Tests that passing a model object via ``<field>_id`` is coerced to primary key.
+        """
+        dummy_model_instance = self.factory_class.create()
+        instance = self.factory_class2.create(
+            description="Test Description",
+            dummy_model_id=dummy_model_instance,
+        )
+        self.assertIsInstance(instance, DummyModel2)
+        self.assertEqual(instance.dummy_model_id, dummy_model_instance.pk)
+
     def test_generate_instance_with_many_to_many(self):
         """
         Tests that the factory can create a DummyModel2 instance with ManyToMany relationships assigned to multiple DummyModel instances.

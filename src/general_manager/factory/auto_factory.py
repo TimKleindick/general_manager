@@ -143,7 +143,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         ]
 
         for field in field_list:
-            if field.name in [*params, *declared_fields]:
+            relation_id_explicit = bool(
+                isinstance(field, models.Field)
+                and field.is_relation
+                and (field.many_to_one or field.one_to_one)
+                and getattr(field, "attname", "") in params
+            )
+            if field.name in [*params, *declared_fields] or relation_id_explicit:
                 continue  # Skip fields that are already set
             if isinstance(field, models.AutoField) or field.auto_created:
                 continue  # Skip auto fields
@@ -188,7 +194,11 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
     @classmethod
     def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
         """
-        Strip many-to-many entries from kwargs and coerce single-related values for foreign/one-to-one relation fields.
+        Strip many-to-many entries and normalize relation values.
+
+        Accept both relation names (e.g. ``customer``) and explicit relation id names
+        (e.g. ``customer_id``) for foreign/one-to-one fields. ``*_id`` inputs are kept as-is
+        and coerced to primitive primary key values when needed.
 
         Returns:
             dict[str, Any]: Keyword arguments with many-to-many fields removed and relation field values normalized.
@@ -202,11 +212,29 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             try:
                 field = model._meta.get_field(field_name)
             except FieldDoesNotExist:
+                if not field_name.endswith("_id"):
+                    continue
+                relation_name = field_name[: -len("_id")]
+                try:
+                    relation_field = model._meta.get_field(relation_name)
+                except FieldDoesNotExist:
+                    continue
+                if relation_field.is_relation and (
+                    relation_field.many_to_one or relation_field.one_to_one
+                ):
+                    value = cls._coerce_single_related_value(kwargs[field_name])
+                    if isinstance(value, models.Model):
+                        kwargs[field_name] = getattr(value, "pk", value)
+                    else:
+                        kwargs[field_name] = value
                 continue
             if field.is_relation and (field.many_to_one or field.one_to_one):
-                kwargs[field_name] = cls._coerce_single_related_value(
-                    kwargs[field_name]
-                )
+                value = cls._coerce_single_related_value(kwargs[field_name])
+                is_relation_id_key = field_name == getattr(field, "attname", None)
+                if is_relation_id_key and isinstance(value, models.Model):
+                    kwargs[field_name] = getattr(value, "pk", value)
+                else:
+                    kwargs[field_name] = value
         return kwargs
 
     @classmethod
