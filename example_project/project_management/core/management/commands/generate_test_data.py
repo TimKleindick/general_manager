@@ -6,22 +6,17 @@ from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 
-from core.managers import (
-    AccountNumber,
-    Plant,
+from core.managers.catalogs import (
     Currency,
-    Customer,
-    CustomerVolumeCurvePoint,
-    CustomerVolume,
-    Derivative,
     DerivativeType,
-    Project,
     ProjectPhaseType,
-    ProjectTeam,
     ProjectType,
     ProjectUserRole,
-    User,
 )
+from core.managers.identity import User
+from core.managers.master_data import AccountNumber, Customer, Plant
+from core.managers.project_domain import Derivative, Project, ProjectTeam
+from core.managers.volume_domain import CustomerVolume, CustomerVolumeCurvePoint
 
 ERR_PROJECTS_MIN = "--projects must be at least 1."
 ERR_MAX_DERIVATIVES_MIN = "--max-derivatives must be >= 0."

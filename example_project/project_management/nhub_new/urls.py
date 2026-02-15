@@ -5,5 +5,5 @@ from django.urls import include, path
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("", include("core.urls")),
-    path("", lambda _request: redirect("graphql/", permanent=True)),
+    path("", lambda _request: redirect("dashboard/", permanent=True)),
 ]

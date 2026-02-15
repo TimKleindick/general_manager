@@ -1,0 +1,15 @@
+{
+  "folders": [
+    {
+      "name": "general_manager",
+      "path": "."
+    },
+    {
+      "name": "project_management_example",
+      "path": "example_project/project_management"
+    }
+  ],
+  "settings": {
+    "python.testing.autoTestDiscoverOnSaveEnabled": true
+  }
+}

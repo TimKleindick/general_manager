@@ -26,4 +26,8 @@ Additional read-only support managers are included for FK completeness:
 - `Currency`
 - `DerivativeType`
 
-All managers are defined in `core/managers.py`.
+Managers are split across `core/managers/` domain modules.
+
+UI routes:
+- `/dashboard/` advanced dashboard with CRUD and live subscriptions.
+- `/projects/` legacy project list UI with live updates enabled.

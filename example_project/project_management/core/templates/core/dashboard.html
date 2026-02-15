@@ -1,0 +1,1139 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Program Dashboard</title>
+  <style>
+    :root {
+      --bg-a: #f2efe6;
+      --bg-b: #d8e5da;
+      --panel: #fffef8;
+      --ink: #1c2321;
+      --muted: #52605a;
+      --line: #cad5cf;
+      --accent: #0f7b6c;
+      --accent-soft: #e4f3ef;
+      --danger: #b42318;
+      --warn: #b54708;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Space Grotesk", "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 8% 4%, var(--bg-b), var(--bg-a) 42%);
+    }
+
+    .page {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 20px 14px 30px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 300px minmax(420px, 1fr) 420px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 93%, #ffffff);
+      box-shadow: 0 8px 28px rgba(17, 33, 28, 0.07);
+    }
+
+    .stack { display: grid; gap: 12px; }
+
+    .panel h2, .panel h3 {
+      margin: 0;
+      font-family: "Fraunces", Georgia, serif;
+      letter-spacing: 0.01em;
+    }
+
+    .head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .body { padding: 12px 14px; }
+
+    .list {
+      display: grid;
+      gap: 8px;
+      max-height: 74vh;
+      overflow: auto;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }
+
+    .item:hover { transform: translateY(-1px); border-color: #98b8ad; }
+    .item.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      box-shadow: 0 3px 12px rgba(15, 123, 108, 0.17);
+    }
+
+    .item.updated { animation: pulse 900ms ease; }
+    @keyframes pulse {
+      0% { background: #ddf4ec; }
+      100% { background: inherit; }
+    }
+
+    .label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .value { font-size: 0.95rem; }
+
+    .row {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .row.full { grid-template-columns: 1fr; }
+
+    input, select, textarea, button {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #b9c9c2;
+      font: inherit;
+      padding: 8px 9px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    textarea { min-height: 72px; resize: vertical; }
+
+    button {
+      cursor: pointer;
+      background: #f5faf8;
+      border-color: #a5c2b8;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .btn-danger {
+      border-color: #f0c4c1;
+      background: #fff3f2;
+      color: var(--danger);
+    }
+
+    .btn-row {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      border: 1px solid #b8cdc6;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 0.78rem;
+      color: #28403a;
+      background: #eef7f3;
+    }
+
+    .status { font-size: 0.86rem; color: var(--muted); min-height: 1.2rem; }
+    .status.err { color: var(--danger); }
+    .status.warn { color: var(--warn); }
+
+    .tabbar { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tabbar button[data-tab].active { border-color: var(--accent); background: var(--accent-soft); }
+
+    .tab { display: none; }
+    .tab.active { display: block; }
+
+    .activity {
+      max-height: 160px;
+      overflow: auto;
+      font-size: 0.82rem;
+      display: grid;
+      gap: 5px;
+    }
+
+    .activity p {
+      margin: 0;
+      color: #2d423d;
+      border: 1px solid #d7e3dd;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: #fafcfb;
+    }
+
+    .dirty-banner {
+      display: none;
+      border: 1px solid #f2d49d;
+      background: #fff8e8;
+      color: #7c4b13;
+      border-radius: 10px;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+
+    .dirty-banner.show { display: block; }
+
+    @media (max-width: 1220px) {
+      .page { grid-template-columns: 1fr; }
+      .list { max-height: 280px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="panel">
+      <header class="head">
+        <h2>Explorer</h2>
+        <span id="wsStatus" class="chip">WS: idle</span>
+      </header>
+      <div class="body stack">
+        <div>
+          <label class="label" for="searchProject">Project Search</label>
+          <input id="searchProject" placeholder="Search project name">
+          <div id="projectList" class="list" aria-label="projects"></div>
+        </div>
+        <div>
+          <label class="label" for="searchCustomer">Customer Search</label>
+          <input id="searchCustomer" placeholder="Search company/group">
+          <div id="customerList" class="list" aria-label="customers"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header class="head">
+        <h2 id="detailTitle">Details</h2>
+        <div class="chips">
+          <span class="chip" id="selectedProjectChip">Project: none</span>
+          <span class="chip" id="selectedCustomerChip">Customer: none</span>
+        </div>
+      </header>
+      <div class="body">
+        <div class="tabbar" id="tabbar">
+          <button data-tab="project" class="active">Project</button>
+          <button data-tab="customer">Customer</button>
+          <button data-tab="derivatives">Derivatives</button>
+          <button data-tab="volumes">Volumes</button>
+        </div>
+
+        <section id="tab-project" class="tab active">
+          <h3>Project Snapshot</h3>
+          <div id="projectSnapshot" class="stack"></div>
+        </section>
+
+        <section id="tab-customer" class="tab">
+          <h3>Customer Snapshot</h3>
+          <div id="customerSnapshot" class="stack"></div>
+        </section>
+
+        <section id="tab-derivatives" class="tab">
+          <h3>Derivatives</h3>
+          <div id="derivativeSnapshot" class="stack"></div>
+        </section>
+
+        <section id="tab-volumes" class="tab">
+          <h3>Volumes</h3>
+          <div id="volumeSnapshot" class="stack"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header class="head">
+        <h2>Editor</h2>
+      </header>
+      <div class="body stack">
+        <div id="dirtyBanner" class="dirty-banner">
+          New server updates arrived while this form is dirty.
+          <button id="reloadFromServer" type="button">Reload server values</button>
+        </div>
+        <div id="formStatus" class="status">Ready.</div>
+
+        <div>
+          <h3>Project</h3>
+          <div class="row">
+            <input id="projectName" placeholder="Name">
+            <select id="projectCustomer"></select>
+          </div>
+          <div class="row">
+            <select id="projectPhaseType"></select>
+            <select id="projectType"></select>
+          </div>
+          <div class="row">
+            <select id="projectCurrency"></select>
+            <input id="projectProbability" type="number" step="0.01" min="0" max="1" placeholder="Probability 0..1">
+          </div>
+          <div class="btn-row">
+            <button id="createProjectBtn">Create</button>
+            <button id="updateProjectBtn" class="btn-primary">Update</button>
+            <button id="deleteProjectBtn" class="btn-danger">Delete</button>
+          </div>
+        </div>
+
+        <div>
+          <h3>Customer</h3>
+          <div class="row">
+            <input id="customerCompany" placeholder="Company name">
+            <input id="customerGroup" placeholder="Group name">
+          </div>
+          <div class="row">
+            <input id="customerNumber" type="number" placeholder="Number">
+            <select id="customerKeyAccount"></select>
+          </div>
+          <div class="btn-row">
+            <button id="createCustomerBtn">Create</button>
+            <button id="updateCustomerBtn" class="btn-primary">Update</button>
+            <button id="deleteCustomerBtn" class="btn-danger">Delete</button>
+          </div>
+        </div>
+
+        <div>
+          <h3>Derivative</h3>
+          <div class="row">
+            <input id="derivativeName" placeholder="Derivative name">
+            <select id="derivativeProject"></select>
+          </div>
+          <div class="row">
+            <select id="derivativeType"></select>
+            <select id="derivativePlant"></select>
+          </div>
+          <div class="row">
+            <input id="derivativePieces" type="number" min="1" placeholder="Pieces per set">
+            <input id="derivativeNorm" type="number" min="0" placeholder="Norm daily qty">
+          </div>
+          <div class="row full">
+            <textarea id="derivativeDescription" placeholder="Volume description"></textarea>
+          </div>
+          <div class="btn-row">
+            <button id="createDerivativeBtn">Create</button>
+            <button id="updateDerivativeBtn" class="btn-primary">Update</button>
+            <button id="deleteDerivativeBtn" class="btn-danger">Delete</button>
+          </div>
+        </div>
+
+        <div>
+          <h3>Volume</h3>
+          <div class="row">
+            <select id="volumeDerivative"></select>
+            <select id="volumePhaseType"></select>
+          </div>
+          <div class="row">
+            <input id="volumeSop" type="date">
+            <input id="volumeEop" type="date">
+          </div>
+          <div class="row">
+            <label><input id="volumeUsed" type="checkbox"> usedVolume</label>
+            <label><input id="volumeVehicles" type="checkbox"> isVolumeInVehicles</label>
+          </div>
+          <div class="row full">
+            <textarea id="volumeDescription" placeholder="Description"></textarea>
+          </div>
+          <div class="btn-row">
+            <button id="createVolumeBtn">Create</button>
+            <button id="updateVolumeBtn" class="btn-primary">Update</button>
+            <button id="deleteVolumeBtn" class="btn-danger">Delete</button>
+          </div>
+        </div>
+
+        <div>
+          <h3>Activity</h3>
+          <div id="activityLog" class="activity"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="{% static 'core/js/graphql_clients.js' %}"></script>
+  <script>
+    const { executeQuery, executeMutation, createSubscriptionClient, createEventBus } = window.GMGraphQLClient;
+
+    const state = {
+      projects: [],
+      customers: [],
+      users: [],
+      phaseTypes: [],
+      projectTypes: [],
+      currencies: [],
+      derivativeTypes: [],
+      plants: [],
+      selectedProjectId: null,
+      selectedCustomerId: null,
+      selectedDerivativeId: null,
+      selectedVolumeId: null,
+      activeProjectDetail: null,
+      dirty: false,
+    };
+
+    const refs = {
+      wsStatus: document.getElementById("wsStatus"),
+      projectList: document.getElementById("projectList"),
+      customerList: document.getElementById("customerList"),
+      searchProject: document.getElementById("searchProject"),
+      searchCustomer: document.getElementById("searchCustomer"),
+      projectSnapshot: document.getElementById("projectSnapshot"),
+      customerSnapshot: document.getElementById("customerSnapshot"),
+      derivativeSnapshot: document.getElementById("derivativeSnapshot"),
+      volumeSnapshot: document.getElementById("volumeSnapshot"),
+      formStatus: document.getElementById("formStatus"),
+      dirtyBanner: document.getElementById("dirtyBanner"),
+      reloadFromServer: document.getElementById("reloadFromServer"),
+      selectedProjectChip: document.getElementById("selectedProjectChip"),
+      selectedCustomerChip: document.getElementById("selectedCustomerChip"),
+      activityLog: document.getElementById("activityLog"),
+    };
+
+    const bus = createEventBus();
+    const subscriptionClient = createSubscriptionClient({
+      onStatus(status) {
+        refs.wsStatus.textContent = `WS: ${status}`;
+      },
+    });
+
+    const subscriptions = {
+      project: null,
+      customer: null,
+      derivative: new Map(),
+      volume: new Map(),
+    };
+
+    const BOOTSTRAP_QUERY = `
+      query DashboardBootstrap {
+        projectList(page: 1, pageSize: 200) {
+          items {
+            id
+            name
+            probabilityOfNomination
+            customer { id companyName groupName }
+            projectPhaseType { id name }
+          }
+        }
+        customerList(page: 1, pageSize: 300) {
+          items {
+            id
+            companyName
+            groupName
+            number
+            keyAccount { id fullName }
+          }
+        }
+        userList(page: 1, pageSize: 300) {
+          items { id fullName username }
+        }
+        projectphasetypeList(page: 1, pageSize: 100) { items { id name } }
+        projecttypeList(page: 1, pageSize: 100) { items { id name } }
+        currencyList(page: 1, pageSize: 100) { items { id name abbreviation } }
+        derivativetypeList(page: 1, pageSize: 100) { items { id name } }
+        plantList(page: 1, pageSize: 100) { items { id name } }
+      }
+    `;
+
+    const PROJECT_DETAIL_QUERY = `
+      query ProjectDetail($id: ID!) {
+        project(id: $id) {
+          id
+          name
+          probabilityOfNomination
+          customerVolumeFlex
+          customer { id companyName groupName }
+          projectPhaseType { id name }
+          projectType { id name }
+          currency { id name }
+          derivativeList(pageSize: 500) {
+            items {
+              id
+              name
+              derivativeType { id name }
+              Plant { id name }
+              piecesPerCarSet
+              normDailyQuantity
+              maxDailyQuantity
+              volumeDescription
+              customervolumeList(pageSize: 500) {
+                items {
+                  id
+                  sop
+                  eop
+                  description
+                  usedVolume
+                  isVolumeInVehicles
+                  projectPhaseType { id name }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const PROJECT_MUTATIONS = {
+      create: `
+        mutation CreateProject($name: String!, $customer: ID!, $projectPhaseType: ID!, $projectType: ID, $currency: ID!, $probabilityOfNomination: Float) {
+          createProject(name: $name, customer: $customer, projectPhaseType: $projectPhaseType, projectType: $projectType, currency: $currency, probabilityOfNomination: $probabilityOfNomination) {
+            success
+            Project { id name }
+          }
+        }
+      `,
+      update: `
+        mutation UpdateProject($id: Int!, $name: String!, $customer: ID!, $projectPhaseType: ID!, $projectType: ID, $currency: ID!, $probabilityOfNomination: Float) {
+          updateProject(id: $id, name: $name, customer: $customer, projectPhaseType: $projectPhaseType, projectType: $projectType, currency: $currency, probabilityOfNomination: $probabilityOfNomination) {
+            success
+            Project { id name }
+          }
+        }
+      `,
+      delete: `
+        mutation DeleteProject($id: Int!) {
+          deleteProject(id: $id) {
+            success
+          }
+        }
+      `,
+    };
+
+    const CUSTOMER_MUTATIONS = {
+      create: `
+        mutation CreateCustomer($companyName: String!, $groupName: String!, $number: Int, $keyAccount: ID) {
+          createCustomer(companyName: $companyName, groupName: $groupName, number: $number, keyAccount: $keyAccount) {
+            success
+            Customer { id companyName groupName }
+          }
+        }
+      `,
+      update: `
+        mutation UpdateCustomer($id: Int!, $companyName: String!, $groupName: String!, $number: Int, $keyAccount: ID) {
+          updateCustomer(id: $id, companyName: $companyName, groupName: $groupName, number: $number, keyAccount: $keyAccount) {
+            success
+            Customer { id companyName groupName }
+          }
+        }
+      `,
+      delete: `
+        mutation DeleteCustomer($id: Int!) {
+          deleteCustomer(id: $id) {
+            success
+          }
+        }
+      `,
+    };
+
+    const DERIVATIVE_MUTATIONS = {
+      create: `
+        mutation CreateDerivative($project: ID!, $name: String!, $derivativeType: ID!, $Plant: ID!, $piecesPerCarSet: Int, $normDailyQuantity: Int, $volumeDescription: String) {
+          createDerivative(project: $project, name: $name, derivativeType: $derivativeType, Plant: $Plant, piecesPerCarSet: $piecesPerCarSet, normDailyQuantity: $normDailyQuantity, volumeDescription: $volumeDescription) {
+            success
+            Derivative { id name }
+          }
+        }
+      `,
+      update: `
+        mutation UpdateDerivative($id: Int!, $project: ID!, $name: String!, $derivativeType: ID!, $Plant: ID!, $piecesPerCarSet: Int, $normDailyQuantity: Int, $volumeDescription: String) {
+          updateDerivative(id: $id, project: $project, name: $name, derivativeType: $derivativeType, Plant: $Plant, piecesPerCarSet: $piecesPerCarSet, normDailyQuantity: $normDailyQuantity, volumeDescription: $volumeDescription) {
+            success
+            Derivative { id name }
+          }
+        }
+      `,
+      delete: `
+        mutation DeleteDerivative($id: Int!) {
+          deleteDerivative(id: $id) { success }
+        }
+      `,
+    };
+
+    const VOLUME_MUTATIONS = {
+      create: `
+        mutation CreateVolume($derivative: ID!, $projectPhaseType: ID, $sop: Date!, $eop: Date!, $description: String, $usedVolume: Boolean, $isVolumeInVehicles: Boolean) {
+          createCustomerVolume(derivative: $derivative, projectPhaseType: $projectPhaseType, sop: $sop, eop: $eop, description: $description, usedVolume: $usedVolume, isVolumeInVehicles: $isVolumeInVehicles) {
+            success
+            CustomerVolume { id sop eop }
+          }
+        }
+      `,
+      update: `
+        mutation UpdateVolume($id: Int!, $derivative: ID!, $projectPhaseType: ID, $sop: Date!, $eop: Date!, $description: String, $usedVolume: Boolean, $isVolumeInVehicles: Boolean) {
+          updateCustomerVolume(id: $id, derivative: $derivative, projectPhaseType: $projectPhaseType, sop: $sop, eop: $eop, description: $description, usedVolume: $usedVolume, isVolumeInVehicles: $isVolumeInVehicles) {
+            success
+            CustomerVolume { id sop eop }
+          }
+        }
+      `,
+      delete: `
+        mutation DeleteVolume($id: Int!) {
+          deleteCustomerVolume(id: $id) { success }
+        }
+      `,
+    };
+
+    function addActivity(text) {
+      const item = document.createElement("p");
+      const timestamp = new Date().toLocaleTimeString();
+      item.textContent = `[${timestamp}] ${text}`;
+      refs.activityLog.prepend(item);
+      while (refs.activityLog.children.length > 24) {
+        refs.activityLog.removeChild(refs.activityLog.lastChild);
+      }
+    }
+
+    function setStatus(message, kind) {
+      refs.formStatus.textContent = message;
+      refs.formStatus.className = `status ${kind || ""}`.trim();
+    }
+
+    function opt(label, value, selectedValue) {
+      const isSelected = String(value) === String(selectedValue || "");
+      return `<option value="${value}" ${isSelected ? "selected" : ""}>${label}</option>`;
+    }
+
+    function fillSelect(selectId, items, mapLabel, selectedValue, includeBlank = true) {
+      const node = document.getElementById(selectId);
+      const options = [];
+      if (includeBlank) options.push(`<option value="">--</option>`);
+      for (const item of items) {
+        options.push(opt(mapLabel(item), item.id, selectedValue));
+      }
+      node.innerHTML = options.join("");
+    }
+
+    function projectById(id) {
+      return state.projects.find((item) => String(item.id) === String(id)) || null;
+    }
+
+    function customerById(id) {
+      return state.customers.find((item) => String(item.id) === String(id)) || null;
+    }
+
+    function renderList() {
+      const projectTerm = refs.searchProject.value.trim().toLowerCase();
+      const customerTerm = refs.searchCustomer.value.trim().toLowerCase();
+
+      const projects = state.projects.filter((item) => {
+        if (!projectTerm) return true;
+        return `${item.name || ""}`.toLowerCase().includes(projectTerm);
+      });
+
+      const customers = state.customers.filter((item) => {
+        if (!customerTerm) return true;
+        return `${item.companyName || ""} ${item.groupName || ""}`.toLowerCase().includes(customerTerm);
+      });
+
+      refs.projectList.innerHTML = projects.map((item) => `
+        <article class="item ${String(item.id) === String(state.selectedProjectId) ? "active" : ""}" data-project-id="${item.id}">
+          <div class="value"><strong>#${item.id}</strong> ${item.name || "(no name)"}</div>
+          <div class="label">${item.customer?.companyName || "-"} · ${item.projectPhaseType?.name || "n/a"}</div>
+        </article>
+      `).join("");
+
+      refs.customerList.innerHTML = customers.map((item) => `
+        <article class="item ${String(item.id) === String(state.selectedCustomerId) ? "active" : ""}" data-customer-id="${item.id}">
+          <div class="value"><strong>#${item.id}</strong> ${item.companyName || "(no name)"}</div>
+          <div class="label">${item.groupName || "-"}</div>
+        </article>
+      `).join("");
+
+      refs.selectedProjectChip.textContent = `Project: ${state.selectedProjectId || "none"}`;
+      refs.selectedCustomerChip.textContent = `Customer: ${state.selectedCustomerId || "none"}`;
+    }
+
+    function renderSnapshots() {
+      const project = projectById(state.selectedProjectId);
+      const customer = customerById(state.selectedCustomerId);
+
+      refs.projectSnapshot.innerHTML = project ? `
+        <div class="chips">
+          <span class="chip">#${project.id}</span>
+          <span class="chip">${project.projectPhaseType?.name || "phase n/a"}</span>
+        </div>
+        <p><strong>${project.name || "(no name)"}</strong></p>
+        <p>Customer: ${project.customer?.companyName || "-"}</p>
+      ` : `<p class="label">Select a project.</p>`;
+
+      refs.customerSnapshot.innerHTML = customer ? `
+        <div class="chips"><span class="chip">#${customer.id}</span></div>
+        <p><strong>${customer.companyName}</strong> (${customer.groupName})</p>
+        <p>Number: ${customer.number ?? "-"}</p>
+      ` : `<p class="label">Select a customer.</p>`;
+
+      const derivatives = state.activeProjectDetail?.derivativeList?.items || [];
+      refs.derivativeSnapshot.innerHTML = derivatives.length
+        ? derivatives.map((item) => `
+          <article class="item ${String(item.id) === String(state.selectedDerivativeId) ? "active" : ""}" data-derivative-id="${item.id}">
+            <div class="value"><strong>#${item.id}</strong> ${item.name || "(unnamed)"}</div>
+            <div class="label">${item.derivativeType?.name || "-"} · ${item.Plant?.name || "-"}</div>
+          </article>
+        `).join("")
+        : `<p class="label">No derivatives loaded.</p>`;
+
+      const allVolumes = [];
+      for (const derivative of derivatives) {
+        for (const volume of derivative.customervolumeList?.items || []) {
+          allVolumes.push({ ...volume, derivativeId: derivative.id, derivativeName: derivative.name });
+        }
+      }
+
+      refs.volumeSnapshot.innerHTML = allVolumes.length
+        ? allVolumes.map((item) => `
+          <article class="item ${String(item.id) === String(state.selectedVolumeId) ? "active" : ""}" data-volume-id="${item.id}">
+            <div class="value"><strong>#${item.id}</strong> ${item.derivativeName || "-"}</div>
+            <div class="label">SOP ${item.sop} · EOP ${item.eop} · ${item.projectPhaseType?.name || "phase n/a"}</div>
+          </article>
+        `).join("")
+        : `<p class="label">No volumes loaded.</p>`;
+    }
+
+    function selectedDerivative() {
+      const derivatives = state.activeProjectDetail?.derivativeList?.items || [];
+      return derivatives.find((item) => String(item.id) === String(state.selectedDerivativeId)) || null;
+    }
+
+    function selectedVolume() {
+      const derivatives = state.activeProjectDetail?.derivativeList?.items || [];
+      for (const derivative of derivatives) {
+        const found = (derivative.customervolumeList?.items || []).find((item) => String(item.id) === String(state.selectedVolumeId));
+        if (found) return { ...found, derivativeId: derivative.id };
+      }
+      return null;
+    }
+
+    function refillEditorControls() {
+      fillSelect("projectCustomer", state.customers, (item) => `${item.companyName} (${item.groupName})`, null, true);
+      fillSelect("projectPhaseType", state.phaseTypes, (item) => item.name, null, true);
+      fillSelect("projectType", state.projectTypes, (item) => item.name, null, true);
+      fillSelect("projectCurrency", state.currencies, (item) => `${item.name} (${item.abbreviation})`, null, true);
+      fillSelect("customerKeyAccount", state.users, (item) => `${item.fullName || item.username} (#${item.id})`, null, true);
+      fillSelect("derivativeProject", state.projects, (item) => `${item.name} (#${item.id})`, state.selectedProjectId, true);
+      fillSelect("derivativeType", state.derivativeTypes, (item) => item.name, null, true);
+      fillSelect("derivativePlant", state.plants, (item) => item.name, null, true);
+      fillSelect("volumePhaseType", state.phaseTypes, (item) => item.name, null, true);
+
+      const derivatives = state.activeProjectDetail?.derivativeList?.items || [];
+      fillSelect("volumeDerivative", derivatives, (item) => `${item.name} (#${item.id})`, state.selectedDerivativeId, true);
+    }
+
+    function fillFormsFromSelection() {
+      const project = projectById(state.selectedProjectId);
+      const customer = customerById(state.selectedCustomerId);
+      const derivative = selectedDerivative();
+      const volume = selectedVolume();
+
+      document.getElementById("projectName").value = project?.name || "";
+      document.getElementById("projectCustomer").value = project?.customer?.id || "";
+      document.getElementById("projectPhaseType").value = project?.projectPhaseType?.id || "";
+      document.getElementById("projectType").value = state.activeProjectDetail?.projectType?.id || "";
+      document.getElementById("projectCurrency").value = state.activeProjectDetail?.currency?.id || "";
+      document.getElementById("projectProbability").value = state.activeProjectDetail?.probabilityOfNomination ?? "";
+
+      document.getElementById("customerCompany").value = customer?.companyName || "";
+      document.getElementById("customerGroup").value = customer?.groupName || "";
+      document.getElementById("customerNumber").value = customer?.number ?? "";
+      document.getElementById("customerKeyAccount").value = customer?.keyAccount?.id || "";
+
+      document.getElementById("derivativeName").value = derivative?.name || "";
+      document.getElementById("derivativeProject").value = derivative?.project?.id || state.selectedProjectId || "";
+      document.getElementById("derivativeType").value = derivative?.derivativeType?.id || "";
+      document.getElementById("derivativePlant").value = derivative?.Plant?.id || "";
+      document.getElementById("derivativePieces").value = derivative?.piecesPerCarSet ?? "";
+      document.getElementById("derivativeNorm").value = derivative?.normDailyQuantity ?? "";
+      document.getElementById("derivativeDescription").value = derivative?.volumeDescription || "";
+
+      document.getElementById("volumeDerivative").value = volume?.derivativeId || derivative?.id || "";
+      document.getElementById("volumePhaseType").value = volume?.projectPhaseType?.id || "";
+      document.getElementById("volumeSop").value = volume?.sop || "";
+      document.getElementById("volumeEop").value = volume?.eop || "";
+      document.getElementById("volumeDescription").value = volume?.description || "";
+      document.getElementById("volumeUsed").checked = Boolean(volume?.usedVolume);
+      document.getElementById("volumeVehicles").checked = Boolean(volume?.isVolumeInVehicles);
+
+      state.dirty = false;
+      refs.dirtyBanner.classList.remove("show");
+    }
+
+    function markDirty() {
+      state.dirty = true;
+    }
+
+    function normalizeOptionalId(value) {
+      return value ? String(value) : null;
+    }
+
+    async function loadBootstrap() {
+      const data = await executeQuery(BOOTSTRAP_QUERY, {});
+      state.projects = data.projectList.items || [];
+      state.customers = data.customerList.items || [];
+      state.users = data.userList.items || [];
+      state.phaseTypes = data.projectphasetypeList.items || [];
+      state.projectTypes = data.projecttypeList.items || [];
+      state.currencies = data.currencyList.items || [];
+      state.derivativeTypes = data.derivativetypeList.items || [];
+      state.plants = data.plantList.items || [];
+
+      if (!state.selectedProjectId && state.projects.length) {
+        state.selectedProjectId = String(state.projects[0].id);
+      }
+      if (!state.selectedCustomerId && state.customers.length) {
+        state.selectedCustomerId = String(state.customers[0].id);
+      }
+
+      renderList();
+      refillEditorControls();
+      await loadActiveProjectDetail();
+      fillFormsFromSelection();
+      wireSubscriptions();
+    }
+
+    async function loadActiveProjectDetail() {
+      if (!state.selectedProjectId) {
+        state.activeProjectDetail = null;
+        renderSnapshots();
+        return;
+      }
+      const data = await executeQuery(PROJECT_DETAIL_QUERY, { id: String(state.selectedProjectId) });
+      state.activeProjectDetail = data.project;
+      renderSnapshots();
+      refillEditorControls();
+      fillFormsFromSelection();
+      wireDetailSubscriptions();
+    }
+
+    function tabSwitch(target) {
+      for (const btn of document.querySelectorAll("button[data-tab]")) {
+        btn.classList.toggle("active", btn.dataset.tab === target);
+      }
+      for (const tab of document.querySelectorAll(".tab")) {
+        tab.classList.toggle("active", tab.id === `tab-${target}`);
+      }
+    }
+
+    function onLiveConflict() {
+      if (!state.dirty) return false;
+      refs.dirtyBanner.classList.add("show");
+      setStatus("Live update arrived while your form is dirty.", "warn");
+      return true;
+    }
+
+    function wireSubscriptions() {
+      if (subscriptions.project) subscriptions.project.unsubscribe();
+      if (subscriptions.customer) subscriptions.customer.unsubscribe();
+
+      if (state.selectedProjectId) {
+        subscriptions.project = subscriptionClient.subscribe({
+          query: `subscription OnProject($id: ID!) { onProjectChange(id: $id) { action item { id name probabilityOfNomination customer { id companyName } projectPhaseType { id name } } } }`,
+          variables: { id: String(state.selectedProjectId) },
+          onNext(data) {
+            const event = data?.onProjectChange;
+            if (!event) return;
+            if (event.action === "snapshot") return;
+            addActivity(`Project ${event.action}: #${event.item?.id || state.selectedProjectId}`);
+            if (onLiveConflict()) return;
+            loadBootstrap().catch((err) => setStatus(err.message, "err"));
+          },
+        });
+      }
+
+      if (state.selectedCustomerId) {
+        subscriptions.customer = subscriptionClient.subscribe({
+          query: `subscription OnCustomer($id: ID!) { onCustomerChange(id: $id) { action item { id companyName groupName number keyAccount { id fullName } } } }`,
+          variables: { id: String(state.selectedCustomerId) },
+          onNext(data) {
+            const event = data?.onCustomerChange;
+            if (!event) return;
+            if (event.action === "snapshot") return;
+            addActivity(`Customer ${event.action}: #${event.item?.id || state.selectedCustomerId}`);
+            if (onLiveConflict()) return;
+            loadBootstrap().catch((err) => setStatus(err.message, "err"));
+          },
+        });
+      }
+    }
+
+    function wireDetailSubscriptions() {
+      for (const handle of subscriptions.derivative.values()) handle.unsubscribe();
+      for (const handle of subscriptions.volume.values()) handle.unsubscribe();
+      subscriptions.derivative.clear();
+      subscriptions.volume.clear();
+
+      const derivatives = state.activeProjectDetail?.derivativeList?.items || [];
+      for (const derivative of derivatives) {
+        const derivativeHandle = subscriptionClient.subscribe({
+          query: `subscription OnDerivative($id: ID!) { onDerivativeChange(id: $id) { action item { id name } } }`,
+          variables: { id: String(derivative.id) },
+          onNext(data) {
+            const event = data?.onDerivativeChange;
+            if (!event) return;
+            if (event.action === "snapshot") return;
+            addActivity(`Derivative ${event.action}: #${event.item?.id || derivative.id}`);
+            if (onLiveConflict()) return;
+            loadActiveProjectDetail().catch((err) => setStatus(err.message, "err"));
+          },
+        });
+        subscriptions.derivative.set(String(derivative.id), derivativeHandle);
+
+        for (const volume of derivative.customervolumeList?.items || []) {
+          const volumeHandle = subscriptionClient.subscribe({
+            query: `subscription OnVolume($id: ID!) { onCustomervolumeChange(id: $id) { action item { id sop eop } } }`,
+            variables: { id: String(volume.id) },
+            onNext(data) {
+              const event = data?.onCustomervolumeChange;
+              if (!event) return;
+              if (event.action === "snapshot") return;
+              addActivity(`Volume ${event.action}: #${event.item?.id || volume.id}`);
+              if (onLiveConflict()) return;
+              loadActiveProjectDetail().catch((err) => setStatus(err.message, "err"));
+            },
+          });
+          subscriptions.volume.set(String(volume.id), volumeHandle);
+        }
+      }
+    }
+
+    async function runMutation(mutation, variables, successMessage, refreshDetail = false) {
+      const data = await executeMutation(mutation, variables);
+      setStatus(successMessage, "");
+      addActivity(successMessage);
+      await loadBootstrap();
+      if (refreshDetail) {
+        await loadActiveProjectDetail();
+      }
+      return data;
+    }
+
+    function wireActions() {
+      document.getElementById("tabbar").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-tab]");
+        if (!button) return;
+        tabSwitch(button.dataset.tab);
+      });
+
+      refs.searchProject.addEventListener("input", renderList);
+      refs.searchCustomer.addEventListener("input", renderList);
+
+      refs.projectList.addEventListener("click", (event) => {
+        const node = event.target.closest("[data-project-id]");
+        if (!node) return;
+        state.selectedProjectId = String(node.dataset.projectId);
+        const selected = projectById(state.selectedProjectId);
+        state.selectedCustomerId = selected?.customer?.id ? String(selected.customer.id) : state.selectedCustomerId;
+        renderList();
+        loadActiveProjectDetail().catch((err) => setStatus(err.message, "err"));
+        wireSubscriptions();
+      });
+
+      refs.customerList.addEventListener("click", (event) => {
+        const node = event.target.closest("[data-customer-id]");
+        if (!node) return;
+        state.selectedCustomerId = String(node.dataset.customerId);
+        renderList();
+        fillFormsFromSelection();
+        wireSubscriptions();
+      });
+
+      refs.derivativeSnapshot.addEventListener("click", (event) => {
+        const node = event.target.closest("[data-derivative-id]");
+        if (!node) return;
+        state.selectedDerivativeId = String(node.dataset.derivativeId);
+        renderSnapshots();
+        fillFormsFromSelection();
+      });
+
+      refs.volumeSnapshot.addEventListener("click", (event) => {
+        const node = event.target.closest("[data-volume-id]");
+        if (!node) return;
+        state.selectedVolumeId = String(node.dataset.volumeId);
+        renderSnapshots();
+        fillFormsFromSelection();
+      });
+
+      for (const node of document.querySelectorAll("input, select, textarea")) {
+        node.addEventListener("input", markDirty);
+        node.addEventListener("change", markDirty);
+      }
+
+      refs.reloadFromServer.addEventListener("click", () => {
+        fillFormsFromSelection();
+        setStatus("Form reloaded from server values.", "");
+      });
+
+      document.getElementById("createProjectBtn").addEventListener("click", async () => {
+        try {
+          await runMutation(PROJECT_MUTATIONS.create, {
+            name: document.getElementById("projectName").value,
+            customer: String(document.getElementById("projectCustomer").value),
+            projectPhaseType: String(document.getElementById("projectPhaseType").value),
+            projectType: normalizeOptionalId(document.getElementById("projectType").value),
+            currency: String(document.getElementById("projectCurrency").value),
+            probabilityOfNomination: Number(document.getElementById("projectProbability").value || 0),
+          }, "Project created.");
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("updateProjectBtn").addEventListener("click", async () => {
+        if (!state.selectedProjectId) return setStatus("Select a project first.", "warn");
+        try {
+          await runMutation(PROJECT_MUTATIONS.update, {
+            id: Number(state.selectedProjectId),
+            name: document.getElementById("projectName").value,
+            customer: String(document.getElementById("projectCustomer").value),
+            projectPhaseType: String(document.getElementById("projectPhaseType").value),
+            projectType: normalizeOptionalId(document.getElementById("projectType").value),
+            currency: String(document.getElementById("projectCurrency").value),
+            probabilityOfNomination: Number(document.getElementById("projectProbability").value || 0),
+          }, "Project updated.", true);
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("deleteProjectBtn").addEventListener("click", async () => {
+        if (!state.selectedProjectId) return setStatus("Select a project first.", "warn");
+        if (!window.confirm(`Delete project #${state.selectedProjectId}?`)) return;
+        try {
+          await runMutation(PROJECT_MUTATIONS.delete, { id: Number(state.selectedProjectId) }, "Project deleted.");
+          state.selectedProjectId = null;
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("createCustomerBtn").addEventListener("click", async () => {
+        try {
+          await runMutation(CUSTOMER_MUTATIONS.create, {
+            companyName: document.getElementById("customerCompany").value,
+            groupName: document.getElementById("customerGroup").value,
+            number: document.getElementById("customerNumber").value ? Number(document.getElementById("customerNumber").value) : null,
+            keyAccount: normalizeOptionalId(document.getElementById("customerKeyAccount").value),
+          }, "Customer created.");
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("updateCustomerBtn").addEventListener("click", async () => {
+        if (!state.selectedCustomerId) return setStatus("Select a customer first.", "warn");
+        try {
+          await runMutation(CUSTOMER_MUTATIONS.update, {
+            id: Number(state.selectedCustomerId),
+            companyName: document.getElementById("customerCompany").value,
+            groupName: document.getElementById("customerGroup").value,
+            number: document.getElementById("customerNumber").value ? Number(document.getElementById("customerNumber").value) : null,
+            keyAccount: normalizeOptionalId(document.getElementById("customerKeyAccount").value),
+          }, "Customer updated.");
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("deleteCustomerBtn").addEventListener("click", async () => {
+        if (!state.selectedCustomerId) return setStatus("Select a customer first.", "warn");
+        if (!window.confirm(`Delete customer #${state.selectedCustomerId}?`)) return;
+        try {
+          await runMutation(CUSTOMER_MUTATIONS.delete, { id: Number(state.selectedCustomerId) }, "Customer deleted.");
+          state.selectedCustomerId = null;
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("createDerivativeBtn").addEventListener("click", async () => {
+        try {
+          await runMutation(DERIVATIVE_MUTATIONS.create, {
+            project: String(document.getElementById("derivativeProject").value),
+            name: document.getElementById("derivativeName").value,
+            derivativeType: String(document.getElementById("derivativeType").value),
+            Plant: String(document.getElementById("derivativePlant").value),
+            piecesPerCarSet: Number(document.getElementById("derivativePieces").value || 1),
+            normDailyQuantity: Number(document.getElementById("derivativeNorm").value || 0),
+            volumeDescription: document.getElementById("derivativeDescription").value || null,
+          }, "Derivative created.", true);
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("updateDerivativeBtn").addEventListener("click", async () => {
+        if (!state.selectedDerivativeId) return setStatus("Select a derivative first.", "warn");
+        try {
+          await runMutation(DERIVATIVE_MUTATIONS.update, {
+            id: Number(state.selectedDerivativeId),
+            project: String(document.getElementById("derivativeProject").value),
+            name: document.getElementById("derivativeName").value,
+            derivativeType: String(document.getElementById("derivativeType").value),
+            Plant: String(document.getElementById("derivativePlant").value),
+            piecesPerCarSet: Number(document.getElementById("derivativePieces").value || 1),
+            normDailyQuantity: Number(document.getElementById("derivativeNorm").value || 0),
+            volumeDescription: document.getElementById("derivativeDescription").value || null,
+          }, "Derivative updated.", true);
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("deleteDerivativeBtn").addEventListener("click", async () => {
+        if (!state.selectedDerivativeId) return setStatus("Select a derivative first.", "warn");
+        if (!window.confirm(`Delete derivative #${state.selectedDerivativeId}?`)) return;
+        try {
+          await runMutation(DERIVATIVE_MUTATIONS.delete, { id: Number(state.selectedDerivativeId) }, "Derivative deleted.", true);
+          state.selectedDerivativeId = null;
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("createVolumeBtn").addEventListener("click", async () => {
+        try {
+          await runMutation(VOLUME_MUTATIONS.create, {
+            derivative: String(document.getElementById("volumeDerivative").value),
+            projectPhaseType: normalizeOptionalId(document.getElementById("volumePhaseType").value),
+            sop: document.getElementById("volumeSop").value,
+            eop: document.getElementById("volumeEop").value,
+            description: document.getElementById("volumeDescription").value || null,
+            usedVolume: document.getElementById("volumeUsed").checked,
+            isVolumeInVehicles: document.getElementById("volumeVehicles").checked,
+          }, "Volume created.", true);
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("updateVolumeBtn").addEventListener("click", async () => {
+        if (!state.selectedVolumeId) return setStatus("Select a volume first.", "warn");
+        try {
+          await runMutation(VOLUME_MUTATIONS.update, {
+            id: Number(state.selectedVolumeId),
+            derivative: String(document.getElementById("volumeDerivative").value),
+            projectPhaseType: normalizeOptionalId(document.getElementById("volumePhaseType").value),
+            sop: document.getElementById("volumeSop").value,
+            eop: document.getElementById("volumeEop").value,
+            description: document.getElementById("volumeDescription").value || null,
+            usedVolume: document.getElementById("volumeUsed").checked,
+            isVolumeInVehicles: document.getElementById("volumeVehicles").checked,
+          }, "Volume updated.", true);
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      document.getElementById("deleteVolumeBtn").addEventListener("click", async () => {
+        if (!state.selectedVolumeId) return setStatus("Select a volume first.", "warn");
+        if (!window.confirm(`Delete volume #${state.selectedVolumeId}?`)) return;
+        try {
+          await runMutation(VOLUME_MUTATIONS.delete, { id: Number(state.selectedVolumeId) }, "Volume deleted.", true);
+          state.selectedVolumeId = null;
+        } catch (err) { setStatus(err.message, "err"); }
+      });
+
+      bus.on("entity:update", (payload) => addActivity(`${payload.entity} ${payload.action}`));
+    }
+
+    async function init() {
+      try {
+        wireActions();
+        subscriptionClient.connect();
+        await loadBootstrap();
+        setStatus("Dashboard loaded.");
+      } catch (err) {
+        setStatus(err.message || String(err), "err");
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

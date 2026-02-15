@@ -1,3 +1,4 @@
+{% load static %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -228,9 +229,11 @@
     <div id="sentinel" aria-hidden="true"></div>
   </main>
 
+  <script src="{% static 'core/js/graphql_clients.js' %}"></script>
   <script>
+    const { executeQuery, createSubscriptionClient } = window.GMGraphQLClient;
     const PAGE_SIZE = 25;
-    const query = `
+    const listQuery = `
       query ProjectList(
         $page: Int!,
         $pageSize: Int!,
@@ -297,38 +300,66 @@
         }
       }
     `;
+    const singleProjectQuery = `
+      query ProjectSummary($id: ID!) {
+        project(id: $id) {
+          id
+          name
+          totalVolume
+          probabilityOfNomination
+          earliestSop
+          latestEop
+          projectPhaseType { id name }
+          customer { companyName groupName }
+        }
+      }
+    `;
 
     let page = 1;
     let loading = false;
     let hasNext = true;
     let total = 0;
+    const cardByProjectId = new Map();
+    const expandedProjects = new Set();
+    const visibleProjects = new Set();
+    const subscriptions = new Map();
     const list = document.getElementById("list");
     const meta = document.getElementById("meta");
     const status = document.getElementById("status");
     const sentinel = document.getElementById("sentinel");
     const sortByEl = document.getElementById("sortBy");
     const reverseEl = document.getElementById("reverse");
+    const subscriptionClient = createSubscriptionClient({
+      onStatus(nextStatus) {
+        if (nextStatus === "connected") return;
+        status.textContent = `Live updates: ${nextStatus}`;
+      },
+    });
+
+    function cardGridMarkup(project) {
+      const prob = project.probabilityOfNomination == null
+        ? "-"
+        : `${Math.round(project.probabilityOfNomination * 100)}%`;
+      return `
+        <div><strong>Customer</strong><br>${project.customer?.companyName || "-"} (${project.customer?.groupName || "-"})</div>
+        <div><strong>Total Volume</strong><br>${Number(project.totalVolume || 0).toLocaleString()}</div>
+        <div><strong>Nomination</strong><br>${prob}</div>
+        <div><strong>Earliest SOP</strong><br>${project.earliestSop || "-"}</div>
+        <div><strong>Latest EOP</strong><br>${project.latestEop || "-"}</div>
+      `;
+    }
 
     function itemCard(project) {
       const node = document.createElement("article");
       node.className = "card";
-
-      const prob = project.probabilityOfNomination == null
-        ? "-"
-        : `${Math.round(project.probabilityOfNomination * 100)}%`;
+      node.dataset.projectId = String(project.id);
 
       node.innerHTML = `
         <div class="row-1">
           <h2 class="name">#${project.id} ${project.name || "(no name)"}</h2>
           <span class="badge">${project.projectPhaseType?.name || "n/a"}</span>
         </div>
-        <div class="grid">
-          <div><strong>Customer</strong><br>${project.customer?.companyName || "-"} (${project.customer?.groupName || "-"})</div>
-          <div><strong>Total Volume</strong><br>${Number(project.totalVolume || 0).toLocaleString()}</div>
-          <div><strong>Nomination</strong><br>${prob}</div>
-          <div><strong>Earliest SOP</strong><br>${project.earliestSop || "-"}</div>
-          <div><strong>Latest EOP</strong><br>${project.latestEop || "-"}</div>
-        </div>
+        <div class="grid">${cardGridMarkup(project)}</div>
         <button class="details-toggle" type="button">Show details</button>
         <div class="details" id="details-${project.id}"></div>
       `;
@@ -342,6 +373,8 @@
         if (open) {
           detailContainer.classList.remove("open");
           toggle.textContent = "Show details";
+          expandedProjects.delete(String(project.id));
+          syncProjectSubscriptions();
           return;
         }
 
@@ -359,28 +392,20 @@
           }
         }
         detailContainer.classList.add("open");
+        expandedProjects.add(String(project.id));
+        syncProjectSubscriptions();
         toggle.textContent = "Hide details";
       });
 
+      cardByProjectId.set(String(project.id), node);
       return node;
     }
 
     async function loadProjectDetail(projectId) {
-      const response = await fetch("/graphql/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: detailQuery,
-          variables: { id: String(projectId) },
-        }),
-      });
-      const payload = await response.json();
-      if (payload.errors?.length) {
-        throw new Error(payload.errors[0].message);
-      }
+      const payload = await executeQuery(detailQuery, { id: String(projectId) });
       return {
-        project: payload.data.project,
-        curveJson: payload.data.projectvolumecurve?.curveJson || "[]",
+        project: payload.project,
+        curveJson: payload.projectvolumecurve?.curveJson || "[]",
       };
     }
 
@@ -495,25 +520,14 @@
       status.textContent = "Loading more projects...";
 
       try {
-        const response = await fetch("/graphql/", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query,
-            variables: {
-              page,
-              pageSize: PAGE_SIZE,
-              sortBy: sortByEl.value,
-              reverse: reverseEl.checked,
-            },
-          }),
+        const payload = await executeQuery(listQuery, {
+          page,
+          pageSize: PAGE_SIZE,
+          sortBy: sortByEl.value,
+          reverse: reverseEl.checked,
         });
-        const payload = await response.json();
-        if (payload.errors?.length) {
-          throw new Error(payload.errors[0].message);
-        }
 
-        const pageData = payload.data.projectList;
+        const pageData = payload.projectList;
         total = pageData.pageInfo.totalCount;
         for (const project of pageData.items) {
           list.appendChild(itemCard(project));
@@ -524,6 +538,7 @@
 
         meta.textContent = `${list.children.length} of ${total} projects loaded · page size ${PAGE_SIZE}`;
         status.textContent = hasNext ? "Scroll down to load more." : "All projects loaded.";
+        syncProjectSubscriptions();
       } catch (err) {
         status.textContent = `Failed to load projects: ${err.message}`;
         hasNext = false;
@@ -545,12 +560,131 @@
       hasNext = true;
       loading = false;
       list.innerHTML = "";
+      cardByProjectId.clear();
+      visibleProjects.clear();
+      expandedProjects.clear();
+      for (const handle of subscriptions.values()) {
+        handle.unsubscribe();
+      }
+      subscriptions.clear();
       loadNextPage();
     }
+
+    async function refreshProjectCard(projectId) {
+      const node = cardByProjectId.get(String(projectId));
+      if (!node) return;
+      try {
+        const result = await executeQuery(singleProjectQuery, { id: String(projectId) });
+        const project = result.project;
+        if (!project) return;
+        const title = node.querySelector(".name");
+        const badge = node.querySelector(".badge");
+        const grid = node.querySelector(".grid");
+        if (title) title.textContent = `#${project.id} ${project.name || "(no name)"}`;
+        if (badge) badge.textContent = project.projectPhaseType?.name || "n/a";
+        if (grid) grid.innerHTML = cardGridMarkup(project);
+        node.classList.add("updated");
+        setTimeout(() => node.classList.remove("updated"), 850);
+
+        const details = node.querySelector(".details");
+        if (details && details.classList.contains("open")) {
+          const detailPayload = await loadProjectDetail(projectId);
+          renderProjectDetail(details, detailPayload);
+        }
+      } catch (err) {
+        status.textContent = `Live refresh failed for #${projectId}: ${err.message}`;
+      }
+    }
+
+    function syncProjectSubscriptions() {
+      const targetIds = new Set([...visibleProjects, ...expandedProjects]);
+
+      for (const [projectId, handle] of subscriptions.entries()) {
+        if (!targetIds.has(projectId)) {
+          handle.unsubscribe();
+          subscriptions.delete(projectId);
+        }
+      }
+
+      for (const projectId of targetIds) {
+        if (subscriptions.has(projectId)) continue;
+        const handle = subscriptionClient.subscribe({
+          query: `
+            subscription OnProjectChange($id: ID!) {
+              onProjectChange(id: $id) {
+                action
+                item { id }
+              }
+            }
+          `,
+          variables: { id: String(projectId) },
+          onNext(data) {
+            const payload = data?.onProjectChange;
+            if (!payload) return;
+            if (payload.action === "delete") {
+              const card = cardByProjectId.get(String(projectId));
+              card?.remove();
+              cardByProjectId.delete(String(projectId));
+              subscriptions.get(String(projectId))?.unsubscribe();
+              subscriptions.delete(String(projectId));
+              expandedProjects.delete(String(projectId));
+              visibleProjects.delete(String(projectId));
+              meta.textContent = `${list.children.length} of ${total} projects loaded · page size ${PAGE_SIZE}`;
+              status.textContent = `Project #${projectId} deleted.`;
+              return;
+            }
+            refreshProjectCard(projectId);
+          },
+          onError(errors) {
+            const first = Array.isArray(errors) ? errors[0] : null;
+            status.textContent = `Live subscription error: ${first?.message || "unknown"}`;
+          },
+        });
+        subscriptions.set(projectId, handle);
+      }
+    }
+
+    const cardObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const projectId = entry.target?.dataset?.projectId;
+        if (!projectId) continue;
+        if (entry.isIntersecting) {
+          visibleProjects.add(projectId);
+        } else {
+          visibleProjects.delete(projectId);
+        }
+      }
+      syncProjectSubscriptions();
+    }, { rootMargin: "200px" });
+
+    const mutationObserver = new MutationObserver(() => {
+      const observed = new Set();
+      for (const card of list.querySelectorAll(".card[data-project-id]")) {
+        const id = card.dataset.projectId;
+        if (!id) continue;
+        observed.add(id);
+        cardObserver.observe(card);
+      }
+      for (const id of [...visibleProjects]) {
+        if (!observed.has(id) && !expandedProjects.has(id)) {
+          visibleProjects.delete(id);
+        }
+      }
+      syncProjectSubscriptions();
+    });
+
+    mutationObserver.observe(list, { childList: true, subtree: true });
 
     sortByEl.addEventListener("change", resetAndReload);
     reverseEl.addEventListener("change", resetAndReload);
 
+    window.addEventListener("beforeunload", () => {
+      cardObserver.disconnect();
+      mutationObserver.disconnect();
+      subscriptionClient.close();
+    });
+
+    subscriptionClient.connect();
     loadNextPage();
   </script>
 </body>
