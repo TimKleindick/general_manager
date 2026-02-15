@@ -2107,6 +2107,46 @@ class GraphQL:
         return fields
 
     @classmethod
+    def _normalize_mutation_kwargs_for_manager(
+        cls,
+        generalManagerClass: type[GeneralManager],
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Normalize GraphQL mutation payload keys to ORM-friendly relation key formats.
+
+        Handles legacy GraphQL list aliases (`*_list`) by mapping them to
+        `*_id_list` for many-to-many style payload handling, and converts
+        underscore-prefixed relation keys carrying raw IDs (for example
+        `_plant`) into their `_id` form (for example `_plant_id`).
+        """
+        interface_cls = getattr(generalManagerClass, "Interface", None)
+        if interface_cls is None:
+            return dict(kwargs)
+
+        attribute_types = interface_cls.get_attribute_types()
+        normalized = dict(kwargs)
+
+        for key in list(kwargs.keys()):
+            if key.endswith("_list") and not key.endswith("_id_list"):
+                base_key = key.removesuffix("_list")
+                if base_key in attribute_types or key in attribute_types:
+                    canonical = f"{base_key}_id_list"
+                    normalized.setdefault(canonical, normalized[key])
+                    normalized.pop(key, None)
+                    continue
+
+            if key.startswith("_") and not key.endswith("_id"):
+                type_info = attribute_types.get(key)
+                relation_type = type_info["type"] if type_info is not None else None
+                if _is_subclass(relation_type, GeneralManager):
+                    canonical = f"{key}_id"
+                    normalized.setdefault(canonical, normalized[key])
+                    normalized.pop(key, None)
+
+        return normalized
+
+    @classmethod
     def generate_create_mutation_class(
         cls,
         generalManagerClass: type[GeneralManager],
@@ -2149,6 +2189,9 @@ class GraphQL:
                     for field_name, value in kwargs.items()
                     if value is not NOT_PROVIDED
                 }
+                kwargs = cls._normalize_mutation_kwargs_for_manager(
+                    generalManagerClass, kwargs
+                )
                 instance = generalManagerClass.create(
                     **kwargs, creator_id=info.context.user.id
                 )
@@ -2220,6 +2263,9 @@ class GraphQL:
             if manager_id is None:
                 raise GraphQL._handle_graph_ql_error(MissingManagerIdentifierError())
             try:
+                kwargs = cls._normalize_mutation_kwargs_for_manager(
+                    generalManagerClass, kwargs
+                )
                 instance = generalManagerClass(id=manager_id).update(
                     creator_id=info.context.user.id, **kwargs
                 )

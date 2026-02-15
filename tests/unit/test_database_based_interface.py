@@ -1878,3 +1878,77 @@ def test_payload_normalizer_normalize_many_values_single_item():
     result = normalizer.normalize_many_values(kwargs)
 
     assert result["field"] == [42]
+
+
+def test_payload_normalizer_accepts_list_alias_suffix() -> None:
+    """`*_list` aliases are accepted for many-to-many payload keys."""
+    from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+        PayloadNormalizer,
+    )
+    from django.db import models
+
+    class AliasRelatedModel(models.Model):
+        class Meta:
+            app_label = "test"
+
+    class AliasModel(models.Model):
+        tags = models.ManyToManyField(AliasRelatedModel)
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(AliasModel)
+    # Should not raise.
+    normalizer.validate_keys({"tags_list": [1, 2]})
+
+
+def test_payload_normalizer_split_many_to_many_normalizes_list_alias_key() -> None:
+    """`split_many_to_many` canonicalizes `*_list` to `*_id_list`."""
+    from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+        PayloadNormalizer,
+    )
+    from django.db import models
+
+    class AliasRelatedModel(models.Model):
+        class Meta:
+            app_label = "test"
+
+    class AliasModel(models.Model):
+        tags = models.ManyToManyField(AliasRelatedModel)
+        name = models.CharField(max_length=32, default="")
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(AliasModel)
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many(
+        {"name": "asset", "tags_list": [1, 2]}
+    )
+
+    assert "name" in simple_kwargs
+    assert "tags_list" not in simple_kwargs
+    assert many_kwargs["tags_id_list"] == [1, 2]
+
+
+def test_payload_normalizer_normalize_simple_values_converts_fk_plain_id() -> None:
+    """Raw IDs on relation keys normalize to `<field>_id`."""
+    from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
+        PayloadNormalizer,
+    )
+    from django.db import models
+
+    class PlantModel(models.Model):
+        class Meta:
+            app_label = "test"
+
+    class DerivativeModel(models.Model):
+        _plant = models.ForeignKey(PlantModel, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(DerivativeModel)
+    normalized = normalizer.normalize_simple_values({"_plant": 7})
+
+    assert "_plant_id" in normalized
+    assert normalized["_plant_id"] == 7
