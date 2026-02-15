@@ -32,6 +32,7 @@ Each event has two fields:
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
 - Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant channel group (`gm_subscriptions.<Manager>.<digest>`).
+- If `prometheus-client` is installed, websocket lifecycle metrics are emitted: `graphql_ws_connections` (active gauge) and `graphql_ws_disconnects_total{code}`.
 
 ### Identification helpers
 

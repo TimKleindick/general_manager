@@ -41,6 +41,24 @@ def project_forecast(project_id: int) -> dict[str, float]:
 ```
 When `timeout` is set, the cache entry expires after the given duration no matter if the tracked dependencies change.
 
+## Bucket-level cache reuse
+
+Beyond decorator-based caching, GeneralManager also caches expensive bucket computations that cannot always be pushed fully to SQL:
+
+- `DatabaseBucket` caches Python-evaluated filter ID sets.
+- `DatabaseBucket` caches Python fallback sort order ID lists.
+- `CalculationBucket` caches generated input/property combinations.
+
+These caches are dependency-aware. On cache hits, dependencies are replayed into the current tracker context so upstream cached functions preserve correct invalidation links.
+
+For Python fallback sorting, ascending and descending order caches are both stored and reused, reducing repeated sort work for mirrored queries.
+
+## Invalidation and warm-up hook
+
+Dependency index invalidation deduplicates invalidated cache keys per invalidation pass, avoiding repeated invalidation work for the same key.
+
+After invalidation, dependency records can trigger GraphQL warm-up dispatch for affected managers (when warm-up is enabled and matching `warm_up=True` properties exist). This helps restore hot paths proactively after writes.
+
 
 ## Recommended practices
 

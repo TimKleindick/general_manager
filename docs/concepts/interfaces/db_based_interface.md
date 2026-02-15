@@ -56,6 +56,11 @@ Project.create(
 )
 ```
 
+Compatibility note:
+
+- `*_id_list` remains the canonical payload format.
+- `*_list` is also accepted and normalized to `*_id_list`, mainly to support legacy GraphQL mutation clients.
+
 ## Read-only data
 
 Use `general_manager.interface.ReadOnlyInterface` to mirror static datasets in the database:

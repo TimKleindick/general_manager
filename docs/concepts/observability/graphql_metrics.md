@@ -36,6 +36,12 @@ Optional resolver timing (when `GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING=
 - `graphql_resolver_duration_seconds_bucket{field_name}`
 - `graphql_resolver_errors_total{field_name}`
 
+Additional optional metrics (require `prometheus-client` and matching runtime components):
+
+- `gm_cache_hits_total{function}` and `gm_cache_misses_total{function}` from `@cached`-decorated functions.
+- `graphql_ws_connections` (gauge) for active GraphQL websocket connections.
+- `graphql_ws_disconnects_total{code}` for websocket disconnect counts by close code.
+
 ## Label policies
 
 - `operation_name` is taken from the GraphQL `operationName` and normalized to ASCII.
@@ -50,3 +56,5 @@ Optional resolver timing (when `GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING=
 
 Resolver timing adds overhead because every field resolution is timed and
 recorded. Keep it off unless you need resolver-level diagnostics.
+
+Cache and websocket metrics are low-overhead counters/gauges, but they still add label cardinality. Keep function names stable and avoid dynamically generated callable names in hot paths.
