@@ -107,20 +107,21 @@ def _should_run_graphql_warmup(django_settings: Any) -> bool:
 def _auto_reindex_search(*_args: object, **kwargs: object) -> None:
     global _SEARCH_REINDEXED
     environ = kwargs.get("environ")
-    if not isinstance(environ, dict):
-        return
-    request_path = environ.get("PATH_INFO")
-    if not isinstance(request_path, str):
-        return
-    graphql_path = _normalize_graphql_path(getattr(settings, "GRAPHQL_URL", "graphql"))
-    if _normalize_graphql_path(request_path) != graphql_path:
-        return
+    request_path = environ.get("PATH_INFO") if isinstance(environ, dict) else None
+    if isinstance(request_path, str):
+        graphql_path = _normalize_graphql_path(
+            getattr(settings, "GRAPHQL_URL", "graphql")
+        )
+        if _normalize_graphql_path(request_path) != graphql_path:
+            return
+    # ASGI servers may not provide WSGI-like PATH_INFO via request_started.
+    # In that case, run once on first request when auto-reindex is enabled.
     if _SEARCH_REINDEXED:
         return
     _SEARCH_REINDEXED = True
     try:
         call_command("search_index", reindex=True)
-        logger.info("auto reindex complete", context={"component": "search"})
+        logger.info("search auto-reindex completed", context={"component": "search"})
     except Exception:  # pragma: no cover - defensive log
         logger.exception("auto reindex failed", context={"component": "search"})
 

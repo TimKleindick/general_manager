@@ -146,9 +146,29 @@ CACHES = {
 
 AUTOCREATE_GRAPHQL = True
 GRAPHQL_URL = "graphql/"
+GENERAL_MANAGER = {
+    "SEARCH_AUTO_REINDEX": True,
+}
 
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels.layers.InMemoryChannelLayer",
     }
+}
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "loggers": {
+        "general_manager.apps": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
 }
