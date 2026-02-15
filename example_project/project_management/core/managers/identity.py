@@ -8,9 +8,46 @@ from factory.declarations import LazyAttribute, LazyFunction
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 
-from general_manager.factory import lazy_boolean, lazy_choice
+from general_manager.factory import lazy_boolean
 from general_manager.interface import ExistingModelInterface
 from general_manager.manager import GeneralManager, graph_ql_property
+
+
+_USER_FIRST_NAMES = (
+    "Alex",
+    "Jordan",
+    "Taylor",
+    "Morgan",
+    "Casey",
+    "Sam",
+    "Riley",
+    "Avery",
+    "Jamie",
+    "Drew",
+)
+_USER_LAST_NAMES = (
+    "Miller",
+    "Nguyen",
+    "Brown",
+    "Schmidt",
+    "Garcia",
+    "Patel",
+    "Kim",
+    "Lopez",
+    "Kowalski",
+    "Rossi",
+)
+
+
+def _user_name_parts(index: int) -> tuple[str, str]:
+    first = _USER_FIRST_NAMES[index % len(_USER_FIRST_NAMES)]
+    last = _USER_LAST_NAMES[(index // len(_USER_FIRST_NAMES)) % len(_USER_LAST_NAMES)]
+    return first, last
+
+
+def _user_username(index: int) -> str:
+    first, last = _user_name_parts(index)
+    return f"{first.lower()}.{last.lower()}.{index + 1:04d}"
 
 
 class User(GeneralManager):
@@ -28,14 +65,10 @@ class User(GeneralManager):
             skip_history_registration = True
 
     class Factory:
-        username = Sequence(lambda index: f"pm_user_{index + 1:04d}")
+        username = Sequence(_user_username)
         email = LazyAttribute(lambda obj: f"{obj.username}@example.local")
-        first_name = lazy_choice(
-            ["Alex", "Jordan", "Taylor", "Morgan", "Casey", "Sam", "Riley"]
-        )
-        last_name = lazy_choice(
-            ["Miller", "Nguyen", "Brown", "Schmidt", "Garcia", "Patel", "Kim"]
-        )
+        first_name = Sequence(lambda index: _user_name_parts(index)[0])
+        last_name = Sequence(lambda index: _user_name_parts(index)[1])
         is_active = lazy_boolean(0.92)
         password = LazyFunction(lambda: make_password("test-pass-123"))
 

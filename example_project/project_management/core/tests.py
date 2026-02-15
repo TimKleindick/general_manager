@@ -23,6 +23,7 @@ from core.managers.identity import User
 from core.managers.master_data import AccountNumber, Customer, Plant
 from core.managers.project_domain import Derivative, Project, ProjectTeam
 from core.managers.volume_domain import CustomerVolume, CustomerVolumeCurvePoint
+from general_manager.search.config import IndexConfig
 
 
 TEST_PASSWORD = "test" + "-pass-123"
@@ -136,6 +137,28 @@ class ProjectManagementFactoryTests(TestCase):
             "canUpdateProbabilityOfNomination",
         ):
             self.assertIn(permission_name, permission_functions)
+
+    def test_project_search_config_contains_global_project_manager_and_derivative_fields(self) -> None:
+        config = getattr(Project, "SearchConfig", None)
+        self.assertIsNotNone(config)
+        indexes = getattr(config, "indexes", [])
+        self.assertTrue(indexes)
+        global_index = next(
+            (
+                index
+                for index in indexes
+                if isinstance(index, IndexConfig) and index.name == "global"
+            ),
+            None,
+        )
+        self.assertIsNotNone(global_index)
+        fields = [
+            entry.name if hasattr(entry, "name") else entry
+            for entry in global_index.fields  # type: ignore[union-attr]
+        ]
+        self.assertIn("name", fields)
+        self.assertIn("projectteam_list__responsible_user__full_name", fields)
+        self.assertIn("derivative_list__name", fields)
 
 
 class DashboardRoutingTests(TestCase):

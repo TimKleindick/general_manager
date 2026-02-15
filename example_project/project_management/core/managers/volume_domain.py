@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 from math import exp
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from factory.declarations import LazyAttribute
 from django.db.models import (
@@ -27,6 +27,7 @@ from general_manager.factory import (
 )
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager import GeneralManager, Input, graph_ql_property
+from general_manager.rule import Rule
 
 from .constants import _RNG
 from .ids import (
@@ -60,10 +61,26 @@ def _generate_customer_volume_curve_points(
     if not isinstance(eop, date) or eop < sop:
         eop = sop
 
-    total_days = max(0, (eop - sop).days)
-    suggested_points = max(2, eop.year - sop.year + 1)
+    suggested_points = max(1, eop.year - sop.year + 1)
     requested_points = suggested_points if datapoints is None else int(datapoints)
-    normalized_datapoints = max(2, min(requested_points, total_days + 1))
+    yearly_dates = [date(year, 1, 1) for year in range(sop.year, eop.year + 1)]
+    normalized_datapoints = max(1, min(requested_points, len(yearly_dates)))
+
+    if normalized_datapoints == len(yearly_dates):
+        selected_dates = yearly_dates
+    elif normalized_datapoints == 1:
+        selected_dates = [yearly_dates[0]]
+    else:
+        indices = {
+            round(index * (len(yearly_dates) - 1) / (normalized_datapoints - 1))
+            for index in range(normalized_datapoints)
+        }
+        selected_dates = [yearly_dates[index] for index in sorted(indices)]
+        while len(selected_dates) < normalized_datapoints:
+            for candidate in yearly_dates:
+                if candidate not in selected_dates:
+                    selected_dates.append(candidate)
+                    break
 
     generated_total_volume = total_volume
     if generated_total_volume is None:
@@ -95,12 +112,11 @@ def _generate_customer_volume_curve_points(
 
     curve_points: list[dict[str, Any]] = []
     for index in range(normalized_datapoints):
-        day_offset = round((index * total_days) / (normalized_datapoints - 1))
         curve_points.append(
             {
                 **kwargs,
                 "customer_volume": customer_volume,
-                "volume_date": sop + timedelta(days=day_offset),
+                "volume_date": selected_dates[index],
                 "volume": volumes[index],
             }
         )
@@ -162,6 +178,16 @@ class CustomerVolumeCurvePoint(GeneralManager):
                     name="unique_customer_volume_curve_point",
                 ),
             )
+            rules: ClassVar[list[Rule["CustomerVolumeCurvePoint"]]] = [
+                Rule["CustomerVolumeCurvePoint"](
+                    lambda x: x.volume_date.month == 1 and x.volume_date.day == 1,
+                    custom_error_message=(
+                        "Curve point date {volume_date} must be January 1st "
+                        "(YYYY-01-01). month={volume_date.month}, day={volume_date.day}."
+                    ),
+                    ignore_if_none=False,
+                )
+            ]
 
     class Factory:
         volume_date = LazyAttribute(lambda obj: obj.customer_volume.sop)

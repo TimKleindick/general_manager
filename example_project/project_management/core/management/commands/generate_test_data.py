@@ -4,6 +4,7 @@ import math
 import random
 from typing import Any
 
+from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from core.managers.catalogs import (
@@ -29,6 +30,7 @@ ERR_DERIVATIVE_TYPE_EMPTY = (
     "DerivativeType is empty. Read-only seed data must exist first."
 )
 ERR_USERS_PREPARE = "Failed to prepare users for creator_id usage."
+ERR_USERS_MIN = "--users must be at least 1."
 ERR_MANAGER_ID_RESOLVE = "Cannot resolve ID for manager instance."
 ERR_TEAM_PROBABILITY_RANGE = "--extra-team-role-probability must be between 0 and 1."
 ERR_MAX_EXTRA_TEAM_ROLES_MIN = "--max-extra-team-roles must be >= 0."
@@ -150,6 +152,8 @@ class Command(BaseCommand):
             raise CommandError(ERR_MAX_DERIVATIVES_MIN)
         if avg_derivatives < 0:
             raise CommandError(ERR_AVG_DERIVATIVES_MIN)
+        if user_target < 1:
+            raise CommandError(ERR_USERS_MIN)
         if not 0 <= extra_team_role_probability <= 1:
             raise CommandError(ERR_TEAM_PROBABILITY_RANGE)
         if max_extra_team_roles < 0:
@@ -184,15 +188,25 @@ class Command(BaseCommand):
         if role_by_id.get(1) is None:
             raise CommandError(ERR_PROJECT_ROLE_PM_MISSING)
 
-        users = list(User.all())
+        users = sorted(
+            [user for user in User.all() if getattr(user, "id", None) is not None],
+            key=lambda user: int(user.id),  # type: ignore[arg-type]
+        )
+        if len(users) > user_target:
+            keep_ids = {int(user.id) for user in users[:user_target]}
+            get_user_model().objects.exclude(id__in=keep_ids).delete()
+            users = sorted(
+                [
+                    user
+                    for user in User.all()
+                    if getattr(user, "id", None) is not None
+                ],
+                key=lambda user: int(user.id),  # type: ignore[arg-type]
+            )
         while len(users) < user_target:
-            idx = len(users) + 1
             users.append(
                 User.Factory.create(
-                    username=f"seed_user_{idx}",
-                    first_name=f"Seed{idx}",
-                    last_name="User",
-                    email=f"seed_user_{idx}@example.local",
+                    creator_id=None,
                     is_active=True,
                 )
             )
@@ -202,28 +216,40 @@ class Command(BaseCommand):
         ]
         if not creator_ids:
             raise CommandError(ERR_USERS_PREPARE)
-        user_by_id = {user.id: user for user in users if user.id is not None}
 
         plants = list(Plant.all())
         while len(plants) < plant_target:
-            plants.append(Plant.Factory.create())
+            plants.append(
+                Plant.Factory.create(
+                    creator_id=rng.choice(creator_ids),
+                    ignore_permission=True,
+                    changed_by=None,
+                    changed_by_id=rng.choice(creator_ids),
+                    plant_officer=None,
+                    plant_deputy_officer=None,
+                )
+            )
 
         customers = list(Customer.all())
         while len(customers) < customer_target:
-            idx = len(customers) + 1
             creator_id = rng.choice(creator_ids)
             key_account_id = rng.choice(creator_ids)
             customer = Customer.Factory.create(
-                company_name=f"Customer Company {idx:03d}",
-                group_name=f"Group {idx:03d}",
+                creator_id=creator_id,
+                ignore_permission=True,
+                changed_by=None,
+                changed_by_id=creator_id,
+                key_account=None,
                 key_account_id=key_account_id,
-                number=10000 + idx,
+                sales_responsible=[],
             )
             customers.append(customer)
             # Randomly attach a couple of sales responsibles.
             sales_count = rng.randint(0, 3)
             if sales_count > 0:
                 customer.update(
+                    creator_id=creator_id,
+                    ignore_permission=True,
                     sales_responsible_id_list=rng.sample(
                         creator_ids,
                         k=min(sales_count, len(creator_ids)),
@@ -233,23 +259,38 @@ class Command(BaseCommand):
         total_derivatives_created = 0
         projects_created = 0
 
-        for project_idx in range(project_target):
+        for _project_idx in range(project_target):
             creator_id = rng.choice(creator_ids)
             customer = rng.choice(customers)
             currency = rng.choice(currencies)
             phase_type = rng.choice(project_phase_types)
             project_type = rng.choice(project_types) if project_types else None
 
-            project_number = AccountNumber.Factory.create(is_project_account=True)
+            project_number = AccountNumber.Factory.create(
+                creator_id=creator_id,
+                ignore_permission=True,
+                changed_by=None,
+                changed_by_id=creator_id,
+                is_project_account=True,
+            )
 
             invest_numbers: list[AccountNumber] = []
             for _invest_idx in range(rng.randint(0, 3)):
                 invest_numbers.append(
-                    AccountNumber.Factory.create(is_project_account=False)
+                    AccountNumber.Factory.create(
+                        creator_id=creator_id,
+                        ignore_permission=True,
+                        changed_by=None,
+                        changed_by_id=creator_id,
+                        is_project_account=False,
+                    )
                 )
 
             project = Project.Factory.create(
-                name=f"Project {project_idx + 1:04d}",
+                creator_id=creator_id,
+                ignore_permission=True,
+                changed_by=None,
+                changed_by_id=creator_id,
                 project_number=project_number,
                 project_phase_type=phase_type,
                 project_type=project_type,
@@ -268,9 +309,14 @@ class Command(BaseCommand):
                 project_user_role_id=1,
             ).first():
                 ProjectTeam.Factory.create(
+                    creator_id=creator_id,
+                    ignore_permission=True,
+                    changed_by=None,
+                    changed_by_id=creator_id,
                     project=project,
                     project_user_role=role_by_id.get(1),
-                    responsible_user=user_by_id.get(creator_id),
+                    responsible_user=None,
+                    responsible_user_id=creator_id,
                     active=True,
                 )
 
@@ -292,9 +338,14 @@ class Command(BaseCommand):
                         ).first():
                             continue
                         ProjectTeam.Factory.create(
+                            creator_id=creator_id,
+                            ignore_permission=True,
+                            changed_by=None,
+                            changed_by_id=creator_id,
                             project=project,
                             project_user_role=role_by_id.get(role_id),
-                            responsible_user=user_by_id.get(rng.choice(creator_ids)),
+                            responsible_user=None,
+                            responsible_user_id=rng.choice(creator_ids),
                             active=(rng.random() > 0.05),
                         )
 
@@ -302,10 +353,13 @@ class Command(BaseCommand):
                 max_derivatives,
                 max(0, _poisson_draw(avg_derivatives, rng)),
             )
-            for derivative_idx in range(derivative_count):
+            for _derivative_idx in range(derivative_count):
                 derivative = Derivative.Factory.create(
+                    creator_id=creator_id,
+                    ignore_permission=True,
+                    changed_by=None,
+                    changed_by_id=creator_id,
                     project=project,
-                    name=f"Der-{project_idx + 1:04d}-{derivative_idx + 1:02d}",
                     derivative_type=rng.choice(derivative_types),
                     _plant=rng.choice(plants),
                     pieces_per_car_set=rng.randint(1, 8),
@@ -317,6 +371,10 @@ class Command(BaseCommand):
 
                 if rng.random() < 0.85:
                     customer_volume = CustomerVolume.Factory.create(
+                        creator_id=creator_id,
+                        ignore_permission=True,
+                        changed_by=None,
+                        changed_by_id=creator_id,
                         derivative=derivative,
                         project_phase_type=phase_type,
                         sop=date_from_year(rng.randint(2024, 2030)),
@@ -330,6 +388,10 @@ class Command(BaseCommand):
                     year_span = max(1, eop_year - sop_year + 1)
                     base_volume = rng.randint(1500, 12000)
                     CustomerVolumeCurvePoint.Factory.create(
+                        creator_id=creator_id,
+                        ignore_permission=True,
+                        changed_by=None,
+                        changed_by_id=creator_id,
                         customer_volume=customer_volume,
                         datapoints=year_span,
                         total_volume=base_volume * year_span,

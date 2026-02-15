@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: hsl(158 25% 12%);
+  font-family: "Space Grotesk", "IBM Plex Sans", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(1000px 460px at 8% 0%, rgba(255, 241, 212, 0.78), transparent 70%),
+    radial-gradient(900px 380px at 88% 0%, rgba(204, 233, 214, 0.72), transparent 70%),
+    linear-gradient(160deg, #f4efe3, #d7e6dd);
+}
+
+h1,
+h2,
+h3,
+.font-serif {
+  font-family: "Fraunces", Georgia, serif;
+}

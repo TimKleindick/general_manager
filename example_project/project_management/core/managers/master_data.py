@@ -23,6 +23,37 @@ if TYPE_CHECKING:
     from .identity import User
 
 
+_CUSTOMER_OEMS = (
+    "Apex Motors",
+    "Nordstern Automotive",
+    "Helios Mobility",
+    "Summit Vehicle Systems",
+    "Vector Auto Group",
+    "Orchid EV Technologies",
+)
+_CUSTOMER_REGIONS = ("EU", "NA", "APAC", "LATAM", "MEA")
+_CUSTOMER_GROUPS = (
+    "Powertrain Sourcing",
+    "Body & Trim Procurement",
+    "Electronics Platform Buying",
+    "E-Mobility Commodity Purchasing",
+    "Interior Module Purchasing",
+)
+
+
+def _customer_company_name(index: int) -> str:
+    oem = _CUSTOMER_OEMS[index % len(_CUSTOMER_OEMS)]
+    region = _CUSTOMER_REGIONS[(index // len(_CUSTOMER_OEMS)) % len(_CUSTOMER_REGIONS)]
+    account_id = f"CUST-{index + 1:05d}"
+    return f"{oem} ({region}) {account_id}"
+
+
+def _customer_group_name(index: int) -> str:
+    group = _CUSTOMER_GROUPS[index % len(_CUSTOMER_GROUPS)]
+    region = _CUSTOMER_REGIONS[(index // len(_CUSTOMER_GROUPS)) % len(_CUSTOMER_REGIONS)]
+    return f"{group} - {region}"
+
+
 class AccountNumber(GeneralManager):
     number: str
     is_project_account: bool
@@ -75,8 +106,8 @@ class Customer(GeneralManager):
             )
 
     class Factory:
-        company_name = Sequence(lambda index: f"Customer Company {index + 1:04d}")
-        group_name = Sequence(lambda index: f"Group {index + 1:04d}")
+        company_name = Sequence(_customer_company_name)
+        group_name = Sequence(_customer_group_name)
         number = Sequence(lambda index: 10_000 + index)
 
 

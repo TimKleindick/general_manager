@@ -29,6 +29,7 @@ from general_manager.factory import (
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager, graph_ql_property
 from general_manager.permission import ManagerBasedPermission
+from general_manager.search.config import FieldConfig, IndexConfig
 
 from .exceptions import (
     ProjectCreationCreatorNotFoundError,
@@ -53,6 +54,52 @@ if TYPE_CHECKING:
     )
     from .identity import User
     from .master_data import AccountNumber, Customer, Plant
+
+
+_PROJECT_BRANDS = (
+    "Aster",
+    "Nova",
+    "Orion",
+    "Helix",
+    "Vanguard",
+    "Atlas",
+)
+_PROJECT_VEHICLE_LINES = (
+    "Falcon",
+    "Summit",
+    "Pulse",
+    "Strider",
+    "Voyager",
+    "Contour",
+)
+_PROJECT_STAGES = ("Concept", "Mule", "SOP", "Facelift", "EV", "Hybrid")
+
+_DERIVATIVE_REGIONS = ("EU", "NA", "APAC", "LATAM", "MEA")
+_DERIVATIVE_FAMILIES = (
+    "FRONT-BUMPER",
+    "REAR-LAMP",
+    "DOOR-HARNESS",
+    "BATTERY-TRAY",
+    "DASH-BEAM",
+    "SEAT-TRACK",
+)
+_DERIVATIVE_VARIANTS = ("STD", "SPORT", "LUX", "RUG", "ECO", "PERF")
+
+
+def _project_factory_name(index: int) -> str:
+    brand = _PROJECT_BRANDS[index % len(_PROJECT_BRANDS)]
+    line = _PROJECT_VEHICLE_LINES[(index // len(_PROJECT_BRANDS)) % len(_PROJECT_VEHICLE_LINES)]
+    stage = _PROJECT_STAGES[(index // (len(_PROJECT_BRANDS) * len(_PROJECT_VEHICLE_LINES))) % len(_PROJECT_STAGES)]
+    generation = (index // 180) + 1
+    return f"{brand} {line} Gen {generation} {stage}"
+
+
+def _derivative_factory_name(index: int) -> str:
+    region = _DERIVATIVE_REGIONS[index % len(_DERIVATIVE_REGIONS)]
+    family = _DERIVATIVE_FAMILIES[(index // len(_DERIVATIVE_REGIONS)) % len(_DERIVATIVE_FAMILIES)]
+    variant = _DERIVATIVE_VARIANTS[(index // (len(_DERIVATIVE_REGIONS) * len(_DERIVATIVE_FAMILIES))) % len(_DERIVATIVE_VARIANTS)]
+    part_code = f"PT-{index + 10000:05d}"
+    return f"{region} | {part_code} | {family} | {variant}"
 
 
 class Project(GeneralManager):
@@ -95,9 +142,29 @@ class Project(GeneralManager):
             app_label = "core"
 
     class Factory:
-        name = Sequence(lambda index: f"Project {index + 1:04d}")
+        name = Sequence(_project_factory_name)
         probability_of_nomination = lazy_decimal(0.01, 0.99, 4)
         customer_volume_flex = lazy_decimal(0.0, 0.4, 4)
+
+    class SearchConfig:
+        indexes: ClassVar[list[IndexConfig]] = [
+            IndexConfig(
+                name="global",
+                fields=[
+                    FieldConfig(name="name", boost=2.0),
+                    "projectteam_list__responsible_user__full_name",
+                    "derivative_list__name",
+                ],
+                sorts=[
+                    "name",
+                    "total_volume",
+                    "probability_of_nomination",
+                    "customer_volume_flex",
+                    "earliest_sop",
+                    "latest_eop",
+                ],
+            )
+        ]
 
     @graph_ql_property(sortable=True, filterable=True)
     def earliest_sop(self) -> Optional[date]:
@@ -296,7 +363,7 @@ class Derivative(GeneralManager):
             )
 
     class Factory:
-        name = Sequence(lambda index: f"Derivative-{index + 1:04d}")
+        name = Sequence(_derivative_factory_name)
         pieces_per_car_set = lazy_integer(1, 8)
         max_daily_quantity = lazy_integer(300, 6500)
         norm_daily_quantity = lazy_integer(100, 4200)

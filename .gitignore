@@ -166,6 +166,14 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Frontend (project management example)
+example_project/project_management/frontend/node_modules/
+example_project/project_management/frontend/.vite/
+example_project/project_management/frontend/dist/
+example_project/project_management/frontend/.eslintcache
+example_project/project_management/frontend/.tsbuildinfo
+example_project/project_management/core/static/core/dashboard_app/
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
