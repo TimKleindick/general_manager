@@ -10,8 +10,9 @@ These tutorials walk you through common development tasks when working with Gene
 6. [Cache dependent calculations](cache_dependent_calculation.md)
 7. [Write a custom interface](write_custom_interface.md)
 8. [Generate test data in bulk](factory_bulk_generate.md)
-9. [Testing strategies](testing_guides.md)
-10. [Analyse permission audit logs](audit_logger_analysis.md)
-11. [Handle database migrations](migrations_gotchas.md)
+9. [Seed data from manager landscape](seed_manager_landscape.md)
+10. [Testing strategies](testing_guides.md)
+11. [Analyse permission audit logs](audit_logger_analysis.md)
+12. [Handle database migrations](migrations_gotchas.md)
 
 Follow them in order when you start a new project, or jump to the topic relevant to your current task.

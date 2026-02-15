@@ -29,25 +29,17 @@ TEST_PASSWORD = "test" + "-pass-123"
 
 
 class ProjectManagementFactoryTests(TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        super().setUpClass()
-        cls._catalogs_synced = False
-
     def setUp(self) -> None:
         super().setUp()
         self._sync_catalogs()
 
     def _sync_catalogs(self) -> None:
-        if self.__class__._catalogs_synced:
-            return
         capability = ReadOnlyManagementCapability()
         capability.sync_data(ProjectUserRole.Interface)
         capability.sync_data(ProjectPhaseType.Interface)
         capability.sync_data(ProjectType.Interface)
         capability.sync_data(Currency.Interface)
         capability.sync_data(DerivativeType.Interface)
-        self.__class__._catalogs_synced = True
 
     def test_user_manager_uses_auth_user_model_and_login(self) -> None:
         auth_model = get_user_model()
@@ -62,8 +54,10 @@ class ProjectManagementFactoryTests(TestCase):
 
     def test_factories_create_realistic_related_project_data(self) -> None:
         user = User.Factory.create(is_active=True)
-        project = Project.Factory.create()
-        derivative = Derivative.Factory.create(project=project)
+        customer = Customer.Factory.create(key_account=user)
+        plant = Plant.Factory.create()
+        project = Project.Factory.create(customer=customer)
+        derivative = Derivative.Factory.create(project=project, _plant=plant)
         customer_volume = CustomerVolume.Factory.create(derivative=derivative)
         points = CustomerVolumeCurvePoint.Factory.create(
             customer_volume=customer_volume
@@ -78,8 +72,11 @@ class ProjectManagementFactoryTests(TestCase):
         self.assertEqual(team.responsible_user.id, user.id)
 
     def test_curve_point_factory_can_generate_multiple_datapoints(self) -> None:
-        project = Project.Factory.create()
-        derivative = Derivative.Factory.create(project=project)
+        user = User.Factory.create(is_active=True)
+        customer = Customer.Factory.create(key_account=user)
+        plant = Plant.Factory.create()
+        project = Project.Factory.create(customer=customer)
+        derivative = Derivative.Factory.create(project=project, _plant=plant)
         customer_volume = CustomerVolume.Factory.create(derivative=derivative)
 
         points = CustomerVolumeCurvePoint.Factory.create(
@@ -88,9 +85,13 @@ class ProjectManagementFactoryTests(TestCase):
         )
 
         self.assertIsInstance(points, list)
-        self.assertEqual(len(points), 6)
-        self.assertEqual(points[0].volume_date, customer_volume.sop)
-        self.assertEqual(points[-1].volume_date, customer_volume.eop)
+        expected_points = min(6, customer_volume.eop.year - customer_volume.sop.year + 1)
+        self.assertEqual(len(points), expected_points)
+        self.assertTrue(
+            all(point.volume_date.month == 1 and point.volume_date.day == 1 for point in points)
+        )
+        self.assertEqual(points[0].volume_date.year, customer_volume.sop.year)
+        self.assertEqual(points[-1].volume_date.year, customer_volume.eop.year)
 
     def test_managers_domain_modules_are_importable(self) -> None:
         module_names = [
@@ -143,15 +144,28 @@ class DashboardRoutingTests(TestCase):
         self.assertEqual(response.status_code, 301)
         self.assertEqual(response.url, "dashboard/")
 
-    def test_dashboard_route_is_available(self) -> None:
+    def test_dashboard_route_serves_spa_without_project_id(self) -> None:
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Program Dashboard")
+        self.assertContains(response, 'id="app-root"')
+        self.assertContains(response, "core/dashboard_app/assets/app.css")
+        self.assertContains(response, "core/dashboard_app/assets/app.js")
+
+    def test_dashboard_route_is_available(self) -> None:
+        response = self.client.get(f"{reverse('dashboard')}?projectId=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Program Dashboard")
+        self.assertContains(response, "core/dashboard_app/assets/app.css")
+        self.assertContains(response, "core/dashboard_app/assets/app.js")
 
     def test_projects_route_remains_available(self) -> None:
         response = self.client.get(reverse("project-list"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Project List")
+        self.assertContains(response, "Program Dashboard")
+        self.assertContains(response, 'id="app-root"')
+        self.assertContains(response, "core/dashboard_app/assets/app.css")
+        self.assertContains(response, "core/dashboard_app/assets/app.js")
 
 
 class ProjectManagementGraphQLMutationContractTests(TestCase):
@@ -249,6 +263,66 @@ class ProjectManagementGraphQLMutationContractTests(TestCase):
                 active=True,
             )
         return project_id
+
+    def _create_derivative_via_graphql(self, project_id: int) -> int:
+        derivative_type = DerivativeType.filter(id=1).first()
+        plant = Plant.Factory.create()
+        self.assertIsNotNone(derivative_type)
+
+        create_derivative_mutation = """
+        mutation CreateDerivative(
+          $project: ID!,
+          $name: String!,
+          $derivativeType: ID!,
+          $Plant: ID!,
+          $piecesPerCarSet: Int
+        ) {
+          createDerivative(
+            project: $project,
+            name: $name,
+            derivativeType: $derivativeType,
+            Plant: $Plant,
+            piecesPerCarSet: $piecesPerCarSet
+          ) {
+            success
+            Derivative { id }
+          }
+        }
+        """
+        payload = self._graphql(
+            create_derivative_mutation,
+            {
+                "project": str(project_id),
+                "name": "Mutation Contract Derivative",
+                "derivativeType": str(derivative_type.id),
+                "Plant": str(plant.id),
+                "piecesPerCarSet": 2,
+            },
+        )
+        self.assertNotIn("errors", payload)
+        self.assertTrue(payload["data"]["createDerivative"]["success"])
+        return int(payload["data"]["createDerivative"]["Derivative"]["id"])
+
+    def _create_customer_volume_via_graphql(self, derivative_id: int) -> int:
+        create_volume_mutation = """
+        mutation CreateVolume($derivative: ID!, $sop: Date!, $eop: Date!) {
+          createCustomerVolume(derivative: $derivative, sop: $sop, eop: $eop) {
+            success
+            CustomerVolume { id }
+          }
+        }
+        """
+        payload = self._graphql(
+            create_volume_mutation,
+            {
+                "derivative": str(derivative_id),
+                "sop": "2026-01-01",
+                "eop": "2028-01-01",
+            },
+        )
+        self.assertNotIn("errors", payload)
+        self.assertTrue(payload["data"]["createCustomerVolume"]["success"])
+        return int(payload["data"]["createCustomerVolume"]["CustomerVolume"]["id"])
 
     def test_create_project_with_invest_number_list(self) -> None:
         customer = Customer.Factory.create()
@@ -349,39 +423,90 @@ class ProjectManagementGraphQLMutationContractTests(TestCase):
 
     def test_create_derivative_with_plant_id(self) -> None:
         project_id = self._create_project_via_graphql()
-        derivative_type = DerivativeType.filter(id=1).first()
-        plant = Plant.Factory.create()
-        self.assertIsNotNone(derivative_type)
+        derivative_id = self._create_derivative_via_graphql(project_id)
+        self.assertGreater(derivative_id, 0)
 
-        create_derivative_mutation = """
-        mutation CreateDerivative(
-          $project: ID!,
-          $name: String!,
-          $derivativeType: ID!,
-          $Plant: ID!,
-          $piecesPerCarSet: Int
-        ) {
-          createDerivative(
-            project: $project,
-            name: $name,
-            derivativeType: $derivativeType,
-            Plant: $Plant,
-            piecesPerCarSet: $piecesPerCarSet
+    def test_create_curve_point_rejects_non_january_first_date(self) -> None:
+        project_id = self._create_project_via_graphql()
+        derivative_id = self._create_derivative_via_graphql(project_id)
+        volume_id = self._create_customer_volume_via_graphql(derivative_id)
+
+        create_curve_mutation = """
+        mutation CreateCurvePoint($customerVolume: ID!, $volumeDate: Date!, $volume: Int!) {
+          createCustomerVolumeCurvePoint(
+            customerVolume: $customerVolume,
+            volumeDate: $volumeDate,
+            volume: $volume
           ) {
             success
-            Derivative { id }
+            CustomerVolumeCurvePoint { id }
           }
         }
         """
         payload = self._graphql(
-            create_derivative_mutation,
+            create_curve_mutation,
             {
-                "project": str(project_id),
-                "name": "Mutation Contract Derivative",
-                "derivativeType": str(derivative_type.id),
-                "Plant": str(plant.id),
-                "piecesPerCarSet": 2,
+                "customerVolume": str(volume_id),
+                "volumeDate": "2027-03-15",
+                "volume": 1234,
             },
         )
-        self.assertNotIn("errors", payload)
-        self.assertTrue(payload["data"]["createDerivative"]["success"])
+        self.assertIn("errors", payload)
+        self.assertIn("January 1st", payload["errors"][0]["message"])
+
+    def test_update_curve_point_rejects_non_january_first_date(self) -> None:
+        project_id = self._create_project_via_graphql()
+        derivative_id = self._create_derivative_via_graphql(project_id)
+        volume_id = self._create_customer_volume_via_graphql(derivative_id)
+
+        create_curve_mutation = """
+        mutation CreateCurvePoint($customerVolume: ID!, $volumeDate: Date!, $volume: Int!) {
+          createCustomerVolumeCurvePoint(
+            customerVolume: $customerVolume,
+            volumeDate: $volumeDate,
+            volume: $volume
+          ) {
+            success
+            CustomerVolumeCurvePoint { id }
+          }
+        }
+        """
+        create_payload = self._graphql(
+            create_curve_mutation,
+            {
+                "customerVolume": str(volume_id),
+                "volumeDate": "2027-01-01",
+                "volume": 1000,
+            },
+        )
+        self.assertNotIn("errors", create_payload)
+        curve_id = int(
+            create_payload["data"]["createCustomerVolumeCurvePoint"][
+                "CustomerVolumeCurvePoint"
+            ]["id"]
+        )
+
+        update_curve_mutation = """
+        mutation UpdateCurvePoint($id: Int!, $customerVolume: ID!, $volumeDate: Date!, $volume: Int!) {
+          updateCustomerVolumeCurvePoint(
+            id: $id,
+            customerVolume: $customerVolume,
+            volumeDate: $volumeDate,
+            volume: $volume
+          ) {
+            success
+            CustomerVolumeCurvePoint { id }
+          }
+        }
+        """
+        update_payload = self._graphql(
+            update_curve_mutation,
+            {
+                "id": curve_id,
+                "customerVolume": str(volume_id),
+                "volumeDate": "2027-06-01",
+                "volume": 1111,
+            },
+        )
+        self.assertIn("errors", update_payload)
+        self.assertIn("January 1st", update_payload["errors"][0]["message"])

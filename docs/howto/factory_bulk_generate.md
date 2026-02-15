@@ -76,3 +76,13 @@ Use the fixture in tests to create data on demand.
 ## Step 5: Tear down
 
 Use database transactions or pytest's `django_db(reset_sequences=True)` marker to keep the test environment clean after bulk creation.
+
+## Related command
+
+If you want to seed all writable managers discovered in the current project, use:
+
+```bash
+python manage.py seed_manager_landscape
+```
+
+See [Seed data from manager landscape](seed_manager_landscape.md) for dependency ordering, retries, and filtering options.
