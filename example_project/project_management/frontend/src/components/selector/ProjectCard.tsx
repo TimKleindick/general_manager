@@ -9,10 +9,11 @@ type Props = {
 };
 
 export function ProjectCard({ project, onOpen }: Props) {
+  const nominationValue = project.probabilityOfNomination?.value;
   const nomination =
-    project.probabilityOfNomination == null
-      ? "-"
-      : `${Math.round(Number(project.probabilityOfNomination) * 100)}%`;
+    typeof nominationValue === "number" && !Number.isNaN(nominationValue)
+      ? `${Math.round(nominationValue)}%`
+      : "-";
 
   return (
     <Card className="border-border/80 bg-white/90">

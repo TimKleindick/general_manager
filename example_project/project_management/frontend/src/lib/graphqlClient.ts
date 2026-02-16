@@ -9,10 +9,23 @@ type GraphQLResponse<T> = {
   errors?: GraphQLErrorItem[];
 };
 
+function getCookie(name: string): string | null {
+  const value = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`))
+    ?.split("=")[1];
+  return value ? decodeURIComponent(value) : null;
+}
+
 export async function executeQuery<T>(query: string, variables: Record<string, unknown>) {
+  const csrfToken = getCookie("csrftoken");
   const response = await fetch(GRAPHQL_HTTP_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
+    },
     body: JSON.stringify({ query, variables }),
   });
   const payload = (await response.json()) as GraphQLResponse<T>;

@@ -6,6 +6,7 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
+from general_manager.measurement import Measurement
 
 from core.managers.catalogs import (
     Currency,
@@ -196,11 +197,7 @@ class Command(BaseCommand):
             keep_ids = {int(user.id) for user in users[:user_target]}
             get_user_model().objects.exclude(id__in=keep_ids).delete()
             users = sorted(
-                [
-                    user
-                    for user in User.all()
-                    if getattr(user, "id", None) is not None
-                ],
+                [user for user in User.all() if getattr(user, "id", None) is not None],
                 key=lambda user: int(user.id),  # type: ignore[arg-type]
             )
         while len(users) < user_target:
@@ -296,8 +293,12 @@ class Command(BaseCommand):
                 project_type=project_type,
                 currency=currency,
                 customer=customer,
-                probability_of_nomination=round(rng.uniform(0.0, 1.0), 4),
-                customer_volume_flex=round(rng.uniform(0.0, 0.4), 4),
+                probability_of_nomination=Measurement(
+                    round(rng.uniform(0.0, 100.0), 4), "percent"
+                ),
+                customer_volume_flex=Measurement(
+                    round(rng.uniform(0.0, 40.0), 4), "percent"
+                ),
                 invest_number=invest_numbers,
             )
             projects_created += 1

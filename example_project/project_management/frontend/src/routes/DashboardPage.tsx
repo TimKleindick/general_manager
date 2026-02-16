@@ -22,7 +22,7 @@ import { Table, TBody, TD, TH, THead } from "@/components/ui/table";
 import { DerivativesSplitPanel } from "@/components/dashboard/DerivativesSplitPanel";
 
 const MUTATIONS = {
-  updateProject: `mutation UpdateProject($id: Int!, $name: String!, $customer: ID!, $projectPhaseType: ID!, $projectType: ID, $currency: ID!, $probabilityOfNomination: Float) { updateProject(id: $id, name: $name, customer: $customer, projectPhaseType: $projectPhaseType, projectType: $projectType, currency: $currency, probabilityOfNomination: $probabilityOfNomination) { success } }`,
+  updateProject: `mutation UpdateProject($id: Int!, $name: String!, $customer: ID!, $projectPhaseType: ID!, $projectType: ID, $currency: ID!, $probabilityOfNomination: MeasurementScalar) { updateProject(id: $id, name: $name, customer: $customer, projectPhaseType: $projectPhaseType, projectType: $projectType, currency: $currency, probabilityOfNomination: $probabilityOfNomination) { success } }`,
   updateCustomer: `mutation UpdateCustomer($id: Int!, $companyName: String!, $groupName: String!, $number: Int, $keyAccount: ID) { updateCustomer(id: $id, companyName: $companyName, groupName: $groupName, number: $number, keyAccount: $keyAccount) { success } }`,
   updateDerivative: `mutation UpdateDerivative($id: Int!, $project: ID!, $name: String!, $derivativeType: ID!, $Plant: ID!, $piecesPerCarSet: Int, $normDailyQuantity: Int, $volumeDescription: String) { updateDerivative(id: $id, project: $project, name: $name, derivativeType: $derivativeType, Plant: $Plant, piecesPerCarSet: $piecesPerCarSet, normDailyQuantity: $normDailyQuantity, volumeDescription: $volumeDescription) { success } }`,
   updateVolume: `mutation UpdateVolume($id: Int!, $derivative: ID!, $projectPhaseType: ID, $sop: Date!, $eop: Date!, $description: String, $usedVolume: Boolean, $isVolumeInVehicles: Boolean) { updateCustomerVolume(id: $id, derivative: $derivative, projectPhaseType: $projectPhaseType, sop: $sop, eop: $eop, description: $description, usedVolume: $usedVolume, isVolumeInVehicles: $isVolumeInVehicles) { success } }`,
@@ -50,6 +50,18 @@ function yearStartDate(value: string) {
 function requireValue(value: string, msg: string) {
   if (String(value || "").trim()) return null;
   return msg;
+}
+
+function percentValue(value: unknown): number | null {
+  if (!value || typeof value !== "object") return null;
+  const maybeValue = (value as { value?: unknown }).value;
+  if (typeof maybeValue !== "number" || Number.isNaN(maybeValue)) return null;
+  return maybeValue;
+}
+
+function formatPercent(value: unknown): string {
+  const parsed = percentValue(value);
+  return parsed == null ? "-" : `${Math.round(parsed)}%`;
 }
 
 function derivatives(project: Project | null) {
@@ -165,7 +177,7 @@ export function DashboardPage() {
       projectPhaseType: String(project.projectPhaseType?.id || ""),
       projectType: String(project.projectType?.id || ""),
       currency: String(project.currency?.id || ""),
-      probabilityOfNomination: String(project.probabilityOfNomination ?? ""),
+      probabilityOfNomination: String(percentValue(project.probabilityOfNomination) ?? ""),
     });
     setCustomerForm({
       companyName: project.customer?.companyName || "",
@@ -233,7 +245,9 @@ export function DashboardPage() {
       projectPhaseType: projectForm.projectPhaseType,
       projectType: projectForm.projectType || null,
       currency: projectForm.currency,
-      probabilityOfNomination: Number(projectForm.probabilityOfNomination || 0),
+      probabilityOfNomination: projectForm.probabilityOfNomination
+        ? `${Number(projectForm.probabilityOfNomination)} percent`
+        : null,
     }, "updated", "Project", String(projectId), "Project data saved");
     dispatch(closeModal("project"));
   };
@@ -344,8 +358,7 @@ export function DashboardPage() {
   };
 
   const projectTotals = useMemo(() => {
-    const nomination =
-      project?.probabilityOfNomination == null ? "-" : `${Math.round(Number(project.probabilityOfNomination) * 100)}%`;
+    const nomination = formatPercent(project?.probabilityOfNomination);
     return {
       nomination,
       derivativeCount: derivatives(project).length,
@@ -495,7 +508,7 @@ export function DashboardPage() {
               <p><strong>Currency:</strong> {project?.currency?.abbreviation || project?.currency?.name || "-"}</p>
               <p><strong>Nomination:</strong> {projectTotals.nomination}</p>
               <p><strong>Total Volume:</strong> {Number(project?.totalVolume || 0).toLocaleString()}</p>
-              <p><strong>Volume Flex:</strong> {project?.customerVolumeFlex ?? "-"}</p>
+              <p><strong>Volume Flex:</strong> {formatPercent(project?.customerVolumeFlex)}</p>
             </div>
           </CardContent>
         </Card>
@@ -585,7 +598,7 @@ export function DashboardPage() {
           <label className="text-sm">Project Phase Type<select className="mt-1 w-full rounded border border-border p-2" value={projectForm.projectPhaseType} onChange={(event) => setProjectForm((prev) => ({ ...prev, projectPhaseType: event.target.value }))}>{entities.phaseTypes.map((item) => <option key={String(item.id)} value={String(item.id)}>{item.name}</option>)}</select></label>
           <label className="text-sm">Project Type<select className="mt-1 w-full rounded border border-border p-2" value={projectForm.projectType} onChange={(event) => setProjectForm((prev) => ({ ...prev, projectType: event.target.value }))}><option value="">--</option>{entities.projectTypes.map((item) => <option key={String(item.id)} value={String(item.id)}>{item.name}</option>)}</select></label>
           <label className="text-sm">Currency<select className="mt-1 w-full rounded border border-border p-2" value={projectForm.currency} onChange={(event) => setProjectForm((prev) => ({ ...prev, currency: event.target.value }))}>{entities.currencies.map((item) => <option key={String(item.id)} value={String(item.id)}>{item.name} ({item.abbreviation})</option>)}</select></label>
-          <label className="text-sm">Probability of Nomination<input className="mt-1 w-full rounded border border-border p-2" type="number" min="0" max="1" step="0.01" value={projectForm.probabilityOfNomination} onChange={(event) => setProjectForm((prev) => ({ ...prev, probabilityOfNomination: event.target.value }))} /></label>
+          <label className="text-sm">Probability of Nomination (%)<input className="mt-1 w-full rounded border border-border p-2" type="number" min="0" max="100" step="1" value={projectForm.probabilityOfNomination} onChange={(event) => setProjectForm((prev) => ({ ...prev, probabilityOfNomination: event.target.value }))} /></label>
         </div>
         <div className="mt-3"><Button variant="default" onClick={() => void onUpdateProject()}>Update Project</Button></div>
       </Dialog>

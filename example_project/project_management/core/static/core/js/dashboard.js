@@ -71,10 +71,10 @@
         id
         name
         totalVolume
-        probabilityOfNomination
+        probabilityOfNomination { value unit }
         earliestSop
         latestEop
-        customerVolumeFlex
+        customerVolumeFlex { value unit }
         customer { id companyName groupName number keyAccount { id fullName username } }
         projectPhaseType { id name }
         projectType { id name }
@@ -124,7 +124,7 @@
   `;
 
   const PROJECT_UPDATE_MUTATION = `
-    mutation UpdateProject($id: Int!, $name: String!, $customer: ID!, $projectPhaseType: ID!, $projectType: ID, $currency: ID!, $probabilityOfNomination: Float) {
+    mutation UpdateProject($id: Int!, $name: String!, $customer: ID!, $projectPhaseType: ID!, $projectType: ID, $currency: ID!, $probabilityOfNomination: MeasurementScalar) {
       updateProject(id: $id, name: $name, customer: $customer, projectPhaseType: $projectPhaseType, projectType: $projectType, currency: $currency, probabilityOfNomination: $probabilityOfNomination) {
         success
         Project { id name }
@@ -216,6 +216,17 @@
 
   function normalizeOptionalId(value) {
     return value ? String(value) : null;
+  }
+
+  function readPercentValue(measurement) {
+    const value = measurement?.value;
+    if (typeof value !== "number" || Number.isNaN(value)) return null;
+    return value;
+  }
+
+  function formatPercent(measurement) {
+    const value = readPercentValue(measurement);
+    return value == null ? "-" : `${Math.round(value)}%`;
   }
 
   function derivatives() {
@@ -436,10 +447,7 @@
     refs.projectIdChip.textContent = `Project: #${project.id}`;
     refs.customerChip.textContent = `Customer: ${project.customer?.companyName || "-"}`;
 
-    const nomination =
-      project.probabilityOfNomination == null
-        ? "-"
-        : `${Math.round(project.probabilityOfNomination * 100)}%`;
+    const nomination = formatPercent(project.probabilityOfNomination);
 
     refs.overviewContent.innerHTML = `
       <div class="kv-grid">
@@ -448,7 +456,7 @@
         <div class="kv"><div class="k">Currency</div><div class="v">${project.currency?.abbreviation || project.currency?.name || "-"}</div></div>
         <div class="kv"><div class="k">Nomination</div><div class="v">${nomination}</div></div>
         <div class="kv"><div class="k">Total Volume</div><div class="v">${Number(project.totalVolume || 0).toLocaleString()}</div></div>
-        <div class="kv"><div class="k">Volume Flex</div><div class="v">${project.customerVolumeFlex == null ? "-" : Number(project.customerVolumeFlex).toLocaleString()}</div></div>
+        <div class="kv"><div class="k">Volume Flex</div><div class="v">${formatPercent(project.customerVolumeFlex)}</div></div>
       </div>
     `;
 
@@ -612,7 +620,7 @@
     if (!project) return;
 
     document.getElementById("projectName").value = project.name || "";
-    document.getElementById("projectProbability").value = project.probabilityOfNomination ?? "";
+    document.getElementById("projectProbability").value = readPercentValue(project.probabilityOfNomination) ?? "";
 
     document.getElementById("customerCompany").value = project.customer?.companyName || "";
     document.getElementById("customerGroup").value = project.customer?.groupName || "";
@@ -1045,9 +1053,9 @@
             projectPhaseType: String(phaseType),
             projectType: normalizeOptionalId(document.getElementById("projectType").value),
             currency: String(currency),
-            probabilityOfNomination: Number(
-              document.getElementById("projectProbability").value || 0
-            ),
+            probabilityOfNomination: document.getElementById("projectProbability").value
+              ? `${Number(document.getElementById("projectProbability").value)} percent`
+              : null,
           },
           "Project updated."
         );

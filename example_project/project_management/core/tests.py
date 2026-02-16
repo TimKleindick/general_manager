@@ -174,6 +174,7 @@ class DashboardRoutingTests(TestCase):
         self.assertContains(response, 'id="app-root"')
         self.assertContains(response, "core/dashboard_app/assets/app.css")
         self.assertContains(response, "core/dashboard_app/assets/app.js")
+        self.assertIn("csrftoken", response.cookies)
 
     def test_dashboard_route_is_available(self) -> None:
         response = self.client.get(f"{reverse('dashboard')}?projectId=1")
@@ -189,6 +190,7 @@ class DashboardRoutingTests(TestCase):
         self.assertContains(response, 'id="app-root"')
         self.assertContains(response, "core/dashboard_app/assets/app.css")
         self.assertContains(response, "core/dashboard_app/assets/app.js")
+        self.assertIn("csrftoken", response.cookies)
 
 
 class ProjectManagementGraphQLMutationContractTests(TestCase):

@@ -53,3 +53,53 @@ Build commands (run in `example_project/project_management/frontend`):
 - `npm install`
 - `npm run typecheck`
 - `npm run build`
+
+## Docker Compose (ORL-style full stack)
+
+`project_management` includes a full Docker stack strongly aligned with the ORL setup:
+
+- `web` (Django + Daphne, scale target)
+- `celery` (background tasks)
+- `nginx` (reverse proxy + load balancing)
+- `db` (PostgreSQL)
+- `redis` (cache + Celery broker/result backend)
+- `meilisearch` (search backend)
+- `django-init` (migrations, collectstatic, search reindex, optional seeding)
+
+Files:
+
+- `example_project/project_management/docker-compose.yml`
+- `example_project/project_management/Dockerfile`
+- `example_project/project_management/docker/entrypoint.sh`
+- `example_project/project_management/docker/init-entrypoint.sh`
+- `example_project/project_management/docker/entrypoint-celery.sh`
+- `example_project/project_management/docker/nginx.conf.template`
+- `example_project/project_management/docker/nginx-entrypoint.sh`
+- `example_project/project_management/.env.example`
+
+Run:
+
+```bash
+cd example_project/project_management
+cp .env.example .env
+docker compose up --build
+```
+
+Scale web workers behind nginx:
+
+```bash
+docker compose up --build --scale web=3
+```
+
+Common environment variables (`.env`):
+
+- `PM_HTTP_PORT` (default `8000`)
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+- `MEILISEARCH_API_KEY` (used by web and meilisearch)
+- `PM_SEED_ON_START=true` to run `generate_test_data` once in `django-init`
+
+Notes:
+
+- Static assets are collected to shared volume `pm-static` and served by nginx.
+- Search indexes are rebuilt during `django-init` (`python manage.py search_index --reindex`).
+- Redis is used for both Django cache and Celery broker/result backend.

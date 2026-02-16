@@ -10,7 +10,6 @@ from django.db.models import (
     BigIntegerField,
     BooleanField,
     CharField,
-    FloatField,
     ForeignKey,
     IntegerField,
     ManyToManyField,
@@ -22,12 +21,13 @@ from django.db.models import (
 
 from general_manager.factory import (
     lazy_boolean,
-    lazy_decimal,
     lazy_faker_sentence,
     lazy_integer,
+    lazy_measurement,
 )
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager, graph_ql_property
+from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission import ManagerBasedPermission
 from general_manager.search.config import FieldConfig, IndexConfig
 
@@ -88,16 +88,26 @@ _DERIVATIVE_VARIANTS = ("STD", "SPORT", "LUX", "RUG", "ECO", "PERF")
 
 def _project_factory_name(index: int) -> str:
     brand = _PROJECT_BRANDS[index % len(_PROJECT_BRANDS)]
-    line = _PROJECT_VEHICLE_LINES[(index // len(_PROJECT_BRANDS)) % len(_PROJECT_VEHICLE_LINES)]
-    stage = _PROJECT_STAGES[(index // (len(_PROJECT_BRANDS) * len(_PROJECT_VEHICLE_LINES))) % len(_PROJECT_STAGES)]
+    line = _PROJECT_VEHICLE_LINES[
+        (index // len(_PROJECT_BRANDS)) % len(_PROJECT_VEHICLE_LINES)
+    ]
+    stage = _PROJECT_STAGES[
+        (index // (len(_PROJECT_BRANDS) * len(_PROJECT_VEHICLE_LINES)))
+        % len(_PROJECT_STAGES)
+    ]
     generation = (index // 180) + 1
     return f"{brand} {line} Gen {generation} {stage}"
 
 
 def _derivative_factory_name(index: int) -> str:
     region = _DERIVATIVE_REGIONS[index % len(_DERIVATIVE_REGIONS)]
-    family = _DERIVATIVE_FAMILIES[(index // len(_DERIVATIVE_REGIONS)) % len(_DERIVATIVE_FAMILIES)]
-    variant = _DERIVATIVE_VARIANTS[(index // (len(_DERIVATIVE_REGIONS) * len(_DERIVATIVE_FAMILIES))) % len(_DERIVATIVE_VARIANTS)]
+    family = _DERIVATIVE_FAMILIES[
+        (index // len(_DERIVATIVE_REGIONS)) % len(_DERIVATIVE_FAMILIES)
+    ]
+    variant = _DERIVATIVE_VARIANTS[
+        (index // (len(_DERIVATIVE_REGIONS) * len(_DERIVATIVE_FAMILIES)))
+        % len(_DERIVATIVE_VARIANTS)
+    ]
     part_code = f"PT-{index + 10000:05d}"
     return f"{region} | {part_code} | {family} | {variant}"
 
@@ -111,8 +121,8 @@ class Project(GeneralManager):
     currency: "Currency"
     project_image_group_id: Optional[int]
     customer: "Customer"
-    probability_of_nomination: Optional[float]
-    customer_volume_flex: Optional[float]
+    probability_of_nomination: Optional[Measurement]
+    customer_volume_flex: Optional[Measurement]
 
     class Interface(DatabaseInterface):
         name = CharField(max_length=255)
@@ -135,16 +145,20 @@ class Project(GeneralManager):
         currency = ForeignKey("Currency", on_delete=PROTECT)
         project_image_group_id = BigIntegerField(null=True, blank=True)
         customer = ForeignKey("Customer", on_delete=PROTECT)
-        probability_of_nomination = FloatField(null=True, blank=True)
-        customer_volume_flex = FloatField(null=True, blank=True)
+        probability_of_nomination = MeasurementField(
+            base_unit="percent", null=True, blank=True
+        )
+        customer_volume_flex = MeasurementField(
+            base_unit="percent", null=True, blank=True
+        )
 
         class Meta:
             app_label = "core"
 
     class Factory:
         name = Sequence(_project_factory_name)
-        probability_of_nomination = lazy_decimal(0.01, 0.99, 4)
-        customer_volume_flex = lazy_decimal(0.0, 0.4, 4)
+        probability_of_nomination = lazy_measurement(1, 99, "percent")
+        customer_volume_flex = lazy_measurement(0, 40, "percent")
 
     class SearchConfig:
         indexes: ClassVar[list[IndexConfig]] = [

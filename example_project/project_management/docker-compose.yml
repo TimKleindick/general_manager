@@ -1,0 +1,236 @@
+x-security-defaults: &security-defaults
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-app-env: &app-env
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  DJANGO_DEBUG: "false"
+  DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,nginx,web"
+  DJANGO_CSRF_TRUSTED_ORIGINS: "http://localhost:${PM_HTTP_PORT:-8000}"
+  POSTGRES_HOST: "db"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "${POSTGRES_DB:-project_management}"
+  POSTGRES_USER: "${POSTGRES_USER:-project_management}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-project_management}"
+  POSTGRES_CONN_MAX_AGE: "${POSTGRES_CONN_MAX_AGE:-60}"
+  REDIS_URL: "redis://redis:6379/0"
+  CELERY_BROKER_URL: "redis://redis:6379/0"
+  CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+  GM_SEARCH_AUTO_REINDEX: "false"
+  GM_SEARCH_ASYNC: "true"
+  GM_SEARCH_BACKEND: "general_manager.search.backends.meilisearch.MeilisearchBackend"
+  MEILISEARCH_URL: "http://meilisearch:7700"
+  MEILISEARCH_API_KEY: "${MEILISEARCH_API_KEY:-project-management-master-key}"
+  STATIC_ROOT: "/static"
+  PM_SEED_ON_START: "${PM_SEED_ON_START:-false}"
+  GM_CACHE_WARMUP_ENABLED: "${GM_CACHE_WARMUP_ENABLED:-true}"
+
+services:
+  django-init:
+    <<: *security-defaults
+    build:
+      context: ../../
+      dockerfile: example_project/project_management/Dockerfile
+    entrypoint: ["/app/example_project/project_management/docker/init-entrypoint.sh"]
+    environment:
+      <<: *app-env
+      GM_CACHE_WARMUP_ENABLED: "false"
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    volumes:
+      - pm-static:/static
+    networks:
+      - backend
+
+  web:
+    <<: *security-defaults
+    build:
+      context: ../../
+      dockerfile: example_project/project_management/Dockerfile
+    environment: *app-env
+    depends_on:
+      django-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    volumes:
+      - pm-static:/static
+    networks:
+      - backend
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/projects/', timeout=3)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  celery:
+    <<: *security-defaults
+    build:
+      context: ../../
+      dockerfile: example_project/project_management/Dockerfile
+    entrypoint: ["/app/example_project/project_management/docker/entrypoint-celery.sh"]
+    command: ["celery", "-A", "nhub_new", "worker", "-l", "INFO"]
+    environment: *app-env
+    depends_on:
+      django-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    volumes:
+      - pm-static:/static
+    networks:
+      - backend
+
+  nginx:
+    security_opt:
+      - no-new-privileges:true
+    image: nginx:1.27-alpine
+    entrypoint: ["/bin/sh", "/etc/nginx/nginx-entrypoint.sh"]
+    ports:
+      - "${PM_HTTP_PORT:-8000}:80"
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./docker/nginx.conf.template:/tmp/nginx.conf.template:ro
+      - ./docker/nginx-entrypoint.sh:/etc/nginx/nginx-entrypoint.sh:ro
+      - pm-static:/static:ro
+      - ./logs:/var/log/project-management
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+      - /var/cache/nginx:mode=1777
+    networks:
+      - backend
+      - frontend
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1/nginx-healthz > /dev/null",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-project_management}"
+      POSTGRES_USER: "${POSTGRES_USER:-project_management}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-project_management}"
+    volumes:
+      - pm-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-project_management}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    # Dev profile: disable disk persistence to avoid AOF/SNAPSHOT disk-pressure
+    # failures from blocking app startup and management commands.
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    volumes:
+      - pm-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  meilisearch:
+    <<: *security-defaults
+    build:
+      context: ../../
+      dockerfile: example_project/project_management/docker/meilisearch.Dockerfile
+    environment:
+      MEILI_MASTER_KEY: "${MEILISEARCH_API_KEY:-project-management-master-key}"
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_EXPERIMENTAL_METRICS: "true"
+      MEILI_EXPERIMENTAL_ENABLE_METRICS: "true"
+      MEILI_DB_PATH: "/meili_data/data.ms"
+    volumes:
+      - pm-meili:/meili_data
+    user: "1000:1000"
+    depends_on:
+      meili-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/bin/busybox wget -qO- http://localhost:7700/health | /bin/busybox grep -q '\"status\":\"available\"'",
+        ]
+      start_period: 20s
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  meili-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "chown -R 1000:1000 /meili_data"]
+    volumes:
+      - pm-meili:/meili_data
+    restart: "no"
+    networks:
+      - backend
+
+  app-init:
+    image: alpine:3.19
+    command:
+      [
+        "sh",
+        "-c",
+        "mkdir -p /static && chown -R 1000:1000 /static && chmod -R a+rwX /static",
+      ]
+    volumes:
+      - pm-static:/static
+    restart: "no"
+    networks:
+      - backend
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  pm-static:
+  pm-postgres:
+  pm-redis:
+  pm-meili:

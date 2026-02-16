@@ -31,7 +31,7 @@
           id
           name
           totalVolume
-          probabilityOfNomination
+          probabilityOfNomination { value unit }
           earliestSop
           latestEop
           projectPhaseType { id name }
@@ -88,7 +88,7 @@
         id
         name
         totalVolume
-        probabilityOfNomination
+        probabilityOfNomination { value unit }
         earliestSop
         latestEop
         projectPhaseType { id name }
@@ -149,11 +149,14 @@
     window.location.href = `/dashboard/?projectId=${encodeURIComponent(projectId)}&return=projects`;
   }
 
+  function formatPercent(measurement) {
+    const value = measurement?.value;
+    if (typeof value !== "number" || Number.isNaN(value)) return "-";
+    return `${Math.round(value)}%`;
+  }
+
   function cardGridMarkup(project) {
-    const prob =
-      project.probabilityOfNomination == null
-        ? "-"
-        : `${Math.round(project.probabilityOfNomination * 100)}%`;
+    const prob = formatPercent(project.probabilityOfNomination);
     return `
       <div><strong>Customer</strong><br>${project.customer?.companyName || "-"} (${project.customer?.groupName || "-"})</div>
       <div><strong>Total Volume</strong><br>${Number(project.totalVolume || 0).toLocaleString()}</div>

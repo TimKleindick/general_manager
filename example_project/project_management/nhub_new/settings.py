@@ -20,16 +20,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
+def _env(name: str, default: str | None = None) -> str | None:
+    return os.environ.get(name, default)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_list(name: str, default: list[str]) -> list[str]:
+    value = os.environ.get(name, "")
+    if not value.strip():
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+SECRET_KEY = _env(
     "DJANGO_SECRET_KEY",
     "dev-secret-key-nhub-new-structure",
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = _env_bool("DJANGO_DEBUG", True)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", ["*"])
+CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
 
 
 # Application definition
@@ -84,12 +102,25 @@ ASGI_APPLICATION = "nhub_new.asgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+if _env("POSTGRES_HOST"):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": _env("POSTGRES_DB", "project_management"),
+            "USER": _env("POSTGRES_USER", "project_management"),
+            "PASSWORD": _env("POSTGRES_PASSWORD", "project_management"),
+            "HOST": _env("POSTGRES_HOST", "db"),
+            "PORT": _env("POSTGRES_PORT", "5432"),
+            "CONN_MAX_AGE": int(_env("POSTGRES_CONN_MAX_AGE", "60") or 60),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": _env("SQLITE_PATH", str(BASE_DIR / "db.sqlite3")),
+        }
+    }
 
 
 # Password validation
@@ -127,34 +158,84 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = Path(_env("STATIC_ROOT", str(BASE_DIR / "staticfiles")))
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "nhub-new-structure",
-        "OPTIONS": {
-            "MAX_ENTRIES": 10000,
-            "CULL_FREQUENCY": 3,
-        },
+if _env("REDIS_URL"):
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": _env("REDIS_URL"),
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "nhub-new-structure",
+            "OPTIONS": {
+                "MAX_ENTRIES": 10000,
+                "CULL_FREQUENCY": 3,
+            },
+        }
+    }
 
 AUTOCREATE_GRAPHQL = True
 GRAPHQL_URL = "graphql/"
-GENERAL_MANAGER = {
-    "SEARCH_AUTO_REINDEX": True,
+
+_gm_search_backend_class = _env(
+    "GM_SEARCH_BACKEND",
+    "general_manager.search.backends.dev.DevSearchBackend",
+)
+_gm_search_backend_options: dict[str, object] = {}
+if _gm_search_backend_class.endswith("MeilisearchBackend"):
+    _gm_search_backend_options = {
+        "url": _env("MEILISEARCH_URL", "http://127.0.0.1:7700"),
+        "api_key": _env("MEILISEARCH_API_KEY"),
+    }
+GENERAL_MANAGER: dict[str, object] = {
+    "SEARCH_AUTO_REINDEX": _env_bool("GM_SEARCH_AUTO_REINDEX", True),
+    "SEARCH_ASYNC": _env_bool("GM_SEARCH_ASYNC", False),
+    "SEARCH_BACKEND": {
+        "class": _gm_search_backend_class,
+        "options": _gm_search_backend_options,
+    },
 }
 
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
+if _env("REDIS_URL"):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [_env("REDIS_URL")]},
+        }
     }
-}
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
+
+CELERY_BROKER_URL = _env("CELERY_BROKER_URL")
+CELERY_RESULT_BACKEND = _env("CELERY_RESULT_BACKEND")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = _env_bool("DJANGO_SECURE_SSL_REDIRECT", False)
+SECURE_HSTS_SECONDS = int(_env("DJANGO_SECURE_HSTS_SECONDS", "0") or 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool(
+    "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", False
+)
+SECURE_HSTS_PRELOAD = _env_bool("DJANGO_SECURE_HSTS_PRELOAD", False)
 
 LOGGING = {
     "version": 1,

@@ -1,4 +1,5 @@
 export type IdName = { id: string | number; name?: string };
+export type MeasurementValue = { value: number; unit: string };
 
 export type Customer = {
   id: string | number;
@@ -41,10 +42,10 @@ export type Project = {
   id: string | number;
   name: string;
   totalVolume?: number | null;
-  probabilityOfNomination?: number | null;
+  probabilityOfNomination?: MeasurementValue | null;
   earliestSop?: string | null;
   latestEop?: string | null;
-  customerVolumeFlex?: number | null;
+  customerVolumeFlex?: MeasurementValue | null;
   customer?: Customer | null;
   projectPhaseType?: IdName | null;
   projectType?: IdName | null;

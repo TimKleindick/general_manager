@@ -9,7 +9,7 @@ const PROJECT_LIST_QUERY = `
         id
         name
         totalVolume
-        probabilityOfNomination
+        probabilityOfNomination { value unit }
         earliestSop
         latestEop
         projectPhaseType { id name }
@@ -49,7 +49,7 @@ const PROJECT_SEARCH_QUERY = `
           id
           name
           totalVolume
-          probabilityOfNomination
+          probabilityOfNomination { value unit }
           earliestSop
           latestEop
           projectPhaseType { id name }
@@ -79,10 +79,10 @@ const DASHBOARD_QUERY = `
       id
       name
       totalVolume
-      probabilityOfNomination
+      probabilityOfNomination { value unit }
       earliestSop
       latestEop
-      customerVolumeFlex
+      customerVolumeFlex { value unit }
       customer { id companyName groupName number keyAccount { id fullName username } }
       projectPhaseType { id name }
       projectType { id name }
