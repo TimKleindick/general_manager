@@ -197,3 +197,123 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
                 len(item["projectList"]["items"]),
                 item["projectList"]["pageInfo"]["totalCount"],
             )
+
+
+class TestGraphQLIncludeInactive(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class SoftFamily(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+                class Meta:
+                    use_soft_delete = True
+
+        cls.general_manager_classes = [SoftFamily]
+        cls.soft_family = SoftFamily
+
+    def setUp(self):
+        super().setUp()
+        password = get_random_string(12)
+        self.user = get_user_model().objects.create_user(
+            username="inactive-user", password=password
+        )
+        self.client.login(username="inactive-user", password=password)
+
+        self.active_family = self.soft_family.create(
+            creator_id=None,
+            name="Active Family",
+            ignore_permission=True,
+        )
+        self.inactive_family = self.soft_family.create(
+            creator_id=None,
+            name="Inactive Family",
+            ignore_permission=True,
+        )
+        self.inactive_family.delete(ignore_permission=True)
+
+    def test_query_include_inactive_returns_soft_deleted_rows(self):
+        query_default = """
+        query {
+            softfamilyList {
+                items {
+                    id
+                    name
+                }
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+        default_response = self.query(query_default)
+        self.assertResponseNoErrors(default_response)
+        default_data = default_response.json()["data"]["softfamilyList"]
+        default_names = {item["name"] for item in default_data["items"]}
+        self.assertEqual(default_names, {"Active Family"})
+        self.assertEqual(default_data["pageInfo"]["totalCount"], 1)
+
+        query_with_inactive = """
+        query {
+            softfamilyList(includeInactive: true) {
+                items {
+                    id
+                    name
+                }
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+        include_response = self.query(query_with_inactive)
+        self.assertResponseNoErrors(include_response)
+        include_data = include_response.json()["data"]["softfamilyList"]
+        include_names = {item["name"] for item in include_data["items"]}
+        self.assertEqual(include_names, {"Active Family", "Inactive Family"})
+        self.assertEqual(include_data["pageInfo"]["totalCount"], 2)
+
+
+class TestGraphQLIncludeInactiveValidation(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class HardFamily(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+        cls.general_manager_classes = [HardFamily]
+        cls.hard_family = HardFamily
+
+    def setUp(self):
+        super().setUp()
+        password = get_random_string(12)
+        self.user = get_user_model().objects.create_user(
+            username="hard-family-user", password=password
+        )
+        self.client.login(username="hard-family-user", password=password)
+        self.hard_family.create(
+            creator_id=None,
+            name="Only Active",
+            ignore_permission=True,
+        )
+
+    def test_query_include_inactive_fails_without_soft_delete(self):
+        query = """
+        query {
+            hardfamilyList(includeInactive: true) {
+                items {
+                    id
+                    name
+                }
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+        response = self.query(query)
+        self.assertResponseHasErrors(response)
+        errors = response.json().get("errors", [])
+        self.assertTrue(errors)
+        self.assertIn("Unknown argument", errors[0].get("message", ""))
+        self.assertIn("includeInactive", errors[0].get("message", ""))
