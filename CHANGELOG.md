@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.29.1 (2026-02-17)
+
+### Bug Fixes
+
+- **graphql**: Expose includeInactive only for soft-delete managers
+  ([`82c3b99`](https://github.com/TimKleindick/general_manager/commit/82c3b990ceb4f9844131d8d0c6bbc512940b93eb))
+
+
 ## v0.29.0 (2026-02-05)
 
 ### Bug Fixes
