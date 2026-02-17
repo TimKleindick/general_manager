@@ -1,6 +1,6 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { Project } from "@/lib/types";
-import { fetchProjectListPage, fetchProjectSearchPage } from "@/store/thunks";
+import { fetchOverallProjectVolume, fetchProjectListPage, fetchProjectSearchPage } from "@/store/thunks";
 
 type SelectorState = {
   items: Project[];
@@ -8,6 +8,8 @@ type SelectorState = {
   hasNext: boolean;
   loading: boolean;
   total: number;
+  overallTotalVolume: number;
+  overallTotalVolumeLoading: boolean;
   sortBy: string;
   reverse: boolean;
   query: string;
@@ -23,6 +25,8 @@ const initialState: SelectorState = {
   hasNext: true,
   loading: false,
   total: 0,
+  overallTotalVolume: 0,
+  overallTotalVolumeLoading: false,
   sortBy: "name",
   reverse: false,
   query: "",
@@ -73,6 +77,9 @@ const selectorSlice = createSlice({
       .addCase(fetchProjectSearchPage.pending, (state) => {
         state.loading = true;
       })
+      .addCase(fetchOverallProjectVolume.pending, (state) => {
+        state.overallTotalVolumeLoading = true;
+      })
       .addCase(fetchProjectListPage.fulfilled, (state, action) => {
         state.loading = false;
         state.items.push(...action.payload.items);
@@ -87,6 +94,10 @@ const selectorSlice = createSlice({
         state.page = action.payload.currentPage + 1;
         state.hasNext = action.payload.currentPage < action.payload.totalPages;
       })
+      .addCase(fetchOverallProjectVolume.fulfilled, (state, action) => {
+        state.overallTotalVolumeLoading = false;
+        state.overallTotalVolume = Number(action.payload.totalVolume || 0);
+      })
       .addCase(fetchProjectListPage.rejected, (state) => {
         state.loading = false;
         state.hasNext = false;
@@ -94,6 +105,9 @@ const selectorSlice = createSlice({
       .addCase(fetchProjectSearchPage.rejected, (state) => {
         state.loading = false;
         state.hasNext = false;
+      })
+      .addCase(fetchOverallProjectVolume.rejected, (state) => {
+        state.overallTotalVolumeLoading = false;
       });
   },
 });

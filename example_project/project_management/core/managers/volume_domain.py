@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import re
+from base64 import b64decode
 from collections import defaultdict
 from datetime import date
 from math import exp
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from factory.declarations import LazyAttribute
+from django.db import transaction
 from django.db.models import (
     BooleanField,
     DateField,
@@ -18,6 +21,7 @@ from django.db.models import (
     constraints,
 )
 
+from general_manager.api.mutation import graph_ql_mutation
 from general_manager.factory import (
     lazy_boolean,
     lazy_date_between,
@@ -40,6 +44,43 @@ from .ids import (
 if TYPE_CHECKING:
     from .catalogs import ProjectPhaseType
     from .project_domain import Derivative, Project
+
+
+def _parse_customer_volume_id(value: object | None) -> int | None:
+    direct = _to_int(value)
+    if direct is not None:
+        return direct
+
+    if isinstance(value, dict):
+        for key in ("id", "pk", "customer_volume_id", "customerVolume"):
+            resolved = _to_int(value.get(key))
+            if resolved is not None:
+                return resolved
+
+    resolved = (
+        _extract_related_id(value)
+        or _extract_identification_id(value)
+        or _extract_related_id(getattr(value, "pk", None))
+        or _extract_related_id(getattr(value, "customer_volume_id", None))
+    )
+    if resolved is not None:
+        return resolved
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        match = re.search(r"(\d+)$", candidate)
+        if match:
+            return _to_int(match.group(1))
+        try:
+            decoded = b64decode(candidate).decode("utf-8", errors="ignore")
+        except Exception:
+            decoded = ""
+        if decoded:
+            match = re.search(r"(\d+)$", decoded)
+            if match:
+                return _to_int(match.group(1))
+
+    return None
 
 
 def _generate_customer_volume_curve_points(
@@ -259,3 +300,61 @@ class ProjectVolumeCurve(GeneralManager):
             for point_date in sorted(total_curve.keys())
         ]
         return json.dumps(output)
+
+
+@graph_ql_mutation
+def replace_customer_volume_curve_points(
+    info: object,
+    customer_volume: CustomerVolume,
+    volume_dates: list[date],
+    volumes: list[int],
+) -> CustomerVolume:
+    if len(volume_dates) != len(volumes):
+        raise ValueError("volumeDates and volumes must have the same length.")
+
+    customer_volume_id = _parse_customer_volume_id(customer_volume)
+    if customer_volume_id is None:
+        raise ValueError("customerVolume id is required.")
+
+    user = getattr(getattr(info, "context", None), "user", None)
+    creator_id = (
+        getattr(user, "id", None) if getattr(user, "is_authenticated", False) else None
+    )
+
+    desired_points: dict[date, int] = {}
+    for point_date, point_volume in zip(volume_dates, volumes):
+        desired_points[point_date] = int(point_volume)
+
+    with transaction.atomic():
+        existing_points_by_date = {
+            point.volume_date: point
+            for point in CustomerVolumeCurvePoint.filter(
+                customer_volume_id=customer_volume_id
+            )
+        }
+
+        for point_date, point_volume in desired_points.items():
+            existing_point = existing_points_by_date.pop(point_date, None)
+            if existing_point is None:
+                CustomerVolumeCurvePoint.create(
+                    creator_id=creator_id,
+                    customer_volume_id=customer_volume_id,
+                    volume_date=point_date,
+                    volume=point_volume,
+                )
+                continue
+
+            if _to_int(getattr(existing_point, "volume", None)) == point_volume:
+                continue
+
+            existing_point.update(
+                creator_id=creator_id,
+                customer_volume_id=customer_volume_id,
+                volume_date=point_date,
+                volume=point_volume,
+            )
+
+        for obsolete_point in existing_points_by_date.values():
+            obsolete_point.delete(creator_id=creator_id)
+
+    return CustomerVolume(customer_volume_id)

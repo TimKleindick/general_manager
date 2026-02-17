@@ -3,8 +3,8 @@ import { executeMutation, executeQuery } from "@/lib/graphqlClient";
 import type { Project } from "@/lib/types";
 
 const PROJECT_LIST_QUERY = `
-  query ProjectList($page: Int!, $pageSize: Int!, $sortBy: ProjectSortByOptions, $reverse: Boolean) {
-    projectList(page: $page, pageSize: $pageSize, sortBy: $sortBy, reverse: $reverse) {
+  query ProjectList($page: Int!, $pageSize: Int!, $sortBy: ProjectSortByOptions, $reverse: Boolean, $filter: ProjectFilterType) {
+    projectList(page: $page, pageSize: $pageSize, sortBy: $sortBy, reverse: $reverse, filter: $filter) {
       items {
         id
         name
@@ -19,6 +19,19 @@ const PROJECT_LIST_QUERY = `
         totalCount
         currentPage
         pageSize
+        totalPages
+      }
+    }
+  }
+`;
+
+const PROJECT_VOLUME_TOTAL_QUERY = `
+  query ProjectVolumeTotal($page: Int!, $pageSize: Int!) {
+    projectList(page: $page, pageSize: $pageSize, sortBy: id, reverse: false) {
+      items {
+        totalVolume
+      }
+      pageInfo {
         totalPages
       }
     }
@@ -78,6 +91,7 @@ const DASHBOARD_QUERY = `
     project(id: $id) {
       id
       name
+      projectImageUrl
       totalVolume
       probabilityOfNomination { value unit }
       earliestSop
@@ -123,18 +137,53 @@ const DASHBOARD_QUERY = `
 
 export const fetchProjectListPage = createAsyncThunk(
   "selector/fetchProjectListPage",
-  async (params: { page: number; pageSize: number; sortBy: string; reverse: boolean }) => {
+  async (params: { page: number; pageSize: number; sortBy: string; reverse: boolean; phaseFilter: string }) => {
     type Response = {
       projectList: {
         items: Project[];
         pageInfo: { totalCount: number; currentPage: number; pageSize: number; totalPages: number };
       };
     };
-    const data = await executeQuery<Response>(PROJECT_LIST_QUERY, params);
+    const filter =
+      params.phaseFilter && params.phaseFilter !== "all"
+        ? { projectPhaseTypeName_Exact: params.phaseFilter }
+        : null;
+    const data = await executeQuery<Response>(PROJECT_LIST_QUERY, {
+      page: params.page,
+      pageSize: params.pageSize,
+      sortBy: params.sortBy,
+      reverse: params.reverse,
+      filter,
+    });
     return {
       items: data.projectList.items,
       ...data.projectList.pageInfo,
     };
+  }
+);
+
+export const fetchOverallProjectVolume = createAsyncThunk(
+  "selector/fetchOverallProjectVolume",
+  async () => {
+    type Response = {
+      projectList: {
+        items: Array<{ totalVolume?: number | null }>;
+        pageInfo: { totalPages: number };
+      };
+    };
+    const pageSize = 500;
+    let page = 1;
+    let totalPages = 1;
+    let totalVolume = 0;
+
+    while (page <= totalPages) {
+      const data = await executeQuery<Response>(PROJECT_VOLUME_TOTAL_QUERY, { page, pageSize });
+      totalPages = Math.max(1, Number(data.projectList.pageInfo.totalPages || 1));
+      totalVolume += data.projectList.items.reduce((sum, item) => sum + Number(item.totalVolume || 0), 0);
+      page += 1;
+    }
+
+    return { totalVolume };
   }
 );
 
@@ -216,4 +265,5 @@ export const QUERIES = {
   PROJECT_LIST_QUERY,
   PROJECT_SEARCH_QUERY,
   DASHBOARD_QUERY,
+  PROJECT_VOLUME_TOTAL_QUERY,
 };

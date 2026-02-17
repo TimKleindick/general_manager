@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from importlib import import_module
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
+from django.test.utils import override_settings
 from django.urls import reverse
 
 from general_manager.interface.capabilities.read_only.management import (
@@ -86,10 +89,15 @@ class ProjectManagementFactoryTests(TestCase):
         )
 
         self.assertIsInstance(points, list)
-        expected_points = min(6, customer_volume.eop.year - customer_volume.sop.year + 1)
+        expected_points = min(
+            6, customer_volume.eop.year - customer_volume.sop.year + 1
+        )
         self.assertEqual(len(points), expected_points)
         self.assertTrue(
-            all(point.volume_date.month == 1 and point.volume_date.day == 1 for point in points)
+            all(
+                point.volume_date.month == 1 and point.volume_date.day == 1
+                for point in points
+            )
         )
         self.assertEqual(points[0].volume_date.year, customer_volume.sop.year)
         self.assertEqual(points[-1].volume_date.year, customer_volume.eop.year)
@@ -138,7 +146,9 @@ class ProjectManagementFactoryTests(TestCase):
         ):
             self.assertIn(permission_name, permission_functions)
 
-    def test_project_search_config_contains_global_project_manager_and_derivative_fields(self) -> None:
+    def test_project_search_config_contains_global_project_manager_and_derivative_fields(
+        self,
+    ) -> None:
         config = getattr(Project, "SearchConfig", None)
         self.assertIsNotNone(config)
         indexes = getattr(config, "indexes", [])
@@ -159,6 +169,61 @@ class ProjectManagementFactoryTests(TestCase):
         self.assertIn("name", fields)
         self.assertIn("projectteam_list__responsible_user__full_name", fields)
         self.assertIn("derivative_list__name", fields)
+
+    def test_upload_project_image_and_read_it_via_graphql(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_media:
+            with override_settings(MEDIA_ROOT=tmp_media, MEDIA_URL="/media/"):
+                user = User.Factory.create(is_active=True)
+                did_login = self.client.login(
+                    username=user.username, password=TEST_PASSWORD
+                )
+                self.assertTrue(did_login)
+                customer = Customer.Factory.create(key_account=user)
+                project = Project.Factory.create(customer=customer)
+
+                upload = SimpleUploadedFile(
+                    "overview.png",
+                    b"\x89PNG\r\n\x1a\nfake-data",
+                    content_type="image/png",
+                )
+                response = self.client.post(
+                    reverse("project-image-upload", args=[project.id]),
+                    data={"image": upload},
+                )
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertTrue(payload["ok"])
+                self.assertIn("/media/project_images/", payload["projectImageUrl"])
+
+                graph_payload = self.client.post(
+                    "/graphql/",
+                    data=json.dumps(
+                        {
+                            "query": "query ProjectImage($id: ID!) { project(id: $id) { id projectImageUrl } }",
+                            "variables": {"id": str(project.id)},
+                        }
+                    ),
+                    content_type="application/json",
+                ).json()
+                self.assertNotIn("errors", graph_payload)
+                image_url = graph_payload["data"]["project"]["projectImageUrl"]
+                self.assertEqual(image_url, payload["projectImageUrl"])
+
+    def test_upload_project_image_requires_authentication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_media:
+            with override_settings(MEDIA_ROOT=tmp_media, MEDIA_URL="/media/"):
+                customer = Customer.Factory.create()
+                project = Project.Factory.create(customer=customer)
+                upload = SimpleUploadedFile(
+                    "overview.png",
+                    b"\x89PNG\r\n\x1a\nfake-data",
+                    content_type="image/png",
+                )
+                response = self.client.post(
+                    reverse("project-image-upload", args=[project.id]),
+                    data={"image": upload},
+                )
+                self.assertEqual(response.status_code, 403)
 
 
 class DashboardRoutingTests(TestCase):
@@ -210,7 +275,9 @@ class ProjectManagementGraphQLMutationContractTests(TestCase):
             email="seed_user_2@example.local",
         )
         self.client = Client()
-        did_login = self.client.login(username=self.user.username, password=self.password)
+        did_login = self.client.login(
+            username=self.user.username, password=self.password
+        )
         self.assertTrue(did_login)
 
     def _sync_catalogs(self) -> None:
@@ -535,3 +602,66 @@ class ProjectManagementGraphQLMutationContractTests(TestCase):
         )
         self.assertIn("errors", update_payload)
         self.assertIn("January 1st", update_payload["errors"][0]["message"])
+
+    def test_replace_curve_points_bulk_upserts_and_deletes(self) -> None:
+        project_id = self._create_project_via_graphql()
+        derivative_id = self._create_derivative_via_graphql(project_id)
+        volume_id = self._create_customer_volume_via_graphql(derivative_id)
+
+        CustomerVolumeCurvePoint.create(
+            ignore_permission=True,
+            creator_id=self.user.id,
+            customer_volume_id=volume_id,
+            volume_date="2026-01-01",
+            volume=100,
+        )
+        CustomerVolumeCurvePoint.create(
+            ignore_permission=True,
+            creator_id=self.user.id,
+            customer_volume_id=volume_id,
+            volume_date="2027-01-01",
+            volume=200,
+        )
+        CustomerVolumeCurvePoint.create(
+            ignore_permission=True,
+            creator_id=self.user.id,
+            customer_volume_id=volume_id,
+            volume_date="2028-01-01",
+            volume=300,
+        )
+
+        mutation = """
+        mutation ReplaceCurvePoints(
+          $customerVolume: ID!,
+          $volumeDates: [Date]!,
+          $volumes: [Int]!
+        ) {
+          replaceCustomerVolumeCurvePoints(
+            customerVolume: $customerVolume,
+            volumeDates: $volumeDates,
+            volumes: $volumes
+          ) {
+            success
+            customerVolume { id }
+          }
+        }
+        """
+        payload = self._graphql(
+            mutation,
+            {
+                "customerVolume": str(volume_id),
+                "volumeDates": ["2026-01-01", "2027-01-01", "2029-01-01"],
+                "volumes": [111, 222, 999],
+            },
+        )
+        self.assertNotIn("errors", payload)
+        self.assertTrue(payload["data"]["replaceCustomerVolumeCurvePoints"]["success"])
+
+        points = sorted(
+            CustomerVolumeCurvePoint.filter(customer_volume_id=volume_id),
+            key=lambda point: point.volume_date.isoformat(),
+        )
+        self.assertEqual(
+            [(point.volume_date.isoformat(), point.volume) for point in points],
+            [("2026-01-01", 111), ("2027-01-01", 222), ("2029-01-01", 999)],
+        )

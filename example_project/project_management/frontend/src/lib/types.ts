@@ -41,6 +41,7 @@ export type Derivative = {
 export type Project = {
   id: string | number;
   name: string;
+  projectImageUrl?: string | null;
   totalVolume?: number | null;
   probabilityOfNomination?: MeasurementValue | null;
   earliestSop?: string | null;

@@ -8,9 +8,10 @@ type Props = {
   title: string;
   children: ReactNode;
   className?: string;
+  headerActions?: ReactNode;
 };
 
-export function Dialog({ open, onClose, title, children, className }: Props) {
+export function Dialog({ open, onClose, title, children, className, headerActions }: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -28,7 +29,10 @@ export function Dialog({ open, onClose, title, children, className }: Props) {
       <section className={cn("relative z-50 max-h-[95vh] w-full max-w-4xl overflow-auto rounded-xl border border-border bg-card shadow-xl", className)}>
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card p-3">
           <h3 className="font-serif text-lg font-semibold">{title}</h3>
-          <button className="rounded border border-border px-3 py-1 text-sm" onClick={onClose}>Close</button>
+          <div className="flex items-center gap-2">
+            {headerActions}
+            <button className="rounded border border-border px-3 py-1 text-sm" onClick={onClose}>Close</button>
+          </div>
         </header>
         <div className="p-3">{children}</div>
       </section>

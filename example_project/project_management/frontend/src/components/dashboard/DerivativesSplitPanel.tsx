@@ -11,17 +11,12 @@ type Props = {
   onEditVolumes: (id: string) => void;
 };
 
-function derivativeCurve(derivative: Derivative) {
-  const totals = new Map<string, number>();
-  for (const volume of derivative.customervolumeList?.items || []) {
-    for (const point of volume.customervolumecurvepointList?.items || []) {
-      if (!point.volumeDate) continue;
-      totals.set(point.volumeDate, (totals.get(point.volumeDate) || 0) + Number(point.volume || 0));
-    }
-  }
-  return [...totals.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([date, value]) => ({ date, value }));
+function derivativeUsedCurve(derivative: Derivative) {
+  const usedVolume = (derivative.customervolumeList?.items || []).find((item) => Boolean(item.usedVolume));
+  return (usedVolume?.customervolumecurvepointList?.items || [])
+    .filter((point) => Boolean(point.volumeDate))
+    .sort((a, b) => (String(a.volumeDate) < String(b.volumeDate) ? -1 : 1))
+    .map((point) => ({ date: String(point.volumeDate), value: Number(point.volume || 0) }));
 }
 
 function derivativeVolumeMeta(derivative: Derivative) {
@@ -48,7 +43,7 @@ export function DerivativesSplitPanel({
     () =>
       derivatives.map((derivative) => ({
         derivative,
-        curve: derivativeCurve(derivative),
+        curve: derivativeUsedCurve(derivative),
         meta: derivativeVolumeMeta(derivative),
       })),
     [derivatives]
@@ -58,8 +53,18 @@ export function DerivativesSplitPanel({
     [derivativeRows, selectedDerivativeId]
   );
   const selectedDerivative = selectedRow?.derivative || null;
-  const selectedCurve = selectedRow?.curve.map((item) => ({ date: item.date, value: item.value })) || [];
-  const selectedMeta = selectedRow?.meta || null;
+  const selectedUsedVolume = useMemo(
+    () => selectedDerivative?.customervolumeList?.items?.find((item) => Boolean(item.usedVolume)) || null,
+    [selectedDerivative]
+  );
+  const selectedCurve = useMemo(
+    () =>
+      (selectedUsedVolume?.customervolumecurvepointList?.items || [])
+        .filter((point) => Boolean(point.volumeDate))
+        .sort((a, b) => (String(a.volumeDate) < String(b.volumeDate) ? -1 : 1))
+        .map((point) => ({ date: String(point.volumeDate), value: Number(point.volume || 0) })),
+    [selectedUsedVolume]
+  );
   const sharedMax = useMemo(() => {
     const values = derivativeRows.flatMap((row) => row.curve.map((point) => Number(point.value || 0)));
     return Math.max(1, ...values);
@@ -130,10 +135,9 @@ export function DerivativesSplitPanel({
 
               <div className="rounded-md border border-border bg-muted/20 p-2">
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Volume Summary</p>
-                <p><strong>Volume Entries:</strong> {selectedMeta?.volumeCount ?? 0}</p>
-                <p><strong>Curve Points:</strong> {selectedMeta?.pointCount ?? 0}</p>
-                <p><strong>Earliest SOP:</strong> {selectedMeta?.earliestSop || "-"}</p>
-                <p><strong>Latest EOP:</strong> {selectedMeta?.latestEop || "-"}</p>
+                <p><strong>Used Volume:</strong> {selectedUsedVolume ? `#${selectedUsedVolume.id}` : "-"}</p>
+                <p><strong>SOP:</strong> {selectedUsedVolume?.sop || "-"}</p>
+                <p><strong>EOP:</strong> {selectedUsedVolume?.eop || "-"}</p>
               </div>
 
               <div className="rounded-md border border-border bg-muted/20 p-2">

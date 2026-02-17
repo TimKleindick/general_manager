@@ -31,6 +31,8 @@ from general_manager.measurement import Measurement, MeasurementField
 from general_manager.permission import ManagerBasedPermission
 from general_manager.search.config import FieldConfig, IndexConfig
 
+from core.image_utils import resolve_project_image_url
+
 from .exceptions import (
     ProjectCreationCreatorNotFoundError,
     ProjectCreationMissingCreatorError,
@@ -166,6 +168,7 @@ class Project(GeneralManager):
                 name="global",
                 fields=[
                     FieldConfig(name="name", boost=2.0),
+                    "project_phase_type_name",
                     "projectteam_list__responsible_user__full_name",
                     "derivative_list__name",
                 ],
@@ -179,6 +182,17 @@ class Project(GeneralManager):
                 ],
             )
         ]
+
+    @graph_ql_property(filterable=True)
+    def project_phase_type_name(self) -> str:
+        phase = getattr(self, "project_phase_type", None)
+        return getattr(phase, "name", "") or ""
+
+    @graph_ql_property()
+    def project_image_url(self) -> Optional[str]:
+        return resolve_project_image_url(
+            _to_int(getattr(self, "project_image_group_id", None))
+        )
 
     @graph_ql_property(sortable=True, filterable=True)
     def earliest_sop(self) -> Optional[date]:

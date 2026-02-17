@@ -5,10 +5,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Program Dashboard</title>
-  <link rel="stylesheet" href="{% static 'core/dashboard_app/assets/app.css' %}">
+  <link rel="stylesheet" href="{% static 'core/dashboard_app/assets/app.css' %}?v={{ dashboard_asset_version }}">
 </head>
 <body>
   <div id="app-root"></div>
-  <script type="module" src="{% static 'core/dashboard_app/assets/app.js' %}"></script>
+  <script type="module" src="{% static 'core/dashboard_app/assets/app.js' %}?v={{ dashboard_asset_version }}"></script>
 </body>
 </html>
