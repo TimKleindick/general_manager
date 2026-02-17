@@ -8,7 +8,7 @@ Before executing a query, the resolver calls `get_read_permission_filter()`. Per
 
 ## Query arguments
 
-Each list field accepts `filter`, `exclude`, `order_by`, `page`, and `page_size` arguments. Filters support Django lookups (`name__icontains`, `total_capex__gte`, etc.) and automatic casting of measurements and dates. Bucket chaining happens server-side, so complex filters remain efficient.
+Each list field accepts `filter`, `exclude`, `order_by`, `page`, and `page_size` arguments. Soft-delete managers also accept `includeInactive` to include rows where `is_active=False`. Filters support Django lookups (`name__icontains`, `total_capex__gte`, etc.) and automatic casting of measurements and dates. Bucket chaining happens server-side, so complex filters remain efficient.
 
 ## Pagination model
 

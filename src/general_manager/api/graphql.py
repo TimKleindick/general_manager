@@ -1297,13 +1297,14 @@ class GraphQL:
 
     @staticmethod
     def _create_list_resolver(
-        base_getter: Callable[[Any], Any], fallback_manager_class: type[GeneralManager]
+        base_getter: Callable[[Any, bool], Any],
+        fallback_manager_class: type[GeneralManager],
     ) -> Callable[..., Any]:
         """
         Build a resolver for list fields applying filters, permissions, and paging.
 
         Parameters:
-            base_getter (Callable[[Any], Any]): Callable returning the base queryset.
+            base_getter (Callable[[Any, bool], Any]): Callable returning the base queryset; receives the parent object and the `include_inactive` flag.
             fallback_manager_class (type[GeneralManager]): Manager used when ``base_getter`` returns ``None``.
 
         Returns:
@@ -1320,6 +1321,7 @@ class GraphQL:
             page: int | None = None,
             page_size: int | None = None,
             group_by: list[str] | None = None,
+            include_inactive: bool = False,
         ) -> dict[str, Any]:
             """
             Resolves a list field by returning filtered, excluded, sorted, grouped, and paginated results with permission checks.
@@ -1336,9 +1338,12 @@ class GraphQL:
             Returns:
                 A dictionary containing the paginated items under "items" and pagination metadata under "pageInfo".
             """
-            base_queryset = base_getter(self)
+            base_queryset = base_getter(self, include_inactive)
             if base_queryset is None:
-                base_queryset = fallback_manager_class.all()
+                if include_inactive:
+                    base_queryset = fallback_manager_class.filter(include_inactive=True)
+                else:
+                    base_queryset = fallback_manager_class.all()
             # use _manager_class from the attribute if available, otherwise fallback
             manager_class = getattr(
                 base_queryset, "_manager_class", fallback_manager_class
@@ -1454,7 +1459,7 @@ class GraphQL:
         """
         if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
             return cls._create_list_resolver(
-                lambda self: getattr(self, field_name), field_type
+                lambda self, _include_inactive: getattr(self, field_name), field_type
             )
         if issubclass(field_type, Measurement):
             return cls._create_measurement_resolver(field_name)
@@ -1556,6 +1561,14 @@ class GraphQL:
             "page_size": graphene.Int(),
             "group_by": graphene.List(graphene.String),
         }
+        from general_manager.interface.capabilities.orm.support import (
+            is_soft_delete_enabled,
+        )
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        interface_cls = cast(type[OrmInterfaceBase], generalManagerClass.Interface)
+        if is_soft_delete_enabled(interface_cls):
+            attributes["include_inactive"] = graphene.Boolean()
         filter_options = cls._create_filter_options(generalManagerClass)
         if filter_options:
             attributes["filter"] = graphene.Argument(filter_options)
@@ -1569,13 +1582,15 @@ class GraphQL:
         )
         list_field = graphene.Field(page_type, **attributes)
 
-        def _all_items(_: Any) -> Any:
+        def _all_items(_: Any, include_inactive: bool) -> Any:
             """
             Return all instances for the associated GeneralManager class.
 
             Returns:
                 All instances for the associated GeneralManager class, typically provided as a Bucket/QuerySet-like iterable.
             """
+            if include_inactive:
+                return generalManagerClass.filter(include_inactive=True)
             return generalManagerClass.all()
 
         list_resolver = cls._create_list_resolver(_all_items, generalManagerClass)
