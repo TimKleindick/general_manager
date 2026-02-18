@@ -30,6 +30,16 @@ class AppsUtilitiesTests(SimpleTestCase):
         )
         assert gm_apps._should_auto_reindex(settings) is False
 
+    def test_mcp_gateway_enabled_flag(self) -> None:
+        settings = SimpleNamespace(GENERAL_MANAGER={"MCP_GATEWAY": {"ENABLED": True}})
+        assert gm_apps._mcp_gateway_enabled(settings) is True
+
+        settings = SimpleNamespace(GENERAL_MANAGER={"MCP_GATEWAY": {"ENABLED": False}})
+        assert gm_apps._mcp_gateway_enabled(settings) is False
+
+        settings = SimpleNamespace(GENERAL_MANAGER={})
+        assert gm_apps._mcp_gateway_enabled(settings) is False
+
     def test_auto_reindex_search_skips_invalid_env(self) -> None:
         gm_apps._SEARCH_REINDEXED = False
         gm_apps._auto_reindex_search()
@@ -73,3 +83,17 @@ class AppsUtilitiesTests(SimpleTestCase):
         dispatch.assert_not_called()
         fallback.assert_not_called()
         assert gm_apps._GRAPHQL_WARMUP_RAN is False
+
+    def test_add_mcp_gateway_url_registers_once(self) -> None:
+        urlconf = SimpleNamespace(urlpatterns=[])
+        with (
+            patch("general_manager.apps.import_module", return_value=urlconf),
+            patch(
+                "general_manager.apps.settings",
+                SimpleNamespace(ROOT_URLCONF="tests.test_urls", MCP_GATEWAY_URL=""),
+            ),
+        ):
+            gm_apps.GeneralmanagerConfig.add_mcp_gateway_url()
+            gm_apps.GeneralmanagerConfig.add_mcp_gateway_url()
+
+        assert len(urlconf.urlpatterns) == 1

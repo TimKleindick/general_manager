@@ -13,7 +13,7 @@ from django.core.checks import register
 from django.core.management.base import BaseCommand
 from django.core.management import call_command
 from django.core.signals import request_started
-from django.urls import path, re_path
+from django.urls import include, path, re_path
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.metrics import build_graphql_middleware
 
@@ -81,6 +81,15 @@ def _should_auto_reindex(django_settings: Any) -> bool:
         auto_reindex or getattr(django_settings, "SEARCH_AUTO_REINDEX", False)
     )
     return bool(auto_reindex and getattr(django_settings, "DEBUG", False))
+
+
+def _mcp_gateway_enabled(django_settings: Any) -> bool:
+    config = getattr(django_settings, "GENERAL_MANAGER", {})
+    if isinstance(config, dict):
+        gateway_config = config.get("MCP_GATEWAY", {})
+        if isinstance(gateway_config, dict):
+            return bool(gateway_config.get("ENABLED", False))
+    return False
 
 
 def _normalize_graphql_path(raw_path: str) -> str:
@@ -174,6 +183,8 @@ class GeneralmanagerConfig(AppConfig):
 
         if getattr(settings, "AUTOCREATE_GRAPHQL", False):
             self.handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
+        if _mcp_gateway_enabled(settings):
+            self.add_mcp_gateway_url()
 
     @staticmethod
     def install_search_auto_reindex() -> None:
@@ -502,6 +513,54 @@ class GeneralmanagerConfig(AppConfig):
             )
         )
         GeneralmanagerConfig._ensure_asgi_subscription_route(graph_ql_url)
+
+    @staticmethod
+    def add_mcp_gateway_url() -> None:
+        """
+        Add the MCP HTTP gateway URL include to the project's root URL configuration.
+
+        The endpoint include path is controlled by ``MCP_GATEWAY_URL`` and defaults
+        to the project root, where ``general_manager.mcp.urls`` exposes ``ai/query``.
+        """
+        root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
+        if not root_url_conf_path:
+            raise MissingRootUrlconfError()
+        urlconf = import_module(root_url_conf_path)
+        mcp_gateway_url = getattr(settings, "MCP_GATEWAY_URL", "")
+        normalized = str(mcp_gateway_url).strip()
+        if normalized in {"", "/"}:
+            route = ""
+        else:
+            route = normalized.strip("/") + "/"
+
+        for existing in getattr(urlconf, "urlpatterns", []):
+            nested_patterns = getattr(existing, "url_patterns", None)
+            if nested_patterns:
+                for nested in nested_patterns:
+                    callback = getattr(nested, "callback", None)
+                    if callback is None:
+                        continue
+                    module_name = getattr(callback, "__module__", "")
+                    if module_name.startswith("general_manager.mcp"):
+                        return
+                    view_class = getattr(callback, "view_class", None)
+                    if view_class is None:
+                        continue
+                    if getattr(view_class, "__name__", "") == "MCPGatewayQueryView":
+                        return
+            callback = getattr(existing, "callback", None)
+            if callback is None:
+                continue
+            module_name = getattr(callback, "__module__", "")
+            if module_name.startswith("general_manager.mcp"):
+                return
+            view_class = getattr(callback, "view_class", None)
+            if view_class is None:
+                continue
+            if getattr(view_class, "__name__", "") == "MCPGatewayQueryView":
+                return
+
+        urlconf.urlpatterns.append(path(route, include("general_manager.mcp.urls")))
 
     @staticmethod
     def _ensure_asgi_subscription_route(graphql_url: str) -> None:
