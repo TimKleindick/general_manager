@@ -103,6 +103,8 @@ nav:
           - concepts/observability/logging.md
           - concepts/observability/audit_logging.md
           - concepts/observability/graphql_metrics.md
+      - MCP Gateway:
+          - concepts/mcp_security.md
       - GraphQL:
           - concepts/graphql/index.md
           - concepts/graphql/schema_autogen.md
@@ -129,6 +131,7 @@ nav:
       - howto/testing_guides.md
       - howto/audit_logger_analysis.md
       - howto/migrations_gotchas.md
+      - howto/mcp_chat_gateway.md
   - Examples (Cookbook):
       - examples/index.md
       - examples/project_volume_curve.md
