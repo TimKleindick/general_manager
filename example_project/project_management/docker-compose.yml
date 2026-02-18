@@ -27,6 +27,7 @@ x-app-env: &app-env
   STATIC_ROOT: "/static"
   PM_SEED_ON_START: "${PM_SEED_ON_START:-false}"
   GM_CACHE_WARMUP_ENABLED: "${GM_CACHE_WARMUP_ENABLED:-true}"
+  GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
 
 services:
   django-init:

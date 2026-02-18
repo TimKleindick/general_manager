@@ -209,6 +209,91 @@ GENERAL_MANAGER: dict[str, object] = {
         "class": _gm_search_backend_class,
         "options": _gm_search_backend_options,
     },
+    "MCP_GATEWAY": {
+        "ENABLED": _env_bool("GM_MCP_GATEWAY_ENABLED", True),
+        "UNANSWERED_LOGGER": _env(
+            "GM_MCP_UNANSWERED_LOGGER", "general_manager.mcp.unanswered.log_to_model"
+        ),
+        "UNANSWERED_LOG_FILE": _env("GM_MCP_UNANSWERED_LOG_FILE", ""),
+        "UNANSWERED_LOG_MODEL": _env(
+            "GM_MCP_UNANSWERED_LOG_MODEL", "core.UnansweredAIRequest"
+        ),
+        "AI_ASSISTANT": {
+            "PLANNER": _env("GM_MCP_AI_PLANNER", "openai_compatible"),
+            "SYNTHESIZER": _env("GM_MCP_AI_SYNTHESIZER", "openai_compatible"),
+            "ENDPOINT": _env(
+                "GM_MCP_AI_ENDPOINT",
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            ),
+            "MODEL": _env("GM_MCP_AI_MODEL", "gemini-2.5-flash"),
+            "ANSWER_MODEL": _env("GM_MCP_AI_ANSWER_MODEL", "gemini-2.5-flash"),
+            "API_KEY_ENV": _env("GM_MCP_AI_API_KEY_ENV", "GEMINI_API_KEY"),
+            "TEMPERATURE": float(_env("GM_MCP_AI_TEMPERATURE", "0") or 0),
+            "ANSWER_TEMPERATURE": float(
+                _env("GM_MCP_AI_ANSWER_TEMPERATURE", "0.1") or 0.1
+            ),
+        },
+        "DOMAINS": {
+            "Project": {
+                "manager": "Project",
+                "readable_fields": [
+                    "id",
+                    "name",
+                    "project_phase_type_name",
+                    "derivative_count",
+                    "total_volume",
+                    "earliest_sop",
+                    "latest_eop",
+                    "project_image_url",
+                ],
+                "filterable_fields": [
+                    "name",
+                    "project_phase_type_name",
+                    "derivative_count",
+                    "total_volume",
+                    "earliest_sop",
+                    "latest_eop",
+                ],
+                "sortable_fields": [
+                    "name",
+                    "project_phase_type_name",
+                    "derivative_count",
+                    "total_volume",
+                    "earliest_sop",
+                    "latest_eop",
+                ],
+                "aggregate_fields": ["derivative_count", "total_volume"],
+            },
+            "Derivative": {
+                "manager": "Derivative",
+                "readable_fields": [
+                    "id",
+                    "name",
+                    "pieces_per_car_set",
+                    "max_daily_quantity",
+                    "norm_daily_quantity",
+                    "volume_description",
+                ],
+                "filterable_fields": [
+                    "name",
+                    "pieces_per_car_set",
+                    "max_daily_quantity",
+                    "norm_daily_quantity",
+                ],
+                "sortable_fields": [
+                    "name",
+                    "pieces_per_car_set",
+                    "max_daily_quantity",
+                    "norm_daily_quantity",
+                ],
+                "aggregate_fields": [
+                    "pieces_per_car_set",
+                    "max_daily_quantity",
+                    "norm_daily_quantity",
+                ],
+            },
+        },
+    },
 }
 
 if _env("REDIS_URL"):

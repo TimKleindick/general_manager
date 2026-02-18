@@ -96,6 +96,10 @@ Common environment variables (`.env`):
 - `PM_HTTP_PORT` (default `8000`)
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
 - `MEILISEARCH_API_KEY` (used by web and meilisearch)
+- `GEMINI_API_KEY` (required for `/ai/chat` when using Gemini backend)
+- `GM_MCP_UNANSWERED_LOGGER` (default `general_manager.mcp.unanswered.log_to_file`)
+- `GM_MCP_UNANSWERED_LOG_FILE` (optional JSONL path for fast setup logging)
+- `GM_MCP_UNANSWERED_LOG_MODEL` (used with `general_manager.mcp.unanswered.log_to_model`)
 - `PM_SEED_ON_START=true` to run `generate_test_data` once in `django-init`
 
 Notes:

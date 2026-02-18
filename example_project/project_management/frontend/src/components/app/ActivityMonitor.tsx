@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from "@/store";
 import { clearNotifications } from "@/store/slices/appSlice";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { AiChatModal } from "@/components/app/AiChatModal";
 
 export function ActivityMonitor() {
   const dispatch = useAppDispatch();
@@ -22,7 +23,8 @@ export function ActivityMonitor() {
 
   return (
     <>
-      <div className="fixed right-3 top-3 z-30">
+      <div className="fixed right-3 top-3 z-30 flex items-center gap-2">
+        <AiChatModal />
         <Button
           className="relative gap-2 bg-white/95 shadow-lg"
           variant="outline"
