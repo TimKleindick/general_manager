@@ -243,6 +243,13 @@ class Project(GeneralManager):
                     total += _to_int(getattr(curve_point, "volume", None)) or 0
         return total
 
+    @graph_ql_property(sortable=True, filterable=True)
+    def derivative_count(self) -> int:
+        project_id = _resolve_project_id(self)
+        if project_id is None:
+            return 0
+        return len(Derivative.filter(project_id=project_id))
+
     @classmethod
     def create(
         cls,
@@ -297,66 +304,6 @@ class Project(GeneralManager):
             "isKeyAccountOfProjectCustomer",
         ]
         __delete__: ClassVar[list[str]] = __update__
-
-        project_image_group_id: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2,3,4,5,6,7",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        project_number: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        project_phase_type: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        project_type: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        currency: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        customer: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        invest_number: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        name: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        customer_volume_flex: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "isProjectRoleAny:1,2",
-                "isKeyAccountOfProjectCustomer",
-            ]
-        }
-        probability_of_nomination: ClassVar[dict[str, list[str]]] = {
-            "update": [
-                "canUpdateProbabilityOfNomination",
-            ]
-        }
 
 
 class Derivative(GeneralManager):
