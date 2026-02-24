@@ -129,6 +129,8 @@ nav:
       - howto/testing_guides.md
       - howto/audit_logger_analysis.md
       - howto/migrations_gotchas.md
+      - howto/workflow_events.md
+      - howto/workflow_ops.md
   - Examples (Cookbook):
       - examples/index.md
       - examples/project_volume_curve.md
@@ -152,3 +154,4 @@ nav:
       - adr/0003-capability-overrides-via-settings.md
       - adr/0004-startup-hooks.md
       - adr/0005-search-backend.md
+      - adr/0006-workflow-engine-architecture.md
