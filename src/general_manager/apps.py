@@ -34,6 +34,15 @@ from general_manager.interface.infrastructure.system_checks import (
 from general_manager.search.backend_registry import (
     configure_search_backend_from_settings,
 )
+from general_manager.workflow.backend_registry import (
+    configure_workflow_engine_from_settings,
+)
+from general_manager.workflow.event_registry import (
+    configure_event_registry_from_settings,
+)
+from general_manager.workflow.signal_bridge import (
+    configure_workflow_signal_bridge_from_settings,
+)
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -125,6 +134,9 @@ class GeneralmanagerConfig(AppConfig):
         )
         configure_audit_logger_from_settings(settings)
         configure_search_backend_from_settings(settings)
+        configure_workflow_engine_from_settings(settings)
+        configure_event_registry_from_settings(settings)
+        configure_workflow_signal_bridge_from_settings(settings)
         from general_manager.search import indexer as _search_indexer  # noqa: F401
 
         self.install_search_auto_reindex()
