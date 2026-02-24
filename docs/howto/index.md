@@ -13,5 +13,7 @@ These tutorials walk you through common development tasks when working with Gene
 9. [Testing strategies](testing_guides.md)
 10. [Analyse permission audit logs](audit_logger_analysis.md)
 11. [Handle database migrations](migrations_gotchas.md)
+12. [Build workflow event triggers](workflow_events.md)
+13. [Operate workflow outbox/dead letters](workflow_ops.md)
 
 Follow them in order when you start a new project, or jump to the topic relevant to your current task.
