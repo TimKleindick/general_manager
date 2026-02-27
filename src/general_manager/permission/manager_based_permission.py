@@ -1,7 +1,7 @@
 """Default permission implementation leveraging manager configuration."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Literal, Optional, Dict
+from typing import TYPE_CHECKING, Literal, Optional, Dict, ClassVar
 from general_manager.permission.base_permission import BasePermission, UserLike
 
 if TYPE_CHECKING:
@@ -66,11 +66,11 @@ class notExistent:
 class ManagerBasedPermission(BasePermission):
     """Permission implementation driven by class-level configuration lists."""
 
-    __based_on__: Optional[str] = None
-    __read__: list[str]
-    __create__: list[str]
-    __update__: list[str]
-    __delete__: list[str]
+    __based_on__: ClassVar[Optional[str]] = None
+    __read__: ClassVar[list[str]]
+    __create__: ClassVar[list[str]]
+    __update__: ClassVar[list[str]]
+    __delete__: ClassVar[list[str]]
 
     def __init__(
         self,
@@ -105,10 +105,10 @@ class ManagerBasedPermission(BasePermission):
             default_read = []
             default_write = []
 
-        self.__read__ = getattr(self.__class__, "__read__", default_read)
-        self.__create__ = getattr(self.__class__, "__create__", default_write)
-        self.__update__ = getattr(self.__class__, "__update__", default_write)
-        self.__delete__ = getattr(self.__class__, "__delete__", default_write)
+        self.__class__.__read__ = getattr(self.__class__, "__read__", default_read)
+        self.__class__.__create__ = getattr(self.__class__, "__create__", default_write)
+        self.__class__.__update__ = getattr(self.__class__, "__update__", default_write)
+        self.__class__.__delete__ = getattr(self.__class__, "__delete__", default_write)
 
     def __get_based_on_permission(self) -> Optional[BasePermission]:
         """
