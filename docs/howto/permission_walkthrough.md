@@ -32,6 +32,23 @@ class Project(GeneralManager):
 - Attribute overrides restrict specific fields without impacting the rest.
 - Checks such as `isAuthenticated`, `isSelf`, and `inGroup` are registered in the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks).
 
+If you want project-wide defaults for permission classes that omit these lists,
+set:
+
+```python
+GENERAL_MANAGER = {
+    "DEFAULT_PERMISSIONS": {
+        "READ": ["public"],
+        "CREATE": ["isAuthenticated"],
+        "UPDATE": ["isAuthenticated"],
+        "DELETE": ["isAuthenticated"],
+    }
+}
+```
+
+When this setting is absent, `ManagerBasedPermission` falls back to the values
+shown above.
+
 ## 2. Attach filters for queryset access
 
 Read permissions do more than guard individual attribute access. The GraphQL API calls [`get_permission_filter`](../concepts/graphql/security.md#permission-enforcement) to narrow the queryset before results are returned. Each permission function may provide a filter companion.
@@ -66,6 +83,11 @@ class ProjectDocument(GeneralManager):
 ```
 
 When a user fails a delegated check, the action is denied immediately. Filters returned from `Project.Permission.get_permission_filter()` are namespaced as `{"filter": {"project__...": ...}}`, keeping queryset logic consistent.
+
+If `project` is `None` at runtime, implicit CRUD rules on the current
+permission fall back to `GENERAL_MANAGER["DEFAULT_PERMISSIONS"]` (or to
+`public` for reads and `isAuthenticated` for writes when that setting is not
+configured). Explicitly declared CRUD lists still win.
 
 ## 4. Validate at runtime
 

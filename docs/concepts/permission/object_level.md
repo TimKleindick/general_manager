@@ -22,7 +22,7 @@ Behind the scenes, `PermissionDataManager` builds a comparison context containin
 
 ## Filters and delegation
 
-`get_permission_filter()` merges filters returned by the delegated permission. This ensures bucket queries respect constraints from both the primary manager and the related manager. When delegation fails to load the referenced manager, the permission defaults to no access.
+`get_permission_filter()` merges filters returned by the delegated permission. This ensures bucket queries respect constraints from both the primary manager and the related manager. When the delegated attribute is `None`, implicit CRUD rules fall back to `GENERAL_MANAGER["DEFAULT_PERMISSIONS"]`; if that setting is not configured, the fallback is `["public"]` for reads and `["isAuthenticated"]` for create, update, and delete.
 
 ## Tips
 

@@ -70,6 +70,20 @@ Project.Factory.createBatch(10)
 
 The example above defines a project model, exposes it through the auto-generated GraphQL schema, and produces ten sample records with a single call. The full documentation walks through extending this setup with custom rules, interfaces, and queries.
 
+If you want global permission defaults for managers that use
+`ManagerBasedPermission`, configure them in Django settings:
+
+```python
+GENERAL_MANAGER = {
+    "DEFAULT_PERMISSIONS": {
+        "READ": ["public"],
+        "CREATE": ["isAuthenticated"],
+        "UPDATE": ["isAuthenticated"],
+        "DELETE": ["isAuthenticated"],
+    }
+}
+```
+
 ## Core Building Blocks
 
 - **Entities & interfaces**: Compose domain entities with database-backed or computed interfaces to control persistence and data flows.
