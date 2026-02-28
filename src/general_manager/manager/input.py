@@ -131,6 +131,17 @@ def _year_end(value: date) -> date:
     return value.replace(month=12, day=31)
 
 
+def _week_end(value: date) -> date:
+    days_until_sunday = (6 - value.weekday()) % 7
+    return value.fromordinal(value.toordinal() + days_until_sunday)
+
+
+def _quarter_end(value: date) -> date:
+    quarter_end_month = ((value.month - 1) // 3 + 1) * 3
+    last_day = calendar.monthrange(value.year, quarter_end_month)[1]
+    return value.replace(month=quarter_end_month, day=last_day)
+
+
 def _add_months(value: date, months: int) -> date:
     absolute_month = (value.year * 12 + (value.month - 1)) + months
     year = absolute_month // 12
@@ -252,8 +263,10 @@ class DateRangeDomain(InputDomain[date]):
             raise InvalidDateRangeError("bounds")
         if frequency not in {
             "day",
+            "week_end",
             "month_start",
             "month_end",
+            "quarter_end",
             "year_start",
             "year_end",
         }:
@@ -267,16 +280,22 @@ class DateRangeDomain(InputDomain[date]):
     def normalize(self, value: date) -> date:
         if self.frequency == "day":
             return value
+        if self.frequency == "week_end":
+            return _week_end(value)
         if self.frequency == "month_start":
             return _month_start(value)
         if self.frequency == "month_end":
             return _month_end(value)
+        if self.frequency == "quarter_end":
+            return _quarter_end(value)
         if self.frequency == "year_start":
             return _year_start(value)
         return _year_end(value)
 
     def contains(self, value: date) -> bool:
         normalized = self.normalize(value)
+        if normalized > self.end:
+            return False
         return normalized in self
 
     def metadata(self) -> dict[str, Any]:
@@ -290,7 +309,7 @@ class DateRangeDomain(InputDomain[date]):
 
     def __iter__(self) -> Iterator[date]:
         current = self.normalize(self.start)
-        last = self.normalize(self.end)
+        last = self.end
         while current <= last:
             yield current
             current = self._advance(current)
@@ -299,8 +318,10 @@ class DateRangeDomain(InputDomain[date]):
         if not isinstance(value, date):
             return False
         normalized = self.normalize(value)
+        if normalized > self.end:
+            return False
         current = self.normalize(self.start)
-        last = self.normalize(self.end)
+        last = self.end
         while current <= last:
             if current == normalized:
                 return True
@@ -310,10 +331,14 @@ class DateRangeDomain(InputDomain[date]):
     def _advance(self, value: date) -> date:
         if self.frequency == "day":
             return value.fromordinal(value.toordinal() + self.step)
+        if self.frequency == "week_end":
+            return value.fromordinal(value.toordinal() + self.step * 7)
         if self.frequency == "month_start":
             return _month_start(_add_months(value, self.step))
         if self.frequency == "month_end":
             return _month_end(_add_months(value, self.step))
+        if self.frequency == "quarter_end":
+            return _quarter_end(_add_months(value, self.step * 3))
         if self.frequency == "year_start":
             return value.replace(year=value.year + self.step, month=1, day=1)
         return value.replace(year=value.year + self.step, month=12, day=31)
