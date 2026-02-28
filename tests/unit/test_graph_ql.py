@@ -4,6 +4,7 @@ import json
 from decimal import Decimal
 from datetime import date, datetime
 import graphene
+from graphene.types.structures import NonNull
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
@@ -16,6 +17,7 @@ from general_manager.api.graphql import (
 )
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
+from general_manager.manager.input import Input
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.base_interface import InterfaceBase
 from graphql import GraphQLError
@@ -232,6 +234,28 @@ class GraphQLTests(TestCase):
         first = GraphQL._create_filter_options(DummyManager2)
         second = GraphQL._create_filter_options(DummyManager2)
         self.assertIs(first, second)
+
+    def test_build_identification_arguments_respects_optional_inputs(self):
+        class DependencyManager(GeneralManager):
+            pass
+
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {
+                    "id": Input(int, required=True),
+                    "as_of": Input(date, required=False),
+                    "dependency": Input(DependencyManager, required=False),
+                }
+
+                @staticmethod
+                def get_attribute_types():
+                    return {}
+
+        arguments = GraphQL._build_identification_arguments(DummyManager)
+
+        self.assertIsInstance(arguments["id"].type, NonNull)
+        self.assertNotIsInstance(arguments["as_of"].type, NonNull)
+        self.assertNotIsInstance(arguments["dependency_id"].type, NonNull)
 
 
 class TestGetReadPermissionFilter(TestCase):

@@ -404,10 +404,10 @@ class GraphQLBuildIdentificationArgumentsEdgeCasesTests(unittest.TestCase):
 
         class MixedInterface(BaseTestInterface):
             input_fields: ClassVar = {
-                "id": SimpleNamespace(type=int),
-                "name": SimpleNamespace(type=str),
-                "active": SimpleNamespace(type=bool),
-                "parent": SimpleNamespace(type=RelatedManager),
+                "id": SimpleNamespace(type=int, required=True),
+                "name": SimpleNamespace(type=str, required=True),
+                "active": SimpleNamespace(type=bool, required=True),
+                "parent": SimpleNamespace(type=RelatedManager, required=True),
             }
 
         class MixedManager(GeneralManager):

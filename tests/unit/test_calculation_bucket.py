@@ -1,9 +1,10 @@
 # type: ignore
 from django.test import TestCase
+from datetime import date
 from unittest.mock import patch
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.interface import CalculationInterface
-from general_manager.manager.input import Input
+from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
 from typing import ClassVar
 
@@ -340,6 +341,58 @@ class TestGenerateCombinations(TestCase):
             {"a": 2, "b": 20},
         ]
         self.assertCountEqual(combos, expected)
+
+    def test_optional_field_does_not_expand_none(self, _mock_parse):
+        fields = {
+            "a": Input(type=int, possible_values=[1, 2]),
+            "b": Input(type=int, possible_values=[10], required=False),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+        combos = bucket.generate_combinations()
+        self.assertCountEqual(
+            combos,
+            [
+                {"a": 1, "b": 10},
+                {"a": 2, "b": 10},
+            ],
+        )
+
+    def test_optional_field_without_domain_uses_default_behavior(self, _mock_parse):
+        fields = {
+            "a": Input(type=int, possible_values=[1, 2]),
+            "b": Input(type=int, required=False),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+        combos = bucket.generate_combinations()
+        self.assertCountEqual(
+            combos,
+            [
+                {"a": 1},
+                {"a": 2},
+            ],
+        )
+
+    def test_domain_backed_possible_values_are_iterable(self, _mock_parse):
+        fields = {
+            "as_of": Input(
+                type=date,
+                possible_values=DateRangeDomain(
+                    date(2024, 1, 1),
+                    date(2024, 3, 31),
+                    frequency="month_end",
+                ),
+            ),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+        combos = bucket.generate_combinations()
+        self.assertEqual(
+            combos,
+            [
+                {"as_of": date(2024, 1, 31)},
+                {"as_of": date(2024, 2, 29)},
+                {"as_of": date(2024, 3, 31)},
+            ],
+        )
 
     def test_filters_and_excludes(self, _mock_parse):
         # Apply filter_funcs to include only even numbers, and exclude a specific value

@@ -47,6 +47,12 @@ Because calculation managers do not persist data, `create`, `update`, and `delet
 
 ## Input helpers
 
+- Use `required=False` for optional inputs. Calculation metadata and parsing now treat those fields as nullable and default them to `None` when omitted.
 - Use `possible_values` to restrict input choices or provide a callable for dynamic options.
+- Use `min_value`, `max_value`, and `validator` for scalar constraints without eagerly enumerating every allowed value.
+- Use `Input.date_range(...)`, `Input.monthly_date(...)`, and `Input.yearly_date(...)` for structured date domains such as month-end or year-start inputs.
+- Use domain objects like `DateRangeDomain` and `NumericRangeDomain` when you want structured range metadata instead of a plain eager list.
+- Set `GENERAL_MANAGER["VALIDATE_INPUT_VALUES"] = True` or `GENERAL_MANAGER_VALIDATE_INPUT_VALUES = True` to enforce `possible_values` membership outside `DEBUG`.
 - Use `depends_on` (or rely on callable signature introspection) to declare dependencies between inputs.
+- Use `Input.from_manager_query(...)` to build manager-backed dependent inputs without repeating query boilerplate.
 - Call `Input.cast()` in custom workflows to convert raw data into the expected types when bypassing the interface.

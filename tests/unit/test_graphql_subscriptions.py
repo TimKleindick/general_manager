@@ -763,7 +763,7 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
 
         class SimpleInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, object]] = {
-                "id": SimpleNamespace(type=int),
+                "id": SimpleNamespace(type=int, required=True),
             }
 
         class SimpleManager(GeneralManager):
@@ -781,7 +781,7 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
 
         class TestInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, object]] = {
-                "parent": SimpleNamespace(type=RelatedManager),
+                "parent": SimpleNamespace(type=RelatedManager, required=True),
             }
 
         class TestManager(GeneralManager):
@@ -799,9 +799,9 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
 
         class TestInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, object]] = {
-                "id": SimpleNamespace(type=int),
-                "name": SimpleNamespace(type=str),
-                "parent": SimpleNamespace(type=RelatedManager),
+                "id": SimpleNamespace(type=int, required=True),
+                "name": SimpleNamespace(type=str, required=True),
+                "parent": SimpleNamespace(type=RelatedManager, required=True),
             }
 
         class TestManager(GeneralManager):

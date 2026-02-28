@@ -164,6 +164,24 @@ class InvalidInputValueError(ValueError):
         )
 
 
+class InvalidInputConstraintError(ValueError):
+    """Raised when a provided input value violates a declared constraint."""
+
+    def __init__(self, name: str, detail: str) -> None:
+        super().__init__(f"Invalid value for {name}: {detail}.")
+
+
+def _should_validate_possible_values() -> bool:
+    """Return whether ``possible_values`` membership should be enforced."""
+
+    config = getattr(settings, "GENERAL_MANAGER", {})
+    if isinstance(config, dict) and "VALIDATE_INPUT_VALUES" in config:
+        return bool(config["VALIDATE_INPUT_VALUES"])
+    if hasattr(settings, "GENERAL_MANAGER_VALIDATE_INPUT_VALUES"):
+        return bool(settings.GENERAL_MANAGER_VALIDATE_INPUT_VALUES)
+    return bool(settings.DEBUG)
+
+
 class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
 
@@ -582,7 +600,15 @@ class InterfaceBase(ABC):
             if remaining:
                 raise UnexpectedInputArgumentsError(remaining)
 
-        missing_args = set(self.input_fields.keys()) - set(kwargs.keys())
+        for name, input_field in self.input_fields.items():
+            if name not in kwargs and not input_field.required:
+                kwargs[name] = None
+
+        missing_args = {
+            name
+            for name, input_field in self.input_fields.items()
+            if input_field.required and name not in kwargs
+        }
         if missing_args:
             raise MissingInputArgumentsError(missing_args)
 
@@ -595,7 +621,9 @@ class InterfaceBase(ABC):
                     continue
                 depends_on = input_field.depends_on
                 if all(dep in processed for dep in depends_on):
-                    value = self.input_fields[name].cast(kwargs[name])
+                    value = self.input_fields[name].cast(
+                        kwargs.get(name), identification
+                    )
                     self._process_input(name, value, identification)
                     identification[name] = value
                     processed.add(name)
@@ -656,26 +684,40 @@ class InterfaceBase(ABC):
             InvalidInputValueError: If `value` is not contained in the evaluated `possible_values` (only checked when DEBUG is true).
         """
         input_field = self.input_fields[name]
+        if value is None:
+            if input_field.required:
+                raise InvalidInputTypeError(name, type(value), input_field.type)
+            return
         if not isinstance(value, input_field.type):
             raise InvalidInputTypeError(name, type(value), input_field.type)
-        if settings.DEBUG:
-            # `possible_values` can be a callable or an iterable
-            possible_values = input_field.possible_values
-            if possible_values is not None:
-                if callable(possible_values):
-                    depends_on = input_field.depends_on
-                    dep_values = {
-                        dep_name: identification.get(dep_name)
-                        for dep_name in depends_on
-                    }
-                    allowed_values = possible_values(**dep_values)
-                elif isinstance(possible_values, Iterable):
-                    allowed_values = possible_values
-                else:
-                    raise InvalidPossibleValuesTypeError(name)
+        if not input_field.validate_bounds(value):
+            raise InvalidInputConstraintError(
+                name,
+                f"{value} is outside the allowed range"
+                f" [{input_field.min_value}, {input_field.max_value}]",
+            )
+        if not input_field.validate_with_callable(value, identification):
+            raise InvalidInputConstraintError(
+                name,
+                f"{value} did not satisfy the configured validator",
+            )
 
-                if value not in allowed_values:
-                    raise InvalidInputValueError(name, value, allowed_values)
+        if not _should_validate_possible_values():
+            return
+
+        allowed_values = input_field.resolve_possible_values(identification)
+        if allowed_values is None:
+            return
+        if not isinstance(allowed_values, Iterable):
+            contains = getattr(allowed_values, "contains", None)
+            if callable(contains):
+                if not contains(value):
+                    raise InvalidInputValueError(name, value, [value])
+                return
+            raise InvalidPossibleValuesTypeError(name)
+
+        if value not in allowed_values:
+            raise InvalidInputValueError(name, value, allowed_values)
 
     @classmethod
     def create(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:

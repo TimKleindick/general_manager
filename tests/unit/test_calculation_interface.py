@@ -17,7 +17,7 @@ from general_manager.manager.input import Input
 class DummyCalculationInterface(CalculationInterface):
     input_fields: ClassVar[dict[str, Input]] = {
         "field1": Input(type=str),
-        "field2": Input(type=int),
+        "field2": Input(type=int, required=False),
     }
 
 
@@ -75,6 +75,8 @@ class TestCalculationInterface(TestCase):
             self.assertIn("default", attr)
             self.assertIn("is_editable", attr)
             self.assertIn("is_required", attr)
+        self.assertTrue(attribute_types["field1"]["is_required"])
+        self.assertFalse(attribute_types["field2"]["is_required"])
 
     def test_get_attributes(self):
         """
