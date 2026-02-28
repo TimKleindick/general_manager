@@ -317,11 +317,13 @@ class DateRangeDomain(InputDomain[date]):
     def __contains__(self, value: object) -> bool:
         if not isinstance(value, date):
             return False
-        normalized = self.normalize(value)
-        if normalized > self.end:
+        date_value = value.date() if isinstance(value, datetime) else value
+        normalized = self.normalize(date_value)
+        end = self.end
+        if normalized > end:
             return False
         current = self.normalize(self.start)
-        last = self.end
+        last = end
         while current <= last:
             if current == normalized:
                 return True
@@ -385,7 +387,15 @@ class Input(Generic[INPUT_TYPE]):
             self.depends_on = depends_on
         elif callable(possible_values):
             signature = inspect.signature(possible_values)
-            self.depends_on = list(signature.parameters.keys())
+            self.depends_on = [
+                name
+                for name, parameter in signature.parameters.items()
+                if parameter.kind
+                not in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }
+            ]
         else:
             self.depends_on = []
 
@@ -521,7 +531,14 @@ class Input(Generic[INPUT_TYPE]):
         for value in values:
             if not callable(value):
                 continue
-            for parameter_name in inspect.signature(value).parameters:
+            for parameter_name, parameter in inspect.signature(
+                value
+            ).parameters.items():
+                if parameter.kind in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }:
+                    continue
                 if parameter_name not in dependencies:
                     dependencies.append(parameter_name)
         return dependencies

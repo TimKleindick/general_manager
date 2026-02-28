@@ -95,6 +95,13 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.possible_values, possible_values_func)
         self.assertEqual(input_obj.depends_on, ["input1"])
 
+    def test_input_initialization_ignores_variadic_callable_dependencies(self):
+        def possible_values_func(a, *args, b=1, **kwargs):
+            return [a, b]
+
+        input_obj = Input(int, possible_values=possible_values_func)
+        self.assertEqual(input_obj.depends_on, ["a", "b"])
+
     def test_simple_input_casting(self):
         """
         Test that the Input class casts values to integers and preserves `None`.
@@ -233,6 +240,13 @@ class TestInput(TestCase):
         resolved_values = list(resolved)
         self.assertEqual(next(iter(resolved_values)), date(2024, 1, 1))
         self.assertEqual(resolved_values[-1], date(2024, 1, 31))
+
+    def test_date_range_helper_inferred_dependencies_ignore_variadics(self):
+        input_obj = Input.date_range(
+            start=lambda base, *_args: base,
+            end=lambda limit, **_kwargs: limit,
+        )
+        self.assertEqual(input_obj.depends_on, ["base", "limit"])
 
     def test_date_range_domain_with_daily_frequency(self):
         domain = DateRangeDomain(
