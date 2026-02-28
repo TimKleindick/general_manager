@@ -235,6 +235,9 @@ MANAGER_EXPORTS: LazyExportMap = {
     "GeneralManager": ("general_manager.manager.general_manager", "GeneralManager"),
     "GeneralManagerMeta": ("general_manager.manager.meta", "GeneralManagerMeta"),
     "Input": ("general_manager.manager.input", "Input"),
+    "InputDomain": ("general_manager.manager.input", "InputDomain"),
+    "DateRangeDomain": ("general_manager.manager.input", "DateRangeDomain"),
+    "NumericRangeDomain": ("general_manager.manager.input", "NumericRangeDomain"),
     "GroupManager": ("general_manager.manager.group_manager", "GroupManager"),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
 }

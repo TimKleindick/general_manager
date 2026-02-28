@@ -11,7 +11,17 @@ from typing import Callable, ClassVar, Type
 
 # Dummy InputField implementation for testing
 class DummyInput:
-    def __init__(self, type_, depends_on=None, possible_values=None):
+    def __init__(
+        self,
+        type_,
+        depends_on=None,
+        possible_values=None,
+        *,
+        required=True,
+        min_value=None,
+        max_value=None,
+        validator=None,
+    ):
         """
         Initializes a DummyInput instance with a type, dependencies, and possible values.
 
@@ -23,8 +33,12 @@ class DummyInput:
         self.type = type_
         self.depends_on = depends_on or []
         self.possible_values = possible_values
+        self.required = required
+        self.min_value = min_value
+        self.max_value = max_value
+        self.validator = validator
 
-    def cast(self, value):
+    def cast(self, value, _identification=None):
         """
         Returns the input value unchanged.
 
@@ -35,6 +49,35 @@ class DummyInput:
             The same value that was provided as input.
         """
         return value
+
+    def resolve_possible_values(self, identification=None):
+        if callable(self.possible_values):
+            identification = identification or {}
+            dependency_values = {
+                dependency_name: identification.get(dependency_name)
+                for dependency_name in self.depends_on
+            }
+            return self.possible_values(**dependency_values)
+        return self.possible_values
+
+    def validate_bounds(self, value):
+        if value is None:
+            return not self.required
+        if self.min_value is not None and value < self.min_value:
+            return False
+        if self.max_value is not None and value > self.max_value:
+            return False
+        return True
+
+    def validate_with_callable(self, value, identification=None):
+        if self.validator is None or value is None:
+            return True
+        identification = identification or {}
+        dependency_values = {
+            dependency_name: identification.get(dependency_name)
+            for dependency_name in self.depends_on
+        }
+        return bool(self.validator(value, **dependency_values))
 
 
 # Dummy GeneralManager subclass for testing format_identification
@@ -320,6 +363,72 @@ class InterfaceBaseTests(SimpleTestCase):
         # 'b' depends on 'a' and is required in this interface layout
         with self.assertRaises(TypeError):
             DummyInterface(a=1, gm=DummyGM({"id": 3}), vals=1, c=1)
+
+    def test_optional_input_defaults_to_none(self):
+        class OptionalInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "maybe": DummyInput(int, required=False),
+            }
+
+        inst = OptionalInterface(a=1, b="foo", gm=DummyGM({"id": 4}), vals=1, c=1)
+        self.assertIsNone(inst.identification["maybe"])
+
+    def test_optional_input_accepts_explicit_none(self):
+        class OptionalInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "maybe": DummyInput(int, required=False),
+            }
+
+        inst = OptionalInterface(
+            a=1,
+            b="foo",
+            gm=DummyGM({"id": 5}),
+            vals=1,
+            c=1,
+            maybe=None,
+        )
+        self.assertIsNone(inst.identification["maybe"])
+
+    def test_scalar_bounds_are_enforced(self):
+        class RangedInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "score": DummyInput(int, min_value=1, max_value=3),
+            }
+
+        with self.assertRaises(ValueError):
+            RangedInterface(
+                a=1,
+                b="foo",
+                gm=DummyGM({"id": 6}),
+                vals=1,
+                c=1,
+                score=0,
+            )
+
+    def test_validator_is_enforced(self):
+        class ValidatedInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "score": DummyInput(int, validator=lambda value: value % 2 == 0),
+            }
+
+        with self.assertRaises(ValueError):
+            ValidatedInterface(
+                a=1,
+                b="foo",
+                gm=DummyGM({"id": 7}),
+                vals=1,
+                c=1,
+                score=3,
+            )
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_possible_values_enforced_outside_debug_when_enabled(self):
+        with self.assertRaises(ValueError):
+            DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
 
     def test_format_identification_deep_nested_collections(self):
         gm13 = DummyGM({"id": 13})

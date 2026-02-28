@@ -1,6 +1,6 @@
 from django.test import TestCase
 from unittest.mock import patch
-from general_manager.manager.input import Input
+from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
 from general_manager.measurement import Measurement
 from datetime import date, datetime
 
@@ -14,6 +14,9 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.type, int)
         self.assertIsNone(input_obj.possible_values)
         self.assertEqual(input_obj.depends_on, [])
+        self.assertTrue(input_obj.required)
+        self.assertIsNone(input_obj.min_value)
+        self.assertIsNone(input_obj.max_value)
 
     def test_input_initialization_with_callable_possible_values(self):
         """
@@ -44,6 +47,17 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.type, int)
         self.assertIsNone(input_obj.possible_values)
         self.assertEqual(input_obj.depends_on, ["input1", "input2"])
+
+    def test_optional_input_initialization(self):
+        input_obj = Input(int, required=False)
+        self.assertFalse(input_obj.required)
+
+    def test_input_initialization_with_scalar_constraints(self):
+        input_obj = Input(int, min_value=1, max_value=5, validator=lambda _value: True)
+        self.assertEqual(input_obj.min_value, 1)
+        self.assertEqual(input_obj.max_value, 5)
+        self.assertTrue(input_obj.validate_bounds(3))
+        self.assertFalse(input_obj.validate_bounds(0))
 
     def test_input_initialization_with_type_not_matching_possible_values(self):
         """
@@ -92,10 +106,13 @@ class TestInput(TestCase):
 
         with self.assertRaises(ValueError):
             input_obj.cast("abc")
-        with self.assertRaises(TypeError):
-            input_obj.cast(None)
+        self.assertIsNone(input_obj.cast(None))
         with self.assertRaises(TypeError):
             input_obj.cast([1, 2, 3])
+
+    def test_optional_input_casting_accepts_none(self):
+        input_obj = Input(int, required=False)
+        self.assertIsNone(input_obj.cast(None))
 
     def test_input_casting_with_general_manager(self):
         """
@@ -133,8 +150,7 @@ class TestInput(TestCase):
         )
         with self.assertRaises(ValueError):
             input_obj.cast("invalid-date")
-        with self.assertRaises(TypeError):
-            input_obj.cast(None)
+        self.assertIsNone(input_obj.cast(None))
         with self.assertRaises(TypeError):
             input_obj.cast([1, 2, 3])
 
@@ -153,8 +169,7 @@ class TestInput(TestCase):
         )
         with self.assertRaises(ValueError):
             input_obj.cast("invalid-datetime")
-        with self.assertRaises(TypeError):
-            input_obj.cast(None)
+        self.assertIsNone(input_obj.cast(None))
         with self.assertRaises(TypeError):
             input_obj.cast([1, 2, 3])
 
@@ -169,7 +184,46 @@ class TestInput(TestCase):
         self.assertEqual(input_obj.cast(Measurement(2.0, "m")), Measurement(2.0, "m"))
         with self.assertRaises(ValueError):
             input_obj.cast("invalid-measurement")
-        with self.assertRaises(TypeError):
-            input_obj.cast(None)
+        self.assertIsNone(input_obj.cast(None))
         with self.assertRaises(TypeError):
             input_obj.cast([1, 2, 3])
+
+    def test_date_range_domain_contains_and_iterates(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 3, 31),
+            frequency="month_end",
+        )
+        self.assertIn(date(2024, 1, 31), list(domain))
+        self.assertTrue(domain.contains(date(2024, 2, 10)))
+        self.assertFalse(domain.contains(date(2024, 4, 1)))
+
+    def test_numeric_range_domain_contains_and_iterates(self):
+        domain = NumericRangeDomain(1, 5, step=2)
+        self.assertEqual(list(domain), [1, 3, 5])
+        self.assertTrue(domain.contains(3))
+        self.assertFalse(domain.contains(4))
+
+    def test_monthly_date_helper_normalizes_values(self):
+        input_obj = Input.monthly_date(
+            start=date(2024, 1, 1),
+            end=date(2024, 3, 31),
+            anchor="end",
+        )
+        self.assertEqual(input_obj.cast("2024-02-10"), date(2024, 2, 29))
+        resolved = input_obj.resolve_possible_values({})
+        self.assertIsInstance(resolved, DateRangeDomain)
+
+    def test_date_range_helper_infers_dependencies(self):
+        input_obj = Input.date_range(
+            start=lambda base: base,
+            end=lambda limit: limit,
+            depends_on=["base", "limit"],
+        )
+        resolved = input_obj.resolve_possible_values(
+            {"base": date(2024, 1, 1), "limit": date(2024, 1, 31)}
+        )
+        self.assertIsInstance(resolved, DateRangeDomain)
+        resolved_values = list(resolved)
+        self.assertEqual(next(iter(resolved_values)), date(2024, 1, 1))
+        self.assertEqual(resolved_values[-1], date(2024, 1, 31))

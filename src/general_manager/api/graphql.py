@@ -1520,16 +1520,16 @@ class GraphQL:
             if issubclass(input_field.type, GeneralManager):
                 key = f"{input_field_name}_id"
                 identification_fields[key] = graphene.Argument(
-                    graphene.ID, required=True
+                    graphene.ID, required=input_field.required
                 )
             elif input_field_name == "id":
                 identification_fields[input_field_name] = graphene.Argument(
-                    graphene.ID, required=True
+                    graphene.ID, required=input_field.required
                 )
             else:
                 base_type = cls._map_field_to_graphene_base_type(input_field.type)
                 identification_fields[input_field_name] = graphene.Argument(
-                    base_type, required=True
+                    base_type, required=input_field.required
                 )
         return identification_fields
 
@@ -1832,25 +1832,27 @@ class GraphQL:
             for value in values:
                 if isinstance(value, GeneralManager):
                     identification = deepcopy(value.identification)
-                    key = (input_field.type.__name__, repr(identification))
+                    manager_type = cast(type[GeneralManager], input_field.type)
+                    key = (manager_type.__name__, repr(identification))
                     if key in seen:
                         continue
                     seen.add(key)
                     dependencies.append(
                         (
-                            cast(type[GeneralManager], input_field.type),
+                            manager_type,
                             identification,
                         )
                     )
                 elif isinstance(value, dict):
                     identification_dict = deepcopy(cast(dict[str, Any], value))
-                    key = (input_field.type.__name__, repr(identification_dict))
+                    manager_type = cast(type[GeneralManager], input_field.type)
+                    key = (manager_type.__name__, repr(identification_dict))
                     if key in seen:
                         continue
                     seen.add(key)
                     dependencies.append(
                         (
-                            cast(type[GeneralManager], input_field.type),
+                            manager_type,
                             identification_dict,
                         )
                     )

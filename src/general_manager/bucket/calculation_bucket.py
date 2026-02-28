@@ -1,12 +1,12 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
+from collections.abc import Iterable
 from types import UnionType
 from typing import (
     Any,
     Type,
     TYPE_CHECKING,
-    Iterable,
     Union,
     Optional,
     Generator,
@@ -22,7 +22,7 @@ from general_manager.interface.base_interface import (
     GeneralManagerType,
 )
 from general_manager.bucket.base_bucket import Bucket
-from general_manager.manager.input import Input
+from general_manager.manager.input import Input, InputDomain
 from general_manager.utils.filter_parser import parse_filters
 
 if TYPE_CHECKING:
@@ -547,7 +547,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def get_possible_values(
         self, key_name: str, input_field: Input, current_combo: dict
-    ) -> Union[Iterable[Any], Bucket[Any]]:
+    ) -> Union[Iterable[Any], Bucket[Any], None]:
         # Retrieve possible values
         """
         Resolve potential values for an input field based on the current partial input combination.
@@ -558,18 +558,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             current_combo (dict): Partial mapping of already-selected input values required to evaluate dependencies.
 
         Returns:
-            Iterable[Any] | Bucket[Any]: An iterable of allowed values for the input or a Bucket supplying candidate values.
+            Iterable[Any] | Bucket[Any] | None: An iterable of allowed values for the input, a Bucket supplying candidate values, or ``None`` when an optional input has no explicit domain.
 
         Raises:
             InvalidPossibleValuesError: If the input field's `possible_values` is neither callable nor an iterable/Bucket.
         """
-        if callable(input_field.possible_values):
-            depends_on = input_field.depends_on
-            dep_values = [current_combo[dep_name] for dep_name in depends_on]
-            possible_values = input_field.possible_values(*dep_values)
-        elif isinstance(input_field.possible_values, (Iterable, Bucket)):
-            possible_values = input_field.possible_values
-        else:
+        possible_values = input_field.resolve_possible_values(current_combo)
+        if possible_values is None:
+            if input_field.required:
+                raise InvalidPossibleValuesError(key_name)
+            return None
+        if isinstance(possible_values, InputDomain):
+            possible_values = possible_values
+        elif not isinstance(possible_values, (Iterable, Bucket)):
             raise InvalidPossibleValuesError(key_name)
         return possible_values
 
@@ -614,6 +615,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             possible_values = self.get_possible_values(
                 input_name, input_field, current_combo
             )
+            if possible_values is None:
+                yield from helper(index + 1, current_combo)
+                return
 
             field_filters = filters.get(input_name, {})
             field_excludes = excludes.get(input_name, {})

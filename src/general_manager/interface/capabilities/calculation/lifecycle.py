@@ -54,7 +54,7 @@ class CalculationReadCapability(BaseCapability):
                 "type": field.type,
                 "default": None,
                 "is_editable": False,
-                "is_required": True,
+                "is_required": field.required,
                 "is_derived": False,
             }
             for name, field in interface_cls.input_fields.items()
