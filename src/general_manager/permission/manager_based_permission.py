@@ -1,7 +1,7 @@
 """Default permission implementation leveraging manager configuration."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Literal, Optional, Dict, ClassVar
+from typing import TYPE_CHECKING, Any, Literal, Optional, Dict, ClassVar
 from general_manager.permission.base_permission import BasePermission, UserLike
 
 if TYPE_CHECKING:
@@ -72,6 +72,25 @@ class ManagerBasedPermission(BasePermission):
     __update__: ClassVar[list[str]]
     __delete__: ClassVar[list[str]]
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Initialize per-subclass CRUD defaults once at class creation time."""
+        super().__init_subclass__(**kwargs)
+
+        default_read = ["public"]
+        default_write = ["isAuthenticated"]
+        if cls.__based_on__ is not None:
+            default_read = []
+            default_write = []
+
+        if "__read__" not in cls.__dict__:
+            cls.__read__ = list(default_read)
+        if "__create__" not in cls.__dict__:
+            cls.__create__ = list(default_write)
+        if "__update__" not in cls.__dict__:
+            cls.__update__ = list(default_write)
+        if "__delete__" not in cls.__dict__:
+            cls.__delete__ = list(default_write)
+
     def __init__(
         self,
         instance: PermissionDataManager | GeneralManager,
@@ -85,7 +104,6 @@ class ManagerBasedPermission(BasePermission):
             request_user (UserLike): User whose permissions are being checked.
         """
         super().__init__(instance, request_user)
-        self.__set_permissions()
 
         self.__attribute_permissions = self.__get_attribute_permissions()
         self.__based_on_permission = self.__get_based_on_permission()
@@ -96,25 +114,11 @@ class ManagerBasedPermission(BasePermission):
             "delete": None,
         }
 
-    def __set_permissions(self, skip_based_on: bool = False) -> None:
-        """Populate CRUD permissions using class-level defaults and overrides."""
-        default_read = ["public"]
-        default_write = ["isAuthenticated"]
-
-        if self.__based_on__ is not None and not skip_based_on:
-            default_read = []
-            default_write = []
-
-        self.__class__.__read__ = getattr(self.__class__, "__read__", default_read)
-        self.__class__.__create__ = getattr(self.__class__, "__create__", default_write)
-        self.__class__.__update__ = getattr(self.__class__, "__update__", default_write)
-        self.__class__.__delete__ = getattr(self.__class__, "__delete__", default_write)
-
     def __get_based_on_permission(self) -> Optional[BasePermission]:
         """
         Resolve and return a BasePermission instance from the manager attribute named by the class-level `__based_on__` configuration.
 
-        If `__based_on__` is None or not configured on this class, returns None. If the referenced attribute exists on the target instance but is None, resets permissions to skip based-on evaluation and returns None. If the referenced attribute resolves to a manager that exposes a valid `Permission` subclass, constructs and returns that permission with the corresponding manager instance and the current request user.
+        If `__based_on__` is None or not configured on this class, returns None. If the referenced attribute exists on the target instance but is None, returns None. If the referenced attribute resolves to a manager that exposes a valid `Permission` subclass, constructs and returns that permission with the corresponding manager instance and the current request user.
 
         Returns:
             BasePermission | None: The resolved permission instance for the related manager, or `None` when no based-on permission applies.
@@ -133,7 +137,6 @@ class ManagerBasedPermission(BasePermission):
         if basis_object is notExistent:
             raise InvalidBasedOnConfigurationError(__based_on__)
         if basis_object is None:
-            self.__set_permissions(skip_based_on=True)
             return None
         if not isinstance(basis_object, GeneralManager) and not (
             isinstance(basis_object, type) and issubclass(basis_object, GeneralManager)

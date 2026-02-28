@@ -551,17 +551,81 @@ class ManagerBasedPermissionTests(TestCase):
         class BasedOnPermission(ManagerBasedPermission):
             __based_on__ = "manager"
 
+        self.assertEqual(BasedOnPermission.__read__, [])
+        self.assertEqual(BasedOnPermission.__create__, [])
+        self.assertEqual(BasedOnPermission.__update__, [])
+        self.assertEqual(BasedOnPermission.__delete__, [])
+
         permission = BasedOnPermission(self.mock_instance, self.user)
-        # When based_on is set, defaults should be empty unless explicitly defined
-        self.assertIsNotNone(permission)
+        self.assertEqual(permission.__read__, [])
+        self.assertEqual(permission.__create__, [])
+        self.assertEqual(permission.__update__, [])
+        self.assertEqual(permission.__delete__, [])
 
     def test_permission_defaults_when_based_on_is_none(self) -> None:
         """Test default permissions when based_on is None."""
+
+        self.assertEqual(CustomManagerBasedPermissionNoBasis.__read__, ["public"])
+        self.assertEqual(
+            CustomManagerBasedPermissionNoBasis.__create__, ["isAuthenticated"]
+        )
+        self.assertEqual(CustomManagerBasedPermissionNoBasis.__update__, ["isAdmin"])
+        self.assertEqual(
+            CustomManagerBasedPermissionNoBasis.__delete__,
+            ["isAuthenticated&isAdmin"],
+        )
+
         permission = CustomManagerBasedPermissionNoBasis(self.mock_instance, self.user)
 
-        # Should have default permissions
-        self.assertIsNotNone(permission.__read__)
-        self.assertIsNotNone(permission.__create__)
+        self.assertEqual(permission.__read__, ["public"])
+        self.assertEqual(permission.__create__, ["isAuthenticated"])
+        self.assertEqual(permission.__update__, ["isAdmin"])
+        self.assertEqual(permission.__delete__, ["isAuthenticated&isAdmin"])
+
+    def test_init_subclass_assigns_default_permissions_for_empty_subclass(self) -> None:
+        """Subclasses without explicit CRUD config should get standard defaults."""
+
+        class EmptyPermission(ManagerBasedPermission):
+            pass
+
+        self.assertEqual(EmptyPermission.__read__, ["public"])
+        self.assertEqual(EmptyPermission.__create__, ["isAuthenticated"])
+        self.assertEqual(EmptyPermission.__update__, ["isAuthenticated"])
+        self.assertEqual(EmptyPermission.__delete__, ["isAuthenticated"])
+
+    def test_init_subclass_keeps_subclass_defaults_isolated(self) -> None:
+        """Subclass defaults should not bleed across sibling subclasses."""
+
+        class BasedOnPermission(ManagerBasedPermission):
+            __based_on__ = "manager"
+
+        class DefaultPermission(ManagerBasedPermission):
+            pass
+
+        based_on_permission = BasedOnPermission(self.mock_instance, self.user)
+        default_permission = DefaultPermission(self.mock_instance, self.user)
+
+        self.assertEqual(BasedOnPermission.__read__, [])
+        self.assertEqual(DefaultPermission.__read__, ["public"])
+        self.assertEqual(based_on_permission.__read__, [])
+        self.assertEqual(default_permission.__read__, ["public"])
+
+    def test_based_on_none_attribute_value_keeps_class_level_defaults(self) -> None:
+        """A missing related manager should keep the subclass defaults from __init_subclass__."""
+        self.mock_instance.manager = None
+        self.check_patcher.stop()
+
+        class BasedOnPermission(ManagerBasedPermission):
+            __based_on__ = "manager"
+
+        permission = BasedOnPermission(self.mock_instance, self.user)
+
+        self.assertEqual(BasedOnPermission.__read__, [])
+        self.assertEqual(BasedOnPermission.__create__, [])
+        self.assertEqual(permission.__read__, [])
+        self.assertEqual(permission.__create__, [])
+        self.assertEqual(permission.__update__, [])
+        self.assertEqual(permission.__delete__, [])
 
     def test_overall_results_caching(self) -> None:
         """Test that overall results are cached correctly."""
