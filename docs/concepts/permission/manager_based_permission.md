@@ -24,6 +24,37 @@ Each list contains permission expressions evaluated by `validate_permission_stri
 
 If any expression evaluates to `True`, the action is allowed.
 
+## Default permissions from settings
+
+If a permission class does not define one or more CRUD lists explicitly,
+`ManagerBasedPermission` fills them from Django settings:
+
+```python
+GENERAL_MANAGER = {
+    "DEFAULT_PERMISSIONS": {
+        "READ": ["public"],
+        "CREATE": ["isAuthenticated"],
+        "UPDATE": ["isAuthenticated"],
+        "DELETE": ["isAuthenticated"],
+    }
+}
+```
+
+When `GENERAL_MANAGER["DEFAULT_PERMISSIONS"]` is not configured, these same
+values are used as the built-in fallback.
+
+This affects three places:
+
+- subclasses that omit `__read__`, `__create__`, `__update__`, or `__delete__`
+- direct use of `ManagerBasedPermission` as a manager's default permission class
+- `__based_on__` permissions when the delegated manager attribute exists but is `None`
+
+For `__based_on__` subclasses, implicit CRUD defaults are still initialised as
+empty lists at class creation time so delegation remains the primary source of
+permissions. If the delegated object is `None` at runtime, the instance falls
+back to the configured defaults above unless the subclass explicitly defined its
+own CRUD list for that action.
+
 ## Attribute-level rules
 
 Define nested dictionaries to restrict specific attributes:
