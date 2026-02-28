@@ -1,4 +1,6 @@
 from django.test import TestCase
+from decimal import Decimal
+from datetime import timedelta
 from unittest.mock import patch
 from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
 from general_manager.measurement import Measurement
@@ -231,3 +233,304 @@ class TestInput(TestCase):
         resolved_values = list(resolved)
         self.assertEqual(next(iter(resolved_values)), date(2024, 1, 1))
         self.assertEqual(resolved_values[-1], date(2024, 1, 31))
+
+    def test_date_range_domain_with_daily_frequency(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 1, 5),
+            frequency="day",
+        )
+        values = list(domain)
+        self.assertEqual(values, [date(2024, 1, day) for day in range(1, 6)])
+
+    def test_date_range_domain_with_week_end_frequency(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+            frequency="week_end",
+        )
+        self.assertEqual(
+            list(domain),
+            [
+                date(2024, 1, 7),
+                date(2024, 1, 14),
+                date(2024, 1, 21),
+                date(2024, 1, 28),
+            ],
+        )
+
+    def test_date_range_domain_with_quarter_end_frequency(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 12, 31),
+            frequency="quarter_end",
+        )
+        self.assertEqual(
+            list(domain),
+            [
+                date(2024, 3, 31),
+                date(2024, 6, 30),
+                date(2024, 9, 30),
+                date(2024, 12, 31),
+            ],
+        )
+
+    def test_date_range_domain_invalid_bounds_raise(self):
+        with self.assertRaises(ValueError):
+            DateRangeDomain(
+                date(2024, 1, 31),
+                date(2024, 1, 1),
+                frequency="day",
+            )
+
+    def test_date_range_domain_single_day(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 15),
+            date(2024, 1, 15),
+            frequency="day",
+        )
+        self.assertEqual(list(domain), [date(2024, 1, 15)])
+
+    def test_date_range_domain_year_end_frequency(self):
+        domain = DateRangeDomain(
+            date(2020, 1, 1),
+            date(2023, 12, 31),
+            frequency="year_end",
+        )
+        values = list(domain)
+        self.assertEqual(len(values), 4)
+        self.assertTrue(all(value.month == 12 and value.day == 31 for value in values))
+
+    def test_numeric_range_domain_with_float_step(self):
+        domain = NumericRangeDomain(0.0, 1.0, step=0.25)
+        values = list(domain)
+        self.assertEqual(len(values), 5)
+        self.assertAlmostEqual(values[0], 0.0)
+        self.assertAlmostEqual(values[-1], 1.0)
+
+    def test_numeric_range_domain_with_decimal_step(self):
+        domain = NumericRangeDomain(Decimal("0.0"), Decimal("1.0"), step=Decimal("0.5"))
+        self.assertEqual(
+            list(domain),
+            [Decimal("0.0"), Decimal("0.5"), Decimal("1.0")],
+        )
+
+    def test_numeric_range_domain_negative_range(self):
+        domain = NumericRangeDomain(-10, -1, step=3)
+        self.assertEqual(list(domain), [-10, -7, -4, -1])
+
+    def test_numeric_range_domain_invalid_bounds_raise(self):
+        with self.assertRaises(ValueError):
+            NumericRangeDomain(10, 1, step=1)
+
+    def test_numeric_range_domain_single_value(self):
+        domain = NumericRangeDomain(5, 5, step=1)
+        self.assertEqual(list(domain), [5])
+
+    def test_numeric_range_domain_zero_step_raises(self):
+        with self.assertRaises(ValueError):
+            NumericRangeDomain(1, 10, step=0)
+
+    def test_date_range_domain_contains_boundary(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+            frequency="day",
+        )
+        self.assertTrue(domain.contains(date(2024, 1, 1)))
+        self.assertTrue(domain.contains(date(2024, 1, 31)))
+        self.assertFalse(domain.contains(date(2023, 12, 31)))
+        self.assertFalse(domain.contains(date(2024, 2, 1)))
+
+    def test_numeric_range_domain_contains_boundary(self):
+        domain = NumericRangeDomain(1, 10, step=1)
+        self.assertTrue(domain.contains(1))
+        self.assertTrue(domain.contains(10))
+        self.assertFalse(domain.contains(0))
+        self.assertFalse(domain.contains(11))
+
+    def test_input_with_validator_function(self):
+        def is_positive(value):
+            return value > 0
+
+        input_obj = Input(int, validator=is_positive)
+        self.assertTrue(input_obj.validate_with_callable(5))
+        self.assertFalse(input_obj.validate_with_callable(-1))
+        self.assertFalse(input_obj.validate_with_callable(0))
+
+    def test_input_with_normalizer_function(self):
+        def round_to_nearest_10(value):
+            return round(value / 10) * 10
+
+        input_obj = Input(int, normalizer=round_to_nearest_10)
+        self.assertEqual(input_obj.cast(47), 50)
+
+    def test_input_validate_bounds_with_min_only(self):
+        input_obj = Input(int, min_value=5)
+        self.assertTrue(input_obj.validate_bounds(5))
+        self.assertTrue(input_obj.validate_bounds(10))
+        self.assertFalse(input_obj.validate_bounds(4))
+
+    def test_input_validate_bounds_with_max_only(self):
+        input_obj = Input(int, max_value=100)
+        self.assertTrue(input_obj.validate_bounds(100))
+        self.assertTrue(input_obj.validate_bounds(50))
+        self.assertFalse(input_obj.validate_bounds(101))
+
+    def test_input_validate_bounds_with_both_min_max(self):
+        input_obj = Input(int, min_value=10, max_value=20)
+        self.assertFalse(input_obj.validate_bounds(9))
+        self.assertTrue(input_obj.validate_bounds(10))
+        self.assertTrue(input_obj.validate_bounds(15))
+        self.assertTrue(input_obj.validate_bounds(20))
+        self.assertFalse(input_obj.validate_bounds(21))
+
+    def test_input_validate_bounds_without_constraints(self):
+        input_obj = Input(int)
+        self.assertTrue(input_obj.validate_bounds(-1000))
+        self.assertTrue(input_obj.validate_bounds(0))
+        self.assertTrue(input_obj.validate_bounds(1000))
+
+    def test_yearly_date_helper(self):
+        input_obj = Input.yearly_date(
+            start=date(2020, 1, 1),
+            end=date(2023, 12, 31),
+            anchor="end",
+        )
+        resolved = input_obj.resolve_possible_values({})
+        self.assertIsInstance(resolved, DateRangeDomain)
+        values = list(resolved)
+        self.assertEqual(len(values), 4)
+        self.assertTrue(all(value.month == 12 and value.day == 31 for value in values))
+
+    def test_input_from_manager_query_helper(self):
+        class MockManager:
+            @classmethod
+            def all(cls):
+                return ["all"]
+
+        with patch("general_manager.manager.input.issubclass", return_value=True):
+            input_obj = Input.from_manager_query(MockManager)
+
+        self.assertEqual(input_obj.type, MockManager)
+        self.assertEqual(input_obj.resolve_possible_values({}), ["all"])
+
+    def test_input_from_manager_query_with_filter_dict(self):
+        class MockManager:
+            @classmethod
+            def filter(cls, **kwargs):
+                return kwargs
+
+        with patch("general_manager.manager.input.issubclass", return_value=True):
+            input_obj = Input.from_manager_query(
+                MockManager, query={"status": "active"}
+            )
+
+        self.assertEqual(
+            input_obj.resolve_possible_values({}),
+            {"status": "active"},
+        )
+
+    def test_input_resolve_possible_values_with_callable(self):
+        def get_values():
+            return [1, 2, 3]
+
+        input_obj = Input(int, possible_values=get_values)
+        resolved = input_obj.resolve_possible_values({})
+        self.assertEqual(resolved, [1, 2, 3])
+
+    def test_input_resolve_possible_values_with_static_list(self):
+        input_obj = Input(int, possible_values=[10, 20, 30])
+        resolved = input_obj.resolve_possible_values({})
+        self.assertEqual(resolved, [10, 20, 30])
+
+    def test_input_resolve_possible_values_with_dependencies(self):
+        def get_values(min_val, max_val):
+            return list(range(min_val, max_val + 1))
+
+        input_obj = Input(
+            int,
+            possible_values=get_values,
+            depends_on=["min_val", "max_val"],
+        )
+        resolved = input_obj.resolve_possible_values({"min_val": 5, "max_val": 8})
+        self.assertEqual(resolved, [5, 6, 7, 8])
+
+    def test_input_resolve_with_domain_object(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+            frequency="day",
+        )
+        input_obj = Input(date, possible_values=domain)
+        self.assertIs(input_obj.resolve_possible_values({}), domain)
+
+    def test_date_range_with_callable_boundaries(self):
+        def get_start(base_date):
+            return base_date
+
+        def get_end(base_date):
+            return base_date + timedelta(days=5)
+
+        input_obj = Input.date_range(
+            start=get_start,
+            end=get_end,
+            depends_on=["base_date"],
+            frequency="day",
+        )
+
+        resolved = input_obj.resolve_possible_values({"base_date": date(2024, 2, 1)})
+        self.assertIsInstance(resolved, DateRangeDomain)
+        values = list(resolved)
+        self.assertEqual(values[0], date(2024, 2, 1))
+        self.assertEqual(values[-1], date(2024, 2, 6))
+
+    def test_input_cast_with_normalizer_and_domain(self):
+        def normalize_to_month_start(value):
+            return value.replace(day=1)
+
+        input_obj = Input(
+            date,
+            normalizer=normalize_to_month_start,
+            possible_values=DateRangeDomain(
+                date(2024, 1, 1),
+                date(2024, 3, 31),
+                frequency="month_end",
+            ),
+        )
+        self.assertEqual(input_obj.cast("2024-02-29"), date(2024, 2, 1))
+
+    def test_input_bounds_with_float_values(self):
+        input_obj = Input(float, min_value=0.5, max_value=10.5)
+        self.assertTrue(input_obj.validate_bounds(0.5))
+        self.assertTrue(input_obj.validate_bounds(5.0))
+        self.assertTrue(input_obj.validate_bounds(10.5))
+        self.assertFalse(input_obj.validate_bounds(0.49))
+        self.assertFalse(input_obj.validate_bounds(10.51))
+
+    def test_monthly_date_normalization_start_anchor(self):
+        input_obj = Input.monthly_date(
+            start=date(2024, 1, 1),
+            end=date(2024, 3, 31),
+            anchor="start",
+        )
+        self.assertEqual(input_obj.cast("2024-02-15"), date(2024, 2, 1))
+
+    def test_date_range_monthly_with_different_anchors(self):
+        input_start = Input.monthly_date(
+            start=date(2024, 1, 1),
+            end=date(2024, 3, 31),
+            anchor="start",
+        )
+        values_start = list(input_start.resolve_possible_values({}))
+        self.assertTrue(all(value.day == 1 for value in values_start))
+
+        input_end = Input.monthly_date(
+            start=date(2024, 1, 1),
+            end=date(2024, 3, 31),
+            anchor="end",
+        )
+        values_end = list(input_end.resolve_possible_values({}))
+        self.assertIn(date(2024, 1, 31), values_end)
+        self.assertIn(date(2024, 2, 29), values_end)
+        self.assertIn(date(2024, 3, 31), values_end)
