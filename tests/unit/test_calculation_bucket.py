@@ -372,6 +372,26 @@ class TestGenerateCombinations(TestCase):
             ],
         )
 
+    def test_optional_field_without_domain_still_respects_filters(self, _mock_parse):
+        fields = {
+            "a": Input(type=int, possible_values=[1, 2]),
+            "b": Input(type=int, required=False),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+        bucket._filters = {"b": {"filter_funcs": [lambda value: value is None]}}
+        combos = bucket.generate_combinations()
+        self.assertCountEqual(
+            combos,
+            [
+                {"a": 1},
+                {"a": 2},
+            ],
+        )
+
+        bucket = self._make_bucket_with_fields(fields)
+        bucket._filters = {"b": {"filter_funcs": [lambda value: value == 1]}}
+        self.assertEqual(bucket.generate_combinations(), [])
+
     def test_domain_backed_possible_values_are_iterable(self, _mock_parse):
         fields = {
             "as_of": Input(

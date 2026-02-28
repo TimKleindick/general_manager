@@ -46,7 +46,7 @@ class CalculationReadCapability(BaseCapability):
                 - "type": the field's declared Python type,
                 - "default": None,
                 - "is_editable": False,
-                - "is_required": True,
+                - "is_required": whether the field is required (`field.required`),
                 - "is_derived": False
         """
         return {

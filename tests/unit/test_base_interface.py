@@ -77,7 +77,10 @@ class DummyInput:
             dependency_name: identification.get(dependency_name)
             for dependency_name in self.depends_on
         }
-        return bool(self.validator(value, **dependency_values))
+        result = self.validator(value, **dependency_values)
+        if result is None:
+            return True
+        return bool(result)
 
 
 # Dummy GeneralManager subclass for testing format_identification
@@ -429,6 +432,20 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_possible_values_enforced_outside_debug_when_enabled(self):
         with self.assertRaises(ValueError):
             DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": "yes"})
+    def test_possible_values_toggle_accepts_truthy_string(self):
+        with self.assertRaises(ValueError):
+            DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+
+    @override_settings(DEBUG=True, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": "off"})
+    def test_possible_values_toggle_accepts_falsey_string(self):
+        inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+        self.assertEqual(inst.identification["vals"], 99)
+
+    def test_dummy_input_validator_none_return_is_allowed(self):
+        input_field = DummyInput(int, validator=lambda _value: None)
+        self.assertTrue(input_field.validate_with_callable(1))
 
     def test_format_identification_deep_nested_collections(self):
         gm13 = DummyGM({"id": 13})

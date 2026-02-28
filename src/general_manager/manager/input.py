@@ -618,7 +618,9 @@ class Input(Generic[INPUT_TYPE]):
                 cast_value = date.fromisoformat(value)
             return self.normalize(cast_value, identification)
         if self.type == datetime:
-            if isinstance(value, date):
+            if isinstance(value, datetime):
+                cast_value = value
+            elif isinstance(value, date):
                 cast_value = datetime.combine(value, datetime.min.time())
             else:
                 cast_value = datetime.fromisoformat(value)
