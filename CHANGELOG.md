@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.29.2 (2026-02-28)
+
+### Bug Fixes
+
+- **permission**: Enhance ManagerBasedPermission to support configurable default permissions
+  ([`cd4ee9a`](https://github.com/TimKleindick/general_manager/commit/cd4ee9a6b3d338f9bf139d5b451e2ff55687bdfd))
+
+- **permission**: Implement __init_subclass__ for default CRUD permissions in ManagerBasedPermission
+  ([`3c4e65b`](https://github.com/TimKleindick/general_manager/commit/3c4e65bcaa0e06c831a6458f60980bd2e2d91f32))
+
+- **permission**: Update ManagerBasedPermission attributes to ClassVar
+  ([`a83f078`](https://github.com/TimKleindick/general_manager/commit/a83f078df0db85c26d59ba34726afb74137e8ccc))
+
+
 ## v0.29.1 (2026-02-17)
 
 ### Bug Fixes
