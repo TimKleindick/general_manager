@@ -721,12 +721,12 @@ class InterfaceBase(ABC):
         allowed_values = input_field.resolve_possible_values(identification)
         if allowed_values is None:
             return
+        contains = getattr(allowed_values, "contains", None)
+        if callable(contains):
+            if not contains(value):
+                raise InvalidInputValueError(name, value, [])
+            return
         if not isinstance(allowed_values, Iterable):
-            contains = getattr(allowed_values, "contains", None)
-            if callable(contains):
-                if not contains(value):
-                    raise InvalidInputValueError(name, value, [])
-                return
             raise InvalidPossibleValuesTypeError(name)
 
         if value not in allowed_values:

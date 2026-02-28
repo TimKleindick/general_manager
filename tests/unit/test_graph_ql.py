@@ -4,7 +4,6 @@ import json
 from decimal import Decimal
 from datetime import date, datetime
 import graphene
-from graphene.types.structures import NonNull
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
@@ -253,9 +252,9 @@ class GraphQLTests(TestCase):
 
         arguments = GraphQL._build_identification_arguments(DummyManager)
 
-        self.assertIsInstance(arguments["id"].type, NonNull)
-        self.assertNotIsInstance(arguments["as_of"].type, NonNull)
-        self.assertNotIsInstance(arguments["dependency_id"].type, NonNull)
+        self.assertIsInstance(arguments["id"].type, graphene.NonNull)
+        self.assertNotIsInstance(arguments["as_of"].type, graphene.NonNull)
+        self.assertNotIsInstance(arguments["dependency_id"].type, graphene.NonNull)
 
 
 class TestGetReadPermissionFilter(TestCase):
