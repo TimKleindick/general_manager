@@ -95,9 +95,9 @@ class TestInput(TestCase):
 
     def test_simple_input_casting(self):
         """
-        Test that the Input class casts values to integers and raises exceptions for invalid inputs.
+        Test that the Input class casts values to integers and preserves `None`.
 
-        Casts valid string, integer, and float inputs to int, and ensures that invalid strings, None, or unsupported types raise ValueError or TypeError.
+        Casts valid string, integer, and float inputs to int, returns `None` unchanged, and ensures that invalid strings or unsupported types raise ValueError or TypeError.
         """
         input_obj = Input(int)
         self.assertEqual(input_obj.cast("123"), 123)
@@ -138,9 +138,9 @@ class TestInput(TestCase):
 
     def test_input_casting_with_date(self):
         """
-        Test that the Input class casts values to date objects and raises exceptions for invalid inputs.
+        Test that the Input class casts values to date objects and preserves `None`.
 
-        Casts ISO format strings, date, and datetime objects to date. Asserts that invalid strings, None, or unsupported types raise ValueError or TypeError.
+        Casts ISO format strings, date, and datetime objects to date. Asserts that invalid strings or unsupported types raise ValueError or TypeError, while `None` remains `None`.
         """
         input_obj = Input(date)
         self.assertEqual(input_obj.cast(date(2023, 10, 1)), date(2023, 10, 1))
@@ -158,11 +158,15 @@ class TestInput(TestCase):
         """
         Tests that the Input class casts values to datetime objects.
 
-        Casts ISO format strings and date objects to datetime, and verifies that invalid strings, None, or unsupported types raise exceptions.
+        Casts ISO format strings, datetime objects, and date objects to datetime, preserves `None`, and verifies that invalid strings or unsupported types raise exceptions.
         """
         input_obj = Input(datetime)
         self.assertEqual(
             input_obj.cast("2023-10-01T12:00:00"), datetime(2023, 10, 1, 12, 0, 0)
+        )
+        self.assertEqual(
+            input_obj.cast(datetime(2023, 10, 1, 12, 0, 0)),
+            datetime(2023, 10, 1, 12, 0, 0),
         )
         self.assertEqual(
             input_obj.cast(date(2023, 10, 1)), datetime(2023, 10, 1, 0, 0, 0)
@@ -175,9 +179,9 @@ class TestInput(TestCase):
 
     def test_input_casting_with_measurement(self):
         """
-        Test that the Input class casts values to Measurement instances or raises exceptions for invalid input.
+        Test that the Input class casts values to Measurement instances and preserves `None`.
 
-        Casts valid measurement strings and Measurement objects to Measurement instances. Raises ValueError for invalid strings and TypeError for None or unsupported types.
+        Casts valid measurement strings and Measurement objects to Measurement instances. Raises ValueError for invalid strings and TypeError for unsupported types, while `None` remains `None`.
         """
         input_obj = Input(Measurement)
         self.assertEqual(input_obj.cast("1.0 m"), Measurement(1.0, "m"))

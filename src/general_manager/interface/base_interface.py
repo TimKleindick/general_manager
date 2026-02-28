@@ -174,11 +174,24 @@ class InvalidInputConstraintError(ValueError):
 def _should_validate_possible_values() -> bool:
     """Return whether ``possible_values`` membership should be enforced."""
 
+    def _parse_flag(value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        if isinstance(value, int):
+            return value != 0
+        return None
+
     config = getattr(settings, "GENERAL_MANAGER", {})
     if isinstance(config, dict) and "VALIDATE_INPUT_VALUES" in config:
-        return bool(config["VALIDATE_INPUT_VALUES"])
+        parsed = _parse_flag(config["VALIDATE_INPUT_VALUES"])
+        if parsed is not None:
+            return parsed
     if hasattr(settings, "GENERAL_MANAGER_VALIDATE_INPUT_VALUES"):
-        return bool(settings.GENERAL_MANAGER_VALIDATE_INPUT_VALUES)
+        parsed = _parse_flag(settings.GENERAL_MANAGER_VALIDATE_INPUT_VALUES)
+        if parsed is not None:
+            return parsed
     return bool(settings.DEBUG)
 
 
@@ -712,7 +725,7 @@ class InterfaceBase(ABC):
             contains = getattr(allowed_values, "contains", None)
             if callable(contains):
                 if not contains(value):
-                    raise InvalidInputValueError(name, value, [value])
+                    raise InvalidInputValueError(name, value, [])
                 return
             raise InvalidPossibleValuesTypeError(name)
 

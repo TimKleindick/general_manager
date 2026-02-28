@@ -186,6 +186,28 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         self.assertEqual(data["employee"]["name"], "Alice")
         self.assertIsNone(data["asOf"])
 
+    def test_optional_input_accepts_explicit_value_in_graphql_queries(self) -> None:
+        query = """
+        query($employeeId: ID!, $asOf: Date) {
+            optionalinputcalculation(employeeId: $employeeId, asOf: $asOf) {
+                employee {
+                    name
+                }
+                asOf
+            }
+        }
+        """
+
+        response = self.query(
+            query,
+            variables={"employeeId": self.employee_a.id, "asOf": "2024-02-10"},
+        )
+
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]["optionalinputcalculation"]
+        self.assertEqual(data["employee"]["name"], "Alice")
+        self.assertEqual(data["asOf"], "2024-02-10")
+
     def test_min_value_constraint_is_enforced_via_graphql(self) -> None:
         query = """
         query($quantity: Int!) {

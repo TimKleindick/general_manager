@@ -1504,7 +1504,7 @@ class GraphQL:
         """
         Build the GraphQL arguments required to uniquely identify an instance of the given manager class.
 
-        For each input field defined on the manager's Interface: use "<name>_id" as a required ID argument for fields that reference another GeneralManager, use "id" as a required ID argument when present, and map other fields to their corresponding Graphene base type marked required.
+        For each input field defined on the manager's Interface: use "<name>_id" for fields that reference another GeneralManager, use "id" when present, and map other fields to their corresponding Graphene base type. Each argument's nullability mirrors `input_field.required`.
 
         Parameters:
             generalManagerClass: GeneralManager subclass whose Interface.input_fields are used to derive identification arguments.

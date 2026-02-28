@@ -592,6 +592,24 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             list[dict[str, Any]]: Completed input-to-value mappings that meet the filters and excludes.
         """
 
+        def input_passes_filters(
+            input_name: str,
+            current_combo: dict[str, Any],
+        ) -> bool:
+            """Return whether the current input state satisfies input-level filters."""
+
+            field_filters = filters.get(input_name, {})
+            field_excludes = excludes.get(input_name, {})
+            current_value = current_combo.get(input_name)
+
+            for filter_func in field_filters.get("filter_funcs", []):
+                if not filter_func(current_value):
+                    return False
+            for exclude_func in field_excludes.get("filter_funcs", []):
+                if exclude_func(current_value):
+                    return False
+            return True
+
         def helper(
             index: int,
             current_combo: dict[str, Any],
@@ -616,7 +634,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 input_name, input_field, current_combo
             )
             if possible_values is None:
-                yield from helper(index + 1, current_combo)
+                if input_passes_filters(input_name, current_combo):
+                    yield from helper(index + 1, current_combo)
                 return
 
             field_filters = filters.get(input_name, {})
