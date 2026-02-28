@@ -152,16 +152,75 @@ class InvalidInputValueError(ValueError):
 
     def __init__(self, name: str, value: object, allowed: Iterable[object]) -> None:
         """
-        Initialize the exception with a message describing an invalid input value for a specific field.
-
+        Create the exception with a message describing an invalid input value and the allowed options.
+        
         Parameters:
-            name (str): The name of the input field that received the invalid value.
-            value (object): The value that was provided and deemed invalid.
-            allowed (Iterable[object]): An iterable of permitted values for the field; used to include allowed options in the exception message.
+            name (str): Name of the input field that received the invalid value.
+            value (object): The provided value that is invalid.
+            allowed (Iterable[object]): Iterable of permitted values; included in the exception message.
         """
         super().__init__(
             f"Invalid value for {name}: {value}, allowed: {list(allowed)}."
         )
+
+
+class InvalidInputConstraintError(ValueError):
+    """Raised when a provided input value violates a declared constraint."""
+
+    def __init__(self, name: str, detail: str) -> None:
+        """
+        Exception raised when an input value violates a declared constraint.
+        
+        Parameters:
+            name (str): The name of the input field whose value violated the constraint.
+            detail (str): A short description of why the value is invalid.
+        """
+        super().__init__(f"Invalid value for {name}: {detail}.")
+
+
+def _should_validate_possible_values() -> bool:
+    """
+    Decides whether membership checks for an input field's `possible_values` should be enforced.
+    
+    This honors configuration in the following precedence:
+    1. If `settings.GENERAL_MANAGER` is a dict and contains `VALIDATE_INPUT_VALUES`, that value is used.
+    2. Else if `settings.GENERAL_MANAGER_VALIDATE_INPUT_VALUES` exists, that value is used.
+    3. Otherwise the value of `settings.DEBUG` is used.
+    
+    Recognized truthy values are booleans, strings equal to `"true"`, `"1"`, `"yes"`, or `"on"` (case-insensitive), and nonzero integers.
+    
+    Returns:
+        bool: `True` if `possible_values` membership should be enforced, `False` otherwise.
+    """
+
+    def _parse_flag(value: object) -> bool | None:
+        """
+        Interpret a loosely-typed input as a boolean flag.
+        
+        Parameters:
+            value (object): Input value to interpret; supported inputs are booleans, strings like "true"/"1"/"yes"/"on" (case-insensitive, trimmed), and integers (non-zero treated as true).
+        
+        Returns:
+            True if the input represents a truthy flag, False if it represents a falsy flag (e.g., False, "0", 0), or None if the input cannot be interpreted as a boolean.
+        """
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        if isinstance(value, int):
+            return value != 0
+        return None
+
+    config = getattr(settings, "GENERAL_MANAGER", {})
+    if isinstance(config, dict) and "VALIDATE_INPUT_VALUES" in config:
+        parsed = _parse_flag(config["VALIDATE_INPUT_VALUES"])
+        if parsed is not None:
+            return parsed
+    if hasattr(settings, "GENERAL_MANAGER_VALIDATE_INPUT_VALUES"):
+        parsed = _parse_flag(settings.GENERAL_MANAGER_VALIDATE_INPUT_VALUES)
+        if parsed is not None:
+            return parsed
+    return bool(settings.DEBUG)
 
 
 class InterfaceBase(ABC):
@@ -582,7 +641,15 @@ class InterfaceBase(ABC):
             if remaining:
                 raise UnexpectedInputArgumentsError(remaining)
 
-        missing_args = set(self.input_fields.keys()) - set(kwargs.keys())
+        for name, input_field in self.input_fields.items():
+            if name not in kwargs and not input_field.required:
+                kwargs[name] = None
+
+        missing_args = {
+            name
+            for name, input_field in self.input_fields.items()
+            if input_field.required and name not in kwargs
+        }
         if missing_args:
             raise MissingInputArgumentsError(missing_args)
 
@@ -595,7 +662,9 @@ class InterfaceBase(ABC):
                     continue
                 depends_on = input_field.depends_on
                 if all(dep in processed for dep in depends_on):
-                    value = self.input_fields[name].cast(kwargs[name])
+                    value = self.input_fields[name].cast(
+                        kwargs.get(name), identification
+                    )
                     self._process_input(name, value, identification)
                     identification[name] = value
                     processed.add(name)
@@ -641,41 +710,56 @@ class InterfaceBase(ABC):
         self, name: str, value: Any, identification: dict[str, Any]
     ) -> None:
         """
-        Validate a single input value against its declared Input definition.
-
-        Checks that the provided value matches the declared Python type and, when DEBUG is enabled, verifies the value is allowed by the input's `possible_values` (which may be an iterable or a callable that receives dependent input values).
-
+        Validate a single input value against its declared Input definition and configured constraints.
+        
+        Performs requiredness and type checks, enforces numeric/string bounds and custom validator callables, and (when enabled by runtime configuration) verifies membership against the field's resolved `possible_values`. The `identification` mapping is provided to resolve dependent input values when evaluating validators or possible values.
+        
         Parameters:
-            name: The input field name being validated.
-            value: The value to validate.
-            identification: Partially resolved identification mapping used to supply dependent input values when evaluating `possible_values`.
-
+            name (str): The input field name being validated.
+            value (Any): The value to validate.
+            identification (dict[str, Any]): Partially resolved identification mapping used for evaluating dependent validators and possible values.
+        
         Raises:
-            InvalidInputTypeError: If `value` is not an instance of the input's declared `type`.
-            InvalidPossibleValuesTypeError: If `possible_values` is neither callable nor iterable.
-            InvalidInputValueError: If `value` is not contained in the evaluated `possible_values` (only checked when DEBUG is true).
+            InvalidInputTypeError: If a required value is missing or `value` is not an instance of the input's declared type.
+            InvalidInputConstraintError: If `value` violates declared bounds or fails the field's custom validator.
+            InvalidPossibleValuesTypeError: If the field's `possible_values` is neither callable nor an iterable when validation is enabled.
+            InvalidInputValueError: If `value` is not among the resolved allowed values when possible-values validation is enabled.
         """
         input_field = self.input_fields[name]
+        if value is None:
+            if input_field.required:
+                raise InvalidInputTypeError(name, type(value), input_field.type)
+            return
         if not isinstance(value, input_field.type):
             raise InvalidInputTypeError(name, type(value), input_field.type)
-        if settings.DEBUG:
-            # `possible_values` can be a callable or an iterable
-            possible_values = input_field.possible_values
-            if possible_values is not None:
-                if callable(possible_values):
-                    depends_on = input_field.depends_on
-                    dep_values = {
-                        dep_name: identification.get(dep_name)
-                        for dep_name in depends_on
-                    }
-                    allowed_values = possible_values(**dep_values)
-                elif isinstance(possible_values, Iterable):
-                    allowed_values = possible_values
-                else:
-                    raise InvalidPossibleValuesTypeError(name)
+        if not input_field.validate_bounds(value):
+            raise InvalidInputConstraintError(
+                name,
+                f"{value} is outside the allowed range"
+                f" [{input_field.min_value}, {input_field.max_value}]",
+            )
+        if not input_field.validate_with_callable(value, identification):
+            raise InvalidInputConstraintError(
+                name,
+                f"{value} did not satisfy the configured validator",
+            )
 
-                if value not in allowed_values:
-                    raise InvalidInputValueError(name, value, allowed_values)
+        if not _should_validate_possible_values():
+            return
+
+        allowed_values = input_field.resolve_possible_values(identification)
+        if allowed_values is None:
+            return
+        contains = getattr(allowed_values, "contains", None)
+        if callable(contains):
+            if not contains(value):
+                raise InvalidInputValueError(name, value, [])
+            return
+        if not isinstance(allowed_values, Iterable):
+            raise InvalidPossibleValuesTypeError(name)
+
+        if value not in allowed_values:
+            raise InvalidInputValueError(name, value, allowed_values)
 
     @classmethod
     def create(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:

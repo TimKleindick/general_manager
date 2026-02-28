@@ -16,6 +16,7 @@ from general_manager.api.graphql import (
 )
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
+from general_manager.manager.input import Input
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.base_interface import InterfaceBase
 from graphql import GraphQLError
@@ -232,6 +233,34 @@ class GraphQLTests(TestCase):
         first = GraphQL._create_filter_options(DummyManager2)
         second = GraphQL._create_filter_options(DummyManager2)
         self.assertIs(first, second)
+
+    def test_build_identification_arguments_respects_optional_inputs(self):
+        class DependencyManager(GeneralManager):
+            pass
+
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {
+                    "id": Input(int, required=True),
+                    "as_of": Input(date, required=False),
+                    "dependency": Input(DependencyManager, required=False),
+                }
+
+                @staticmethod
+                def get_attribute_types():
+                    """
+                    Provide a mapping of attribute names to their types for the interface.
+                    
+                    Returns:
+                        dict: Mapping from attribute name (str) to the attribute's type descriptor; empty dict when no attribute types are defined.
+                    """
+                    return {}
+
+        arguments = GraphQL._build_identification_arguments(DummyManager)
+
+        self.assertIsInstance(arguments["id"].type, graphene.NonNull)
+        self.assertNotIsInstance(arguments["as_of"].type, graphene.NonNull)
+        self.assertNotIsInstance(arguments["dependency_id"].type, graphene.NonNull)
 
 
 class TestGetReadPermissionFilter(TestCase):

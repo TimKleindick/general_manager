@@ -11,30 +11,112 @@ from typing import Callable, ClassVar, Type
 
 # Dummy InputField implementation for testing
 class DummyInput:
-    def __init__(self, type_, depends_on=None, possible_values=None):
+    def __init__(
+        self,
+        type_,
+        depends_on=None,
+        possible_values=None,
+        *,
+        required=True,
+        min_value=None,
+        max_value=None,
+        validator=None,
+    ):
         """
-        Initializes a DummyInput instance with a type, dependencies, and possible values.
-
-        Args:
-            type_: The expected type for the input value.
-            depends_on: Optional list of field names this input depends on.
-            possible_values: Optional list or callable specifying allowed values for the input.
+        Create a DummyInput representing a single input field with type information, dependency relationships, allowed values, and validation constraints.
+        
+        Parameters:
+            type_ (type): Expected Python type for the input value.
+            depends_on (list[str] | None): Names of other input fields this field depends on; used when resolving callable `possible_values` or `validator`.
+            possible_values (Iterable | callable | None): Explicit allowed values or a callable that returns allowed values based on dependency values and optional identification.
+            required (bool): Whether a value is required (value must not be None) when True.
+            min_value (numeric | None): Minimum allowed value (inclusive) for scalar inputs, if applicable.
+            max_value (numeric | None): Maximum allowed value (inclusive) for scalar inputs, if applicable.
+            validator (callable | None): Optional callable used to perform custom validation; receives the value and dependency context and should indicate validity (truthy result or `None` are treated as passing).
         """
         self.type = type_
         self.depends_on = depends_on or []
         self.possible_values = possible_values
+        self.required = required
+        self.min_value = min_value
+        self.max_value = max_value
+        self.validator = validator
 
-    def cast(self, value):
+    def cast(self, value, _identification=None):
         """
-        Returns the input value unchanged.
-
-        Args:
-            value: The value to be returned.
-
+        Return the input value unchanged.
+        
         Returns:
-            The same value that was provided as input.
+            The same value provided as input.
         """
         return value
+
+    def resolve_possible_values(self, identification=None):
+        """
+        Return the resolved set of allowed values for this input, evaluating a callable `possible_values` with dependent input values when necessary.
+        
+        Parameters:
+            identification (dict | None): Mapping of input names to their current values used to supply arguments to a callable `possible_values`. If a dependency name is absent in `identification`, `None` is passed for that parameter.
+        
+        Returns:
+            The resolved possible values (the direct `possible_values` attribute when not callable, or the result of calling it with dependency values).
+        """
+        if callable(self.possible_values):
+            identification = identification or {}
+            dependency_values = {
+                dependency_name: identification.get(dependency_name)
+                for dependency_name in self.depends_on
+            }
+            return self.possible_values(**dependency_values)
+        return self.possible_values
+
+    def validate_bounds(self, value):
+        """
+        Check whether a value satisfies this input's required, minimum, and maximum constraints.
+        
+        Parameters:
+            value: The value to validate; may be None.
+        
+        Returns:
+            `True` if the value is permitted by the input's `required`, `min_value`, and `max_value` settings, `False` otherwise.
+        """
+        if value is None:
+            return not self.required
+        if self.min_value is not None and value < self.min_value:
+            return False
+        if self.max_value is not None and value > self.max_value:
+            return False
+        return True
+
+    def validate_with_callable(self, value, identification=None):
+        """
+        Validate a value using the configured validator callable and dependency values.
+        
+        If no validator is configured or the provided value is None, the value is considered valid.
+        When a validator is present, it is called as validator(value, **dependency_values), where
+        dependency_values is built by extracting names in self.depends_on from the optional
+        identification mapping. If the validator returns None that is treated as valid; otherwise
+        the truthiness of the validator's return determines validity.
+        
+        Parameters:
+            value: The value to validate.
+            identification (dict, optional): Mapping of field names to values used to supply
+                dependency arguments to the validator. Defaults to an empty mapping.
+        
+        Returns:
+            bool: `True` if the value is valid (or no validator/value is None), `False` otherwise.
+        """
+        if self.validator is None or value is None:
+            return True
+        identification = identification or {}
+        dependency_values = {
+            dependency_name: identification.get(dependency_name)
+            for dependency_name in self.depends_on
+        }
+        result = self.validator(value, **dependency_values)
+        if result is None:
+            return True
+        return bool(result)
 
 
 # Dummy GeneralManager subclass for testing format_identification
@@ -320,6 +402,96 @@ class InterfaceBaseTests(SimpleTestCase):
         # 'b' depends on 'a' and is required in this interface layout
         with self.assertRaises(TypeError):
             DummyInterface(a=1, gm=DummyGM({"id": 3}), vals=1, c=1)
+
+    def test_optional_input_defaults_to_none(self):
+        class OptionalInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "maybe": DummyInput(int, required=False),
+            }
+
+        inst = OptionalInterface(a=1, b="foo", gm=DummyGM({"id": 4}), vals=1, c=1)
+        self.assertIsNone(inst.identification["maybe"])
+
+    def test_optional_input_accepts_explicit_none(self):
+        class OptionalInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "maybe": DummyInput(int, required=False),
+            }
+
+        inst = OptionalInterface(
+            a=1,
+            b="foo",
+            gm=DummyGM({"id": 5}),
+            vals=1,
+            c=1,
+            maybe=None,
+        )
+        self.assertIsNone(inst.identification["maybe"])
+
+    def test_scalar_bounds_are_enforced(self):
+        """
+        Verifies that a numeric input with defined min_value and max_value rejects values outside the inclusive range.
+        
+        Creates an interface with a 'score' field bounded between 1 and 3 and asserts that constructing the interface with score=0 raises a ValueError.
+        """
+        class RangedInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "score": DummyInput(int, min_value=1, max_value=3),
+            }
+
+        with self.assertRaises(ValueError):
+            RangedInterface(
+                a=1,
+                b="foo",
+                gm=DummyGM({"id": 6}),
+                vals=1,
+                c=1,
+                score=0,
+            )
+
+    def test_validator_is_enforced(self):
+        """
+        Verify that a custom validator on an input field raises ValueError when the provided value fails validation.
+        
+        This test defines a ValidatedInterface with a `score` field whose validator requires an even integer, then constructs the interface with an odd `score` (3) and asserts that construction raises a `ValueError`.
+        """
+        class ValidatedInterface(DummyInterface):
+            input_fields: ClassVar[dict] = {
+                **test_input_fields,
+                "score": DummyInput(int, validator=lambda value: value % 2 == 0),
+            }
+
+        with self.assertRaises(ValueError):
+            ValidatedInterface(
+                a=1,
+                b="foo",
+                gm=DummyGM({"id": 7}),
+                vals=1,
+                c=1,
+                score=3,
+            )
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True)
+    def test_possible_values_enforced_outside_debug_when_enabled(self):
+        with self.assertRaises(ValueError):
+            DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": "yes"})
+    def test_possible_values_toggle_accepts_truthy_string(self):
+        with self.assertRaises(ValueError):
+            DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+
+    @override_settings(DEBUG=True, GENERAL_MANAGER={"VALIDATE_INPUT_VALUES": "off"})
+    def test_possible_values_toggle_accepts_falsey_string(self):
+        inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
+        self.assertEqual(inst.identification["vals"], 99)
+
+    def test_dummy_input_validator_none_return_is_allowed(self):
+        input_field = DummyInput(int, validator=lambda _value: None)
+        self.assertTrue(input_field.validate_with_callable(1))
 
     def test_format_identification_deep_nested_collections(self):
         gm13 = DummyGM({"id": 13})

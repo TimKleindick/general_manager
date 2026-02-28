@@ -36,17 +36,17 @@ class CalculationReadCapability(BaseCapability):
         interface_cls: type["CalculationInterface"],
     ) -> dict[str, dict[str, Any]]:
         """
-        Builds a mapping of input field metadata for a calculation interface.
-
+        Map input field names to their metadata for a CalculationInterface subclass.
+        
         Parameters:
             interface_cls (type): CalculationInterface subclass whose `input_fields` mapping will be inspected.
-
+        
         Returns:
-            dict[str, dict[str, Any]]: A dictionary where each key is an input field name and each value is a metadata dictionary with:
-                - "type": the field's declared Python type,
-                - "default": None,
-                - "is_editable": False,
-                - "is_required": True,
+            dict[str, dict[str, Any]]: Mapping where each key is an input field name and each value is a metadata dictionary containing:
+                - "type": the field's declared Python type
+                - "default": None
+                - "is_editable": False
+                - "is_required": `True` if the field is required (`field.required`), `False` otherwise
                 - "is_derived": False
         """
         return {
@@ -54,7 +54,7 @@ class CalculationReadCapability(BaseCapability):
                 "type": field.type,
                 "default": None,
                 "is_editable": False,
-                "is_required": True,
+                "is_required": field.required,
                 "is_derived": False,
             }
             for name, field in interface_cls.input_fields.items()

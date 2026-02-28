@@ -1,12 +1,12 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
+from collections.abc import Iterable
 from types import UnionType
 from typing import (
     Any,
     Type,
     TYPE_CHECKING,
-    Iterable,
     Union,
     Optional,
     Generator,
@@ -22,7 +22,7 @@ from general_manager.interface.base_interface import (
     GeneralManagerType,
 )
 from general_manager.bucket.base_bucket import Bucket
-from general_manager.manager.input import Input
+from general_manager.manager.input import Input, InputDomain
 from general_manager.utils.filter_parser import parse_filters
 
 if TYPE_CHECKING:
@@ -547,29 +547,30 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
     def get_possible_values(
         self, key_name: str, input_field: Input, current_combo: dict
-    ) -> Union[Iterable[Any], Bucket[Any]]:
+    ) -> Union[Iterable[Any], Bucket[Any], None]:
         # Retrieve possible values
         """
-        Resolve potential values for an input field based on the current partial input combination.
-
+        Determine the allowed values for an input field given the current partial input selection.
+        
         Parameters:
-            key_name (str): Name of the input field used for error context.
-            input_field (Input): Input definition that may include `possible_values` and `depends_on`.
-            current_combo (dict): Partial mapping of already-selected input values required to evaluate dependencies.
-
+            key_name (str): Input field name used for error context.
+            input_field (Input): Input definition whose possible values will be resolved.
+            current_combo (dict): Partial mapping of already-selected input values used to evaluate dependencies.
+        
         Returns:
-            Iterable[Any] | Bucket[Any]: An iterable of allowed values for the input or a Bucket supplying candidate values.
-
+            An iterable of allowed values, a Bucket supplying candidate values, or `None` when the input is optional and has no explicit domain.
+        
         Raises:
-            InvalidPossibleValuesError: If the input field's `possible_values` is neither callable nor an iterable/Bucket.
+            InvalidPossibleValuesError: If the resolved possible values are neither an `Iterable` nor a `Bucket`, or if a required input yields no possible values.
         """
-        if callable(input_field.possible_values):
-            depends_on = input_field.depends_on
-            dep_values = [current_combo[dep_name] for dep_name in depends_on]
-            possible_values = input_field.possible_values(*dep_values)
-        elif isinstance(input_field.possible_values, (Iterable, Bucket)):
-            possible_values = input_field.possible_values
-        else:
+        possible_values = input_field.resolve_possible_values(current_combo)
+        if possible_values is None:
+            if input_field.required:
+                raise InvalidPossibleValuesError(key_name)
+            return None
+        if isinstance(possible_values, InputDomain):
+            possible_values = possible_values
+        elif not isinstance(possible_values, (Iterable, Bucket)):
             raise InvalidPossibleValuesError(key_name)
         return possible_values
 
@@ -591,19 +592,44 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             list[dict[str, Any]]: Completed input-to-value mappings that meet the filters and excludes.
         """
 
+        def input_passes_filters(
+            input_name: str,
+            current_combo: dict[str, Any],
+        ) -> bool:
+            """
+            Check whether the current value for an input satisfies its registered filter and exclude predicates.
+            
+            Returns:
+                True if all filter predicates accept the value and no exclude predicate matches, False otherwise.
+            """
+
+            field_filters = filters.get(input_name, {})
+            field_excludes = excludes.get(input_name, {})
+            current_value = current_combo.get(input_name)
+
+            for filter_func in field_filters.get("filter_funcs", []):
+                if not filter_func(current_value):
+                    return False
+            for exclude_func in field_excludes.get("filter_funcs", []):
+                if exclude_func(current_value):
+                    return False
+            return True
+
         def helper(
             index: int,
             current_combo: dict[str, Any],
         ) -> Generator[dict[str, Any], None, None]:
             """
-            Recursively emit input combinations that satisfy filters and excludes.
-
+            Generate completed input assignments for the remaining inputs in dependency order that satisfy input-level filters and excludes.
+            
+            This helper advances through `sorted_inputs` beginning at `index`, resolving possible values for each input and producing all completed input combinations that pass configured filters and excludes. If an input's possible values resolve to `None`, the input is treated as optional and the helper only advances if the input-level filters allow skipping it. When possible values are a Bucket, the bucket is constrained using the field's `filter_kwargs` and `exclude_kwargs`; when they are an iterable, the field's `filter_funcs` and `exclude_funcs` are applied. Values that do not match the input field's declared Python type are skipped. `current_combo` is mutated during generation and a shallow copy is yielded for each completed combination.
+            
             Parameters:
-                index (int): Position within `sorted_inputs` currently being assigned.
-                current_combo (dict[str, Any]): Partial assignment of inputs built so far.
-
+                index (int): Current position in `sorted_inputs` to assign.
+                current_combo (dict[str, Any]): Partial mapping of input names to chosen values; mutated in-place during generation.
+            
             Yields:
-                dict[str, Any]: Completed combination of input values.
+                dict[str, Any]: A completed input assignment (shallow copy of `current_combo`) that satisfies filters and excludes.
             """
             if index == len(sorted_inputs):
                 yield current_combo.copy()
@@ -614,6 +640,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             possible_values = self.get_possible_values(
                 input_name, input_field, current_combo
             )
+            if possible_values is None:
+                if input_passes_filters(input_name, current_combo):
+                    yield from helper(index + 1, current_combo)
+                return
 
             field_filters = filters.get(input_name, {})
             field_excludes = excludes.get(input_name, {})
