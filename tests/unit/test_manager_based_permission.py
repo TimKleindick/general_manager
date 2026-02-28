@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar, Dict, Literal, Optional, cast
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.contrib.auth.models import User, AnonymousUser
 from django.utils.crypto import get_random_string
 from unittest.mock import Mock, patch
@@ -582,6 +582,25 @@ class ManagerBasedPermissionTests(TestCase):
         self.assertEqual(permission.__update__, ["isAdmin"])
         self.assertEqual(permission.__delete__, ["isAuthenticated&isAdmin"])
 
+    @override_settings(
+        GENERAL_MANAGER={
+            "DEFAULT_PERMISSIONS": {
+                "READ": ["isAuthenticated"],
+                "CREATE": ["isAdmin"],
+                "UPDATE": ["isAdmin"],
+                "DELETE": ["isSuperUser"],
+            }
+        }
+    )
+    def test_base_class_uses_configured_default_permissions(self) -> None:
+        """The base permission class should read configured defaults at instantiation time."""
+        permission = ManagerBasedPermission(self.mock_instance, self.user)
+
+        self.assertEqual(permission.__read__, ["isAuthenticated"])
+        self.assertEqual(permission.__create__, ["isAdmin"])
+        self.assertEqual(permission.__update__, ["isAdmin"])
+        self.assertEqual(permission.__delete__, ["isSuperUser"])
+
     def test_init_subclass_assigns_default_permissions_for_empty_subclass(self) -> None:
         """Subclasses without explicit CRUD config should get standard defaults."""
 
@@ -592,6 +611,33 @@ class ManagerBasedPermissionTests(TestCase):
         self.assertEqual(EmptyPermission.__create__, ["isAuthenticated"])
         self.assertEqual(EmptyPermission.__update__, ["isAuthenticated"])
         self.assertEqual(EmptyPermission.__delete__, ["isAuthenticated"])
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "DEFAULT_PERMISSIONS": {
+                "READ": ["isAuthenticated"],
+                "CREATE": ["isAdmin"],
+                "UPDATE": ["isAdmin"],
+                "DELETE": ["isSuperUser"],
+            }
+        }
+    )
+    def test_init_subclass_uses_configured_default_permissions(self) -> None:
+        """Subclasses should use configured CRUD defaults when provided."""
+
+        class ConfiguredPermission(ManagerBasedPermission):
+            pass
+
+        permission = ConfiguredPermission(self.mock_instance, self.user)
+
+        self.assertEqual(ConfiguredPermission.__read__, ["isAuthenticated"])
+        self.assertEqual(ConfiguredPermission.__create__, ["isAdmin"])
+        self.assertEqual(ConfiguredPermission.__update__, ["isAdmin"])
+        self.assertEqual(ConfiguredPermission.__delete__, ["isSuperUser"])
+        self.assertEqual(permission.__read__, ["isAuthenticated"])
+        self.assertEqual(permission.__create__, ["isAdmin"])
+        self.assertEqual(permission.__update__, ["isAdmin"])
+        self.assertEqual(permission.__delete__, ["isSuperUser"])
 
     def test_init_subclass_keeps_subclass_defaults_isolated(self) -> None:
         """Subclass defaults should not bleed across sibling subclasses."""
@@ -610,8 +656,10 @@ class ManagerBasedPermissionTests(TestCase):
         self.assertEqual(based_on_permission.__read__, [])
         self.assertEqual(default_permission.__read__, ["public"])
 
-    def test_based_on_none_attribute_value_keeps_class_level_defaults(self) -> None:
-        """A missing related manager should keep the subclass defaults from __init_subclass__."""
+    def test_based_on_none_attribute_value_uses_instance_fallback_defaults(
+        self,
+    ) -> None:
+        """A missing related manager should fall back per instance without mutating class defaults."""
         self.mock_instance.manager = None
         self.check_patcher.stop()
 
@@ -622,10 +670,39 @@ class ManagerBasedPermissionTests(TestCase):
 
         self.assertEqual(BasedOnPermission.__read__, [])
         self.assertEqual(BasedOnPermission.__create__, [])
-        self.assertEqual(permission.__read__, [])
-        self.assertEqual(permission.__create__, [])
-        self.assertEqual(permission.__update__, [])
-        self.assertEqual(permission.__delete__, [])
+        self.assertEqual(permission.__read__, ["public"])
+        self.assertEqual(permission.__create__, ["isAuthenticated"])
+        self.assertEqual(permission.__update__, ["isAuthenticated"])
+        self.assertEqual(permission.__delete__, ["isAuthenticated"])
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "DEFAULT_PERMISSIONS": {
+                "READ": ["isAuthenticated"],
+                "CREATE": ["isAdmin"],
+                "UPDATE": ["isAdmin"],
+                "DELETE": ["isSuperUser"],
+            }
+        }
+    )
+    def test_based_on_none_attribute_value_uses_configured_fallback_defaults(
+        self,
+    ) -> None:
+        """A missing related manager should use configured defaults for implicit permissions."""
+        self.mock_instance.manager = None
+        self.check_patcher.stop()
+
+        class BasedOnPermission(ManagerBasedPermission):
+            __based_on__ = "manager"
+
+        permission = BasedOnPermission(self.mock_instance, self.user)
+
+        self.assertEqual(BasedOnPermission.__read__, [])
+        self.assertEqual(BasedOnPermission.__create__, [])
+        self.assertEqual(permission.__read__, ["isAuthenticated"])
+        self.assertEqual(permission.__create__, ["isAdmin"])
+        self.assertEqual(permission.__update__, ["isAdmin"])
+        self.assertEqual(permission.__delete__, ["isSuperUser"])
 
     def test_overall_results_caching(self) -> None:
         """Test that overall results are cached correctly."""
