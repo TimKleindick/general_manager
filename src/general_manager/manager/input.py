@@ -272,10 +272,51 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
         }
 
     def __iter__(self) -> Iterator[int | float | Decimal]:
-        current = self.min_value
-        while current <= self.max_value:
+        if any(
+            isinstance(candidate, Decimal)
+            for candidate in (self.min_value, self.max_value, self.step)
+        ):
+            decimal_min = Decimal(str(self.min_value))
+            decimal_max = Decimal(str(self.max_value))
+            decimal_step = Decimal(str(self.step))
+            decimal_tolerance = _decimal_tolerance(decimal_step)
+            decimal_current = decimal_min
+            while decimal_current <= decimal_max + decimal_tolerance:
+                if abs(decimal_current - decimal_max) <= decimal_tolerance:
+                    yield decimal_max
+                    break
+                yield decimal_current
+                decimal_current = cast(
+                    Decimal,
+                    _add_numeric_step(decimal_current, decimal_step),
+                )
+            return
+
+        if any(
+            isinstance(candidate, float)
+            for candidate in (self.min_value, self.max_value, self.step)
+        ):
+            float_min = float(self.min_value)
+            float_max = float(self.max_value)
+            float_step = float(self.step)
+            float_tolerance = _float_tolerance(float_step)
+            float_current = float_min
+            while float_current <= float_max + float_tolerance:
+                if abs(float_current - float_max) <= float_tolerance:
+                    yield float_max
+                    break
+                yield float_current
+                float_current = float(
+                    cast(float, _add_numeric_step(float_current, float_step))
+                )
+            return
+
+        current = cast(int, self.min_value)
+        max_value = cast(int, self.max_value)
+        step = cast(int, self.step)
+        while current <= max_value:
             yield current
-            current = _add_numeric_step(current, self.step)
+            current = cast(int, _add_numeric_step(current, step))
 
     def __contains__(self, value: object) -> bool:
         if not isinstance(value, (int, float, Decimal)):
@@ -336,7 +377,8 @@ class DateRangeDomain(InputDomain[date]):
         return _year_end(value)
 
     def contains(self, value: date) -> bool:
-        normalized = self.normalize(value)
+        date_value = value.date() if isinstance(value, datetime) else value
+        normalized = self.normalize(date_value)
         if normalized > self.end:
             return False
         return normalized in self
@@ -429,16 +471,7 @@ class Input(Generic[INPUT_TYPE]):
         if depends_on is not None:
             self.depends_on = depends_on
         elif callable(possible_values):
-            signature = inspect.signature(possible_values)
-            self.depends_on = [
-                name
-                for name, parameter in signature.parameters.items()
-                if parameter.kind
-                not in {
-                    inspect.Parameter.VAR_POSITIONAL,
-                    inspect.Parameter.VAR_KEYWORD,
-                }
-            ]
+            self.depends_on = self._infer_dependencies(possible_values)
         else:
             self.depends_on = []
 

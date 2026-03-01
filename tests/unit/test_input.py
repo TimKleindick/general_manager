@@ -340,6 +340,12 @@ class TestInput(TestCase):
         domain = NumericRangeDomain(0.0, 0.3, step=0.1)
         self.assertTrue(domain.contains(0.3))
 
+    def test_numeric_range_domain_iterates_inclusive_float_endpoint(self):
+        domain = NumericRangeDomain(0.0, 0.3, step=0.1)
+        values = list(domain)
+        self.assertEqual(len(values), 4)
+        self.assertAlmostEqual(values[-1], 0.3)
+
     def test_numeric_range_domain_with_decimal_step(self):
         domain = NumericRangeDomain(Decimal("0.0"), Decimal("1.0"), step=Decimal("0.5"))
         self.assertEqual(
@@ -373,6 +379,14 @@ class TestInput(TestCase):
         self.assertTrue(domain.contains(date(2024, 1, 31)))
         self.assertFalse(domain.contains(date(2023, 12, 31)))
         self.assertFalse(domain.contains(date(2024, 2, 1)))
+
+    def test_date_range_domain_contains_accepts_datetime(self):
+        domain = DateRangeDomain(
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+            frequency="day",
+        )
+        self.assertTrue(domain.contains(datetime(2024, 1, 31, 23, 59, 59)))
 
     def test_numeric_range_domain_contains_boundary(self):
         domain = NumericRangeDomain(1, 10, step=1)
