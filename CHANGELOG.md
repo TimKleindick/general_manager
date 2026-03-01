@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.30.2 (2026-03-01)
+
+### Bug Fixes
+
+- Ensure deterministic ordering of sets in dependency identifier serialization
+  ([`7ea0bf5`](https://github.com/TimKleindick/general_manager/commit/7ea0bf5aac295a784649f8497ccc3c823677afbd))
+
+- Handle malformed literals in parse_dependency_identifier and skip in cache invalidation
+  ([`4e5a2b4`](https://github.com/TimKleindick/general_manager/commit/4e5a2b4a20317751c0f2fabc5f97ffcb0949b476))
+
+- Improve dependency identifier serialization and parsing for caching
+  ([`6d11a66`](https://github.com/TimKleindick/general_manager/commit/6d11a665b74042f56b7db7211879fb78c44d8291))
+
+
 ## v0.30.1 (2026-03-01)
 
 ### Bug Fixes
