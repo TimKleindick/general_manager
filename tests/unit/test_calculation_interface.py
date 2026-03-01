@@ -88,6 +88,29 @@ class TestCalculationInterface(TestCase):
             self.assertTrue(callable(attr))
             self.assertIn(attr(self.interface), ("test", 1))
 
+    def test_get_attributes_passes_identification_to_dependent_inputs(self):
+        class DependentCalculationInterface(CalculationInterface):
+            input_fields: ClassVar[dict[str, Input]] = {
+                "field1": Input(type=str),
+                "field2": Input(
+                    type=str,
+                    possible_values=lambda field1: [field1.upper()],
+                    depends_on=["field1"],
+                    normalizer=lambda value: value.upper(),
+                ),
+            }
+
+        class DependentManager:
+            Interface = DependentCalculationInterface
+
+        DependentCalculationInterface._parent_class = DependentManager
+        interface = DependentCalculationInterface("alpha", "alpha")
+
+        attributes = DependentCalculationInterface.get_attributes()
+
+        self.assertEqual(attributes["field1"](interface), "alpha")
+        self.assertEqual(attributes["field2"](interface), "ALPHA")
+
     def test_filter(self):
         """
         Tests that the filter method returns a CalculationBucket linked to DummyGeneralManager.
