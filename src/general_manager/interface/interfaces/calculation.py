@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.input import Input
@@ -16,6 +16,7 @@ class CalculationInterface(InterfaceBase):
 
     _interface_type: ClassVar[str] = "calculation"
     input_fields: ClassVar[dict[str, Input]]
+    _resolved_input_values: dict[str, Any]
 
     configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]] = (
         CALCULATION_CORE_CAPABILITIES,
