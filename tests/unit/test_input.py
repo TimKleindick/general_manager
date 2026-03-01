@@ -2,7 +2,12 @@ from django.test import TestCase
 from decimal import Decimal
 from datetime import timedelta
 from unittest.mock import patch
-from general_manager.manager.input import DateRangeDomain, Input, NumericRangeDomain
+from general_manager.manager.input import (
+    DateRangeDomain,
+    Input,
+    NumericRangeDomain,
+    _invoke_callable,
+)
 from general_manager.measurement import Measurement
 from datetime import date, datetime
 
@@ -322,6 +327,10 @@ class TestInput(TestCase):
         self.assertAlmostEqual(values[0], 0.0)
         self.assertAlmostEqual(values[-1], 1.0)
 
+    def test_numeric_range_domain_contains_float_with_rounding_error(self):
+        domain = NumericRangeDomain(0.0, 0.3, step=0.1)
+        self.assertTrue(domain.contains(0.3))
+
     def test_numeric_range_domain_with_decimal_step(self):
         domain = NumericRangeDomain(Decimal("0.0"), Decimal("1.0"), step=Decimal("0.5"))
         self.assertEqual(
@@ -428,6 +437,14 @@ class TestInput(TestCase):
 
         self.assertEqual(input_obj.type, MockManager)
         self.assertEqual(input_obj.resolve_possible_values({}), ["all"])
+
+    def test_invoke_callable_does_not_duplicate_variadics(self):
+        def capture(*args, **kwargs):
+            return args, kwargs
+
+        result_args, result_kwargs = _invoke_callable(capture, 1, 2, a=3, b=4)
+        self.assertEqual(result_args, (1, 2))
+        self.assertEqual(result_kwargs, {"a": 3, "b": 4})
 
     def test_input_from_manager_query_with_filter_dict(self):
         class MockManager:

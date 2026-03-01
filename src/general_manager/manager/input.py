@@ -71,13 +71,6 @@ def _invoke_callable(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> 
 
     signature = inspect.signature(func)
     parameters = list(signature.parameters.values())
-    accepts_var_positional = any(
-        parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters
-    )
-    accepts_var_keyword = any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters
-    )
-
     positional_args = list(args)
     bound_args: list[Any] = []
     bound_kwargs: dict[str, Any] = {}
@@ -106,11 +99,6 @@ def _invoke_callable(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> 
         if parameter.kind == inspect.Parameter.VAR_KEYWORD:
             bound_kwargs.update(remaining_kwargs)
             remaining_kwargs.clear()
-
-    if accepts_var_positional and positional_args:
-        bound_args.extend(positional_args)
-    if accepts_var_keyword and remaining_kwargs:
-        bound_kwargs.update(remaining_kwargs)
 
     return func(*bound_args, **bound_kwargs)
 
@@ -157,6 +145,14 @@ def _add_numeric_step(
     if isinstance(current, Decimal) or isinstance(step, Decimal):
         return Decimal(str(current)) + Decimal(str(step))
     return current + step
+
+
+def _float_tolerance(step: int | float | Decimal) -> float:
+    return max(1e-12, abs(float(step)) * 1e-9)
+
+
+def _decimal_tolerance(step: int | float | Decimal) -> Decimal:
+    return max(Decimal("1e-12"), abs(Decimal(str(step))) * Decimal("1e-9"))
 
 
 @dataclass(frozen=True)
@@ -211,13 +207,59 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
         object.__setattr__(self, "step", step)
 
     def contains(self, value: int | float | Decimal) -> bool:
-        if value < self.min_value or value > self.max_value:
+        if any(
+            isinstance(candidate, Decimal)
+            for candidate in (self.min_value, self.max_value, self.step, value)
+        ):
+            decimal_value = Decimal(str(value))
+            decimal_min = Decimal(str(self.min_value))
+            decimal_max = Decimal(str(self.max_value))
+            decimal_step = Decimal(str(self.step))
+            decimal_tolerance = _decimal_tolerance(decimal_step)
+            if decimal_value < decimal_min - decimal_tolerance:
+                return False
+            if decimal_value > decimal_max + decimal_tolerance:
+                return False
+            decimal_current = decimal_min
+            while decimal_current <= decimal_max + decimal_tolerance:
+                if abs(decimal_current - decimal_value) <= decimal_tolerance:
+                    return True
+                decimal_current = cast(
+                    Decimal,
+                    _add_numeric_step(decimal_current, decimal_step),
+                )
             return False
-        current = self.min_value
-        while current <= self.max_value:
-            if current == value:
+
+        if any(
+            isinstance(candidate, float)
+            for candidate in (self.min_value, self.max_value, self.step, value)
+        ):
+            float_value = float(value)
+            float_min = float(self.min_value)
+            float_max = float(self.max_value)
+            float_step = float(self.step)
+            float_tolerance = _float_tolerance(float_step)
+            if float_value < float_min - float_tolerance:
+                return False
+            if float_value > float_max + float_tolerance:
+                return False
+            float_current = float_min
+            while float_current <= float_max + float_tolerance:
+                if abs(float_current - float_value) <= float_tolerance:
+                    return True
+                float_current = float(
+                    cast(float, _add_numeric_step(float_current, float_step))
+                )
+            return False
+
+        current = cast(int, self.min_value)
+        max_value = cast(int, self.max_value)
+        step = cast(int, self.step)
+        integer_value = cast(int, value)
+        while current <= max_value:
+            if current == integer_value:
                 return True
-            current = _add_numeric_step(current, self.step)
+            current = cast(int, _add_numeric_step(current, step))
         return False
 
     def metadata(self) -> dict[str, Any]:
