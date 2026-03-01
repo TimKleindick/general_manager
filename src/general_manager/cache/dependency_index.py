@@ -126,8 +126,12 @@ def _normalize_dependency_identifier(value: Any) -> Any:
             str(key): _normalize_dependency_identifier(val)
             for key, val in value.items()
         }
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, (list, tuple)):
         return [_normalize_dependency_identifier(item) for item in value]
+    if isinstance(value, set):
+        return [
+            _normalize_dependency_identifier(item) for item in sorted(value, key=str)
+        ]
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, date):
