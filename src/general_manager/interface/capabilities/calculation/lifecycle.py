@@ -73,10 +73,37 @@ class CalculationReadCapability(BaseCapability):
         Returns:
             dict[str, Callable[[Any], Any]]: Mapping from each input field name to a callable. Each callable takes an interface instance (`self`) and returns the value from `self.identification` for that field cast using the field's `cast` method.
         """
-        return {
-            name: lambda self, name=name: interface_cls.input_fields[name].cast(
-                self.identification.get(name)
+
+        def _resolve_input_value(
+            interface_instance: "CalculationInterface",
+            field_name: str,
+        ) -> Any:
+            resolved_values = getattr(
+                interface_instance, "_resolved_input_values", None
             )
+            if resolved_values is None:
+                resolved_values = {}
+                interface_instance._resolved_input_values = resolved_values
+            if field_name in resolved_values:
+                return resolved_values[field_name]
+
+            input_field = interface_cls.input_fields[field_name]
+            dependency_values = {
+                dependency_name: _resolve_input_value(
+                    interface_instance,
+                    dependency_name,
+                )
+                for dependency_name in input_field.depends_on
+            }
+            value = input_field.cast(
+                interface_instance.identification.get(field_name),
+                dependency_values,
+            )
+            resolved_values[field_name] = value
+            return value
+
+        return {
+            name: lambda self, name=name: _resolve_input_value(self, name)
             for name in interface_cls.input_fields.keys()
         }
 

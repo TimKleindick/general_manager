@@ -240,6 +240,7 @@ class InterfaceBase(ABC):
             **kwargs: Named identification values matching the interface's input field names.
         """
         identification = self.parse_input_fields_to_identification(*args, **kwargs)
+        self._resolved_input_values = identification.copy()
         self.identification = self.format_identification(identification)
 
     @classmethod
