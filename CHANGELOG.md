@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.30.0 (2026-03-01)
+
+### Bug Fixes
+
+- Input handling and validation logic across various components
+  ([`1c5cb3c`](https://github.com/TimKleindick/general_manager/commit/1c5cb3cca8437403e2501405f904c2a39d98d915))
+
+### Documentation
+
+- **permission**: Add global default permissions configuration for ManagerBasedPermission
+  ([`cefbf08`](https://github.com/TimKleindick/general_manager/commit/cefbf08fb8efaa4edd220ef817f9f10f8dfaf589))
+
+### Features
+
+- Add week_end and quarter_end frequency options to DateRangeDomain
+  ([`89908d7`](https://github.com/TimKleindick/general_manager/commit/89908d76ff1f9d754e6114d348192df169fc27b2))
+
+- Enhance Input handling and add new calculation interfaces
+  ([`71f6d96`](https://github.com/TimKleindick/general_manager/commit/71f6d96703f9e3b488a0037a2693969c3a6d637a))
+
+- Enhance input handling by honoring explicit empty dependencies and prevent named parameter
+  duplication in callable invocation
+  ([`f125f86`](https://github.com/TimKleindick/general_manager/commit/f125f86370c477b99ee867114dbb2cfe8870cbe4))
+
+- Enhance NumericRangeDomain iteration to include float endpoints and add tests for inclusive
+  behavior
+  ([`ef81f82`](https://github.com/TimKleindick/general_manager/commit/ef81f822d36504ba8a59ab310ed4bb20249d6b55))
+
+- Enhance NumericRangeDomain to handle float rounding errors and improve _invoke_callable to avoid
+  duplicating variadic arguments
+  ([`127fc18`](https://github.com/TimKleindick/general_manager/commit/127fc1844341edeee8e19539d5ef57b287db19ef))
+
+- Improve input handling by ignoring variadic callable dependencies and enhance validation logic
+  ([`6c1e56d`](https://github.com/TimKleindick/general_manager/commit/6c1e56d351bf2173e8b6e3439c79f52a6e49b3c7))
+
+### Testing
+
+- Add daily, week_end, quarter_end, and year_end frequency options to DateRangeDomain tests
+  ([`92c3f9f`](https://github.com/TimKleindick/general_manager/commit/92c3f9f5747271654d3ac526393113b11851f5c3))
+
+
 ## v0.29.2 (2026-02-28)
 
 ### Bug Fixes
