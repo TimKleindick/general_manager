@@ -247,6 +247,12 @@ class TestRecordDependencies(TestCase):
             {"day": "2024-07-24"},
         )
 
+    def test_serialize_dependency_identifier_orders_sets_deterministically(self):
+        self.assertEqual(
+            serialize_dependency_identifier({"members": {"b", "a"}}),
+            json.dumps({"members": ["a", "b"]}, sort_keys=True),
+        )
+
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):
         mock_acquire.side_effect = [False, False, True]
