@@ -247,6 +247,9 @@ class TestRecordDependencies(TestCase):
             {"day": "2024-07-24"},
         )
 
+    def test_parse_dependency_identifier_returns_none_for_malformed_literal(self):
+        self.assertIsNone(parse_dependency_identifier("{bad"))
+
     def test_serialize_dependency_identifier_orders_sets_deterministically(self):
         self.assertEqual(
             serialize_dependency_identifier({"members": {"b", "a"}}),
@@ -1644,6 +1647,35 @@ class GenericCacheInvalidationTests(TestCase):
                 "DummyManager2": {
                     "__cache_dependencies__": {"CMP": {identifier}},
                     "status": {"'active'": {"CMP"}},
+                }
+            },
+            "exclude": {},
+        }
+        inst = DummyManager2(status="active", count=10)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values={"count": 10},
+        )
+
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("general_manager.cache.dependency_index.get_full_index")
+    @patch("general_manager.cache.dependency_index.invalidate_cache_key")
+    @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
+    def test_composite_dependencies_skip_malformed_identifier(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {
+                "DummyManager2": {
+                    "__cache_dependencies__": {"CMP": {"{bad"}},
+                    "count__gte": {"5": {"CMP"}},
                 }
             },
             "exclude": {},

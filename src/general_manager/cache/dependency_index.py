@@ -166,7 +166,10 @@ def parse_dependency_identifier(identifier: str) -> Any:
         return json.loads(identifier)
     except json.JSONDecodeError:
         normalized = _replace_legacy_temporal_repr(identifier)
-        return ast.literal_eval(normalized)
+        try:
+            return ast.literal_eval(normalized)
+        except (ValueError, SyntaxError):
+            return None
 
 
 # -----------------------------------------------------------------------------
@@ -207,6 +210,8 @@ def record_dependencies(
             if action in ("filter", "exclude"):
                 action_key = cast(Literal["filter", "exclude"], action)
                 params = parse_dependency_identifier(identifier)
+                if not isinstance(params, dict):
+                    continue
                 section = idx[action_key].setdefault(model_name, {})
                 if len(params) > 1:
                     cache_dependencies = section.setdefault(
@@ -590,6 +595,8 @@ def generic_cache_invalidation(
 
         for identifier in identifiers:
             params = parse_dependency_identifier(identifier)
+            if not isinstance(params, dict):
+                continue
             if lookup_key not in params:
                 continue
             old_all = True
