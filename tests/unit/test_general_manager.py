@@ -131,7 +131,7 @@ class GeneralManagerTestCase(TestCase):
         """
         manager = self.manager()
         mock_track.assert_called_once_with(
-            "GeneralManager", "identification", "{'id': 'dummy_id'}"
+            "GeneralManager", "identification", '{"id": "dummy_id"}'
         )
         self.assertIsInstance(manager, GeneralManager)
 

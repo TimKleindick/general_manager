@@ -4,9 +4,10 @@ from typing import Generator
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.dependency_index import (
-    general_manager_name,
     Dependency,
     filter_type,
+    general_manager_name,
+    serialize_dependency_identifier,
 )
 
 
@@ -30,11 +31,19 @@ class ModelDependencyCollector:
             yield (
                 obj.__class__.__name__,
                 "identification",
-                f"{obj.identification}",
+                serialize_dependency_identifier(obj.identification),
             )
         elif isinstance(obj, Bucket):
-            yield (obj._manager_class.__name__, "filter", f"{obj.filters}")
-            yield (obj._manager_class.__name__, "exclude", f"{obj.excludes}")
+            yield (
+                obj._manager_class.__name__,
+                "filter",
+                serialize_dependency_identifier(obj.filters),
+            )
+            yield (
+                obj._manager_class.__name__,
+                "exclude",
+                serialize_dependency_identifier(obj.excludes),
+            )
         elif isinstance(obj, dict):
             for v in obj.values():
                 yield from ModelDependencyCollector.collect(v)

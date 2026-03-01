@@ -172,6 +172,15 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 ).count()
 
             @graph_ql_property
+            def exact_start_date_count(self) -> int:
+                """
+                Count projects sharing the exact same start date as the current project.
+                """
+                return TestProjectForCommercials.filter(
+                    start_date=self.project.start_date
+                ).count()
+
+            @graph_ql_property
             def recent_project_window_count(self) -> int:
                 """
                 Count projects whose start_date falls within seven days before or after this instance's project.start_date and whose completion_at is no later than seven days after this instance's project.completion_at.
@@ -287,6 +296,24 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             self.assert_cache_hit()
             self.assertTrue(commercials.budget_left)
             self.assert_cache_miss()
+
+    def test_exact_date_filter_dependencies_are_cacheable(self):
+        """
+        Ensure exact-date filters can be cached and invalidated without dependency parsing errors.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.exact_start_date_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.exact_start_date_count, 1)
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(
+            start_date=date(2024, 1, 1), ignore_permission=True
+        )
+
+        self.assertEqual(commercials1.exact_start_date_count, 2)
+        self.assert_cache_miss()
 
     def test_cache_invalidation_after_related_update(self):
         """

@@ -9,6 +9,8 @@ from general_manager.cache.dependency_index import (
     invalidate_cache_key,
     capture_old_values,
     generic_cache_invalidation,
+    parse_dependency_identifier,
+    serialize_dependency_identifier,
     cache,
     dependency_index,
 )
@@ -217,6 +219,32 @@ class TestRecordDependencies(TestCase):
         self.assertIn(
             json.dumps({"name": 123, "status": "active"}),
             project_section["__cache_dependencies__"]["combo"],
+        )
+
+    def test_record_dependencies_with_date_identifier(self):
+        identifier = serialize_dependency_identifier({"day": date(2024, 7, 24)})
+
+        record_dependencies(
+            "day-cache",
+            [("DateOnlyManager", "filter", identifier)],
+        )
+
+        idx = get_full_index()
+        self.assertEqual(
+            idx["filter"]["DateOnlyManager"]["day"],
+            {repr("2024-07-24"): {"day-cache"}},
+        )
+
+    def test_parse_dependency_identifier_accepts_json_and_legacy_repr(self):
+        self.assertEqual(
+            parse_dependency_identifier(
+                serialize_dependency_identifier({"day": date(2024, 7, 24)})
+            ),
+            {"day": "2024-07-24"},
+        )
+        self.assertEqual(
+            parse_dependency_identifier(repr({"day": date(2024, 7, 24)})),
+            {"day": "2024-07-24"},
         )
 
     @patch("general_manager.cache.dependency_index.acquire_lock")

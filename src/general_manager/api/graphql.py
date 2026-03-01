@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast as py_ast
 import asyncio
 from contextlib import suppress
 import json
@@ -41,7 +40,10 @@ from channels.layers import BaseChannelLayer, get_channel_layer
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.dependency_index import Dependency
+from general_manager.cache.dependency_index import (
+    Dependency,
+    parse_dependency_identifier,
+)
 from general_manager.cache.signals import post_data_change
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
@@ -1683,8 +1685,8 @@ class GraphQL:
             if manager_class is None:
                 continue
             try:
-                parsed = py_ast.literal_eval(identifier)
-            except (ValueError, SyntaxError):
+                parsed = parse_dependency_identifier(identifier)
+            except (ValueError, SyntaxError, json.JSONDecodeError):
                 continue
             if not isinstance(parsed, dict):
                 continue

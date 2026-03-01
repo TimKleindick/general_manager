@@ -1,6 +1,7 @@
 from django.test import SimpleTestCase
 from unittest.mock import patch
 
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 
 
@@ -42,7 +43,16 @@ class TestModelDependencyCollector(SimpleTestCase):
         """
         gm = FakeGM("id123")
         deps = list(ModelDependencyCollector.collect(gm))
-        self.assertEqual(deps, [(gm.__class__.__name__, "identification", "id123")])
+        self.assertEqual(
+            deps,
+            [
+                (
+                    gm.__class__.__name__,
+                    "identification",
+                    serialize_dependency_identifier("id123"),
+                )
+            ],
+        )
 
     def test_collect_bucket(self):
         """
@@ -56,8 +66,8 @@ class TestModelDependencyCollector(SimpleTestCase):
         bucket = FakeBucket(Mgr, {"a": 1}, {"b": 2})
         deps = set(ModelDependencyCollector.collect(bucket))
         expected = {
-            (Mgr.__name__, "filter", "{'a': 1}"),
-            (Mgr.__name__, "exclude", "{'b': 2}"),
+            (Mgr.__name__, "filter", serialize_dependency_identifier({"a": 1})),
+            (Mgr.__name__, "exclude", serialize_dependency_identifier({"b": 2})),
         }
         self.assertEqual(deps, expected)
 
@@ -77,9 +87,9 @@ class TestModelDependencyCollector(SimpleTestCase):
         nested = {"one": [gm, {"inner": bucket}], "two": (gm,)}
         deps = set(ModelDependencyCollector.collect(nested))
         expected = {
-            ("FakeGM", "identification", "root"),
-            (Mgr2.__name__, "filter", "{'x': 10}"),
-            (Mgr2.__name__, "exclude", "{}"),
+            ("FakeGM", "identification", serialize_dependency_identifier("root")),
+            (Mgr2.__name__, "filter", serialize_dependency_identifier({"x": 10})),
+            (Mgr2.__name__, "exclude", serialize_dependency_identifier({})),
         }
         self.assertEqual(deps, expected)
 
@@ -98,8 +108,8 @@ class TestModelDependencyCollector(SimpleTestCase):
         # first arg is gm, second is ignored, no kwargs
         ModelDependencyCollector.add_args(deps_set, (gm, 42), {})
         expected = {
-            ("FakeGM", "identification", "child"),
-            ("FakeGM", "identification", "root"),
+            ("FakeGM", "identification", serialize_dependency_identifier("child")),
+            ("FakeGM", "identification", serialize_dependency_identifier("root")),
         }
         self.assertEqual(deps_set, expected)
 
@@ -114,5 +124,7 @@ class TestModelDependencyCollector(SimpleTestCase):
         deps_set = set()
         ModelDependencyCollector.add_args(deps_set, (), {"gm": gm, "val": other})
         # kwargs contain gm -> should include its identification
-        expected = {("FakeGM", "identification", "root")}
+        expected = {
+            ("FakeGM", "identification", serialize_dependency_identifier("root"))
+        }
         self.assertEqual(deps_set, expected)
