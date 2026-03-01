@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.30.1 (2026-03-01)
+
+### Bug Fixes
+
+- Input value resolution for dependent fields in CalculationInterface
+  ([`0ce6017`](https://github.com/TimKleindick/general_manager/commit/0ce6017ece2eacb506cc064593def9b191019304))
+
+
 ## v0.30.0 (2026-03-01)
 
 ### Bug Fixes
