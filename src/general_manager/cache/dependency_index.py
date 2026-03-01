@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import time
 from datetime import date, datetime
@@ -118,6 +119,52 @@ def set_full_index(idx: dependency_index) -> None:
     cache.set(INDEX_KEY, idx, None)
 
 
+def _normalize_dependency_identifier(value: Any) -> Any:
+    """Return a JSON-serializable representation for dependency tracking."""
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_dependency_identifier(val)
+            for key, val in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_dependency_identifier(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return {"__repr__": repr(value)}
+
+
+def serialize_dependency_identifier(value: Any) -> str:
+    """Serialize dependency payloads using a deterministic literal-safe format."""
+    return json.dumps(_normalize_dependency_identifier(value), sort_keys=True)
+
+
+def _replace_legacy_temporal_repr(identifier: str) -> str:
+    """Normalize legacy `datetime.date(...)` repr fragments into ISO string literals."""
+
+    def _date_replacement(match: re.Match[str]) -> str:
+        year, month, day = (int(group) for group in match.groups())
+        return repr(date(year, month, day).isoformat())
+
+    return re.sub(
+        r"datetime\.date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\)",
+        _date_replacement,
+        identifier,
+    )
+
+
+def parse_dependency_identifier(identifier: str) -> Any:
+    """Parse dependency payloads from current JSON or legacy repr literals."""
+    try:
+        return json.loads(identifier)
+    except json.JSONDecodeError:
+        normalized = _replace_legacy_temporal_repr(identifier)
+        return ast.literal_eval(normalized)
+
+
 # -----------------------------------------------------------------------------
 # DEPENDENCY RECORDING
 # -----------------------------------------------------------------------------
@@ -155,7 +202,7 @@ def record_dependencies(
         for model_name, action, identifier in dependencies:
             if action in ("filter", "exclude"):
                 action_key = cast(Literal["filter", "exclude"], action)
-                params = ast.literal_eval(identifier)
+                params = parse_dependency_identifier(identifier)
                 section = idx[action_key].setdefault(model_name, {})
                 if len(params) > 1:
                     cache_dependencies = section.setdefault(
@@ -315,6 +362,12 @@ def generic_cache_invalidation(
                 return value
         return value
 
+    def _repr_marker(raw: Any) -> str | None:
+        if isinstance(raw, dict) and set(raw.keys()) == {"__repr__"}:
+            marker = raw.get("__repr__")
+            return marker if isinstance(marker, str) else None
+        return None
+
     def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
         """
         Coerces a raw value to match the type and semantics of a sample value.
@@ -414,6 +467,9 @@ def generic_cache_invalidation(
         # eq
         if op == "eq":
             literal_val = _safe_literal_eval(val_key)
+            repr_marker = _repr_marker(literal_val)
+            if repr_marker is not None:
+                return repr(value) == repr_marker
             comparable = _coerce_to_type(value, literal_val)
             if comparable is None:
                 return repr(value) == val_key
@@ -426,6 +482,11 @@ def generic_cache_invalidation(
             except (ValueError, SyntaxError):
                 return False
             for item in seq:
+                repr_marker = _repr_marker(item)
+                if repr_marker is not None:
+                    if repr(value) == repr_marker:
+                        return True
+                    continue
                 comparable = _coerce_to_type(value, item)
                 if comparable is not None:
                     if value == comparable:
@@ -524,7 +585,7 @@ def generic_cache_invalidation(
             return None
 
         for identifier in identifiers:
-            params = ast.literal_eval(identifier)
+            params = parse_dependency_identifier(identifier)
             if lookup_key not in params:
                 continue
             old_all = True

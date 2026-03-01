@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Self, Type
 from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.signals import data_change
 from general_manager.logging import get_logger
 from general_manager.manager.meta import GeneralManagerMeta
@@ -48,7 +49,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
         DependencyTracker.track(
-            self.__class__.__name__, "identification", f"{self.__id}"
+            self.__class__.__name__,
+            "identification",
+            serialize_dependency_identifier(self.__id),
         )
         logger.debug(
             "instantiated manager",
@@ -280,7 +283,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket containing manager instances that match the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        DependencyTracker.track(cls.__name__, "filter", repr(identifier_map))
+        DependencyTracker.track(
+            cls.__name__, "filter", serialize_dependency_identifier(identifier_map)
+        )
         logger.debug(
             "manager filter",
             context={
@@ -302,7 +307,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket of manager instances that do not satisfy the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        DependencyTracker.track(cls.__name__, "exclude", repr(identifier_map))
+        DependencyTracker.track(
+            cls.__name__, "exclude", serialize_dependency_identifier(identifier_map)
+        )
         logger.debug(
             "manager exclude",
             context={
