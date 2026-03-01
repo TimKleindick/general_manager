@@ -84,6 +84,7 @@ def _invoke_callable(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> 
         if parameter.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
             if positional_args:
                 bound_args.append(positional_args.pop(0))
+                remaining_kwargs.pop(parameter.name, None)
                 continue
             if parameter.name in remaining_kwargs:
                 bound_kwargs[parameter.name] = remaining_kwargs.pop(parameter.name)
@@ -464,7 +465,11 @@ class Input(Generic[INPUT_TYPE]):
                 step=step,
             )
 
-        resolved_depends_on = depends_on or cls._infer_dependencies(start, end)
+        resolved_depends_on = (
+            depends_on
+            if depends_on is not None
+            else cls._infer_dependencies(start, end)
+        )
         domain_or_builder: PossibleValues | DateRangeDomain
         if resolved_depends_on:
             domain_or_builder = build_domain
@@ -554,7 +559,9 @@ class Input(Generic[INPUT_TYPE]):
                 return manager_type.filter(**resolved_query)  # type: ignore[attr-defined]
             return resolved_query
 
-        resolved_depends_on = depends_on or cls._infer_dependencies(query)
+        resolved_depends_on = (
+            depends_on if depends_on is not None else cls._infer_dependencies(query)
+        )
         possible_values: PossibleValues
         if resolved_depends_on:
             possible_values = build_values

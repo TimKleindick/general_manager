@@ -246,6 +246,15 @@ class TestInput(TestCase):
         self.assertEqual(next(iter(resolved_values)), date(2024, 1, 1))
         self.assertEqual(resolved_values[-1], date(2024, 1, 31))
 
+    def test_date_range_helper_honors_explicit_empty_dependencies(self):
+        input_obj = Input.date_range(
+            start=lambda base=date(2024, 1, 1): base,
+            end=lambda limit=date(2024, 1, 31): limit,
+            depends_on=[],
+        )
+        self.assertEqual(input_obj.depends_on, [])
+        self.assertIsInstance(input_obj.possible_values, DateRangeDomain)
+
     def test_date_range_helper_inferred_dependencies_ignore_variadics(self):
         input_obj = Input.date_range(
             start=lambda base, *_args: base,
@@ -446,6 +455,14 @@ class TestInput(TestCase):
         self.assertEqual(result_args, (1, 2))
         self.assertEqual(result_kwargs, {"a": 3, "b": 4})
 
+    def test_invoke_callable_does_not_duplicate_named_parameter(self):
+        def capture(a, **kwargs):
+            return a, kwargs
+
+        result_arg, result_kwargs = _invoke_callable(capture, 1, a=1, b=2)
+        self.assertEqual(result_arg, 1)
+        self.assertEqual(result_kwargs, {"b": 2})
+
     def test_input_from_manager_query_with_filter_dict(self):
         class MockManager:
             @classmethod
@@ -461,6 +478,25 @@ class TestInput(TestCase):
             input_obj.resolve_possible_values({}),
             {"status": "active"},
         )
+
+    def test_input_from_manager_query_honors_explicit_empty_dependencies(self):
+        class MockManager:
+            @classmethod
+            def filter(cls, **kwargs):
+                return kwargs
+
+        def query(base_id=7):
+            return {"id": base_id}
+
+        with patch("general_manager.manager.input.issubclass", return_value=True):
+            input_obj = Input.from_manager_query(
+                MockManager,
+                query=query,
+                depends_on=[],
+            )
+
+        self.assertEqual(input_obj.depends_on, [])
+        self.assertEqual(input_obj.resolve_possible_values({}), {"id": 7})
 
     def test_input_resolve_possible_values_with_callable(self):
         def get_values():
