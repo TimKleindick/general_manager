@@ -440,12 +440,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         return self._data.count()
 
-    def all(self) -> DatabaseBucket:
+    def all(self) -> DatabaseBucket[GeneralManagerType]:
         """
         Return a bucket materialising the queryset without further filtering.
 
         Returns:
-            DatabaseBucket: Bucket encapsulating `self._data.all()`.
+            DatabaseBucket[GeneralManagerType]: Bucket encapsulating `self._data.all()`.
         """
         return self.__class__(
             self._data.all(),
@@ -470,7 +470,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         element = self._data.get(**kwargs)
         return self._build_manager(element.pk)
 
-    def __getitem__(self, item: int | slice) -> GeneralManagerType | DatabaseBucket:
+    def __getitem__(
+        self, item: int | slice
+    ) -> GeneralManagerType | DatabaseBucket[GeneralManagerType]:
         """
         Access manager instances by index or obtain a sliced bucket.
 
@@ -478,7 +480,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             item (int | slice): Index of the desired row or slice object describing a range.
 
         Returns:
-            GeneralManagerType | DatabaseBucket: Manager instance for single indices or bucket wrapping the sliced queryset.
+            GeneralManagerType | DatabaseBucket[GeneralManagerType]: Manager instance for single indices or bucket wrapping the sliced queryset.
         """
         if isinstance(item, slice):
             return self.__class__(

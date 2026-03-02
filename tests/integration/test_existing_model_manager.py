@@ -254,16 +254,29 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
         """
         all_customers = self.CustomerManager.all()
         self.assertEqual(len(all_customers), 2)
+        self.assertTrue(
+            all(
+                isinstance(customer, self.CustomerManager) for customer in all_customers
+            )
+        )
         self.assertIsInstance(all_customers[0], self.CustomerManager)
         self.assertIsInstance(all_customers[1], self.CustomerManager)
 
         acme = self.CustomerManager.filter(name="Acme Corp")
         self.assertEqual(len(acme), 1)
+        self.assertTrue(
+            all(isinstance(customer, self.CustomerManager) for customer in acme)
+        )
         self.assertEqual(acme[0].identification, self.customer_a.identification)
         self.assertIsInstance(acme[0], self.CustomerManager)
 
         everyone_else = self.CustomerManager.exclude(name="Acme Corp")
         self.assertEqual(len(everyone_else), 1)
+        self.assertTrue(
+            all(
+                isinstance(customer, self.CustomerManager) for customer in everyone_else
+            )
+        )
         self.assertEqual(
             everyone_else[0].identification, self.customer_b.identification
         )

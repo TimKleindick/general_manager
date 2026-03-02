@@ -122,9 +122,11 @@ class GroupBucketTests(TestCase):
         items = [DummyManager(a=1), DummyManager(a=2)]
         gb = GroupBucket(DummyManager, ("a",), ListBucket(items))
         filtered = gb.filter(a=1)
+        self.assertTrue(all(isinstance(group, GroupManager) for group in filtered))
         self.assertTrue(all(group.a == 1 for group in filtered))
 
         excluded = gb.exclude(a=1)
+        self.assertTrue(all(isinstance(group, GroupManager) for group in excluded))
         self.assertTrue(all(group.a != 1 for group in excluded))
 
     # Test indexing and slicing behavior
@@ -202,6 +204,7 @@ class GroupBucketTests(TestCase):
         gb = GroupBucket(DummyManager, ("a",), ListBucket(items))
         all_gm = gb.all()
         self.assertIsInstance(all_gm, GroupBucket)
+        self.assertTrue(all(isinstance(group, GroupManager) for group in all_gm))
         self.assertEqual(len(all_gm), 5)
         self.assertEqual(all_gm[0].a, 0)
         self.assertEqual(all_gm[4].a, 4)

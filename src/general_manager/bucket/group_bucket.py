@@ -1,7 +1,7 @@
 """Grouping bucket implementation for aggregating GeneralManager instances."""
 
 from __future__ import annotations
-from typing import Any, Generator, Type
+from typing import Any, Generator, Generic, Type
 from general_manager.manager.group_manager import GroupManager
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
 
@@ -107,7 +107,7 @@ class InvalidGroupBucketIndexError(TypeError):
         )
 
 
-class GroupBucket(Bucket[GeneralManagerType]):
+class GroupBucket(Generic[GeneralManagerType]):
     """Bucket variant that groups managers by specified attributes."""
 
     def __init__(
@@ -131,7 +131,9 @@ class GroupBucket(Bucket[GeneralManagerType]):
             TypeError: If a group-by key is not a string.
             ValueError: If a group-by key is not a valid manager attribute.
         """
-        super().__init__(manager_class)
+        self._manager_class = manager_class
+        self.filters: dict[str, Any] = {}
+        self.excludes: dict[str, Any] = {}
         self.__check_group_by_arguments(group_by_keys)
         self._group_by_keys = group_by_keys
         self._data: list[GroupManager[GeneralManagerType]] = (
@@ -231,6 +233,18 @@ class GroupBucket(Bucket[GeneralManagerType]):
             self._basis_data | other._basis_data,
         )
 
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        """
+        Provide pickling support by returning the constructor and arguments.
+
+        Returns:
+            tuple[Any, ...]: Data allowing the group bucket to be reconstructed during unpickling.
+        """
+        return (
+            self.__class__,
+            (self._manager_class, self._group_by_keys, self._basis_data),
+        )
+
     def __iter__(self) -> Generator[GroupManager[GeneralManagerType], None, None]:
         """
         Iterate over the grouped managers produced by this bucket.
@@ -307,12 +321,12 @@ class GroupBucket(Bucket[GeneralManagerType]):
         """
         return sum(1 for _ in self)
 
-    def all(self) -> Bucket[GeneralManagerType]:
+    def all(self) -> GroupBucket[GeneralManagerType]:
         """
         Return the current grouping bucket.
 
         Returns:
-            Bucket[GeneralManagerType]: This instance.
+            GroupBucket[GeneralManagerType]: This instance.
         """
         return self
 
@@ -390,7 +404,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
         self,
         key: tuple[str, ...] | str,
         reverse: bool = False,
-    ) -> Bucket[GeneralManagerType]:
+    ) -> GroupBucket[GeneralManagerType]:
         """
         Return a new GroupBucket sorted by the specified attributes.
 
@@ -399,7 +413,7 @@ class GroupBucket(Bucket[GeneralManagerType]):
             reverse (bool): Whether to apply descending order.
 
         Returns:
-            Bucket[GeneralManagerType]: Sorted grouping bucket.
+            GroupBucket[GeneralManagerType]: Sorted grouping bucket.
         """
         if isinstance(key, str):
             key = (key,)
@@ -446,3 +460,6 @@ class GroupBucket(Bucket[GeneralManagerType]):
         return GroupBucket(
             self._manager_class, self._group_by_keys, self._basis_data.none()
         )
+
+
+Bucket.register(GroupBucket)

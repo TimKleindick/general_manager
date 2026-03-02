@@ -362,7 +362,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         return parsed_inputs
 
-    def filter(self, **kwargs: Any) -> CalculationBucket:
+    def filter(self, **kwargs: Any) -> CalculationBucket[GeneralManagerType]:
         """
         Add additional filters and return a new calculation bucket.
 
@@ -370,7 +370,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             **kwargs (Any): Filter expressions applied to generated combinations.
 
         Returns:
-            CalculationBucket: Bucket reflecting the updated filter definitions.
+            CalculationBucket[GeneralManagerType]: Bucket reflecting the updated filter definitions.
         """
         return CalculationBucket(
             manager_class=self._manager_class,
@@ -381,7 +381,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             exclude_definitions=self.exclude_definitions.copy(),
         )
 
-    def exclude(self, **kwargs: Any) -> CalculationBucket:
+    def exclude(self, **kwargs: Any) -> CalculationBucket[GeneralManagerType]:
         """
         Add additional exclusion rules and return a new calculation bucket.
 
@@ -389,7 +389,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             **kwargs (Any): Exclusion expressions removing combinations from the result.
 
         Returns:
-            CalculationBucket: Bucket reflecting the updated exclusion definitions.
+            CalculationBucket[GeneralManagerType]: Bucket reflecting the updated exclusion definitions.
         """
         return CalculationBucket(
             manager_class=self._manager_class,
@@ -400,12 +400,12 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             },
         )
 
-    def all(self) -> CalculationBucket:
+    def all(self) -> CalculationBucket[GeneralManagerType]:
         """
         Return a deep copy of this calculation bucket.
 
         Returns:
-            CalculationBucket: Independent copy that can be mutated without affecting the original.
+            CalculationBucket[GeneralManagerType]: Independent copy that can be mutated without affecting the original.
         """
         return deepcopy(self)
 
