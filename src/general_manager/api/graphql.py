@@ -21,6 +21,7 @@ from typing import (
     Iterable,
     TYPE_CHECKING,
     Type,
+    TypeVar,
     Union,
     cast,
     get_args,
@@ -65,9 +66,12 @@ from graphql import GraphQLError
 if TYPE_CHECKING:
     from general_manager.permission.base_permission import BasePermission
     from graphene import ResolveInfo as GraphQLResolveInfo
-
+    from general_manager.bucket.group_bucket import GroupBucket
 
 logger = get_logger("api.graphql")
+
+
+GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
 
 
 @dataclass(slots=True)
@@ -1257,26 +1261,26 @@ class GraphQL:
 
     @staticmethod
     def _apply_permission_filters(
-        queryset: Bucket,
-        general_manager_class: type[GeneralManager],
+        queryset: Bucket[GeneralManagerT],
+        general_manager_class: type[GeneralManagerT],
         info: GraphQLResolveInfo,
-    ) -> Bucket:
+    ) -> Bucket[GeneralManagerT]:
         """
         Apply permission-based filters to ``queryset`` for the current user.
 
         Parameters:
-            queryset (Bucket): Queryset being filtered.
+            queryset (Bucket[Any]): Queryset being filtered.
             general_manager_class (type[GeneralManager]): Manager class providing permissions.
             info (GraphQLResolveInfo): Resolver info containing the request user.
 
         Returns:
-            Bucket: Queryset constrained by read permissions.
+            Bucket[Any]: Queryset constrained by read permissions.
         """
         permission_filters = get_read_permission_filter(general_manager_class, info)
         if not permission_filters:
             return queryset
 
-        filtered_queryset = queryset.none()
+        filtered_queryset: Bucket[GeneralManagerT] = queryset.none()
         for perm_filter, perm_exclude in permission_filters:
             qs_perm = queryset.exclude(**perm_exclude).filter(**perm_filter)
             filtered_queryset = filtered_queryset | qs_perm
@@ -1352,11 +1356,11 @@ class GraphQL:
             )
             qs = GraphQL._apply_permission_filters(base_queryset, manager_class, info)
             qs = GraphQL._apply_query_parameters(qs, filter, exclude, sort_by, reverse)
-            qs = GraphQL._apply_grouping(qs, group_by)
+            qs_grouped = GraphQL._apply_grouping(qs, group_by)
 
-            total_count = len(qs)
+            total_count = len(qs_grouped)
 
-            qs_paginated = GraphQL._apply_pagination(qs, page, page_size)
+            qs_paginated = GraphQL._apply_pagination(qs_grouped, page, page_size)
 
             page_info = {
                 "total_count": total_count,
@@ -1375,8 +1379,10 @@ class GraphQL:
 
     @staticmethod
     def _apply_pagination(
-        queryset: Bucket[GeneralManager], page: int | None, page_size: int | None
-    ) -> Bucket[GeneralManager]:
+        queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
+        page: int | None,
+        page_size: int | None,
+    ) -> Bucket[GeneralManager] | GroupBucket[GeneralManager]:
         """
         Returns a paginated subset of the queryset based on the given page number and page size.
 
@@ -1399,7 +1405,7 @@ class GraphQL:
     @staticmethod
     def _apply_grouping(
         queryset: Bucket[GeneralManager], group_by: list[str] | None
-    ) -> Bucket[GeneralManager]:
+    ) -> Bucket[GeneralManager] | GroupBucket[GeneralManager]:
         """
         Groups the queryset by the specified fields.
 
@@ -1407,9 +1413,9 @@ class GraphQL:
         """
         if group_by is not None:
             if group_by == [""]:
-                queryset = queryset.group_by()
+                return queryset.group_by()
             else:
-                queryset = queryset.group_by(*group_by)
+                return queryset.group_by(*group_by)
         return queryset
 
     @staticmethod

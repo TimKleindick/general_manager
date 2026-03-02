@@ -15,7 +15,6 @@ GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
-    from general_manager.manager.group_manager import GroupManager
     from general_manager.bucket.group_bucket import GroupBucket
 
 
@@ -82,12 +81,12 @@ class Bucket(ABC, Generic[GeneralManagerType]):
     @abstractmethod
     def __iter__(
         self,
-    ) -> Generator[GeneralManagerType | GroupManager[GeneralManagerType], None, None]:
+    ) -> Generator[GeneralManagerType, None, None]:
         """
         Iterate over items in the bucket.
 
         Yields:
-            GeneralManagerType | GroupManager[GeneralManagerType]: Items stored in the bucket.
+            GeneralManagerType: Items stored in the bucket.
         """
         raise NotImplementedError
 
@@ -118,22 +117,22 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         raise NotImplementedError
 
     @abstractmethod
-    def first(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
+    def first(self) -> GeneralManagerType | None:
         """
         Return the first item contained in the bucket.
 
         Returns:
-            GeneralManagerType | GroupManager[GeneralManagerType] | None: First entry if present, otherwise None.
+            GeneralManagerType | None: First entry if present, otherwise None.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def last(self) -> GeneralManagerType | GroupManager[GeneralManagerType] | None:
+    def last(self) -> GeneralManagerType | None:
         """
         Return the last item contained in the bucket.
 
         Returns:
-            GeneralManagerType | GroupManager[GeneralManagerType] | None: Last entry if present, otherwise None.
+            GeneralManagerType | None: Last entry if present, otherwise None.
         """
         raise NotImplementedError
 
@@ -158,9 +157,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         raise NotImplementedError
 
     @abstractmethod
-    def get(
-        self, **kwargs: Any
-    ) -> GeneralManagerType | GroupManager[GeneralManagerType]:
+    def get(self, **kwargs: Any) -> GeneralManagerType:
         """
         Retrieve a single item matching the provided criteria.
 
@@ -168,18 +165,14 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             **kwargs: Field lookups identifying the target record.
 
         Returns:
-            GeneralManagerType | GroupManager[GeneralManagerType]: Matching item.
+            GeneralManagerType: Matching item.
         """
         raise NotImplementedError
 
     @abstractmethod
     def __getitem__(
         self, item: int | slice
-    ) -> (
-        GeneralManagerType
-        | GroupManager[GeneralManagerType]
-        | Bucket[GeneralManagerType]
-    ):
+    ) -> GeneralManagerType | Bucket[GeneralManagerType]:
         """
         Retrieve an item or slice from the bucket.
 
@@ -187,7 +180,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
             item (int | slice): Index or slice specifying the desired record(s).
 
         Returns:
-            GeneralManagerType | GroupManager[GeneralManagerType] | Bucket[GeneralManagerType]: Resulting item or bucket slice.
+            GeneralManagerType | Bucket[GeneralManagerType]: Resulting item or bucket slice.
         """
         raise NotImplementedError
 

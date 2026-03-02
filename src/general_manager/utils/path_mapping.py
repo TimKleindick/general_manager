@@ -227,7 +227,7 @@ class PathTracer:
             start_instance (GeneralManager | Bucket): Object used as the traversal root.
 
         Returns:
-            GeneralManager | Bucket | None: The resolved destination object, a merged bucket, or None when no traversal is required.
+            GeneralManager | Bucket[Any] | None: The resolved destination object, a merged bucket, or None when no traversal is required.
         """
         current_instance: Any = start_instance
         if not self.path:
