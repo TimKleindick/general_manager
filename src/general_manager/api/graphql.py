@@ -1269,12 +1269,12 @@ class GraphQL:
         Apply permission-based filters to ``queryset`` for the current user.
 
         Parameters:
-            queryset (Bucket[Any]): Queryset being filtered.
-            general_manager_class (type[GeneralManager]): Manager class providing permissions.
+            queryset (Bucket[GeneralManagerT]): Queryset being filtered.
+            general_manager_class (type[GeneralManagerT]): Manager class providing permissions.
             info (GraphQLResolveInfo): Resolver info containing the request user.
 
         Returns:
-            Bucket[Any]: Queryset constrained by read permissions.
+            Bucket[GeneralManagerT]: Queryset constrained by read permissions.
         """
         permission_filters = get_read_permission_filter(general_manager_class, info)
         if not permission_filters:
@@ -1399,7 +1399,10 @@ class GraphQL:
             page = page or 1
             page_size = page_size or 10
             offset = (page - 1) * page_size
-            queryset = cast(Bucket, queryset[offset : offset + page_size])
+            queryset = cast(
+                Bucket[GeneralManager] | GroupBucket[GeneralManager],
+                queryset[offset : offset + page_size],
+            )
         return queryset
 
     @staticmethod
