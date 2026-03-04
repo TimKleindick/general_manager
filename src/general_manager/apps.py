@@ -43,6 +43,9 @@ from general_manager.workflow.event_registry import (
 from general_manager.workflow.signal_bridge import (
     configure_workflow_signal_bridge_from_settings,
 )
+from general_manager.workflow.tasks import (
+    configure_workflow_beat_schedule_from_settings,
+)
 
 
 class MissingRootUrlconfError(RuntimeError):
@@ -137,6 +140,7 @@ class GeneralmanagerConfig(AppConfig):
         configure_workflow_engine_from_settings(settings)
         configure_event_registry_from_settings(settings)
         configure_workflow_signal_bridge_from_settings(settings)
+        configure_workflow_beat_schedule_from_settings(settings)
         from general_manager.search import indexer as _search_indexer  # noqa: F401
 
         self.install_search_auto_reindex()

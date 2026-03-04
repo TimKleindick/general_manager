@@ -11,4 +11,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options) -> None:  # type: ignore[no-untyped-def]
         del args, options
         processed = publish_outbox_batch()
-        self.stdout.write(self.style.SUCCESS(f"Processed {processed} outbox records."))
+        self.stdout.write(
+            self.style.SUCCESS(f"Dispatched {processed} outbox records for routing.")
+        )

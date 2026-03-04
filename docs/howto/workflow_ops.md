@@ -12,6 +12,16 @@ python manage.py workflow_drain_outbox
 
 This claims and routes pending outbox records.
 
+In production, run a dedicated Celery Beat process to trigger periodic drain:
+
+```bash
+celery -A <your_project> beat -l info
+```
+
+The workflow library registers a Beat schedule for `publish_outbox_batch` when:
+- `WORKFLOW_BEAT_ENABLED=True`
+- Celery is installed and configured in the host app
+
 ## Replay dead letters
 
 Run:
@@ -28,3 +38,7 @@ This moves dead-letter outbox rows back to `pending`.
 - oldest pending outbox age
 - failed/dead-letter outbox count
 - workflow execution state totals
+- outbox claim batch size
+- outbox process duration
+- delivery attempt status totals
+- duplicate suppression totals

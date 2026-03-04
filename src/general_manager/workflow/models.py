@@ -62,6 +62,8 @@ class WorkflowOutbox(models.Model):
     class Meta:
         indexes = (
             models.Index(fields=["status", "available_at"]),
+            models.Index(fields=["status", "claimed_at"]),
+            models.Index(fields=["status", "available_at", "id"]),
             models.Index(fields=["claim_token"]),
             models.Index(fields=["created_at"]),
         )

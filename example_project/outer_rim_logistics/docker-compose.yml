@@ -446,6 +446,50 @@ services:
     networks:
       - backend
 
+  celery-beat:
+    <<: *security-defaults
+    build:
+      context: ../../
+      dockerfile: example_project/outer_rim_logistics/Dockerfile
+    entrypoint: ["/bin/sh", "/app/example_project/outer_rim_logistics/docker/entrypoint-celery.sh"]
+    command: celery -A orl beat -l info
+    user: "1000:1000"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      DJANGO_SECRET_KEY_FILE: "/run/secrets/django_secret_key"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "${POSTGRES_DB:-orl}"
+      POSTGRES_USER: "${POSTGRES_USER:-orl}"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
+      MEILISEARCH_URL: "http://meilisearch:7700"
+      MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
+      GM_SEARCH_AUTO_REINDEX: "false"
+      GM_SEARCH_ASYNC: "true"
+      LOG_DIR: "/var/log/outer-rim/app"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+      REDIS_URL: "redis://redis:6379/0"
+    volumes:
+      - ./logs:/var/log/outer-rim
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      app-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    secrets:
+      - django_secret_key
+      - meilisearch_api_key
+      - postgres_password
+    networks:
+      - backend
+
   meili-init:
     image: alpine:3.19
     command: ["sh", "-c", "chown -R 1000:1000 /meili_data"]
