@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.30.3 (2026-03-04)
+
+### Bug Fixes
+
+- Enhance type hints for buckets and GraphQL utilities
+  ([`922af64`](https://github.com/TimKleindick/general_manager/commit/922af646b6c7b8b1a1a2d3bf293cea833ff4d081))
+
+- Remove redundant import of GroupBucket in type checking block
+  ([`b47e242`](https://github.com/TimKleindick/general_manager/commit/b47e242a52295f9247d759bf0a01545ca8bcb844))
+
+- Update type hints for queryset and general_manager_class in GraphQL class
+  ([`33090c5`](https://github.com/TimKleindick/general_manager/commit/33090c59655aba8b85caaabb1987838d3e971174))
+
+
 ## v0.30.2 (2026-03-01)
 
 ### Bug Fixes
