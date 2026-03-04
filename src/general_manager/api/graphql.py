@@ -40,6 +40,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer, get_channel_layer
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
     Dependency,
@@ -66,7 +67,6 @@ from graphql import GraphQLError
 if TYPE_CHECKING:
     from general_manager.permission.base_permission import BasePermission
     from graphene import ResolveInfo as GraphQLResolveInfo
-    from general_manager.bucket.group_bucket import GroupBucket
 
 logger = get_logger("api.graphql")
 
