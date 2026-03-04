@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import StringIO
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -113,10 +114,12 @@ class WorkflowProductionIntegrationTests(GeneralManagerTransactionTestCase):
             )
             project.update(status="active", ignore_permission=True)
 
+        stdout = StringIO()
         with patch("general_manager.workflow.tasks.CELERY_AVAILABLE", False):
-            call_command("workflow_drain_outbox")
+            call_command("workflow_drain_outbox", stdout=stdout)
 
         assert len(self.handled_events) == 1
+        assert "Dispatched 2 outbox records for routing." in stdout.getvalue()
         assert (
             WorkflowOutbox.objects.filter(
                 status=WorkflowOutbox.STATUS_PROCESSED

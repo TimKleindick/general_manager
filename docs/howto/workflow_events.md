@@ -20,6 +20,11 @@ GENERAL_MANAGER = {
     "WORKFLOW_SIGNAL_BRIDGE": True,
     "WORKFLOW_ASYNC": True,
     "WORKFLOW_OUTBOX_BATCH_SIZE": 100,
+    "WORKFLOW_OUTBOX_PROCESS_CHUNK_SIZE": 50,
+    "WORKFLOW_BEAT_ENABLED": True,
+    "WORKFLOW_BEAT_OUTBOX_INTERVAL_SECONDS": 5,
+    "WORKFLOW_BEAT_MAX_JITTER_SECONDS": 2,
+    "WORKFLOW_DELIVERY_RUNNING_TIMEOUT_SECONDS": 300,
     "WORKFLOW_MAX_RETRIES": 3,
     "WORKFLOW_DEAD_LETTER_ENABLED": True,
 }
@@ -29,6 +34,13 @@ GENERAL_MANAGER = {
 - `WORKFLOW_MODE` controls defaults (`local` vs `production`).
 - `WORKFLOW_EVENT_REGISTRY` selects in-memory vs durable DB routing.
 - `WORKFLOW_SIGNAL_BRIDGE=True` enables automatic event creation from manager mutation signals.
+- `WORKFLOW_BEAT_*` controls periodic outbox draining via Celery Beat.
+- `WORKFLOW_OUTBOX_PROCESS_CHUNK_SIZE` controls per-task claimed outbox batch processing size.
+- `WORKFLOW_DELIVERY_RUNNING_TIMEOUT_SECONDS` defines stale-running takeover threshold for delivery attempts.
+
+Important async contract:
+- in `WORKFLOW_ASYNC=True`, workflow handlers must be importable top-level callables.
+- nested/local handlers are marked failed with an explicit error instead of executing inline.
 
 For local zero-setup mode, use:
 

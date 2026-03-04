@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 
 from django.db import transaction
+from django.utils.module_loading import import_string
 
 from general_manager.workflow.config import workflow_async_enabled
 from general_manager.workflow.engine import (
@@ -16,6 +17,7 @@ from general_manager.workflow.engine import (
     WorkflowExecutionNotFoundError,
 )
 from general_manager.workflow.tasks import CELERY_AVAILABLE, execute_workflow_handler
+from general_manager.workflow.telemetry import increment_execution_state
 
 
 def _handler_path(workflow: WorkflowDefinition) -> str | None:
@@ -45,6 +47,17 @@ def _to_execution(record: Any) -> WorkflowExecution:
         error=record.error,
         metadata=record.metadata,
     )
+
+
+def _run_inline_handler(
+    handler: Callable[[dict[str, Any]], Mapping[str, Any] | None],
+    payload: dict[str, Any],
+) -> tuple[str, Mapping[str, Any] | None, str | None]:
+    try:
+        result = handler(payload) or {}
+        return "completed", dict(result), None
+    except Exception as exc:  # noqa: BLE001
+        return "failed", None, str(exc)
 
 
 class CeleryWorkflowEngine:
@@ -80,8 +93,32 @@ class CeleryWorkflowEngine:
             merged_metadata = dict(metadata or {})
             if handler_path is not None:
                 merged_metadata["handler_path"] = handler_path
-            state = "pending" if handler_path else "completed"
-            output_data: Mapping[str, Any] | None = {} if handler_path is None else None
+            has_runnable_handler = (
+                workflow.handler is not None or handler_path is not None
+            )
+            async_mode = workflow_async_enabled()
+            state = "pending" if has_runnable_handler else "completed"
+            output_data: Mapping[str, Any] | None = None if has_runnable_handler else {}
+            error: str | None = None
+            if has_runnable_handler and async_mode:
+                if handler_path is None:
+                    state = "failed"
+                    error = "Workflow async mode requires an importable top-level handler path."
+                elif not CELERY_AVAILABLE:
+                    state = "failed"
+                    error = "Workflow async mode requires Celery to be installed."
+                else:
+                    try:
+                        resolved = import_string(handler_path)
+                        if not callable(resolved):
+                            state = "failed"
+                            error = (
+                                f"Failed to resolve workflow handler path '{handler_path}': "
+                                "handler is not callable"
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        state = "failed"
+                        error = f"Failed to resolve workflow handler path '{handler_path}': {exc}"
             record = WorkflowExecutionRecord.objects.create(
                 execution_id=execution_id,
                 workflow_id=workflow.workflow_id,
@@ -90,26 +127,41 @@ class CeleryWorkflowEngine:
                 output_data=output_data,
                 correlation_id=correlation_id,
                 started_at=started_at,
-                ended_at=started_at if state == "completed" else None,
+                ended_at=started_at
+                if state in {"completed", "failed", "cancelled"}
+                else None,
+                error=error,
                 metadata=merged_metadata,
             )
-            if handler_path is not None:
-                if workflow_async_enabled() and CELERY_AVAILABLE:
+            increment_execution_state(state)
+            if has_runnable_handler:
+                should_dispatch_async = (
+                    async_mode
+                    and CELERY_AVAILABLE
+                    and handler_path is not None
+                    and state == "pending"
+                )
+                if should_dispatch_async:
                     transaction.on_commit(
                         lambda: execute_workflow_handler.delay(
                             execution_id, handler_path, dict(input_data or {})
                         )
                     )
-                elif workflow.handler is not None:
-                    try:
-                        result = workflow.handler(dict(input_data or {})) or {}
-                        record.state = "completed"
-                        record.output_data = dict(result)
+                elif not async_mode:
+                    handler = workflow.handler
+                    if handler is None and handler_path is not None:
+                        imported = import_string(handler_path)
+                        if callable(imported):
+                            handler = imported
+                    if handler is not None:
+                        final_state, final_output, final_error = _run_inline_handler(
+                            handler, dict(input_data or {})
+                        )
+                        record.state = final_state
+                        record.output_data = final_output
+                        record.error = final_error
                         record.ended_at = self._utcnow()
-                    except Exception as exc:  # noqa: BLE001
-                        record.state = "failed"
-                        record.error = str(exc)
-                        record.ended_at = self._utcnow()
+                        increment_execution_state(final_state)
                     record.save(
                         update_fields=[
                             "state",
