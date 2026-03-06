@@ -9,9 +9,11 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from general_manager.workflow.engine import (
+    ACTIVE_WORKFLOW_STATES,
     WorkflowCancelledError,
     WorkflowDefinition,
     WorkflowExecution,
+    WorkflowInvalidStateError,
     WorkflowExecutionNotFoundError,
     WorkflowState,
 )
@@ -22,6 +24,7 @@ class LocalWorkflowEngine:
 
     def __init__(self) -> None:
         self._executions: dict[str, WorkflowExecution] = {}
+        self._correlation_index: dict[tuple[str, str], str] = {}
         self._lock = Lock()
 
     @staticmethod
@@ -36,6 +39,15 @@ class LocalWorkflowEngine:
         correlation_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> WorkflowExecution:
+        if correlation_id:
+            with self._lock:
+                existing_id = self._correlation_index.get(
+                    (workflow.workflow_id, correlation_id)
+                )
+                if existing_id is not None:
+                    existing = self._executions.get(existing_id)
+                    if existing is not None:
+                        return existing
         execution_id = str(uuid4())
         output_data: Mapping[str, Any] | None = {}
         state: WorkflowState = "completed"
@@ -61,6 +73,10 @@ class LocalWorkflowEngine:
         )
         with self._lock:
             self._executions[execution_id] = execution
+            if correlation_id:
+                self._correlation_index[(workflow.workflow_id, correlation_id)] = (
+                    execution_id
+                )
         return execution
 
     def resume(
@@ -71,6 +87,13 @@ class LocalWorkflowEngine:
         execution = self.status(execution_id)
         if execution.state == "cancelled":
             raise WorkflowCancelledError(execution_id)
+        if execution.state != "waiting":
+            raise WorkflowInvalidStateError(
+                execution_id,
+                operation="resume",
+                state=execution.state,
+                expected_states=("waiting",),
+            )
         merged_metadata = dict(execution.metadata)
         if signal:
             merged_metadata["resume_signal"] = deepcopy(signal)
@@ -94,6 +117,15 @@ class LocalWorkflowEngine:
         self, execution_id: str, *, reason: str | None = None
     ) -> WorkflowExecution:
         execution = self.status(execution_id)
+        if execution.state == "cancelled":
+            raise WorkflowCancelledError(execution_id)
+        if execution.state not in ACTIVE_WORKFLOW_STATES:
+            raise WorkflowInvalidStateError(
+                execution_id,
+                operation="cancel",
+                state=execution.state,
+                expected_states=ACTIVE_WORKFLOW_STATES,
+            )
         updated = WorkflowExecution(
             execution_id=execution.execution_id,
             workflow_id=execution.workflow_id,

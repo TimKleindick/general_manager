@@ -16,6 +16,13 @@ WorkflowState = Literal[
     "completed",
 ]
 
+ACTIVE_WORKFLOW_STATES: tuple[WorkflowState, ...] = ("pending", "running", "waiting")
+TERMINAL_WORKFLOW_STATES: tuple[WorkflowState, ...] = (
+    "failed",
+    "cancelled",
+    "completed",
+)
+
 
 WorkflowHandler = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 
@@ -93,3 +100,21 @@ class WorkflowCancelledError(WorkflowEngineError):
 
     def __init__(self, execution_id: str) -> None:
         super().__init__(f"Workflow execution '{execution_id}' is cancelled.")
+
+
+class WorkflowInvalidStateError(WorkflowEngineError):
+    """Raised when an operation is not valid for the current workflow state."""
+
+    def __init__(
+        self,
+        execution_id: str,
+        *,
+        operation: str,
+        state: WorkflowState,
+        expected_states: tuple[WorkflowState, ...],
+    ) -> None:
+        expected = ", ".join(expected_states)
+        super().__init__(
+            f"Workflow execution '{execution_id}' cannot {operation} from state "
+            f"'{state}'. Expected one of: {expected}."
+        )

@@ -18,6 +18,7 @@ from general_manager.workflow.config import (
     workflow_outbox_process_chunk_size,
 )
 from general_manager.workflow.engine import WorkflowExecutionNotFoundError
+from general_manager.workflow.engine import ACTIVE_WORKFLOW_STATES
 from general_manager.workflow.event_registry import (
     DatabaseEventRegistry,
     get_event_registry,
@@ -199,20 +200,23 @@ def resume_execution_task(
     """Resume a persisted execution record."""
     from general_manager.workflow.models import WorkflowExecutionRecord
 
-    execution = WorkflowExecutionRecord.objects.filter(
-        execution_id=execution_id
-    ).first()
-    if execution is None:
-        raise WorkflowExecutionNotFoundError(execution_id)
-    if execution.state == "cancelled":
-        return False
-    metadata = dict(execution.metadata)
-    if signal:
-        metadata["resume_signal"] = dict(signal)
-    execution.metadata = metadata
-    execution.state = "completed"
-    execution.ended_at = datetime.now(UTC)
-    execution.save(update_fields=["metadata", "state", "ended_at", "updated_at"])
+    with transaction.atomic():
+        execution = (
+            WorkflowExecutionRecord.objects.select_for_update()
+            .filter(execution_id=execution_id)
+            .first()
+        )
+        if execution is None:
+            raise WorkflowExecutionNotFoundError(execution_id)
+        if execution.state != "waiting":
+            return False
+        metadata = dict(execution.metadata)
+        if signal:
+            metadata["resume_signal"] = dict(signal)
+        execution.metadata = metadata
+        execution.state = "completed"
+        execution.ended_at = datetime.now(UTC)
+        execution.save(update_fields=["metadata", "state", "ended_at", "updated_at"])
     increment_execution_state("completed")
     return True
 
@@ -222,14 +226,19 @@ def cancel_execution_task(execution_id: str, reason: str | None = None) -> bool:
     """Cancel a persisted execution record."""
     from general_manager.workflow.models import WorkflowExecutionRecord
 
-    execution = WorkflowExecutionRecord.objects.filter(
-        execution_id=execution_id
-    ).first()
-    if execution is None:
-        raise WorkflowExecutionNotFoundError(execution_id)
-    execution.state = "cancelled"
-    execution.error = reason
-    execution.ended_at = datetime.now(UTC)
-    execution.save(update_fields=["state", "error", "ended_at", "updated_at"])
+    with transaction.atomic():
+        execution = (
+            WorkflowExecutionRecord.objects.select_for_update()
+            .filter(execution_id=execution_id)
+            .first()
+        )
+        if execution is None:
+            raise WorkflowExecutionNotFoundError(execution_id)
+        if execution.state not in ACTIVE_WORKFLOW_STATES:
+            return False
+        execution.state = "cancelled"
+        execution.error = reason
+        execution.ended_at = datetime.now(UTC)
+        execution.save(update_fields=["state", "error", "ended_at", "updated_at"])
     increment_execution_state("cancelled")
     return True

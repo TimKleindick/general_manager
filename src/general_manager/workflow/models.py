@@ -86,6 +86,17 @@ class WorkflowExecutionRecord(models.Model):
     updated_at: Any = models.DateTimeField(auto_now=True)
 
     class Meta:
+        constraints = (
+            models.UniqueConstraint(
+                fields=("workflow_id", "correlation_id"),
+                condition=models.Q(
+                    correlation_id__isnull=False,
+                )
+                & ~models.Q(correlation_id="")
+                & models.Q(state__in=("pending", "running", "waiting", "completed")),
+                name="general_manager_workflow_exec_active_corr_uniq",
+            ),
+        )
         indexes = (
             models.Index(fields=["workflow_id", "state"]),
             models.Index(fields=["correlation_id", "workflow_id"]),
