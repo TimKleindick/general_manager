@@ -165,3 +165,4 @@ class WorkflowProductionIntegrationTests(GeneralManagerTransactionTestCase):
         assert replayed.count() == 1
         assert replayed.first() is not None
         assert replayed.first().status == WorkflowOutbox.STATUS_PENDING
+        assert replayed.first().attempts == 0

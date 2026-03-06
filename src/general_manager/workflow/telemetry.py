@@ -40,7 +40,7 @@ if _METRICS_AVAILABLE:
     _delivery_attempt_total = Counter(
         "workflow_delivery_attempt_total",
         "Workflow delivery attempt outcomes.",
-        ["status", "handler_registration_id"],
+        ["status"],
     )
     _execution_state_total = Counter(
         "workflow_execution_state_total",
@@ -86,13 +86,10 @@ def increment_outbox_status(status: str) -> None:
     _outbox_status_total.labels(_safe_label(status)).inc()
 
 
-def increment_delivery_attempt(*, status: str, handler_registration_id: str) -> None:
+def increment_delivery_attempt(*, status: str) -> None:
     if not _METRICS_AVAILABLE:
         return
-    _delivery_attempt_total.labels(
-        _safe_label(status),
-        _safe_label(handler_registration_id),
-    ).inc()
+    _delivery_attempt_total.labels(_safe_label(status)).inc()
 
 
 def increment_execution_state(state: str) -> None:

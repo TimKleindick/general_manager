@@ -42,6 +42,7 @@ Add a dedicated `general_manager.workflow` subsystem with three layers:
 Backends:
 
 - **LocalWorkflowEngine**: default in-memory backend for development and tests.
+- **CeleryWorkflowEngine**: durable, database-backed backend for production workloads.
 - **N8nWorkflowEngine**: adapter stub for future remote orchestration support.
 
 ## Alternatives considered
@@ -64,8 +65,10 @@ Backends:
 - Keeps room for EventSourcing/CQRS work on the roadmap without forcing it now.
 
 ## Follow-up work
-- Wire workflow engine configuration during app startup.
-- Add persistence-backed local engine (Django models) for resumability/audit.
 - Define event schema validation conventions and replay tooling.
 - Implement n8n adapter API calls and callback mapping.
 - Add concept/how-to docs for event triggers, actions, and backend setup.
+
+Implemented in this ADR rollout:
+- workflow engine configuration is wired during app startup.
+- durable execution persistence is provided by `CeleryWorkflowEngine` using Django models.

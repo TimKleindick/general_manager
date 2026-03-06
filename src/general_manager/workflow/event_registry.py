@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha1
 from time import perf_counter
+from collections import deque
 from threading import Lock
 from traceback import format_exc
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
@@ -244,16 +245,23 @@ class InMemoryEventRegistry(_RoutingMixin):
         self,
         *,
         dead_letter_handler: DeadLetterHandler | None = None,
+        max_seen_event_ids: int = 100_000,
     ) -> None:
         super().__init__()
         self._seen_event_ids: set[str] = set()
+        self._seen_event_order: deque[str] = deque()
+        self._max_seen_event_ids = max(1, max_seen_event_ids)
         self._dead_letter_handler = dead_letter_handler
 
     def publish(self, event: WorkflowEvent) -> bool:
         with self._lock:
             if event.event_id in self._seen_event_ids:
                 return False
+            if len(self._seen_event_order) >= self._max_seen_event_ids:
+                evicted = self._seen_event_order.popleft()
+                self._seen_event_ids.discard(evicted)
             self._seen_event_ids.add(event.event_id)
+            self._seen_event_order.append(event.event_id)
 
         handled = False
         for entry in self._get_entries(event):
@@ -328,7 +336,6 @@ class DatabaseEventRegistry(_RoutingMixin):
         from general_manager.workflow.models import WorkflowOutbox
 
         started = perf_counter()
-        now = datetime.now(UTC)
         with transaction.atomic():
             outbox = (
                 WorkflowOutbox.objects.select_for_update()
@@ -411,7 +418,6 @@ class DatabaseEventRegistry(_RoutingMixin):
                 claim_token=expected_claim_token,
                 was_claimed=was_claimed,
                 error=str(exc),
-                now=now,
             )
             observe_outbox_process_duration(
                 status=status,
@@ -432,18 +438,23 @@ class DatabaseEventRegistry(_RoutingMixin):
                 claim_token=expected_claim_token,
                 was_claimed=was_claimed,
                 error="Workflow event handler did not complete successfully.",
-                now=now,
             )
             observe_outbox_process_duration(
                 status=status,
                 duration_seconds=perf_counter() - started,
             )
             return False
-        self._finalize_outbox_processed(
+        finalized = self._finalize_outbox_processed(
             outbox_id=outbox_id,
             claim_token=expected_claim_token,
             was_claimed=was_claimed,
         )
+        if not finalized:
+            observe_outbox_process_duration(
+                status=WorkflowOutbox.STATUS_FAILED,
+                duration_seconds=perf_counter() - started,
+            )
+            return False
         observe_outbox_process_duration(
             status=WorkflowOutbox.STATUS_PROCESSED,
             duration_seconds=perf_counter() - started,
@@ -578,10 +589,7 @@ class DatabaseEventRegistry(_RoutingMixin):
             attempt_record.status = WorkflowDeliveryAttempt.STATUS_RUNNING
             attempt_record.attempts = max(attempt_record.attempts, attempt)
             attempt_record.save(update_fields=["status", "attempts", "updated_at"])
-            increment_delivery_attempt(
-                status=WorkflowDeliveryAttempt.STATUS_RUNNING,
-                handler_registration_id=entry.registration_id,
-            )
+            increment_delivery_attempt(status=WorkflowDeliveryAttempt.STATUS_RUNNING)
         try:
             entry.handler(event)
         except Exception as exc:
@@ -598,10 +606,7 @@ class DatabaseEventRegistry(_RoutingMixin):
                 last_error=str(exc),
                 last_traceback=format_exc(),
             )
-            increment_delivery_attempt(
-                status=status,
-                handler_registration_id=entry.registration_id,
-            )
+            increment_delivery_attempt(status=status)
             raise
         WorkflowDeliveryAttempt.objects.filter(
             pk=attempt_record.pk,
@@ -611,10 +616,7 @@ class DatabaseEventRegistry(_RoutingMixin):
             last_error=None,
             last_traceback=None,
         )
-        increment_delivery_attempt(
-            status=WorkflowDeliveryAttempt.STATUS_COMPLETED,
-            handler_registration_id=entry.registration_id,
-        )
+        increment_delivery_attempt(status=WorkflowDeliveryAttempt.STATUS_COMPLETED)
         return True
 
     @staticmethod
@@ -630,7 +632,6 @@ class DatabaseEventRegistry(_RoutingMixin):
         claim_token: str | None,
         was_claimed: bool,
         error: str,
-        now: datetime,
     ) -> str:
         from general_manager.workflow.models import WorkflowOutbox
 
@@ -665,7 +666,9 @@ class DatabaseEventRegistry(_RoutingMixin):
                 delay_seconds = workflow_retry_backoff_seconds() * max(
                     outbox.attempts, 1
                 )
-                outbox.available_at = now + timedelta(seconds=delay_seconds)
+                outbox.available_at = datetime.now(UTC) + timedelta(
+                    seconds=delay_seconds
+                )
             outbox.save(
                 update_fields=[
                     "status",
