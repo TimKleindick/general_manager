@@ -117,14 +117,14 @@ Inside your handler, start a workflow and execute an action:
 from general_manager.workflow.backend_registry import get_workflow_engine
 from general_manager.workflow.engine import WorkflowDefinition
 
-def start_project_status_workflow(event):
-    def workflow_handler(input_data):
-        # Replace with your action registry call, e.g. send_email
-        return {"sent": True, "to": "ops@example.test"}
+def project_status_workflow_handler(input_data):
+    # Replace with your action registry call, e.g. send_email
+    return {"sent": True, "to": "ops@example.test"}
 
+def start_project_status_workflow(event):
     workflow = WorkflowDefinition(
         workflow_id="project_status_email",
-        handler=workflow_handler,
+        handler=project_status_workflow_handler,
     )
     engine = get_workflow_engine()
     engine.start(

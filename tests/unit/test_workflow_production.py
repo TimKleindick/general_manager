@@ -39,6 +39,9 @@ def _handler(payload: dict[str, object]) -> dict[str, object]:
     return {"seen": payload.get("value")}
 
 
+NON_CALLABLE_HANDLER = object()
+
+
 class WorkflowProductionRegistryTests(TestCase):
     def tearDown(self) -> None:
         configure_event_registry(InMemoryEventRegistry())
@@ -91,6 +94,28 @@ class WorkflowProductionRegistryTests(TestCase):
         assert registry.publish(event) is True
         assert registry.publish(event) is False
         assert calls == ["evt-prod-2"]
+
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
+    )
+    def test_database_registry_publish_sync_persists_event_record(self) -> None:
+        handled: list[str] = []
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "invoice.created", handler=lambda event: handled.append(event.event_id)
+        )
+        event = WorkflowEvent(
+            event_id="evt-publish-sync",
+            event_type="invoice.created",
+            payload={"invoice_id": 21},
+        )
+
+        assert registry.publish_sync(event) is True
+        assert handled == ["evt-publish-sync"]
+        assert WorkflowEventRecord.objects.filter(event_id="evt-publish-sync").exists()
+        assert WorkflowDeliveryAttempt.objects.filter(
+            idempotency_key__startswith="evt-publish-sync:"
+        ).exists()
 
     @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
@@ -168,7 +193,7 @@ class WorkflowProductionRegistryTests(TestCase):
             "WORKFLOW_DEAD_LETTER_ENABLED": True,
         }
     )
-    def test_process_outbox_entry_not_handled_increments_attempts_and_dead_letters(
+    def test_process_outbox_entry_with_only_filtered_handlers_marks_processed(
         self,
     ) -> None:
         registry = DatabaseEventRegistry()
@@ -186,8 +211,8 @@ class WorkflowProductionRegistryTests(TestCase):
         outbox = WorkflowOutbox.objects.get(event__event_id="evt-not-handled")
         assert registry.process_outbox_entry(int(outbox.pk)) is False
         outbox.refresh_from_db()
-        assert outbox.attempts == 1
-        assert outbox.status == WorkflowOutbox.STATUS_DEAD_LETTER
+        assert outbox.attempts == 0
+        assert outbox.status == WorkflowOutbox.STATUS_PROCESSED
 
     @override_settings(
         GENERAL_MANAGER={
@@ -272,6 +297,49 @@ class WorkflowProductionRegistryTests(TestCase):
         assert calls == []
         outbox.refresh_from_db()
         assert outbox.status == WorkflowOutbox.STATUS_CLAIMED
+
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
+    )
+    def test_process_outbox_entry_counts_duplicate_suppression_once(self) -> None:
+        registry = DatabaseEventRegistry()
+        registry.register("invoice.created", handler=lambda _event: None)
+        event = WorkflowEvent(
+            event_id="evt-dup-suppression",
+            event_type="invoice.created",
+            payload={"invoice_id": 71},
+        )
+        registration_id = registry._get_entries(event)[0].registration_id
+        assert registry.publish(event) is False
+        outbox = WorkflowOutbox.objects.get(event__event_id="evt-dup-suppression")
+        attempt = WorkflowDeliveryAttempt.objects.create(
+            event=WorkflowEventRecord.objects.get(event_id="evt-dup-suppression"),
+            handler_registration_id=registration_id,
+            idempotency_key=f"evt-dup-suppression:{registration_id}",
+            status=WorkflowDeliveryAttempt.STATUS_RUNNING,
+            attempts=1,
+        )
+        WorkflowDeliveryAttempt.objects.filter(pk=attempt.pk).update(
+            updated_at=datetime.now(UTC)
+        )
+
+        with patch(
+            "general_manager.workflow.event_registry.increment_duplicate_suppression"
+        ) as increment:
+            assert registry.process_outbox_entry(int(outbox.pk)) is False
+
+        increment.assert_called_once_with()
+
+    def test_enqueue_publish_task_falls_back_without_delay(self) -> None:
+        calls: list[str] = []
+
+        def fallback() -> None:
+            calls.append("called")
+
+        with patch("general_manager.workflow.tasks.publish_outbox_batch", new=fallback):
+            DatabaseEventRegistry._enqueue_publish_task()
+
+        assert calls == ["called"]
 
     @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
@@ -451,6 +519,29 @@ class WorkflowProductionEngineTests(TestCase):
             ).count()
             == 2
         )
+
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
+    )
+    def test_celery_engine_fails_non_callable_imported_handler_in_sync_mode(
+        self,
+    ) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-non-callable-import",
+            handler=None,
+            metadata={
+                "handler_path": "tests.unit.test_workflow_production.NON_CALLABLE_HANDLER"
+            },
+        )
+
+        execution = engine.start(workflow, {"value": 7})
+        loaded = engine.status(execution.execution_id)
+
+        assert loaded.state == "failed"
+        assert loaded.output_data is None
+        assert loaded.error is not None
+        assert "NON_CALLABLE_HANDLER" in loaded.error
 
     @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from threading import Event, Thread
+
 import pytest
 from django.test import SimpleTestCase
 
@@ -11,6 +13,7 @@ from general_manager.workflow.actions import (
 from general_manager.workflow.backends.local import LocalWorkflowEngine
 from general_manager.workflow.engine import (
     WorkflowDefinition,
+    WorkflowExecution,
     WorkflowInvalidStateError,
     WorkflowExecutionNotFoundError,
 )
@@ -310,3 +313,42 @@ class WorkflowCoreTests(SimpleTestCase):
 
         assert first.execution_id == second.execution_id
         assert second.output_data == {"seen": 1}
+
+    def test_local_engine_reserves_correlation_id_during_inflight_start(self) -> None:
+        engine = LocalWorkflowEngine()
+        handler_started = Event()
+        release_handler = Event()
+        calls: list[int] = []
+        results: list[WorkflowExecution] = []
+
+        def handler(payload: dict[str, object]) -> dict[str, object]:
+            calls.append(int(payload["value"]))
+            handler_started.set()
+            assert release_handler.wait(timeout=2)
+            return {"seen": payload["value"]}
+
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-correlation-race",
+            handler=handler,
+        )
+
+        def start_first() -> None:
+            results.append(engine.start(workflow, {"value": 1}, correlation_id="corr"))
+
+        def start_second() -> None:
+            results.append(engine.start(workflow, {"value": 2}, correlation_id="corr"))
+
+        first_thread = Thread(target=start_first)
+        first_thread.start()
+        assert handler_started.wait(timeout=2)
+
+        second_thread = Thread(target=start_second)
+        second_thread.start()
+        release_handler.set()
+        first_thread.join(timeout=2)
+        second_thread.join(timeout=2)
+
+        assert len(results) == 2
+        assert calls == [1]
+        assert results[0].execution_id == results[1].execution_id
+        assert engine.status(results[0].execution_id).output_data == {"seen": 1}
