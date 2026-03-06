@@ -142,7 +142,7 @@ def start_project_status_workflow(event):
 Correlation behavior:
 - `correlation_id` is a durable deduplication key per `workflow_id`.
 - starting the same workflow with the same `correlation_id` reuses the existing execution record instead of creating a second one while the original execution is still active or already completed.
-- failed executions are also reused until you choose a new `correlation_id`; this keeps retries and operator investigation attached to one durable execution record.
+- after a failed execution, the same `correlation_id` can start a fresh execution again; failed attempts are not treated as the durable winning record.
 
 ## 5. Trigger without signals (explicit publish)
 

@@ -233,6 +233,57 @@ class WorkflowCoreTests(SimpleTestCase):
         assert registry.publish(event) is True
         assert handled == ["evt-dup-reg"]
 
+    def test_event_registry_bounds_seen_event_cache(self) -> None:
+        handled: list[str] = []
+        registry = InMemoryEventRegistry(max_seen_event_ids=2)
+        registry.register(
+            "invoice.created", handler=lambda event: handled.append(event.event_id)
+        )
+
+        assert (
+            registry.publish(
+                WorkflowEvent(
+                    event_id="evt-a",
+                    event_type="invoice.created",
+                    payload={"invoice_id": 1},
+                )
+            )
+            is True
+        )
+        assert (
+            registry.publish(
+                WorkflowEvent(
+                    event_id="evt-b",
+                    event_type="invoice.created",
+                    payload={"invoice_id": 2},
+                )
+            )
+            is True
+        )
+        assert (
+            registry.publish(
+                WorkflowEvent(
+                    event_id="evt-c",
+                    event_type="invoice.created",
+                    payload={"invoice_id": 3},
+                )
+            )
+            is True
+        )
+
+        # The oldest seen id is evicted once the bounded cache is full.
+        assert (
+            registry.publish(
+                WorkflowEvent(
+                    event_id="evt-a",
+                    event_type="invoice.created",
+                    payload={"invoice_id": 4},
+                )
+            )
+            is True
+        )
+        assert handled == ["evt-a", "evt-b", "evt-c", "evt-a"]
+
     def test_local_engine_resume_requires_waiting_state(self) -> None:
         engine = LocalWorkflowEngine()
         execution = engine.start(WorkflowDefinition(workflow_id="wf-local"))

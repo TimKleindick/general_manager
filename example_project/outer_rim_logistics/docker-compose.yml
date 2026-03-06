@@ -452,7 +452,7 @@ services:
       context: ../../
       dockerfile: example_project/outer_rim_logistics/Dockerfile
     entrypoint: ["/bin/sh", "/app/example_project/outer_rim_logistics/docker/entrypoint-celery.sh"]
-    command: celery -A orl beat -l info
+    command: celery -A orl beat -l info -s /tmp/celerybeat-schedule
     user: "1000:1000"
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -470,12 +470,19 @@ services:
       LOG_DIR: "/var/log/outer-rim/app"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+      CELERY_PUSHGATEWAY_URL: "http://pushgateway:9091"
+      CELERY_PUSHGATEWAY_ENABLED: "true"
       REDIS_URL: "redis://redis:6379/0"
     volumes:
       - ./logs:/var/log/outer-rim
     read_only: true
     tmpfs:
       - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       app-init:
         condition: service_completed_successfully

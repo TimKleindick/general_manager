@@ -32,5 +32,6 @@ class Command(BaseCommand):
             last_error=None,
             claim_token=None,
             claimed_at=None,
+            attempts=0,
         )
         self.stdout.write(self.style.SUCCESS(f"Requeued {updated} dead-letter rows."))

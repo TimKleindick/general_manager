@@ -357,6 +357,47 @@ class WorkflowProductionRegistryTests(TestCase):
         assert len(claims) == 1
         assert claims[0][0] == int(outbox.pk)
 
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
+    )
+    def test_process_outbox_entry_returns_false_when_processed_finalize_fails(
+        self,
+    ) -> None:
+        handled: list[str] = []
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "invoice.created", handler=lambda event: handled.append(event.event_id)
+        )
+        event = WorkflowEvent(
+            event_id="evt-finalize-fail",
+            event_type="invoice.created",
+            payload={"invoice_id": 11},
+        )
+        assert registry.publish(event) is False
+        claims = registry.claim_outbox_batch()
+        assert len(claims) == 1
+        outbox_id, claim_token = claims[0]
+
+        with (
+            patch.object(
+                registry, "_finalize_outbox_processed", return_value=False
+            ) as finalize,
+            patch(
+                "general_manager.workflow.event_registry.observe_outbox_process_duration"
+            ) as observe_duration,
+        ):
+            assert (
+                registry.process_outbox_entry(outbox_id, claim_token=claim_token)
+                is False
+            )
+
+        finalize.assert_called_once()
+        observe_duration.assert_called_once()
+        assert (
+            observe_duration.call_args.kwargs["status"] == WorkflowOutbox.STATUS_FAILED
+        )
+        assert handled == ["evt-finalize-fail"]
+
 
 class WorkflowProductionEngineTests(TestCase):
     @override_settings(
