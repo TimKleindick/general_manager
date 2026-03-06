@@ -42,6 +42,11 @@ Important async contract:
 - in `WORKFLOW_ASYNC=True`, workflow handlers must be importable top-level callables.
 - nested/local handlers are marked failed with an explicit error instead of executing inline.
 
+Execution state contract:
+- `resume(...)` is only valid for executions in `waiting`.
+- `cancel(...)` is only valid for active executions in `pending`, `running`, or `waiting`.
+- completed, failed, and cancelled executions are treated as terminal and are not overwritten by later resume/cancel requests.
+
 For local zero-setup mode, use:
 
 ```python
@@ -134,6 +139,11 @@ def start_project_status_workflow(event):
     )
 ```
 
+Correlation behavior:
+- `correlation_id` is a durable deduplication key per `workflow_id`.
+- starting the same workflow with the same `correlation_id` reuses the existing execution record instead of creating a second one while the original execution is still active or already completed.
+- failed executions are also reused until you choose a new `correlation_id`; this keeps retries and operator investigation attached to one durable execution record.
+
 ## 5. Trigger without signals (explicit publish)
 
 If you do not want signal-based triggering, publish events directly from your service layer, mutation, or view:
@@ -176,3 +186,8 @@ Behavior:
 - handler exceptions are isolated and do not crash event publishing for other handlers.
 - failed handlers are retried up to `retries`.
 - after final failure, the dead-letter hook receives `(event, exception)`.
+
+Registration behavior:
+- identical registrations for the same event are deduplicated at registration time.
+- "identical" means the event key and all routing-relevant options resolve to the same registration identity.
+- different `when`, `validator`, retry, or dead-letter settings still create separate registrations.
