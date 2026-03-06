@@ -17,6 +17,10 @@ WorkflowState = Literal[
 ]
 
 ACTIVE_WORKFLOW_STATES: tuple[WorkflowState, ...] = ("pending", "running", "waiting")
+ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES: tuple[WorkflowState, ...] = (
+    *ACTIVE_WORKFLOW_STATES,
+    "completed",
+)
 TERMINAL_WORKFLOW_STATES: tuple[WorkflowState, ...] = (
     "failed",
     "cancelled",

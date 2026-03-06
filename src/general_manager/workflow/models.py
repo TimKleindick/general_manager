@@ -6,6 +6,8 @@ from typing import Any
 
 from django.db import models
 
+from general_manager.workflow.engine import ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES
+
 
 class WorkflowEventRecord(models.Model):
     """Stored workflow event payload."""
@@ -93,7 +95,7 @@ class WorkflowExecutionRecord(models.Model):
                     correlation_id__isnull=False,
                 )
                 & ~models.Q(correlation_id="")
-                & models.Q(state__in=("pending", "running", "waiting", "completed")),
+                & models.Q(state__in=ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES),
                 name="general_manager_workflow_exec_active_corr_uniq",
             ),
         )

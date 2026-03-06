@@ -70,6 +70,12 @@ class _DeliveryInProgressError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class _RoutingOutcome:
+    handled: bool
+    had_applicable_handlers: bool
+
+
+@dataclass(frozen=True)
 class _EventHandlerRegistration:
     event_key: str
     registration_id: str
@@ -218,6 +224,36 @@ class _RoutingMixin:
                 return False
         return False
 
+    def _route_event(self, event: WorkflowEvent) -> _RoutingOutcome:
+        handled = False
+        had_applicable_handlers = False
+        for entry in self._get_entries(event):
+            if entry.validator is not None:
+                try:
+                    entry.validator(event)
+                except Exception as exc:  # noqa: BLE001
+                    self._send_to_dead_letter(event, exc, entry)
+                    continue
+            if entry.when is not None and not entry.when(event):
+                continue
+            had_applicable_handlers = True
+            if self._run_handler_with_retry(
+                event, entry, attempt_handler=self._attempt_handler
+            ):
+                handled = True
+        return _RoutingOutcome(
+            handled=handled,
+            had_applicable_handlers=had_applicable_handlers,
+        )
+
+    def _attempt_handler(
+        self,
+        event: WorkflowEvent,
+        entry: _EventHandlerRegistration,
+        attempt: int,
+    ) -> bool:
+        raise NotImplementedError
+
     def _send_to_dead_letter(
         self,
         event: WorkflowEvent,
@@ -263,29 +299,16 @@ class InMemoryEventRegistry(_RoutingMixin):
             self._seen_event_ids.add(event.event_id)
             self._seen_event_order.append(event.event_id)
 
-        handled = False
-        for entry in self._get_entries(event):
-            if entry.validator is not None:
-                try:
-                    entry.validator(event)
-                except Exception as exc:  # noqa: BLE001
-                    self._send_to_dead_letter(event, exc, entry)
-                    continue
-            if entry.when is not None and not entry.when(event):
-                continue
-            if self._run_handler_with_retry(
-                event, entry, attempt_handler=self._execute_single
-            ):
-                handled = True
-        return handled
+        outcome = self._route_event(event)
+        return outcome.handled
 
-    def _execute_single(
+    def _attempt_handler(
         self,
         event: WorkflowEvent,
         entry: _EventHandlerRegistration,
-        _attempt: int,
+        attempt: int,
     ) -> bool:
-        del _attempt
+        del attempt
         entry.handler(event)
         return True
 
@@ -328,7 +351,8 @@ class DatabaseEventRegistry(_RoutingMixin):
         return self.process_outbox_entry(int(outbox.pk))
 
     def publish_sync(self, event: WorkflowEvent) -> bool:
-        return self._route_event(event)
+        self._save_event(event)
+        return self._route_event(event).handled
 
     def process_outbox_entry(
         self, outbox_id: int, *, claim_token: str | None = None
@@ -385,11 +409,9 @@ class DatabaseEventRegistry(_RoutingMixin):
                 occurred_at=outbox.event.occurred_at,
                 metadata=outbox.event.metadata,
             )
-        has_handlers = bool(self._get_entries(event))
         try:
-            handled = self._route_event(event)
+            outcome = self._route_event(event)
         except _DeliveryInProgressError as exc:
-            increment_duplicate_suppression()
             logger.info(
                 "workflow delivery suppressed due to in-progress attempt",
                 context={
@@ -424,7 +446,7 @@ class DatabaseEventRegistry(_RoutingMixin):
                 duration_seconds=perf_counter() - started,
             )
             return False
-        if has_handlers and not handled:
+        if outcome.had_applicable_handlers and not outcome.handled:
             logger.warning(
                 "workflow handlers did not complete successfully",
                 context={
@@ -459,7 +481,7 @@ class DatabaseEventRegistry(_RoutingMixin):
             status=WorkflowOutbox.STATUS_PROCESSED,
             duration_seconds=perf_counter() - started,
         )
-        return handled
+        return outcome.handled
 
     def claim_outbox_batch(
         self, *, batch_size: int | None = None
@@ -521,24 +543,7 @@ class DatabaseEventRegistry(_RoutingMixin):
         except IntegrityError:
             return None
 
-    def _route_event(self, event: WorkflowEvent) -> bool:
-        handled = False
-        for entry in self._get_entries(event):
-            if entry.validator is not None:
-                try:
-                    entry.validator(event)
-                except Exception as exc:  # noqa: BLE001
-                    self._send_to_dead_letter(event, exc, entry)
-                    continue
-            if entry.when is not None and not entry.when(event):
-                continue
-            if self._run_handler_with_retry(
-                event, entry, attempt_handler=self._execute_with_attempt_record
-            ):
-                handled = True
-        return handled
-
-    def _execute_with_attempt_record(
+    def _attempt_handler(
         self,
         event: WorkflowEvent,
         entry: _EventHandlerRegistration,
@@ -623,7 +628,11 @@ class DatabaseEventRegistry(_RoutingMixin):
     def _enqueue_publish_task() -> None:
         from general_manager.workflow.tasks import publish_outbox_batch
 
-        publish_outbox_batch.delay()
+        delay = getattr(publish_outbox_batch, "delay", None)
+        if callable(delay):
+            delay()
+            return
+        publish_outbox_batch()
 
     def _finalize_outbox_failure(
         self,

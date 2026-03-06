@@ -11,6 +11,7 @@ from django.utils.module_loading import import_string
 
 from general_manager.workflow.config import workflow_async_enabled
 from general_manager.workflow.engine import (
+    ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES,
     ACTIVE_WORKFLOW_STATES,
     WorkflowCancelledError,
     WorkflowDefinition,
@@ -79,7 +80,7 @@ class CeleryWorkflowEngine:
             WorkflowExecutionRecord.objects.filter(
                 correlation_id=correlation_id,
                 workflow_id=workflow_id,
-                state__in=("pending", "running", "waiting", "completed"),
+                state__in=ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES,
             )
             .order_by("created_at", "pk")
             .first()
@@ -179,9 +180,26 @@ class CeleryWorkflowEngine:
                 elif not async_mode:
                     handler = workflow.handler
                     if handler is None and handler_path is not None:
-                        imported = import_string(handler_path)
-                        if callable(imported):
-                            handler = imported
+                        try:
+                            imported = import_string(handler_path)
+                        except Exception as exc:  # noqa: BLE001
+                            record.state = "failed"
+                            record.output_data = None
+                            record.error = f"Failed to resolve workflow handler path '{handler_path}': {exc}"
+                            record.ended_at = self._utcnow()
+                            increment_execution_state("failed")
+                        else:
+                            if callable(imported):
+                                handler = imported
+                            else:
+                                record.state = "failed"
+                                record.output_data = None
+                                record.error = (
+                                    f"Failed to resolve workflow handler path '{handler_path}': "
+                                    f"handler is not callable ({type(imported).__name__})"
+                                )
+                                record.ended_at = self._utcnow()
+                                increment_execution_state("failed")
                     if handler is not None:
                         final_state, final_output, final_error = _run_inline_handler(
                             handler, dict(input_data or {})
