@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v0.31.0 (2026-03-06)
+
+### Bug Fixes
+
+- Address remaining workflow review comments
+  ([`18eb430`](https://github.com/TimKleindick/general_manager/commit/18eb4300baef2c36cf4719bfa22bbd0514a8c2dc))
+
+- Address workflow PR review comments
+  ([`e1a992d`](https://github.com/TimKleindick/general_manager/commit/e1a992de10b24c6b521cea46d96ee3d8893953d6))
+
+- Harden workflow execution semantics
+  ([`4a78138`](https://github.com/TimKleindick/general_manager/commit/4a78138222cd8ecdfac5f576e2a852aabafa9553))
+
+### Documentation
+
+- Clarify workflow engine semantics
+  ([`78cd232`](https://github.com/TimKleindick/general_manager/commit/78cd2320cc10aaf7ca8604098107179b393a493f))
+
+- **workflow**: Add production setup and operations guides
+  ([`adfc99d`](https://github.com/TimKleindick/general_manager/commit/adfc99dbb2840957e8ab8f35eaae81c0639a2495))
+
+### Features
+
+- **workflow**: Add durable outbox and Celery-backed production workflow engine
+  ([`6252d7a`](https://github.com/TimKleindick/general_manager/commit/6252d7aa41ef585d235d4a9f814ebf97161c146a))
+
+- **workflow**: Harden engine for mission-critical load
+  ([`5e31b84`](https://github.com/TimKleindick/general_manager/commit/5e31b849589119364c04d9db3612b6117ab79521))
+
+
 ## v0.30.3 (2026-03-04)
 
 ### Bug Fixes
