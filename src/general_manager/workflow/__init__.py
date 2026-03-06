@@ -17,6 +17,7 @@ from general_manager.workflow.engine import (
     WorkflowDefinition,
     WorkflowEngine,
     WorkflowExecution,
+    WorkflowInvalidStateError,
     WorkflowState,
 )
 from general_manager.workflow.event_registry import (
@@ -60,6 +61,7 @@ __all__ = [
     "WorkflowEvent",
     "WorkflowEventHandler",
     "WorkflowExecution",
+    "WorkflowInvalidStateError",
     "WorkflowState",
     "configure_event_registry",
     "configure_event_registry_from_settings",

@@ -6,15 +6,17 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils.module_loading import import_string
 
 from general_manager.workflow.config import workflow_async_enabled
 from general_manager.workflow.engine import (
+    ACTIVE_WORKFLOW_STATES,
     WorkflowCancelledError,
     WorkflowDefinition,
     WorkflowExecution,
     WorkflowExecutionNotFoundError,
+    WorkflowInvalidStateError,
 )
 from general_manager.workflow.tasks import CELERY_AVAILABLE, execute_workflow_handler
 from general_manager.workflow.telemetry import increment_execution_state
@@ -67,6 +69,25 @@ class CeleryWorkflowEngine:
     def _utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _get_existing_correlation_execution(
+        workflow_id: str, correlation_id: str
+    ) -> WorkflowExecution | None:
+        from general_manager.workflow.models import WorkflowExecutionRecord
+
+        record = (
+            WorkflowExecutionRecord.objects.filter(
+                correlation_id=correlation_id,
+                workflow_id=workflow_id,
+                state__in=("pending", "running", "waiting", "completed"),
+            )
+            .order_by("created_at", "pk")
+            .first()
+        )
+        if record is None:
+            return None
+        return _to_execution(record)
+
     def start(
         self,
         workflow: WorkflowDefinition,
@@ -79,13 +100,11 @@ class CeleryWorkflowEngine:
             from general_manager.workflow.models import WorkflowExecutionRecord
 
             if correlation_id:
-                existing = WorkflowExecutionRecord.objects.filter(
-                    correlation_id=correlation_id,
-                    workflow_id=workflow.workflow_id,
-                    state="completed",
-                ).first()
+                existing = self._get_existing_correlation_execution(
+                    workflow.workflow_id, correlation_id
+                )
                 if existing is not None:
-                    return _to_execution(existing)
+                    return existing
 
             execution_id = str(uuid4())
             started_at = self._utcnow()
@@ -119,20 +138,30 @@ class CeleryWorkflowEngine:
                     except Exception as exc:  # noqa: BLE001
                         state = "failed"
                         error = f"Failed to resolve workflow handler path '{handler_path}': {exc}"
-            record = WorkflowExecutionRecord.objects.create(
-                execution_id=execution_id,
-                workflow_id=workflow.workflow_id,
-                state=state,
-                input_data=dict(input_data or {}),
-                output_data=output_data,
-                correlation_id=correlation_id,
-                started_at=started_at,
-                ended_at=started_at
-                if state in {"completed", "failed", "cancelled"}
-                else None,
-                error=error,
-                metadata=merged_metadata,
-            )
+            try:
+                record = WorkflowExecutionRecord.objects.create(
+                    execution_id=execution_id,
+                    workflow_id=workflow.workflow_id,
+                    state=state,
+                    input_data=dict(input_data or {}),
+                    output_data=output_data,
+                    correlation_id=correlation_id,
+                    started_at=started_at,
+                    ended_at=started_at
+                    if state in {"completed", "failed", "cancelled"}
+                    else None,
+                    error=error,
+                    metadata=merged_metadata,
+                )
+            except IntegrityError:
+                if not correlation_id:
+                    raise
+                existing = self._get_existing_correlation_execution(
+                    workflow.workflow_id, correlation_id
+                )
+                if existing is None:
+                    raise
+                return existing
             increment_execution_state(state)
             if has_runnable_handler:
                 should_dispatch_async = (
@@ -180,37 +209,59 @@ class CeleryWorkflowEngine:
     ) -> WorkflowExecution:
         from general_manager.workflow.models import WorkflowExecutionRecord
 
-        record = WorkflowExecutionRecord.objects.filter(
-            execution_id=execution_id
-        ).first()
-        if record is None:
-            raise WorkflowExecutionNotFoundError(execution_id)
-        if record.state == "cancelled":
-            raise WorkflowCancelledError(execution_id)
-        metadata = dict(record.metadata)
-        if signal:
-            metadata["resume_signal"] = dict(signal)
-        record.metadata = metadata
-        record.state = "completed"
-        record.ended_at = self._utcnow()
-        record.save(update_fields=["metadata", "state", "ended_at", "updated_at"])
-        return _to_execution(record)
+        with transaction.atomic():
+            record = (
+                WorkflowExecutionRecord.objects.select_for_update()
+                .filter(execution_id=execution_id)
+                .first()
+            )
+            if record is None:
+                raise WorkflowExecutionNotFoundError(execution_id)
+            if record.state == "cancelled":
+                raise WorkflowCancelledError(execution_id)
+            if record.state != "waiting":
+                raise WorkflowInvalidStateError(
+                    execution_id,
+                    operation="resume",
+                    state=record.state,
+                    expected_states=("waiting",),
+                )
+            metadata = dict(record.metadata)
+            if signal:
+                metadata["resume_signal"] = dict(signal)
+            record.metadata = metadata
+            record.state = "completed"
+            record.ended_at = self._utcnow()
+            record.save(update_fields=["metadata", "state", "ended_at", "updated_at"])
+            return _to_execution(record)
 
     def cancel(
         self, execution_id: str, *, reason: str | None = None
     ) -> WorkflowExecution:
         from general_manager.workflow.models import WorkflowExecutionRecord
 
-        record = WorkflowExecutionRecord.objects.filter(
-            execution_id=execution_id
-        ).first()
-        if record is None:
-            raise WorkflowExecutionNotFoundError(execution_id)
-        record.state = "cancelled"
-        record.error = reason
-        record.ended_at = self._utcnow()
-        record.save(update_fields=["state", "error", "ended_at", "updated_at"])
-        return _to_execution(record)
+        with transaction.atomic():
+            record = (
+                WorkflowExecutionRecord.objects.select_for_update()
+                .filter(execution_id=execution_id)
+                .first()
+            )
+            if record is None:
+                raise WorkflowExecutionNotFoundError(execution_id)
+            if record.state == "cancelled":
+                raise WorkflowCancelledError(execution_id)
+            if record.state not in ACTIVE_WORKFLOW_STATES:
+                raise WorkflowInvalidStateError(
+                    execution_id,
+                    operation="cancel",
+                    state=record.state,
+                    expected_states=ACTIVE_WORKFLOW_STATES,
+                )
+            record.state = "cancelled"
+            record.error = reason
+            record.ended_at = self._utcnow()
+            record.save(update_fields=["state", "error", "ended_at", "updated_at"])
+            return _to_execution(record)
 
     def status(self, execution_id: str) -> WorkflowExecution:
         from general_manager.workflow.models import WorkflowExecutionRecord

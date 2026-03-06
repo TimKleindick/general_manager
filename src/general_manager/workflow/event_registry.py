@@ -164,9 +164,15 @@ class _RoutingMixin:
         )
         with self._lock:
             if "." in event:
-                self._handlers_by_type.setdefault(event, []).append(registration)
+                bucket = self._handlers_by_type.setdefault(event, [])
             else:
-                self._handlers_by_name.setdefault(event, []).append(registration)
+                bucket = self._handlers_by_name.setdefault(event, [])
+            if any(
+                existing.registration_id == registration.registration_id
+                for existing in bucket
+            ):
+                return
+            bucket.append(registration)
 
     def _get_entries(
         self, event: WorkflowEvent
@@ -447,8 +453,6 @@ class DatabaseEventRegistry(_RoutingMixin):
     def claim_outbox_batch(
         self, *, batch_size: int | None = None
     ) -> list[tuple[int, str]]:
-        from django.db.models import F
-
         from general_manager.workflow.models import WorkflowOutbox
 
         size = batch_size or workflow_outbox_batch_size()
@@ -484,7 +488,6 @@ class DatabaseEventRegistry(_RoutingMixin):
                 status=WorkflowOutbox.STATUS_CLAIMED,
                 claimed_at=now,
                 claim_token=claim_token,
-                attempts=F("attempts") + 1,
             )
             claims = [(outbox_id, claim_token) for outbox_id in ids]
             observe_outbox_claim_batch(len(claims))
@@ -649,9 +652,10 @@ class DatabaseEventRegistry(_RoutingMixin):
             ):
                 return outbox.status
             outbox.status = WorkflowOutbox.STATUS_FAILED
-            if not was_claimed:
-                outbox.attempts += 1
+            outbox.attempts += 1
             outbox.last_error = error
+            outbox.claim_token = None
+            outbox.claimed_at = None
             if (
                 outbox.attempts >= workflow_max_retries()
                 and workflow_dead_letter_enabled()
@@ -667,6 +671,8 @@ class DatabaseEventRegistry(_RoutingMixin):
                     "status",
                     "attempts",
                     "last_error",
+                    "claim_token",
+                    "claimed_at",
                     "available_at",
                     "updated_at",
                 ]

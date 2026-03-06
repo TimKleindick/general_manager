@@ -11,6 +11,7 @@ from general_manager.workflow.actions import (
 from general_manager.workflow.backends.local import LocalWorkflowEngine
 from general_manager.workflow.engine import (
     WorkflowDefinition,
+    WorkflowInvalidStateError,
     WorkflowExecutionNotFoundError,
 )
 from general_manager.workflow.event_registry import InMemoryEventRegistry, WorkflowEvent
@@ -213,3 +214,48 @@ class WorkflowCoreTests(SimpleTestCase):
         assert registry.publish(event) is False
         assert attempts["count"] == 1
         assert dead_letters == [("evt-5", "do-not-retry")]
+
+    def test_event_registry_ignores_duplicate_identical_registrations(self) -> None:
+        handled: list[str] = []
+        registry = InMemoryEventRegistry()
+
+        def handler(event: WorkflowEvent) -> None:
+            handled.append(event.event_id)
+
+        registry.register("invoice.created", handler=handler)
+        registry.register("invoice.created", handler=handler)
+
+        event = WorkflowEvent(
+            event_id="evt-dup-reg",
+            event_type="invoice.created",
+            payload={"invoice_id": 201},
+        )
+        assert registry.publish(event) is True
+        assert handled == ["evt-dup-reg"]
+
+    def test_local_engine_resume_requires_waiting_state(self) -> None:
+        engine = LocalWorkflowEngine()
+        execution = engine.start(WorkflowDefinition(workflow_id="wf-local"))
+
+        with pytest.raises(WorkflowInvalidStateError):
+            engine.resume(execution.execution_id, {"step": "resume"})
+
+    def test_local_engine_cancel_rejects_completed_state(self) -> None:
+        engine = LocalWorkflowEngine()
+        execution = engine.start(WorkflowDefinition(workflow_id="wf-local"))
+
+        with pytest.raises(WorkflowInvalidStateError):
+            engine.cancel(execution.execution_id, reason="late cancel")
+
+    def test_local_engine_reuses_existing_correlation_id(self) -> None:
+        engine = LocalWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-correlation",
+            handler=lambda payload: {"seen": payload.get("value")},
+        )
+
+        first = engine.start(workflow, {"value": 1}, correlation_id="corr-local")
+        second = engine.start(workflow, {"value": 2}, correlation_id="corr-local")
+
+        assert first.execution_id == second.execution_id
+        assert second.output_data == {"seen": 1}

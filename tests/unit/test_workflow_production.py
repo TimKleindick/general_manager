@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
 from django.conf import settings
 from django.test import TestCase, override_settings
 
 from general_manager.workflow.backends.celery import CeleryWorkflowEngine
 from general_manager.workflow.engine import (
+    WorkflowCancelledError,
     WorkflowDefinition,
+    WorkflowInvalidStateError,
     WorkflowExecutionNotFoundError,
 )
 from general_manager.workflow.event_registry import (
@@ -26,6 +29,7 @@ from general_manager.workflow.models import (
     WorkflowOutbox,
 )
 from general_manager.workflow.tasks import (
+    cancel_execution_task,
     execute_workflow_handler,
     resume_execution_task,
 )
@@ -189,6 +193,46 @@ class WorkflowProductionRegistryTests(TestCase):
         GENERAL_MANAGER={
             "WORKFLOW_MODE": "production",
             "WORKFLOW_ASYNC": True,
+            "WORKFLOW_OUTBOX_CLAIM_TTL_SECONDS": 1,
+            "WORKFLOW_MAX_RETRIES": 2,
+        }
+    )
+    def test_stale_claim_reclaims_do_not_consume_outbox_retry_budget(self) -> None:
+        calls: list[str] = []
+        registry = DatabaseEventRegistry()
+        registry.register(
+            "invoice.created", handler=lambda event: calls.append(event.event_id)
+        )
+        event = WorkflowEvent(
+            event_id="evt-claim-budget",
+            event_type="invoice.created",
+            payload={"invoice_id": 9},
+        )
+        assert registry.publish(event) is False
+        outbox = WorkflowOutbox.objects.get(event__event_id="evt-claim-budget")
+
+        first_claim = registry.claim_outbox_batch()
+        assert len(first_claim) == 1
+        WorkflowOutbox.objects.filter(id=outbox.pk).update(
+            claimed_at=datetime.now(UTC) - timedelta(seconds=10)
+        )
+        second_claim = registry.claim_outbox_batch()
+        assert len(second_claim) == 1
+
+        outbox.refresh_from_db()
+        assert outbox.attempts == 0
+        assert (
+            registry.process_outbox_entry(
+                int(outbox.pk), claim_token=second_claim[0][1]
+            )
+            is True
+        )
+        assert calls == ["evt-claim-budget"]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "WORKFLOW_MODE": "production",
+            "WORKFLOW_ASYNC": True,
             "WORKFLOW_DELIVERY_RUNNING_TIMEOUT_SECONDS": 300,
         }
     )
@@ -264,6 +308,32 @@ class WorkflowProductionRegistryTests(TestCase):
         )
 
     @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": False}
+    )
+    def test_duplicate_identical_registrations_are_ignored(self) -> None:
+        calls: list[str] = []
+        registry = DatabaseEventRegistry()
+
+        def handler(event: WorkflowEvent) -> None:
+            calls.append(event.event_id)
+
+        registry.register("invoice.created", handler=handler)
+        registry.register("invoice.created", handler=handler)
+        event = WorkflowEvent(
+            event_id="evt-reg-identical",
+            event_type="invoice.created",
+            payload={"invoice_id": 61},
+        )
+        assert registry.publish(event) is True
+        assert calls == ["evt-reg-identical"]
+        assert (
+            WorkflowDeliveryAttempt.objects.filter(
+                event__event_id="evt-reg-identical"
+            ).count()
+            == 1
+        )
+
+    @override_settings(
         GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
     )
     def test_claim_outbox_batch_respects_available_at_backoff(self) -> None:
@@ -315,6 +385,30 @@ class WorkflowProductionEngineTests(TestCase):
         assert first.execution_id == second.execution_id
         assert (
             WorkflowExecutionRecord.objects.filter(workflow_id="wf-dedupe").count() == 1
+        )
+
+    @override_settings(
+        GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
+    )
+    def test_celery_workflow_engine_allows_retry_after_failed_correlation(self) -> None:
+        engine = CeleryWorkflowEngine()
+        workflow = WorkflowDefinition(
+            workflow_id="wf-dedupe-failed",
+            handler=lambda payload: {"seen": payload.get("value")},
+        )
+
+        with patch("general_manager.workflow.backends.celery.CELERY_AVAILABLE", False):
+            first = engine.start(workflow, {"value": 1}, correlation_id="corr-failed")
+            second = engine.start(workflow, {"value": 2}, correlation_id="corr-failed")
+
+        assert first.execution_id != second.execution_id
+        assert first.state == "failed"
+        assert second.state == "failed"
+        assert (
+            WorkflowExecutionRecord.objects.filter(
+                workflow_id="wf-dedupe-failed"
+            ).count()
+            == 2
         )
 
     @override_settings(
@@ -384,6 +478,119 @@ class WorkflowProductionEngineTests(TestCase):
         record.refresh_from_db()
         assert record.state == "cancelled"
         assert record.metadata == {"existing": True}
+
+    def test_celery_workflow_engine_resume_requires_waiting_state(self) -> None:
+        engine = CeleryWorkflowEngine()
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-invalid",
+            workflow_id="wf-resume-invalid",
+            state="running",
+            input_data={},
+            metadata={},
+        )
+
+        with pytest.raises(WorkflowInvalidStateError):
+            engine.resume(record.execution_id, {"step": "signal"})
+
+    def test_celery_workflow_engine_resume_allows_waiting_state(self) -> None:
+        engine = CeleryWorkflowEngine()
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-waiting",
+            workflow_id="wf-resume-waiting",
+            state="waiting",
+            input_data={},
+            metadata={"existing": True},
+        )
+
+        resumed = engine.resume(record.execution_id, {"step": "signal"})
+
+        assert resumed.state == "completed"
+        assert resumed.metadata["resume_signal"] == {"step": "signal"}
+
+    def test_celery_workflow_engine_cancel_rejects_completed_state(self) -> None:
+        engine = CeleryWorkflowEngine()
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-cancel-completed",
+            workflow_id="wf-cancel-completed",
+            state="completed",
+            input_data={},
+            output_data={"done": True},
+            metadata={},
+        )
+
+        with pytest.raises(WorkflowInvalidStateError):
+            engine.cancel(record.execution_id, reason="late cancel")
+
+    def test_celery_workflow_engine_cancel_keeps_cancelled_error_type(self) -> None:
+        engine = CeleryWorkflowEngine()
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-cancel-cancelled",
+            workflow_id="wf-cancel-cancelled",
+            state="cancelled",
+            input_data={},
+            error="already cancelled",
+            metadata={},
+        )
+
+        with pytest.raises(WorkflowCancelledError):
+            engine.cancel(record.execution_id, reason="late cancel")
+
+    def test_resume_execution_task_rejects_running_state(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-running",
+            workflow_id="wf-resume-running",
+            state="running",
+            input_data={},
+            metadata={"existing": True},
+        )
+
+        assert resume_execution_task(record.execution_id, {"step": "signal"}) is False
+        record.refresh_from_db()
+        assert record.state == "running"
+        assert record.metadata == {"existing": True}
+
+    def test_resume_execution_task_allows_waiting_state(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-waiting-task",
+            workflow_id="wf-resume-waiting-task",
+            state="waiting",
+            input_data={},
+            metadata={},
+        )
+
+        assert resume_execution_task(record.execution_id, {"step": "signal"}) is True
+        record.refresh_from_db()
+        assert record.state == "completed"
+        assert record.metadata["resume_signal"] == {"step": "signal"}
+
+    def test_cancel_execution_task_rejects_terminal_state(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-cancel-completed-task",
+            workflow_id="wf-cancel-completed-task",
+            state="completed",
+            input_data={},
+            output_data={"done": True},
+            metadata={},
+        )
+
+        assert cancel_execution_task(record.execution_id, reason="late cancel") is False
+        record.refresh_from_db()
+        assert record.state == "completed"
+        assert record.output_data == {"done": True}
+
+    def test_cancel_execution_task_allows_running_state(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-cancel-running-task",
+            workflow_id="wf-cancel-running-task",
+            state="running",
+            input_data={},
+            metadata={},
+        )
+
+        assert cancel_execution_task(record.execution_id, reason="stop") is True
+        record.refresh_from_db()
+        assert record.state == "cancelled"
+        assert record.error == "stop"
 
     def test_celery_workflow_engine_status_missing_raises(self) -> None:
         engine = CeleryWorkflowEngine()
