@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Optional, Dict, ClassVar
 from collections.abc import Mapping
 
-from django.conf import settings
 from general_manager.permission.base_permission import BasePermission, UserLike
 
 if TYPE_CHECKING:
@@ -38,12 +37,12 @@ _FALLBACK_DEFAULT_PERMISSIONS: dict[permission_type, list[str]] = {
 
 def _get_default_permissions() -> dict[permission_type, list[str]]:
     """Return configured default CRUD permissions, falling back when absent."""
-    config = getattr(settings, _SETTINGS_KEY, None)
+    from general_manager.conf import get_setting
+
+    raw_defaults = get_setting(_DEFAULT_PERMISSIONS_KEY)
     configured_defaults: Mapping[str, Any] | None = None
-    if isinstance(config, Mapping):
-        raw_defaults = config.get(_DEFAULT_PERMISSIONS_KEY)
-        if isinstance(raw_defaults, Mapping):
-            configured_defaults = raw_defaults
+    if isinstance(raw_defaults, Mapping):
+        configured_defaults = raw_defaults
 
     defaults = {
         action: list(permissions)

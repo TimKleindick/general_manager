@@ -9,7 +9,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from django.conf import settings
 from graphql import get_operation_ast, parse
 from graphql.error import GraphQLError
 from text_unidecode import unidecode
@@ -171,34 +170,23 @@ def reset_graphql_metrics_backend_for_tests() -> None:
 
 
 def _get_settings() -> GraphQLMetricsSettings:
-    enabled = bool(getattr(settings, "GENERAL_MANAGER_GRAPHQL_METRICS_ENABLED", False))
-    backend = str(
-        getattr(settings, "GENERAL_MANAGER_GRAPHQL_METRICS_BACKEND", "prometheus")
-    )
-    resolver_timing = bool(
-        getattr(settings, "GENERAL_MANAGER_GRAPHQL_METRICS_RESOLVER_TIMING", False)
-    )
-    allowlist_raw = getattr(
-        settings, "GENERAL_MANAGER_GRAPHQL_METRICS_OPERATION_ALLOWLIST", None
-    )
+    from general_manager.conf import get_setting
+
+    enabled = bool(get_setting("GRAPHQL_METRICS_ENABLED", False))
+    backend = str(get_setting("GRAPHQL_METRICS_BACKEND", "prometheus"))
+    resolver_timing = bool(get_setting("GRAPHQL_METRICS_RESOLVER_TIMING", False))
+    allowlist_raw = get_setting("GRAPHQL_METRICS_OPERATION_ALLOWLIST", None)
     max_operation_length = int(
-        getattr(
-            settings,
-            "GENERAL_MANAGER_GRAPHQL_METRICS_MAX_OPERATION_LENGTH",
-            DEFAULT_MAX_OPERATION_LENGTH,
+        get_setting(
+            "GRAPHQL_METRICS_MAX_OPERATION_LENGTH", DEFAULT_MAX_OPERATION_LENGTH
         )
     )
     max_label_length = int(
-        getattr(
-            settings,
-            "GENERAL_MANAGER_GRAPHQL_METRICS_MAX_LABEL_LENGTH",
-            DEFAULT_MAX_LABEL_LENGTH,
-        )
+        get_setting("GRAPHQL_METRICS_MAX_LABEL_LENGTH", DEFAULT_MAX_LABEL_LENGTH)
     )
     unknown_policy = str(
-        getattr(
-            settings,
-            "GENERAL_MANAGER_GRAPHQL_METRICS_UNKNOWN_OPERATION_POLICY",
+        get_setting(
+            "GRAPHQL_METRICS_UNKNOWN_OPERATION_POLICY",
             DEFAULT_UNKNOWN_OPERATION_POLICY,
         )
     ).lower()

@@ -97,7 +97,10 @@ class GraphQLChannelLayerStrictModeTests(unittest.TestCase):
 
     def test_strict_mode_error_message(self) -> None:
         """Verify strict mode raises RuntimeError with helpful message."""
-        with patch("general_manager.api.graphql.get_channel_layer", return_value=None):
+        with patch(
+            "general_manager.api.graphql_subscriptions.get_channel_layer",
+            return_value=None,
+        ):
             with self.assertRaises(RuntimeError) as ctx:
                 GraphQL._get_channel_layer(strict=True)
 
@@ -205,7 +208,7 @@ class GraphQLDependencyTrackerComplexCasesTests(unittest.TestCase):
     def test_dependencies_with_nested_dicts(self) -> None:
         """Verify _dependencies_from_tracker handles nested dict identifications."""
         records = [
-            ("ManagerA", "identification", "{'id': 1, 'meta': {'key': 'value'}}"),
+            ("ManagerA", "identification", '{"id": 1, "meta": {"key": "value"}}'),
         ]
 
         extracted = GraphQL._dependencies_from_tracker(records)
@@ -216,9 +219,9 @@ class GraphQLDependencyTrackerComplexCasesTests(unittest.TestCase):
     def test_dependencies_with_multiple_managers(self) -> None:
         """Verify _dependencies_from_tracker handles records from multiple managers."""
         records = [
-            ("ManagerA", "identification", "{'id': 1}"),
-            ("ManagerB", "identification", "{'id': 2}"),
-            ("ManagerA", "identification", "{'id': 3}"),
+            ("ManagerA", "identification", '{"id": 1}'),
+            ("ManagerB", "identification", '{"id": 2}'),
+            ("ManagerA", "identification", '{"id": 3}'),
         ]
 
         extracted = GraphQL._dependencies_from_tracker(records)
@@ -228,10 +231,10 @@ class GraphQLDependencyTrackerComplexCasesTests(unittest.TestCase):
         self.assertEqual(manager_names.count("ManagerA"), 2)
         self.assertEqual(manager_names.count("ManagerB"), 1)
 
-    def test_dependencies_with_special_python_literals(self) -> None:
-        """Verify _dependencies_from_tracker handles various Python literal types."""
+    def test_dependencies_with_special_json_types(self) -> None:
+        """Verify _dependencies_from_tracker handles standard JSON value types."""
         records = [
-            ("ManagerA", "identification", "{'active': True, 'count': 0, 'ref': None}"),
+            ("ManagerA", "identification", '{"active": true, "count": 0, "ref": null}'),
         ]
 
         extracted = GraphQL._dependencies_from_tracker(records)

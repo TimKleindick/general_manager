@@ -249,7 +249,7 @@ def test_dependency_index_logs_invalidation() -> None:
             "filter": {
                 "FakeManager": {
                     "status": {
-                        "'active'": {"cache-key"},
+                        '"active"': {"cache-key"},
                     }
                 }
             },
@@ -284,7 +284,7 @@ def test_apps_logging_when_asgi_missing() -> None:
     from general_manager.apps import GeneralmanagerConfig
 
     with (
-        patch("general_manager.apps.logger") as mock_logger,
+        patch("general_manager.bootstrap.logger") as mock_logger,
         override_settings(ASGI_APPLICATION=None),
     ):
         GeneralmanagerConfig._ensure_asgi_subscription_route("/graphql/")
@@ -351,23 +351,27 @@ def test_utils_public_api_logging() -> None:
 
 
 def test_api_graphql_error_logging() -> None:
-    with patch("general_manager.api.graphql.logger") as mock_logger:
+    # Logging now happens in graphql_errors (where handle_graph_ql_error lives).
+    with patch("general_manager.api.graphql_errors.logger") as mock_logger:
         GraphQL._handle_graph_ql_error(PermissionError("denied"))
         info_call = mock_logger.info.call_args_list[0]
         assert info_call.args[0] == "graphql permission error"
         assert info_call.kwargs["context"]["error"] == "PermissionError"
 
-    with patch("general_manager.api.graphql.logger") as mock_logger:
+    with patch("general_manager.api.graphql_errors.logger") as mock_logger:
         GraphQL._handle_graph_ql_error(ValueError("bad input"))
         warning_call = mock_logger.warning.call_args_list[0]
         assert warning_call.args[0] == "graphql user error"
         assert warning_call.kwargs["context"]["error"] == "ValueError"
 
-    with patch("general_manager.api.graphql.logger") as mock_logger:
+    with patch("general_manager.api.graphql_errors.logger") as mock_logger:
         GraphQL._handle_graph_ql_error(RuntimeError("boom"))
-        error_call = mock_logger.error.call_args_list[0]
-        assert error_call.args[0] == "graphql internal error"
-        assert error_call.kwargs["context"]["error"] == "RuntimeError"
+        warning_call = mock_logger.warning.call_args_list[0]
+        assert (
+            warning_call.args[0]
+            == "graphql caught suspicious error (may indicate a bug)"
+        )
+        assert warning_call.kwargs["context"]["error"] == "RuntimeError"
 
 
 def test_manager_meta_logging_on_class_creation() -> None:

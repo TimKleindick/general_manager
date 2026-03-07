@@ -405,10 +405,10 @@ class GraphQLDependencyExtractionTests(unittest.TestCase):
 
     def test_dependencies_from_tracker_filters_invalid_entries(self) -> None:
         records = [
-            ("DepManager", "identification", "{'id': 1}"),
+            ("DepManager", "identification", '{"id": 1}'),
             ("DepManager", "identification", "not a dict"),
-            ("DepManager", "filter", "{'id': 2}"),
-            ("Unknown", "identification", "{'id': 3}"),
+            ("DepManager", "filter", '{"id": 2}'),
+            ("Unknown", "identification", '{"id": 3}'),
         ]
 
         extracted = GraphQL._dependencies_from_tracker(records)
@@ -423,13 +423,19 @@ class GraphQLChannelLayerTests(unittest.TestCase):
 
     def test_get_channel_layer_returns_none_when_not_configured(self) -> None:
         """Verify _get_channel_layer returns None when no channel layer is configured."""
-        with patch("general_manager.api.graphql.get_channel_layer", return_value=None):
+        with patch(
+            "general_manager.api.graphql_subscriptions.get_channel_layer",
+            return_value=None,
+        ):
             layer = GraphQL._get_channel_layer(strict=False)
             self.assertIsNone(layer)
 
     def test_get_channel_layer_raises_when_strict_and_not_configured(self) -> None:
         """Verify _get_channel_layer raises RuntimeError in strict mode when no channel layer exists."""
-        with patch("general_manager.api.graphql.get_channel_layer", return_value=None):
+        with patch(
+            "general_manager.api.graphql_subscriptions.get_channel_layer",
+            return_value=None,
+        ):
             with self.assertRaises(RuntimeError) as ctx:
                 GraphQL._get_channel_layer(strict=True)
             self.assertIn("No channel layer configured", str(ctx.exception))
@@ -438,7 +444,8 @@ class GraphQLChannelLayerTests(unittest.TestCase):
         """Verify _get_channel_layer returns the configured channel layer."""
         mock_layer = object()
         with patch(
-            "general_manager.api.graphql.get_channel_layer", return_value=mock_layer
+            "general_manager.api.graphql_subscriptions.get_channel_layer",
+            return_value=mock_layer,
         ):
             layer = GraphQL._get_channel_layer()
             self.assertIs(layer, mock_layer)
@@ -631,8 +638,8 @@ class GraphQLDependencyTrackerEdgeCaseTests(unittest.TestCase):
     def test_dependencies_extracts_valid_records(self) -> None:
         """Verify _dependencies_from_tracker successfully extracts valid dependency records."""
         records = [
-            ("TestManager", "identification", "{'id': 1, 'name': 'test'}"),
-            ("TestManager", "identification", "{'id': 2}"),
+            ("TestManager", "identification", '{"id": 1, "name": "test"}'),
+            ("TestManager", "identification", '{"id": 2}'),
         ]
         extracted = GraphQL._dependencies_from_tracker(records)
         self.assertEqual(len(extracted), 2)
@@ -1073,9 +1080,9 @@ class GraphQLResolveSubscriptionDependenciesTests(unittest.TestCase):
         instance._interface = SimpleNamespace(identification={"id": 1})
 
         dependency_records = [
-            ("RelatedManager", "identification", "{'id': 2}"),
-            ("RelatedManager", "identification", "{'id': 2}"),  # Duplicate
-            ("RelatedManager", "identification", "{'id': 3}"),
+            ("RelatedManager", "identification", '{"id": 2}'),
+            ("RelatedManager", "identification", '{"id": 2}'),  # Duplicate
+            ("RelatedManager", "identification", '{"id": 3}'),
         ]
 
         dependencies = GraphQL._resolve_subscription_dependencies(
