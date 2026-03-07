@@ -21,7 +21,7 @@ class User(GeneralManager):
     class Factory:
         username = "wrapped-user"
         email = "wrapped@example.com"
-        password = LazyFunction(get_random_string)
+        password = LazyFunction(lambda: get_random_string(16))
 
 
 class Ticket(GeneralManager):
