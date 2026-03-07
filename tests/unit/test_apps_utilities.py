@@ -76,6 +76,13 @@ class AppsUtilitiesTests(SimpleTestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "boom"):
                     gm_apps._import_optional_managers_module(app_config)
+        with patch("general_manager.apps.util.find_spec", return_value=object()):
+            with patch(
+                "general_manager.apps.import_module",
+                side_effect=ImportError("boom"),
+            ):
+                with self.assertRaisesRegex(ImportError, "boom"):
+                    gm_apps._import_optional_managers_module(app_config)
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_ready_autoloads_managers_before_initialization(self) -> None:
