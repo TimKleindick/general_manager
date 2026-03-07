@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from factory import LazyFunction
+from factory import LazyFunction, Sequence
 from django.conf import settings
 from django.db import models
 from django.utils.crypto import get_random_string
@@ -19,8 +19,8 @@ class User(GeneralManager):
         model = settings.AUTH_USER_MODEL
 
     class Factory:
-        username = "wrapped-user"
-        email = "wrapped@example.com"
+        username = Sequence(lambda n: f"wrapped-user-{n}")
+        email = Sequence(lambda n: f"wrapped-{n}@example.com")
         password = LazyFunction(lambda: get_random_string(16))
 
 
