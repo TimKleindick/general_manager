@@ -116,6 +116,7 @@ nav:
   - Tutorials:
       - howto/index.md
       - howto/create_project.md
+      - howto/custom_user_model.md
       - howto/add_model_with_measurement.md
       - howto/add_permission_rule.md
       - howto/permission_walkthrough.md

@@ -2,30 +2,29 @@
 
 These examples show how to adopt `ExistingModelInterface` for legacy tables while keeping the GeneralManager ergonomics.
 
-## Wrapping Django's built-in User model
+## Wrapping a swappable Django User model
 
-The default Django auth model already includes history and activation-compatible fields (`is_active`, `last_login`, etc.). Import it and expose the fields you want to work with from the manager; the factory gives you consistent fixtures.
+Keep the Django auth model in `models.py` and expose the GeneralManager wrapper from `managers.py`. That lets both classes be named `User` while giving shells and application code a canonical manager import path.
 
 ```python
-from django.contrib.auth import get_user_model
+from django.conf import settings
 
 from general_manager.interface import ExistingModelInterface
 from general_manager.manager import GeneralManager, graph_ql_property
 
 
-User = get_user_model()
-
-
-class Account(GeneralManager):
+class User(GeneralManager):
     id: int
     username: str
     email: str | None
 
     class Interface(ExistingModelInterface):
-        model = User
+        model = settings.AUTH_USER_MODEL
 
     class Factory:
         username = "legacy-user"
+        email = "legacy@example.com"
+        password = "not-hashed"
 
     @graph_ql_property
     def display_name(self) -> str:
@@ -34,7 +33,9 @@ class Account(GeneralManager):
         return self.username
 ```
 
-`Account.create` and `Account.update` call through to the `auth_user` table, `Account.filter(is_active=True)` returns manager instances, and `Account.Factory.create()` seeds users for tests without duplicating schema.
+Import the wrapper with `from myapp.managers import User`; keep `myapp.models.User` for direct ORM usage only. GeneralManager auto-imports `myapp.managers` during startup so foreign keys pointing at `settings.AUTH_USER_MODEL` resolve to the wrapper once the app is loaded.
+
+`User.create` and `User.update` call through to the configured auth table, `User.filter(is_active=True)` returns manager instances, and `User.Factory.create()` seeds users for tests without duplicating schema.
 
 ## Adding validation to a legacy model
 
