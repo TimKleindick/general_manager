@@ -12,27 +12,27 @@ If you control the schema and prefer GeneralManager to build models for you, sti
 
 ## Pointing a manager at a legacy model
 
-Reference the model with either an import or an app label string. Annotate the manager attributes you plan to read—GeneralManager derives field accessors from the legacy model instead of from interface field declarations.
+Reference the model with either an import, `settings.AUTH_USER_MODEL`, or an app label string. Annotate the manager attributes you plan to read—GeneralManager derives field accessors from the legacy model instead of from interface field declarations.
 
 ```python
-from django.contrib.auth import get_user_model
+from django.conf import settings
 
 from general_manager.interface import ExistingModelInterface
 from general_manager.manager import GeneralManager
 
 
-class Customer(GeneralManager):
+class User(GeneralManager):
     id: int
-    name: str
-    notes: str | None
+    username: str
+    email: str | None
 
     class Interface(ExistingModelInterface):
-        model = "crm.Customer"
+        model = settings.AUTH_USER_MODEL
 
 
 ```
 
-The interface resolves `"crm.Customer"` through Django's app registry, registers the model with `django-simple-history` when needed, and links the manager back to the model via `_general_manager_class`. If you already have the model imported, assign the class directly instead of the string.
+For same-name auth wrappers, keep the Django model in `models.py` and define the GeneralManager wrapper in `managers.py`, then import `myapp.managers.User` in shells and app code. GeneralManager auto-imports `<app>.managers` during startup, registers history when needed, and links the model back to the wrapper via `_general_manager_class`. If you already have the model imported, assign the class directly instead of the string.
 
 ## Auditing and validation
 

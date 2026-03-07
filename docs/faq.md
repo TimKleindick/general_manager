@@ -6,11 +6,11 @@ Managers declare fields using type hints. The nested interface class defines the
 
 ## How do I make the Django User model work with GeneralManager?
 
-Wrap it with `ExistingModelInterface`. Import `django.contrib.auth.get_user_model()`, declare a manager with the fields you want to expose, and set `model = get_user_model()` on the interface. `ExistingModelInterface` registers simple-history automatically, honours `is_active`, and wires in factories so you can call `User.create()` or `User.Factory.create()` directly. See the [Existing model interface recipes](examples/existing_model_interface.md) for a full snippet.
+Wrap `settings.AUTH_USER_MODEL` with `ExistingModelInterface` from a manager-focused module such as `myapp/managers.py`. Keep the Django model in `models.py`, define the GeneralManager wrapper as `User` in `managers.py`, and import `myapp.managers.User` in shells and application code. GeneralManager auto-imports `<app>.managers` modules during startup, so the wrapper registers early enough for foreign-key relations to resolve back to the manager. See [Connect a Custom User Model](howto/custom_user_model.md) for the full setup, and the [Existing model interface recipes](examples/existing_model_interface.md) for a shorter snippet.
 
 ## Where should I register managers so Django finds the models?
 
-Import the module containing your managers inside the `AppConfig.ready()` hook or `models.py`. This ensures Django evaluates the interface definitions during startup and generates migrations.
+Put managers in `<app>.managers` when possible. GeneralManager auto-imports that module during startup. If you use a different module layout, import the module containing your managers inside `AppConfig.ready()` so Django evaluates the interface definitions before dependent relations are introspected.
 
 ## How can I override permissions for a one-time maintenance task?
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractBaseUser
 from django.conf import settings
 from simple_history.models import HistoricalRecords  # type: ignore
 from django.core.exceptions import ValidationError
@@ -104,19 +104,19 @@ class GeneralManagerModel(GeneralManagerBasisModel):
     changed_by_id: int | None
 
     @property
-    def _history_user(self) -> AbstractUser | None:
+    def _history_user(self) -> AbstractBaseUser | None:
         """
         Returns the user who last modified this model instance, or None if no user is set.
         """
         return self.changed_by
 
     @_history_user.setter
-    def _history_user(self, value: AbstractUser | None) -> None:
+    def _history_user(self, value: AbstractBaseUser | None) -> None:
         """
         Assign the given user as the author of the most recent change recorded for this model instance.
 
         Parameters:
-            value (AbstractUser | None): The user to associate with the latest modification, or `None` to clear the recorded user.
+            value (AbstractBaseUser | None): The user to associate with the latest modification, or `None` to clear the recorded user.
         """
         self.changed_by = value
 

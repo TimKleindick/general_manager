@@ -431,10 +431,12 @@ class GeneralManagerTransactionTestCase(
 
                 app_label = model._meta.app_label
                 model_key = model.__name__.lower()
+                app_config = None
+                with suppress(LookupError):
+                    app_config = global_apps.get_app_config(app_label)
                 if model_table in created_tables:
                     global_apps.all_models[app_label].pop(model_key, None)
-                    app_config = global_apps.get_app_config(app_label)
-                    with suppress(LookupError):
+                    if app_config is not None:
                         app_config.models.pop(model_key, None)
                 if (
                     history_model
@@ -442,7 +444,7 @@ class GeneralManagerTransactionTestCase(
                 ):
                     hist_key = history_model.model.__name__.lower()
                     global_apps.all_models[app_label].pop(hist_key, None)
-                    with suppress(LookupError):
+                    if app_config is not None:
                         app_config.models.pop(hist_key, None)
                 for related_history_model in related_history_models:
                     table = related_history_model._meta.db_table

@@ -4,10 +4,10 @@ import importlib.abc
 import os
 import sys
 from importlib import import_module, util
-from typing import TYPE_CHECKING, Any, Callable, Type
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Type
 
 import graphene  # type: ignore[import]
-from django.apps import AppConfig
+from django.apps import AppConfig, apps as django_apps
 from django.conf import settings
 from django.core.checks import register
 from django.core.management.base import BaseCommand
@@ -98,6 +98,31 @@ def _normalize_graphql_path(raw_path: str) -> str:
     return raw_path
 
 
+def _import_optional_managers_module(app_config: AppConfig) -> bool:
+    """Import `<app>.managers` when present so manager classes register at startup."""
+    module_name = f"{app_config.name}.managers"
+    spec = util.find_spec(module_name)
+    if spec is None:
+        return False
+    import_module(module_name)
+    logger.debug(
+        "imported app managers module",
+        context={"app": app_config.label, "module": module_name},
+    )
+    return True
+
+
+def _autoload_app_managers_modules(
+    app_configs: Iterable[AppConfig] | None = None,
+) -> list[str]:
+    """Auto-import app `managers` modules before GeneralManager initialization."""
+    imported_modules: list[str] = []
+    for app_config in app_configs or tuple(django_apps.get_app_configs()):
+        if _import_optional_managers_module(app_config):
+            imported_modules.append(f"{app_config.name}.managers")
+    return imported_modules
+
+
 def _auto_reindex_search(*_args: object, **kwargs: object) -> None:
     global _SEARCH_REINDEXED
     environ = kwargs.get("environ")
@@ -131,6 +156,7 @@ class GeneralmanagerConfig(AppConfig):
         """
         self.install_startup_hook_runner()
         self.register_system_checks()
+        _autoload_app_managers_modules()
         self.initialize_general_manager_classes(
             GeneralManagerMeta.pending_attribute_initialization,
             GeneralManagerMeta.all_classes,
