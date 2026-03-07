@@ -15,6 +15,7 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
         script = textwrap.dedent(
             """
             import django
+            import sys
 
             django.setup()
 
@@ -24,10 +25,14 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
             from django.db import connection
             from django.utils.crypto import get_random_string
 
-            from tests.custom_user_app.managers import Ticket, User
-
             auth_model = get_user_model()
+            managers_module = sys.modules["tests.custom_user_app.managers"]
+            User = managers_module.User
+            Ticket = managers_module.Ticket
             ticket_model = Ticket.Interface._model
+
+            assert auth_model._general_manager_class is User
+            assert Ticket.Interface.get_field_type("owner") is User
 
             models_to_create = [
                 ContentType,
@@ -56,9 +61,10 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
                 owner=manager_user,
             )
 
-            from tests.custom_user_app.managers import User as ImportedManagerUser
+            from tests.custom_user_app.managers import Ticket as ImportedTicket, User as ImportedManagerUser
 
             assert ImportedManagerUser is User
+            assert ImportedTicket is Ticket
             assert ImportedManagerUser is not auth_model
             assert auth_model._general_manager_class is User
             assert manager_user.username == "pilot"
