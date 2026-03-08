@@ -177,7 +177,7 @@ def dependencies_from_tracker(
             continue
         try:
             parsed = parse_dependency_identifier(identifier)
-        except (ValueError, SyntaxError, json.JSONDecodeError):
+        except (ValueError, json.JSONDecodeError):
             continue
         if not isinstance(parsed, dict):
             continue
@@ -221,7 +221,10 @@ def resolve_subscription_dependencies(
                 and dependency_identification == instance.identification
             ):
                 continue
-            key = (dependency_class.__name__, repr(dependency_identification))
+            key = (
+                dependency_class.__name__,
+                json.dumps(dependency_identification, sort_keys=True, default=str),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -242,7 +245,10 @@ def resolve_subscription_dependencies(
             if isinstance(value, GeneralManager):
                 identification = deepcopy(value.identification)
                 manager_type = cast(type[GeneralManager], input_field.type)
-                key = (manager_type.__name__, repr(identification))
+                key = (
+                    manager_type.__name__,
+                    json.dumps(identification, sort_keys=True, default=str),
+                )
                 if key in seen:
                     continue
                 seen.add(key)
@@ -250,7 +256,10 @@ def resolve_subscription_dependencies(
             elif isinstance(value, dict):
                 identification_dict = deepcopy(cast(dict[str, Any], value))
                 manager_type = cast(type[GeneralManager], input_field.type)
-                key = (manager_type.__name__, repr(identification_dict))
+                key = (
+                    manager_type.__name__,
+                    json.dumps(identification_dict, sort_keys=True, default=str),
+                )
                 if key in seen:
                     continue
                 seen.add(key)

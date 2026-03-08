@@ -11,7 +11,7 @@ module can be imported by ``graphql.py`` without creating a circular dependency.
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import Any, cast, TYPE_CHECKING
 
 import graphene  # type: ignore[import]
 
@@ -53,8 +53,6 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
         Mapping from attribute name to a Graphene input field instance.
     """
     fields: dict[str, Any] = {}
-    from typing import cast
-
     for name, info in interface_cls.get_attribute_types().items():
         if name in ["changed_by", "created_at", "updated_at"]:
             continue
@@ -264,9 +262,15 @@ def generate_delete_mutation_class(
                 "Arguments",
                 (),
                 {
-                    field_name: field
-                    for field_name, field in create_write_fields(interface_cls).items()
-                    if field_name in generalManagerClass.Interface.input_fields
+                    # Always include id so the resolver can locate the instance.
+                    "id": graphene.ID(required=True),
+                    **{
+                        field_name: field
+                        for field_name, field in create_write_fields(
+                            interface_cls
+                        ).items()
+                        if field_name in generalManagerClass.Interface.input_fields
+                    },
                 },
             ),
             "mutate": delete_mutation,

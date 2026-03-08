@@ -19,7 +19,6 @@ type permission_type = Literal[
     "delete",
 ]
 
-_SETTINGS_KEY = "GENERAL_MANAGER"
 _DEFAULT_PERMISSIONS_KEY = "DEFAULT_PERMISSIONS"
 _PERMISSION_ACTIONS: tuple[permission_type, ...] = (
     "read",

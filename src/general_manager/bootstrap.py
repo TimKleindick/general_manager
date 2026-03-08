@@ -8,6 +8,7 @@ independently importable and testable.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.abc
 import os
 import sys
@@ -392,6 +393,8 @@ def _ensure_asgi_subscription_route(graphql_url: str) -> None:
             def exec_module(self, module):  # type: ignore[override]
                 self._original_loader.exec_module(module)
                 finalize(module)
+                with contextlib.suppress(ValueError):
+                    sys.meta_path.remove(finder)
 
         wrapped_loader = _Loader(spec.loader)
 

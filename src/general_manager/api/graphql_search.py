@@ -465,6 +465,10 @@ def register_search_query(
         raw: list[Any] = []
         requested_count = offset + limit
         fetch_limit = max(requested_count, limit)
+        # Tracks how many authorized hits have been appended globally so far.
+        # This enforces a single cross-manager cap on collected results while
+        # still letting the loop continue counting for an accurate ``total``.
+        global_appended_hits = 0
 
         for manager_class in manager_classes:
             type_label = manager_class.__name__
@@ -513,9 +517,13 @@ def register_search_query(
                     if not passes_permission_filters(instance, info):
                         continue
                     total_hits_for_manager += 1
-                    if appended_hits_for_manager < requested_count:
+                    # Apply a single global cap across all managers so that
+                    # ``authorized_hits`` never grows beyond ``requested_count``
+                    # items, regardless of how many managers are searched.
+                    if global_appended_hits < requested_count:
                         authorized_hits.append((hit.score, hit, instance))
                         appended_hits_for_manager += 1
+                        global_appended_hits += 1
                 if len(result.hits) < fetch_limit:
                     break
             total += total_hits_for_manager

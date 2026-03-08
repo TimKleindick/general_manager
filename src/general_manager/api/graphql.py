@@ -28,6 +28,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.cache.dependency_index import (
     Dependency,
 )

@@ -107,7 +107,10 @@ def acquire_lock_with_retry(operation: str) -> None:
     start = time.time()
     delay = _BACKOFF_INITIAL
     while True:
-        time.sleep(random.uniform(0, delay))  # noqa: S311 - jitter, not crypto
+        remaining = LOCK_TIMEOUT - (time.time() - start)
+        if remaining <= 0:
+            raise DependencyLockTimeoutError(operation)
+        time.sleep(random.uniform(0, min(delay, remaining)))  # noqa: S311 - jitter, not crypto
         if acquire_lock():
             return
         if time.time() - start > LOCK_TIMEOUT:
