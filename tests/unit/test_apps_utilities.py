@@ -115,30 +115,61 @@ class AppsUtilitiesTests(SimpleTestCase):
                     ):
                         with (
                             patch(
-                                "general_manager.apps.configure_audit_logger_from_settings"
+                                "general_manager.apps.configure_audit_logger_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_audit"
+                                ),
                             ),
                             patch(
-                                "general_manager.apps.configure_search_backend_from_settings"
+                                "general_manager.apps.configure_search_backend_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_search"
+                                ),
                             ),
                             patch(
-                                "general_manager.apps.configure_workflow_engine_from_settings"
+                                "general_manager.apps.configure_workflow_engine_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_workflow_engine"
+                                ),
                             ),
                             patch(
-                                "general_manager.apps.configure_event_registry_from_settings"
+                                "general_manager.apps.configure_event_registry_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_event_registry"
+                                ),
                             ),
                             patch(
-                                "general_manager.apps.configure_workflow_signal_bridge_from_settings"
+                                "general_manager.apps.configure_workflow_signal_bridge_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_signal_bridge"
+                                ),
                             ),
                             patch(
-                                "general_manager.apps.configure_workflow_beat_schedule_from_settings"
+                                "general_manager.apps.configure_workflow_beat_schedule_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_beat_schedule"
+                                ),
                             ),
-                            patch.object(config, "install_search_auto_reindex"),
+                            patch.object(
+                                config,
+                                "install_search_auto_reindex",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "install_search_auto_reindex"
+                                ),
+                            ),
                         ):
                             config.ready()
 
-        assert call_order[:4] == [
+        assert call_order == [
             "install_runner",
             "register_checks",
             "autoload",
             "initialize",
+            "configure_audit",
+            "configure_search",
+            "configure_workflow_engine",
+            "configure_event_registry",
+            "configure_signal_bridge",
+            "configure_beat_schedule",
+            "install_search_auto_reindex",
         ]

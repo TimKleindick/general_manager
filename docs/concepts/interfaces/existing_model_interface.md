@@ -32,7 +32,7 @@ class User(GeneralManager):
 
 ```
 
-For same-name auth wrappers, keep the Django model in `models.py` and define the GeneralManager wrapper in `managers.py`, then import `myapp.managers.User` in shells and app code. GeneralManager auto-imports `<app>.managers` during startup, registers history when needed, and links the model back to the wrapper via `_general_manager_class`. If you already have the model imported, assign the class directly instead of the string.
+For wrappers that use the same class name as your Django model, keep the Django model in `models.py` and define the GeneralManager wrapper in `managers.py`. GeneralManager auto-imports `<app>.managers` for every installed app during startup before it initializes manager classes, which avoids import cycles and ensures the wrapper class is available for registration and `_general_manager_class` linking. Import the wrapper from `myapp.managers` in shells and app code so you do not confuse it with `myapp.models.User`; if the model is already imported, assign the wrapper class directly to `_general_manager_class` instead of relying on a string reference.
 
 ## Auditing and validation
 
