@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.32.0 (2026-03-08)
+
+### Bug Fixes
+
+- Make swappable auth fixtures unique
+  ([`7e31034`](https://github.com/TimKleindick/general_manager/commit/7e310348dcc6c6494b861bf8bdeb4f049fb58725))
+
+- Tighten swappable auth manager coverage
+  ([`10da2e0`](https://github.com/TimKleindick/general_manager/commit/10da2e0f012bf123cc5e97fbe927db33803edb33))
+
+- Update password factory to generate a random string of fixed length
+  ([`64b94fe`](https://github.com/TimKleindick/general_manager/commit/64b94fef971349e1568d856495496e749006f0d0))
+
+### Features
+
+- Support swappable auth user managers
+  ([`c57ed13`](https://github.com/TimKleindick/general_manager/commit/c57ed13ce6ee9c150256c70d699369d11d3fbf9d))
+
+### Testing
+
+- Tighten startup ordering coverage
+  ([`a482bdf`](https://github.com/TimKleindick/general_manager/commit/a482bdfe2cd299bb7c10503b5dc0457ffdbbc861))
+
+
 ## v0.31.0 (2026-03-06)
 
 ### Bug Fixes
