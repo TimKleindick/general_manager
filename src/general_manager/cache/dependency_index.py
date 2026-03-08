@@ -227,7 +227,9 @@ def record_dependencies(
                     cache_dependencies.setdefault(cache_key, set()).add(identifier)
                 for lookup, val in params.items():
                     lookup_map = section.setdefault(lookup, {})
-                    val_key = json.dumps(_normalize_dependency_identifier(val))
+                    val_key = json.dumps(
+                        _normalize_dependency_identifier(val), sort_keys=True
+                    )
                     lookup_map.setdefault(val_key, set()).add(cache_key)
 
             else:
@@ -461,7 +463,10 @@ def generic_cache_invalidation(
 
         Behavior notes:
         - If `value` is None the function returns `False`.
-        - Literal parsing of `val_key` is attempted via AST literal evaluation; if parsing or coercion fails, the function falls back to conservative comparisons or returns `False` where appropriate.
+        - ``val_key`` is a JSON-serialised string produced by
+          :func:`json.dumps`.  Parsing is done with :func:`json.loads`; if
+          JSON parsing or type coercion fails, the function falls back to
+          conservative comparisons or returns ``False`` where appropriate.
         - Regex patterns that fail to compile are treated as non-matching.
 
         Parameters:

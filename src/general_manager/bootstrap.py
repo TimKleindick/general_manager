@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import importlib.abc
 import os
+import re
 import sys
 from importlib import import_module, util
 from typing import TYPE_CHECKING, Any, Callable, Type
@@ -147,16 +148,34 @@ def _wrap_system_check(
     return _check
 
 
+# Tracks which Interface classes have already had their system checks registered
+# so that repeated ready() calls (e.g. during tests) do not double-register.
+_registered_system_check_interfaces: set[str] = set()
+
+
 def register_system_checks() -> None:
-    """Register capability-provided system checks with Django's check framework."""
+    """Register capability-provided system checks with Django's check framework.
+
+    Idempotent: a given interface's checks are registered at most once per
+    process lifetime, so calling ``ready()`` multiple times (common in tests)
+    does not produce duplicate check results.
+    """
     hooks = list(iter_interface_system_checks())
     if not hooks:
         return
+    new_hooks = [
+        (iface, hook)
+        for iface, hook in hooks
+        if iface.__name__ not in _registered_system_check_interfaces
+    ]
+    if not new_hooks:
+        return
     logger.debug(
         "registering capability system checks",
-        context={"count": len(hooks)},
+        context={"count": len(new_hooks)},
     )
-    for interface_cls, hook in hooks:
+    for interface_cls, hook in new_hooks:
+        _registered_system_check_interfaces.add(interface_cls.__name__)
         register("general_manager")(_wrap_system_check(interface_cls, hook))
 
 
@@ -465,7 +484,8 @@ def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) ->
         return
 
     normalized = graphql_url.strip("/")
-    pattern = rf"^{normalized}/?$" if normalized else r"^$"
+    escaped = re.escape(normalized)
+    pattern = rf"^{escaped}/?$" if normalized else r"^$"
 
     route_exists = any(
         getattr(route, "_general_manager_graphql_ws", False)
@@ -483,9 +503,10 @@ def _finalize_asgi_module(asgi_module: Any, attr_name: str, graphql_url: str) ->
     if hasattr(application, "application_mapping") and isinstance(
         application.application_mapping, dict
     ):
-        application.application_mapping["websocket"] = AuthMiddlewareStack(
-            URLRouter(list(websocket_patterns))
-        )
+        if "websocket" not in application.application_mapping:
+            application.application_mapping["websocket"] = AuthMiddlewareStack(
+                URLRouter(list(websocket_patterns))
+            )
     else:
         wrapped_application = ProtocolTypeRouter(
             {

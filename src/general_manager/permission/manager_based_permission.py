@@ -35,10 +35,18 @@ _FALLBACK_DEFAULT_PERMISSIONS: dict[permission_type, list[str]] = {
 
 
 def _get_default_permissions() -> dict[permission_type, list[str]]:
-    """Return configured default CRUD permissions, falling back when absent."""
-    from general_manager.conf import get_setting
+    """Return configured default CRUD permissions, falling back when absent.
 
-    raw_defaults = get_setting(_DEFAULT_PERMISSIONS_KEY)
+    Only reads from the ``settings.GENERAL_MANAGER`` namespace to avoid
+    accidentally picking up a top-level ``settings.DEFAULT_PERMISSIONS`` that
+    belongs to an unrelated third-party package.
+    """
+    from django.conf import settings
+
+    gm_config = getattr(settings, "GENERAL_MANAGER", {})
+    raw_defaults = (
+        gm_config.get(_DEFAULT_PERMISSIONS_KEY) if isinstance(gm_config, dict) else None
+    )
     configured_defaults: Mapping[str, Any] | None = None
     if isinstance(raw_defaults, Mapping):
         configured_defaults = raw_defaults
