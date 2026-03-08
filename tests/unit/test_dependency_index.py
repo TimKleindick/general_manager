@@ -283,7 +283,7 @@ class TestRecordDependencies(TestCase):
     @patch("general_manager.cache.dependency_index.acquire_lock")
     @patch("general_manager.cache.dependency_index.LOCK_TIMEOUT", 0.1)
     def test_raises_timeout_error(self, mock_acquire):
-        mock_acquire.side_effect = [False] * 10
+        mock_acquire.return_value = False
         with self.assertRaises(TimeoutError):
             record_dependencies(
                 "abc123",
@@ -442,7 +442,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
         }
 
         set_full_index(idx)
-        mock_acquire.side_effect = [False] * 10
+        mock_acquire.return_value = False
         with self.assertRaises(TimeoutError):
             remove_cache_key_from_index("abc123")
 
