@@ -175,10 +175,7 @@ def dependencies_from_tracker(
         manager_class = manager_registry.get(manager_name)
         if manager_class is None:
             continue
-        try:
-            parsed = parse_dependency_identifier(identifier)
-        except (ValueError, json.JSONDecodeError):
-            continue
+        parsed = parse_dependency_identifier(identifier)
         if not isinstance(parsed, dict):
             continue
         resolved.append((manager_class, parsed))

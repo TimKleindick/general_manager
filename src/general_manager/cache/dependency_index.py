@@ -626,7 +626,9 @@ def generic_cache_invalidation(
                 else:
                     op_param = "eq"
                     attr_path_param = parts_param
-                expected_key = json.dumps(_normalize_dependency_identifier(expected))
+                expected_key = json.dumps(
+                    _normalize_dependency_identifier(expected), sort_keys=True
+                )
                 old_val_param = old_relevant_values.get("__".join(attr_path_param))
                 new_val_param = current_value_for_path(attr_path_param)
                 if not matches(op_param, old_val_param, expected_key):

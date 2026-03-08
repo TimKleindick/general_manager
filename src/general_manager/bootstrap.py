@@ -108,7 +108,13 @@ def install_startup_hook_runner() -> None:
                 for interface_cls in ordered_interfaces:
                     for entry in hooks_registry.get(interface_cls, ()):
                         if entry.dependency_resolver is resolver:
-                            entry.hook()
+                            try:
+                                entry.hook()
+                            except Exception:
+                                logger.exception(
+                                    "startup hook failed",
+                                    context={"interface": interface_cls.__name__},
+                                )
             logger.debug(
                 "finished startup hooks",
                 context={
@@ -198,7 +204,6 @@ def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
         ):
             permission_name = getattr(permission, "__name__", repr(permission))
             raise InvalidPermissionClassError(permission_name)
-        general_manager_class.Permission = permission
     else:
         general_manager_class.Permission = ManagerBasedPermission
 
@@ -276,11 +281,10 @@ def handle_graph_ql(
     Generate GraphQL interfaces and mutations, build a ``graphene.Schema``, and
     add the HTTP and ASGI subscription routes to the project's URL configuration.
     """
-    from general_manager.manager.meta import GeneralManagerMeta
 
     logger.debug(
         "creating graphql interfaces and mutations",
-        context={"pending": len(GeneralManagerMeta.pending_graphql_interfaces)},
+        context={"pending": len(pending_graphql_interfaces)},
     )
     for general_manager_class in pending_graphql_interfaces:
         GraphQL.create_graphql_interface(general_manager_class)
@@ -410,10 +414,12 @@ def _ensure_asgi_subscription_route(graphql_url: str) -> None:
                 return None
 
             def exec_module(self, module):  # type: ignore[override]
-                self._original_loader.exec_module(module)
-                finalize(module)
-                with contextlib.suppress(ValueError):
-                    sys.meta_path.remove(finder)
+                try:
+                    self._original_loader.exec_module(module)
+                    finalize(module)
+                finally:
+                    with contextlib.suppress(ValueError):
+                        sys.meta_path.remove(finder)
 
         wrapped_loader = _Loader(spec.loader)
 
