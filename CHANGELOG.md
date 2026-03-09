@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.32.2 (2026-03-09)
+
+### Bug Fixes
+
+- Bump Django and sqlparse to patched versions
+  ([`eb32a88`](https://github.com/TimKleindick/general_manager/commit/eb32a88dffc7463ced3673825e30483c6e4c9511))
+
+
 ## v0.32.1 (2026-03-09)
 
 ### Bug Fixes
