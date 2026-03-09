@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from secrets import randbelow
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from django.db import transaction
 from django.conf import settings
@@ -36,7 +36,7 @@ try:
     CELERY_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency boundary
     CELERY_AVAILABLE = False
-    current_app = None
+    current_app = cast(Any | None, None)  # type: ignore[assignment, no-redef]
 
     def shared_task(func: Any | None = None, **_kwargs: Any):  # type: ignore[no-redef]
         def decorator(inner):
