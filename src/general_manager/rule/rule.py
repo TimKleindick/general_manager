@@ -8,7 +8,6 @@ import textwrap
 from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar
 from decimal import Decimal
 
-from django.conf import settings
 from django.utils.module_loading import import_string
 
 from general_manager.rule.handler import (
@@ -129,7 +128,9 @@ class Rule(Generic[GeneralManagerType]):
         for cls in (LenHandler, MaxHandler, MinHandler, SumHandler):
             inst: BaseRuleHandler = cls()
             self._handlers[inst.function_name] = inst
-        for path in getattr(settings, "RULE_HANDLERS", []):
+        from general_manager.conf import get_setting
+
+        for path in get_setting("RULE_HANDLERS", []):
             handler_cls: type[BaseRuleHandler] = import_string(path)
             inst = handler_cls()
             self._handlers[inst.function_name] = inst

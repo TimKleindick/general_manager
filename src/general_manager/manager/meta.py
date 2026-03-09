@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from django.conf import settings
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Type, TypeVar, cast
 
 from general_manager.interface.base_interface import InterfaceBase
@@ -141,7 +140,9 @@ class GeneralManagerMeta(type):
                 },
             )
 
-        if getattr(settings, "AUTOCREATE_GRAPHQL", False):
+        from general_manager.conf import get_setting
+
+        if get_setting("AUTOCREATE_GRAPHQL", False):
             mcs.pending_graphql_interfaces.append(new_class)
             logger.debug(
                 "queued manager for graphql generation",

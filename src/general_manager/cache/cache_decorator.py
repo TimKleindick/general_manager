@@ -59,10 +59,17 @@ def cached(
     Parameters:
         timeout (int | None): Expiration in seconds for cached values; `None` stores results until invalidated.
         cache_backend (CacheBackend): Backend used to read and write cached results.
-        record_fn (RecordFn): Callback invoked to persist dependency metadata when no timeout is defined.
+        record_fn (RecordFn): Callback invoked to persist dependency metadata when no timeout is
+            defined.  Defaults to :func:`~general_manager.cache.dependency_index.record_dependencies`.
 
     Returns:
         Callable: Decorator that wraps the target function with caching behaviour.
+
+    Raises:
+        DependencyLockTimeoutError: Propagated from ``record_fn`` (i.e.
+            :func:`~general_manager.cache.dependency_index.record_dependencies`) when the
+            dependency-index lock cannot be acquired within the configured timeout.  The cached
+            value has already been stored at that point; only the dependency metadata is lost.
     """
 
     def decorator(func: FuncT) -> FuncT:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import ast
 import json
+import random
 import re
 import time
 from datetime import date, datetime
@@ -65,6 +65,10 @@ ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
 # -----------------------------------------------------------------------------
 # LOCKING HELPERS
 # -----------------------------------------------------------------------------
+_BACKOFF_INITIAL = 0.02  # 20ms initial sleep
+_BACKOFF_MAX = 0.5  # 500ms maximum sleep between retries
+
+
 def acquire_lock(timeout: int = LOCK_TIMEOUT) -> bool:
     """
     Attempt to acquire the cache-backed lock guarding dependency writes.
@@ -86,6 +90,32 @@ def release_lock() -> None:
         None
     """
     cache.delete(LOCK_KEY)
+
+
+def acquire_lock_with_retry(operation: str) -> None:
+    """
+    Acquire the dependency index lock, retrying with exponential backoff.
+
+    Parameters:
+        operation (str): Name of the operation, used in the timeout error message.
+
+    Raises:
+        DependencyLockTimeoutError: If the lock cannot be acquired within LOCK_TIMEOUT.
+    """
+    if acquire_lock():
+        return
+    start = time.time()
+    delay = _BACKOFF_INITIAL
+    while True:
+        remaining = LOCK_TIMEOUT - (time.time() - start)
+        if remaining <= 0:
+            raise DependencyLockTimeoutError(operation)
+        time.sleep(random.uniform(0, min(delay, remaining)))  # noqa: S311 - jitter, not crypto
+        if acquire_lock():
+            return
+        if time.time() - start > LOCK_TIMEOUT:
+            raise DependencyLockTimeoutError(operation)
+        delay = min(delay * 2, _BACKOFF_MAX)
 
 
 # -----------------------------------------------------------------------------
@@ -146,30 +176,12 @@ def serialize_dependency_identifier(value: Any) -> str:
     return json.dumps(_normalize_dependency_identifier(value), sort_keys=True)
 
 
-def _replace_legacy_temporal_repr(identifier: str) -> str:
-    """Normalize legacy `datetime.date(...)` repr fragments into ISO string literals."""
-
-    def _date_replacement(match: re.Match[str]) -> str:
-        year, month, day = (int(group) for group in match.groups())
-        return repr(date(year, month, day).isoformat())
-
-    return re.sub(
-        r"datetime\.date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\)",
-        _date_replacement,
-        identifier,
-    )
-
-
 def parse_dependency_identifier(identifier: str) -> Any:
-    """Parse dependency payloads from current JSON or legacy repr literals."""
+    """Parse a JSON-serialized dependency identifier, returning None on failure."""
     try:
         return json.loads(identifier)
-    except json.JSONDecodeError:
-        normalized = _replace_legacy_temporal_repr(identifier)
-        try:
-            return ast.literal_eval(normalized)
-        except (ValueError, SyntaxError):
-            return None
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 # -----------------------------------------------------------------------------
@@ -198,12 +210,7 @@ def record_dependencies(
     Raises:
         DependencyLockTimeoutError: If a lock cannot be acquired within the configured timeout while updating the index.
     """
-    start = time.time()
-    while not acquire_lock():
-        if time.time() - start > LOCK_TIMEOUT:
-            raise DependencyLockTimeoutError("record_dependencies")
-        time.sleep(0.05)
-
+    acquire_lock_with_retry("record_dependencies")
     try:
         idx = get_full_index()
         for model_name, action, identifier in dependencies:
@@ -220,7 +227,9 @@ def record_dependencies(
                     cache_dependencies.setdefault(cache_key, set()).add(identifier)
                 for lookup, val in params.items():
                     lookup_map = section.setdefault(lookup, {})
-                    val_key = repr(val)
+                    val_key = json.dumps(
+                        _normalize_dependency_identifier(val), sort_keys=True
+                    )
                     lookup_map.setdefault(val_key, set()).add(cache_key)
 
             else:
@@ -251,12 +260,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     Raises:
         DependencyLockTimeoutError: If the dependency lock cannot be acquired within LOCK_TIMEOUT.
     """
-    start = time.time()
-    while not acquire_lock():
-        if time.time() - start > LOCK_TIMEOUT:
-            raise DependencyLockTimeoutError("remove_cache_key_from_index")
-        time.sleep(0.05)
-
+    acquire_lock_with_retry("remove_cache_key_from_index")
     try:
         idx = get_full_index()
         for action in ACTIONS:
@@ -363,13 +367,13 @@ def generic_cache_invalidation(
     manager_name = sender.__name__
     idx = get_full_index()
 
-    def _safe_literal_eval(value: Any) -> Any:
-        if isinstance(value, str):
+    def _json_loads_val_key(val_key: Any) -> Any:
+        if isinstance(val_key, str):
             try:
-                return ast.literal_eval(value)
-            except (ValueError, SyntaxError):
-                return value
-        return value
+                return json.loads(val_key)
+            except (json.JSONDecodeError, ValueError):
+                return val_key  # treat as opaque string
+        return val_key
 
     def _repr_marker(raw: Any) -> str | None:
         if isinstance(raw, dict) and set(raw.keys()) == {"__repr__"}:
@@ -459,7 +463,10 @@ def generic_cache_invalidation(
 
         Behavior notes:
         - If `value` is None the function returns `False`.
-        - Literal parsing of `val_key` is attempted via AST literal evaluation; if parsing or coercion fails, the function falls back to conservative comparisons or returns `False` where appropriate.
+        - ``val_key`` is a JSON-serialised string produced by
+          :func:`json.dumps`.  Parsing is done with :func:`json.loads`; if
+          JSON parsing or type coercion fails, the function falls back to
+          conservative comparisons or returns ``False`` where appropriate.
         - Regex patterns that fail to compile are treated as non-matching.
 
         Parameters:
@@ -475,7 +482,7 @@ def generic_cache_invalidation(
 
         # eq
         if op == "eq":
-            literal_val = _safe_literal_eval(val_key)
+            literal_val = _json_loads_val_key(val_key)
             repr_marker = _repr_marker(literal_val)
             if repr_marker is not None:
                 return repr(value) == repr_marker
@@ -487,8 +494,8 @@ def generic_cache_invalidation(
         # in
         if op == "in":
             try:
-                seq = ast.literal_eval(val_key)
-            except (ValueError, SyntaxError):
+                seq = json.loads(val_key)
+            except (json.JSONDecodeError, ValueError):
                 return False
             for item in seq:
                 repr_marker = _repr_marker(item)
@@ -506,7 +513,7 @@ def generic_cache_invalidation(
 
         # range comparisons
         if op in ("gt", "gte", "lt", "lte"):
-            literal_val = _safe_literal_eval(val_key)
+            literal_val = _json_loads_val_key(val_key)
             thr = _coerce_to_type(value, literal_val)
             if thr is None:
                 return False
@@ -522,8 +529,8 @@ def generic_cache_invalidation(
         # wildcard / regex comparisons
         if op in ("contains", "startswith", "endswith", "regex"):
             try:
-                literal = ast.literal_eval(val_key)
-            except (ValueError, SyntaxError):
+                literal = json.loads(val_key)
+            except (json.JSONDecodeError, ValueError):
                 literal = val_key
 
             # ensure we always work with strings to avoid TypeErrors
@@ -619,7 +626,9 @@ def generic_cache_invalidation(
                 else:
                     op_param = "eq"
                     attr_path_param = parts_param
-                expected_key = repr(expected)
+                expected_key = json.dumps(
+                    _normalize_dependency_identifier(expected), sort_keys=True
+                )
                 old_val_param = old_relevant_values.get("__".join(attr_path_param))
                 new_val_param = current_value_for_path(attr_path_param)
                 if not matches(op_param, old_val_param, expected_key):

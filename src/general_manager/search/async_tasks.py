@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.conf import settings
 from django.utils.module_loading import import_string
 
 from general_manager.logging import get_logger
@@ -49,10 +48,9 @@ def _async_enabled() -> bool:
     Returns:
         bool: `True` if GENERAL_MANAGER.SEARCH_ASYNC or SEARCH_ASYNC is truthy, `False` otherwise.
     """
-    config = getattr(settings, "GENERAL_MANAGER", {})
-    return bool(
-        config.get("SEARCH_ASYNC", False) or getattr(settings, "SEARCH_ASYNC", False)
-    )
+    from general_manager.conf import get_setting
+
+    return bool(get_setting("SEARCH_ASYNC", False))
 
 
 def _resolve_manager(manager_path: str):

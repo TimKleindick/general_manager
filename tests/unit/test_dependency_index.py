@@ -232,23 +232,20 @@ class TestRecordDependencies(TestCase):
         idx = get_full_index()
         self.assertEqual(
             idx["filter"]["DateOnlyManager"]["day"],
-            {repr("2024-07-24"): {"day-cache"}},
+            {'"2024-07-24"': {"day-cache"}},
         )
 
-    def test_parse_dependency_identifier_accepts_json_and_legacy_repr(self):
+    def test_parse_dependency_identifier_roundtrips_json(self):
         self.assertEqual(
             parse_dependency_identifier(
                 serialize_dependency_identifier({"day": date(2024, 7, 24)})
             ),
             {"day": "2024-07-24"},
         )
-        self.assertEqual(
-            parse_dependency_identifier(repr({"day": date(2024, 7, 24)})),
-            {"day": "2024-07-24"},
-        )
 
-    def test_parse_dependency_identifier_returns_none_for_malformed_literal(self):
+    def test_parse_dependency_identifier_returns_none_for_non_json(self):
         self.assertIsNone(parse_dependency_identifier("{bad"))
+        self.assertIsNone(parse_dependency_identifier(repr({"day": date(2024, 7, 24)})))
 
     def test_serialize_dependency_identifier_orders_sets_deterministically(self):
         self.assertEqual(
@@ -286,7 +283,7 @@ class TestRecordDependencies(TestCase):
     @patch("general_manager.cache.dependency_index.acquire_lock")
     @patch("general_manager.cache.dependency_index.LOCK_TIMEOUT", 0.1)
     def test_raises_timeout_error(self, mock_acquire):
-        mock_acquire.side_effect = [False] * 10
+        mock_acquire.return_value = False
         with self.assertRaises(TimeoutError):
             record_dependencies(
                 "abc123",
@@ -445,7 +442,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
         }
 
         set_full_index(idx)
-        mock_acquire.side_effect = [False] * 10
+        mock_acquire.return_value = False
         with self.assertRaises(TimeoutError):
             remove_cache_key_from_index("abc123")
 
@@ -642,7 +639,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager2": {"status": {"'active'": ["A", "B"]}}},
+            "filter": {"DummyManager2": {"status": {'"active"': ["A", "B"]}}},
             "exclude": {},
         }
 
@@ -723,7 +720,7 @@ class GenericCacheInvalidationTests(TestCase):
     ):
         mock_get_index.return_value = {
             "filter": {},
-            "exclude": {"DummyManager2": {"status": {"'active'": ["X"]}}},
+            "exclude": {"DummyManager2": {"status": {'"active"': ["X"]}}},
         }
         inst = DummyManager2(status="active", count=0)
 
@@ -746,8 +743,8 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager2": {"status": {"'active'": ["X"]}}},
-            "exclude": {"DummyManager2": {"status": {"'active'": ["X"]}}},
+            "filter": {"DummyManager2": {"status": {'"active"': ["X"]}}},
+            "exclude": {"DummyManager2": {"status": {'"active"': ["X"]}}},
         }
         inst = DummyManager2(status="inactive", count=0)
 
@@ -770,7 +767,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager": {"title__contains": {"'hallo'": ["X"]}}},
+            "filter": {"DummyManager": {"title__contains": {'"hallo"': ["X"]}}},
             "exclude": {},
         }
 
@@ -795,7 +792,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager": {"title__contains": {"'hallo'": ["X"]}}},
+            "filter": {"DummyManager": {"title__contains": {'"hallo"': ["X"]}}},
             "exclude": {},
         }
 
@@ -820,7 +817,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager": {"title__endswith": {"'hallo'": ["X"]}}},
+            "filter": {"DummyManager": {"title__endswith": {'"hallo"': ["X"]}}},
             "exclude": {},
         }
 
@@ -845,7 +842,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager": {"title__startswith": {"'hallo'": ["X"]}}},
+            "filter": {"DummyManager": {"title__startswith": {'"hallo"': ["X"]}}},
             "exclude": {},
         }
 
@@ -872,8 +869,8 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index.return_value = {
             "filter": {
                 "DummyManager": {
-                    "title__endswith": {"'hallo'": ["X"]},
-                    "title__startswith": {"'hallo'": ["Y"]},
+                    "title__endswith": {'"hallo"': ["X"]},
+                    "title__startswith": {'"hallo"': ["Y"]},
                 }
             },
             "exclude": {},
@@ -926,7 +923,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_get_index.return_value = {
-            "filter": {"DummyManager": {"title__invalid": {"'hallo'": ["X"]}}},
+            "filter": {"DummyManager": {"title__invalid": {'"hallo"': ["X"]}}},
             "exclude": {},
         }
 
@@ -1255,7 +1252,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index.return_value = {
             "filter": {
                 "DateManager": {
-                    "timestamp": {repr(iso_with_z): {"DATEZ"}},
+                    "timestamp": {json.dumps(iso_with_z): {"DATEZ"}},
                 }
             },
             "exclude": {},
@@ -1286,7 +1283,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index.return_value = {
             "filter": {
                 "DateOnlyManager": {
-                    "day": {repr(iso_date): {"DAY"}},
+                    "day": {json.dumps(iso_date): {"DAY"}},
                 }
             },
             "exclude": {},
@@ -1493,7 +1490,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate,
         mock_get_index,
     ):
-        val_key = repr("2024-07-24T12:00:00+00:00")
+        val_key = json.dumps("2024-07-24T12:00:00+00:00")
         mock_get_index.return_value = {
             "filter": {
                 "DateManager": {
@@ -1646,7 +1643,7 @@ class GenericCacheInvalidationTests(TestCase):
             "filter": {
                 "DummyManager2": {
                     "__cache_dependencies__": {"CMP": {identifier}},
-                    "status": {"'active'": {"CMP"}},
+                    "status": {'"active"': {"CMP"}},
                 }
             },
             "exclude": {},

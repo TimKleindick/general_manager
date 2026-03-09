@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Optional, Dict, ClassVar
 from collections.abc import Mapping
 
-from django.conf import settings
 from general_manager.permission.base_permission import BasePermission, UserLike
 
 if TYPE_CHECKING:
@@ -20,7 +19,6 @@ type permission_type = Literal[
     "delete",
 ]
 
-_SETTINGS_KEY = "GENERAL_MANAGER"
 _DEFAULT_PERMISSIONS_KEY = "DEFAULT_PERMISSIONS"
 _PERMISSION_ACTIONS: tuple[permission_type, ...] = (
     "read",
@@ -37,13 +35,21 @@ _FALLBACK_DEFAULT_PERMISSIONS: dict[permission_type, list[str]] = {
 
 
 def _get_default_permissions() -> dict[permission_type, list[str]]:
-    """Return configured default CRUD permissions, falling back when absent."""
-    config = getattr(settings, _SETTINGS_KEY, None)
+    """Return configured default CRUD permissions, falling back when absent.
+
+    Only reads from the ``settings.GENERAL_MANAGER`` namespace to avoid
+    accidentally picking up a top-level ``settings.DEFAULT_PERMISSIONS`` that
+    belongs to an unrelated third-party package.
+    """
+    from django.conf import settings
+
+    gm_config = getattr(settings, "GENERAL_MANAGER", {})
+    raw_defaults = (
+        gm_config.get(_DEFAULT_PERMISSIONS_KEY) if isinstance(gm_config, dict) else None
+    )
     configured_defaults: Mapping[str, Any] | None = None
-    if isinstance(config, Mapping):
-        raw_defaults = config.get(_DEFAULT_PERMISSIONS_KEY)
-        if isinstance(raw_defaults, Mapping):
-            configured_defaults = raw_defaults
+    if isinstance(raw_defaults, Mapping):
+        configured_defaults = raw_defaults
 
     defaults = {
         action: list(permissions)
