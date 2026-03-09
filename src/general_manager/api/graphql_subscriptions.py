@@ -242,6 +242,11 @@ def resolve_subscription_dependencies(
             if isinstance(value, GeneralManager):
                 identification = deepcopy(value.identification)
                 manager_type = cast(type[GeneralManager], input_field.type)
+                if (
+                    manager_type is manager_class
+                    and identification == instance.identification
+                ):
+                    continue
                 key = (
                     manager_type.__name__,
                     json.dumps(identification, sort_keys=True, default=str),
@@ -253,6 +258,11 @@ def resolve_subscription_dependencies(
             elif isinstance(value, dict):
                 identification_dict = deepcopy(cast(dict[str, Any], value))
                 manager_type = cast(type[GeneralManager], input_field.type)
+                if (
+                    manager_type is manager_class
+                    and identification_dict == instance.identification
+                ):
+                    continue
                 key = (
                     manager_type.__name__,
                     json.dumps(identification_dict, sort_keys=True, default=str),
