@@ -27,6 +27,7 @@ repos:
         name: mypy (type checking)
         files: ^src/
         additional_dependencies:
+          - celery-types
           - channels
           - django-stubs
           - djangorestframework-stubs

@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from graphene_django.constants import MUTATION_ERRORS_FLAG
-from graphene_django.utils.utils import set_rollback
-from graphene_django.views import GraphQLView
+from graphene_django.constants import MUTATION_ERRORS_FLAG  # type: ignore[import-untyped]
+from graphene_django.utils.utils import set_rollback  # type: ignore[import-untyped]
+from graphene_django.views import GraphQLView  # type: ignore[import-untyped]
 
 from general_manager.metrics.graphql import (
     GraphQLResolverTimingMiddleware,

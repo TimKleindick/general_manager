@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 from uuid import uuid4
 
 from django.db import IntegrityError, transaction
@@ -172,9 +172,12 @@ class CeleryWorkflowEngine:
                     and state == "pending"
                 )
                 if should_dispatch_async:
+                    dispatch_handler_path = cast(str, handler_path)
                     transaction.on_commit(
                         lambda: execute_workflow_handler.delay(
-                            execution_id, handler_path, dict(input_data or {})
+                            execution_id,
+                            dispatch_handler_path,
+                            dict(input_data or {}),
                         )
                     )
                 elif not async_mode:

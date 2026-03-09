@@ -163,11 +163,17 @@ module = [
     "faker.*",
     "graphene",
     "graphene.*",
+    "graphene_django",
+    "graphene_django.*",
     "graphql",
     "graphql.*",
     "numpy",
     "pint",
     "pint.*",
+    "prometheus_client",
+    "prometheus_client.*",
     "promise",
+    "text_unidecode",
 ]
 ignore_missing_imports = true
+disable_error_code = ["import-untyped", "import-not-found"]

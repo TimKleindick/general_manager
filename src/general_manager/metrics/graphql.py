@@ -89,7 +89,11 @@ class PrometheusGraphQLMetricsBackend:
         if cls._initialized:
             return
 
-        from prometheus_client import Counter, Histogram, REGISTRY
+        from prometheus_client import (
+            Counter,
+            Histogram,
+            REGISTRY,
+        )
 
         def _get_or_create(
             collector_cls: type, name: str, desc: str, labels: list[str]

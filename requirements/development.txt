@@ -6,6 +6,7 @@ pytest==8.4.0
 pytest_django==4.11.1
 pytest_cov==4.1.0
 django-types==0.21.0
+celery-types==0.23.0
 pre-commit==4.3.0
 prometheus-client==0.24.1  # Local metrics collection for development/tests.
 
