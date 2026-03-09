@@ -41,6 +41,9 @@ jobs:
       - name: Ruff format check
         run: ruff format --config pyproject.toml --check .
 
+      - name: Mypy
+        run: mypy
+
       - name: Run pre-commit (without Ruff)
         env:
           SKIP: ruff,ruff-format
