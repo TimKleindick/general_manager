@@ -61,21 +61,38 @@ class MeasurementField(models.Field):
         self.editable = editable
         self.value_field: models.Field[Any, Any]
         self.unit_field: models.Field[Any, Any]
-        self.value_field = models.DecimalField(
-            max_digits=30,
-            decimal_places=10,
-            db_index=True,
-            unique=unique,
-            editable=editable,
-            null=null,
-            blank=blank,
-        )
-        self.unit_field = models.CharField(
-            max_length=30,
-            editable=editable,
-            null=null,
-            blank=blank,
-        )
+        if null:
+            self.value_field = models.DecimalField(
+                max_digits=30,
+                decimal_places=10,
+                db_index=True,
+                unique=unique,
+                editable=editable,
+                null=True,
+                blank=blank,
+            )
+            self.unit_field = models.CharField(
+                max_length=30,
+                editable=editable,
+                null=True,
+                blank=blank,
+            )
+        else:
+            self.value_field = models.DecimalField(
+                max_digits=30,
+                decimal_places=10,
+                db_index=True,
+                unique=unique,
+                editable=editable,
+                null=False,
+                blank=blank,
+            )
+            self.unit_field = models.CharField(
+                max_length=30,
+                editable=editable,
+                null=False,
+                blank=blank,
+            )
 
         options: dict[str, Any] = {
             **kwargs,
@@ -173,16 +190,24 @@ class MeasurementField(models.Field):
                 "fields": fields,
                 "name": constraint.name,
                 "condition": constraint.condition,
-                "deferrable": constraint.deferrable,
+                "deferrable": getattr(constraint, "deferrable", None),
                 "opclasses": opclasses,
-                "nulls_distinct": constraint.nulls_distinct,
-                "violation_error_code": constraint.violation_error_code,
-                "violation_error_message": constraint.violation_error_message,
+                "nulls_distinct": getattr(constraint, "nulls_distinct", None),
+                "violation_error_code": getattr(
+                    constraint,
+                    "violation_error_code",
+                    None,
+                ),
+                "violation_error_message": getattr(
+                    constraint,
+                    "violation_error_message",
+                    None,
+                ),
             }
             if include_attr is not None:
                 kwargs["include"] = include_names
 
-            expressions = tuple(constraint.expressions)
+            expressions = tuple(getattr(constraint, "expressions", ()))
             return constraint.__class__(*expressions, **kwargs)
 
         remapped_constraints: list[models.BaseConstraint] = []

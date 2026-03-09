@@ -2,14 +2,16 @@
 
 import django.db.models.deletion
 from django.db import migrations, models
+from django.db.migrations.operations.base import Operation
+from typing import ClassVar
 
 
 class Migration(migrations.Migration):
     initial = True
 
-    dependencies = ()
+    dependencies: ClassVar[list[tuple[str, str]]] = []
 
-    operations = (
+    operations: ClassVar[list[Operation]] = [
         migrations.CreateModel(
             name="WorkflowEventRecord",
             fields=[
@@ -216,4 +218,4 @@ class Migration(migrations.Migration):
                 name="general_man_handler_f8368f_idx",
             ),
         ),
-    )
+    ]
