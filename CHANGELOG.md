@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.32.1 (2026-03-09)
+
+### Bug Fixes
+
+- Split graphql.py, fix cache key serialisation, add retry jitter
+  ([`78076aa`](https://github.com/TimKleindick/general_manager/commit/78076aaa0732c2a5bd21f131cccd088260dadab6))
+
+
 ## v0.32.0 (2026-03-08)
 
 ### Bug Fixes
