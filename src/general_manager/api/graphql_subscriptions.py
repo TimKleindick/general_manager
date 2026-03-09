@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 from copy import deepcopy
 from typing import Any, Callable, Iterable, TYPE_CHECKING, cast
 
@@ -28,6 +27,7 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
     Dependency,
     parse_dependency_identifier,
+    serialize_dependency_identifier,
 )
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
@@ -78,7 +78,7 @@ def group_name(
     Returns:
         A stable, collision-resistant group identifier string.
     """
-    normalized = json.dumps(identification, sort_keys=True, default=str)
+    normalized = serialize_dependency_identifier(identification)
     digest = hashlib.sha256(
         f"{manager_class.__module__}.{manager_class.__name__}:{normalized}".encode(
             "utf-8"
@@ -220,7 +220,7 @@ def resolve_subscription_dependencies(
                 continue
             key = (
                 dependency_class.__name__,
-                json.dumps(dependency_identification, sort_keys=True, default=str),
+                serialize_dependency_identifier(dependency_identification),
             )
             if key in seen:
                 continue
@@ -249,7 +249,7 @@ def resolve_subscription_dependencies(
                     continue
                 key = (
                     manager_type.__name__,
-                    json.dumps(identification, sort_keys=True, default=str),
+                    serialize_dependency_identifier(identification),
                 )
                 if key in seen:
                     continue
@@ -265,7 +265,7 @@ def resolve_subscription_dependencies(
                     continue
                 key = (
                     manager_type.__name__,
-                    json.dumps(identification_dict, sort_keys=True, default=str),
+                    serialize_dependency_identifier(identification_dict),
                 )
                 if key in seen:
                     continue
