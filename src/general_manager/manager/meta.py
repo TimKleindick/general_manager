@@ -60,6 +60,21 @@ class AttributeEvaluationError(AttributeError):
         super().__init__(f"Error calling attribute {attribute_name}: {error}.")
 
 
+class InvalidManagerStateError(AttributeError):
+    """Raised when reading manager fields after the instance was invalidated."""
+
+    def __init__(
+        self, manager_name: str, reason: str, attribute_name: str | None
+    ) -> None:
+        detail = (
+            f"Cannot access attribute {attribute_name!r} on invalidated "
+            f"{manager_name}: {reason}."
+            if attribute_name is not None
+            else f"Cannot access invalidated {manager_name}: {reason}."
+        )
+        super().__init__(detail)
+
+
 class _nonExistent:
     pass
 
@@ -72,6 +87,21 @@ class GeneralManagerMeta(type):
     pending_graphql_interfaces: ClassVar[list[Type[GeneralManager]]] = []
     pending_attribute_initialization: ClassVar[list[Type[GeneralManager]]] = []
     Interface: type[InterfaceBase]
+
+    @staticmethod
+    def ensure_manager_is_valid(
+        instance: "GeneralManager",
+        attribute_name: str | None = None,
+    ) -> None:
+        """Raise when descriptor-backed field access targets an invalidated manager."""
+        if getattr(instance, "_manager_state_valid", True):
+            return
+        reason = getattr(instance, "_manager_state_reason", "manager state is invalid")
+        raise InvalidManagerStateError(
+            instance.__class__.__name__,
+            reason,
+            attribute_name,
+        )
 
     def __new__(
         mcs: type["GeneralManagerMeta"],
@@ -212,6 +242,9 @@ class GeneralManagerMeta(type):
                     """
                     if instance is None:
                         return self._class.Interface.get_field_type(self._attr_name)
+                    GeneralManagerMeta.ensure_manager_is_valid(
+                        instance, self._attr_name
+                    )
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
                         logger.warning(

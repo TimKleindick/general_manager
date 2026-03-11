@@ -25,7 +25,7 @@ You can use all field types, including custom fields like `MeasurementField`. Dj
 
 ## CRUD operations
 
-Managers expose `create`, `update`, and `delete` methods that call the interface. Each method accepts `creator_id` and `history_comment` arguments for audit trails. The legacy `deactivate` name remains available as a deprecated alias.
+Managers expose `create`, `update`, and `delete` methods that call the interface. Each method accepts `creator_id` and `history_comment` arguments for audit trails. `update()` refreshes the current manager in place and returns that same instance for chaining. `delete()` invalidates the current manager instance for later field reads.
 
 ```python
 material = Material.create(
@@ -38,6 +38,8 @@ material.update(
     creator_id=request.user.id,
     description="Updated description",
 )
+
+assert material.description == "Updated description"
 ```
 
 To inspect historical state across many rows, pass `search_date=...` to `filter()` or `exclude()` so the query resolves to the snapshot at that point in time.

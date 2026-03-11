@@ -176,6 +176,8 @@ class ExistingModelIntegrationTest(GeneralManagerTransactionTestCase):
             owners_id_list=[self.user1.pk, self.user2.pk],
             ignore_permission=True,
         )
+        self.assertIs(updated, self.customer_a)
+        self.assertEqual(self.customer_a.name, "Acme International")
         self.assertEqual(updated.name, "Acme International")
         owners = sorted(user.pk for user in updated.owners_list)
         self.assertEqual(owners, sorted([self.user1.pk, self.user2.pk]))

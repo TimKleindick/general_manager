@@ -103,12 +103,12 @@ class RejectInvoicePermission(MutationPermission):
 def reject_invoice(info, invoice: Invoice, reason: str) -> Invoice:
     invoice_id = int(invoice)
     manager = Invoice(id=invoice_id)
-    updated = manager.update(
+    manager.update(
         creator_id=getattr(info.context.user, "id", None),
         status="rejected",
         rejection_reason=reason,
     )
-    return updated
+    return manager
 ```
 
 - `graph_ql_mutation` inspects the resolver signature and return annotation to build the GraphQL payload; no separate `base_type` configuration is required.
