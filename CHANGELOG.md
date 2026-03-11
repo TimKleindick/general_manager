@@ -2,6 +2,12 @@
 
 <!-- version list -->
 
+## Unreleased
+
+### Documentation
+
+- Document the current manager lifecycle contract for `ExistingModelInterface` and top-level upgrade notes: `update()` now refreshes and returns the same manager instance, while `delete()` invalidates that manager instance for later reads, including soft-delete flows backed by `is_active`.
+
 ## v0.32.3 (2026-03-11)
 
 ### Bug Fixes

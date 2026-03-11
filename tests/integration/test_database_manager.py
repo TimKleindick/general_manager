@@ -158,6 +158,14 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             [f.id for f in all_families],
         )
 
+    def test_soft_deleted_manager_cannot_mutate_again(self):
+        self.test_family.delete(ignore_permission=True)
+
+        with self.assertRaises(InvalidManagerStateError):
+            self.test_family.update(name="Mutated After Delete", ignore_permission=True)
+        with self.assertRaises(InvalidManagerStateError):
+            self.test_family.delete(ignore_permission=True)
+
     def test_manager_connections(self):
         """
         Test that the many-to-many relationship between humans and families is correctly established.
