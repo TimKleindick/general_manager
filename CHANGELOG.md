@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.32.4 (2026-03-11)
+
+### Bug Fixes
+
+- Guard invalidated managers
+  ([`e2a5837`](https://github.com/TimKleindick/general_manager/commit/e2a583733f76daccf1d7c8b07de4bcf9fb7fa088))
+
+- Update GeneralManager lifecycle semantics and remove deprecated deactivate method
+  ([`c245fc5`](https://github.com/TimKleindick/general_manager/commit/c245fc586013231d5868d9c1ab401d03dc4adb9c))
+
+
 ## Unreleased
 
 ### Documentation
