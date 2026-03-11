@@ -1,5 +1,6 @@
 from django.test import TestCase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import InvalidManagerStateError
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from unittest.mock import patch
 from general_manager.cache.signals import post_data_change, pre_data_change
@@ -262,13 +263,14 @@ class GeneralManagerTestCase(TestCase):
             mock_create.assert_called_once_with(
                 creator_id=1, history_comment=None, name="New Manager"
             )
-            self.assertIsInstance(new_manager, GeneralManager)
+            self.assertIs(new_manager, manager_obj)
             self.assertEqual(len(self.pre_list), 1)
             self.assertEqual(self.pre_list[0]["action"], "update")
             self.assertEqual(self.pre_list[0]["instance"], manager_obj)
 
             self.assertEqual(len(self.post_list), 1)
             self.assertEqual(self.post_list[0]["action"], "update")
+            self.assertIs(self.post_list[0]["instance"], manager_obj)
             self.assertEqual(self.post_list[0]["name"], "New Manager")
 
     def test_delete(self):
@@ -290,23 +292,6 @@ class GeneralManagerTestCase(TestCase):
             self.assertEqual(self.post_list[0]["action"], "delete")
             self.assertIsNone(self.post_list[0]["instance"])
 
-    def test_deactivate_alias_emits_warning(self):
-        """
-        Verify that calling deactivate on a manager instance invokes the interface's delete method and emits a DeprecationWarning.
-
-        Asserts that delete is called with creator_id=1 and history_comment=None and that deactivate returns None.
-        """
-        manager_obj = self.manager()
-        with (
-            patch.object(
-                DummyInterface, "delete", return_value={"id": "new_id"}
-            ) as mock_delete,
-            self.assertWarns(DeprecationWarning),
-        ):
-            result = manager_obj.deactivate(creator_id=1)
-            mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
-            self.assertIsNone(result)
-
     def test_delete_returns_none_when_hard_delete(self):
         """Deletes should return None from the manager API even when the interface returns identifiers."""
         manager_obj = self.manager()
@@ -316,3 +301,10 @@ class GeneralManagerTestCase(TestCase):
             result = manager_obj.delete(creator_id=1)
             mock_delete.assert_called_once_with(creator_id=1, history_comment=None)
             self.assertIsNone(result)
+
+    def test_invalidated_manager_state_raises_dedicated_error(self):
+        manager_obj = self.manager()
+        manager_obj._invalidate_manager_state("manager was deleted")
+
+        with self.assertRaises(InvalidManagerStateError):
+            dict(manager_obj)

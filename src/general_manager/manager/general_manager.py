@@ -1,5 +1,4 @@
 from __future__ import annotations
-import warnings
 from typing import TYPE_CHECKING, Any, Iterator, Self, Type
 
 from general_manager.api.property import GraphQLProperty
@@ -8,7 +7,7 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.signals import data_change
 from general_manager.logging import get_logger
-from general_manager.manager.meta import GeneralManagerMeta
+from general_manager.manager.meta import GeneralManagerMeta, InvalidManagerStateError
 
 
 class UnsupportedUnionOperandError(TypeError):
@@ -37,6 +36,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     _attributes: dict[str, Any]
     Interface: Type["InterfaceBase"]
     _old_values: dict[str, Any]
+    _manager_state_valid: bool
+    _manager_state_reason: str | None
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
@@ -48,6 +49,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """
         self._interface = self.Interface(*args, **kwargs)
         self.__id: dict[str, Any] = self._interface.identification
+        self._manager_state_valid = True
+        self._manager_state_reason = None
         DependencyTracker.track(
             self.__class__.__name__,
             "identification",
@@ -120,8 +123,30 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """Return the identification dictionary used to fetch the managed object."""
         return self.__id
 
+    def _reload_interface_state(self) -> None:
+        """Rebuild the backing interface so field access reflects the latest persisted state."""
+        self._interface = self.Interface(**self.__id)
+        self._manager_state_valid = True
+        self._manager_state_reason = None
+
+    def _invalidate_manager_state(self, reason: str) -> None:
+        """Mark the manager as invalid for subsequent attribute reads."""
+        self._manager_state_valid = False
+        self._manager_state_reason = reason
+
+    def _ensure_manager_state_valid(self, attribute_name: str | None = None) -> None:
+        """Raise a dedicated error when callers read fields from an invalidated manager."""
+        if self._manager_state_valid:
+            return
+        raise InvalidManagerStateError(
+            self.__class__.__name__,
+            self._manager_state_reason or "manager state is invalid",
+            attribute_name,
+        )
+
     def __iter__(self) -> Iterator[tuple[str, Any]]:
         """Iterate over attribute names and resolved values for the managed object."""
+        self._ensure_manager_state_valid()
         for key, value in self._attributes.items():
             if callable(value):
                 yield key, value(self._interface)
@@ -181,7 +206,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         **kwargs: Any,
     ) -> Self:
         """
-        Update the managed object and return a new manager reflecting its updated state.
+        Update the managed object, refresh this manager in place, and return it.
 
         Parameters:
             creator_id (int | None): Optional identifier of the user performing the update.
@@ -190,7 +215,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             **kwargs (Any): Field updates forwarded to the interface.
 
         Returns:
-            Self: Manager instance reflecting the updated object.
+            Self: This manager instance after reloading its backing interface state.
 
         Raises:
             PermissionError: If the permission check fails when `ignore_permission` is False.
@@ -202,6 +227,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             history_comment=history_comment,
             **kwargs,
         )
+        self._reload_interface_state()
         logger.info(
             "manager updated",
             context={
@@ -212,7 +238,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 "identification": self.identification,
             },
         )
-        return self.__class__(**self.identification)
+        return self
 
     @data_change
     def delete(
@@ -235,6 +261,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         if not ignore_permission:
             self.Permission.check_delete_permission(self, creator_id)
         self._interface.delete(creator_id=creator_id, history_comment=history_comment)
+        self._invalidate_manager_state("manager was deleted")
         logger.info(
             "manager deleted",
             context={
@@ -243,30 +270,6 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 "ignore_permission": ignore_permission,
                 "identification": self.identification,
             },
-        )
-
-    def deactivate(
-        self,
-        creator_id: int | None = None,
-        history_comment: str | None = None,
-        ignore_permission: bool = False,
-    ) -> Self | None:
-        """
-        Compatibility wrapper for the deprecated deactivate API.
-
-        Emits a DeprecationWarning and performs object deletion using the provided
-        creator_id, history_comment, and ignore_permission parameters. This function
-        is deprecated and will be removed in a future release.
-        """
-        warnings.warn(
-            "deactivate() is deprecated; use delete() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.delete(
-            creator_id=creator_id,
-            history_comment=history_comment,
-            ignore_permission=ignore_permission,
         )
 
     @classmethod

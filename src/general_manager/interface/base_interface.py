@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from abc import ABC
-import warnings
 import inspect
 from typing import (
     Type,
@@ -839,24 +838,6 @@ class InterfaceBase(ABC):
             func=_invoke,
             observer=observer,
         )
-
-    def deactivate(self, *args: Any, **kwargs: Any) -> Any:
-        """
-        Provide a deprecated compatibility wrapper that issues a DeprecationWarning and performs the record deletion.
-
-        Parameters:
-            *args: Positional arguments forwarded to the underlying deletion implementation.
-            **kwargs: Keyword arguments forwarded to the underlying deletion implementation.
-
-        Returns:
-            The result returned by the deletion operation.
-        """
-        warnings.warn(
-            "deactivate() is deprecated; use delete() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.delete(*args, **kwargs)
 
     def get_data(self) -> Any:
         """

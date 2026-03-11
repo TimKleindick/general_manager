@@ -114,6 +114,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(human.height, "175 cm")
 
         updated_human = human.update(height=human.height, ignore_permission=True)
+        self.assertIs(updated_human, human)
         self.assertEqual(updated_human.height, "175 cm")
 
     def test_measurement_field_validation(self):

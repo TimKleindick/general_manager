@@ -17,6 +17,7 @@ from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
     run_registered_startup_hooks,
 )
+from general_manager.manager.meta import InvalidManagerStateError
 
 
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
@@ -137,6 +138,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         # Soft delete the family
         self.test_family.delete(ignore_permission=True)
+
+        with self.assertRaises(InvalidManagerStateError):
+            _ = self.test_family.name
+        with self.assertRaises(InvalidManagerStateError):
+            dict(self.test_family)
 
         # Verify it is excluded from standard queries
         families_after_delete = self.TestFamily.all()
@@ -304,6 +310,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         test_human1 = self.test_human1.update(
             name="Alice Updated", ignore_permission=True
         )
+        self.assertIs(test_human1, self.test_human1)
+        self.assertEqual(self.test_human1.name, "Alice Updated")
         self.assertEqual(test_human1.name, "Alice Updated")
         self.assertNotEqual(test_human1.name, original_name)
 
@@ -312,12 +320,16 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         test_human2 = self.test_human2.update(
             country=de_country, ignore_permission=True
         )
+        self.assertIs(test_human2, self.test_human2)
+        self.assertEqual(self.test_human2.country.code, "DE")
         self.assertEqual(test_human2.country.code, "DE")
 
         # Test updating family name
         test_family = self.test_family.update(
             name="Updated Family Name", ignore_permission=True
         )
+        self.assertIs(test_family, self.test_family)
+        self.assertEqual(self.test_family.name, "Updated Family Name")
         self.assertEqual(test_family.name, "Updated Family Name")
 
     def test_delete_operations(self):
@@ -339,6 +351,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         test_human3.delete(ignore_permission=True)
         human_count_after = len(self.TestHuman.all())
         self.assertEqual(human_count_after, human_count_before - 1)
+        self.assertIn("id", test_human3.identification)
+        with self.assertRaises(InvalidManagerStateError):
+            _ = test_human3.name
+        with self.assertRaises(InvalidManagerStateError):
+            dict(test_human3)
 
         # Verify the deleted human is not in any families
         remaining_humans = self.TestHuman.all()
@@ -482,7 +499,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             humans=[*self.test_family.humans_list, new_human],
             ignore_permission=True,
         )
+        self.assertIs(updated_family, self.test_family)
         updated_humans = updated_family.humans_list
+        self.assertEqual(len(self.test_family.humans_list), 3)
         self.assertEqual(len(updated_humans), 3)
         self.assertIn(new_human, updated_humans)
 
