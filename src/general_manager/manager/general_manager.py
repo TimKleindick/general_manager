@@ -144,6 +144,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             attribute_name,
         )
 
+    def _ensure_manager_not_invalidated(self) -> None:
+        """Raise when a caller attempts to mutate an invalidated manager."""
+        self._ensure_manager_state_valid()
+
     def __iter__(self) -> Iterator[tuple[str, Any]]:
         """Iterate over attribute names and resolved values for the managed object."""
         self._ensure_manager_state_valid()
@@ -220,6 +224,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: If the permission check fails when `ignore_permission` is False.
         """
+        self._ensure_manager_not_invalidated()
         if not ignore_permission:
             self.Permission.check_update_permission(kwargs, self, creator_id)
         self._interface.update(
@@ -258,6 +263,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: If permission validation fails.
         """
+        self._ensure_manager_not_invalidated()
         if not ignore_permission:
             self.Permission.check_delete_permission(self, creator_id)
         self._interface.delete(creator_id=creator_id, history_comment=history_comment)

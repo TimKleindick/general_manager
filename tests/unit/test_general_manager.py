@@ -308,3 +308,25 @@ class GeneralManagerTestCase(TestCase):
 
         with self.assertRaises(InvalidManagerStateError):
             dict(manager_obj)
+
+    def test_invalidated_manager_cannot_update(self):
+        manager_obj = self.manager()
+        manager_obj._invalidate_manager_state("manager was deleted")
+
+        with (
+            patch.object(DummyInterface, "update") as mock_update,
+            self.assertRaises(InvalidManagerStateError),
+        ):
+            manager_obj.update(name="New Manager", creator_id=1)
+        mock_update.assert_not_called()
+
+    def test_invalidated_manager_cannot_delete_again(self):
+        manager_obj = self.manager()
+        manager_obj._invalidate_manager_state("manager was deleted")
+
+        with (
+            patch.object(DummyInterface, "delete") as mock_delete,
+            self.assertRaises(InvalidManagerStateError),
+        ):
+            manager_obj.delete(creator_id=1)
+        mock_delete.assert_not_called()
