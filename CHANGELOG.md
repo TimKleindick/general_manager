@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.32.3 (2026-03-11)
+
+### Bug Fixes
+
+- Align migration typing with ci
+  ([`0183625`](https://github.com/TimKleindick/general_manager/commit/0183625153950b3d8ccecb4a6798ae16162b9e42))
+
+- Remove obsolete migration noqa
+  ([`24001ef`](https://github.com/TimKleindick/general_manager/commit/24001ef569f7d4e3a78a63017ce7fa8ea0b0a18b))
+
+- Resolve ci mypy regressions
+  ([`e3cd38d`](https://github.com/TimKleindick/general_manager/commit/e3cd38db56cf326ab420348f931181a38babbfb3))
+
+- Restore mypy compliance
+  ([`c4a5913`](https://github.com/TimKleindick/general_manager/commit/c4a59131b76a4e382818da744b42c85f483336b4))
+
+### Continuous Integration
+
+- Enforce mypy in lint workflow
+  ([`a9a5157`](https://github.com/TimKleindick/general_manager/commit/a9a5157804dc38e50c61b824d3abd5c6b95f0753))
+
+- Install mypy in development tooling
+  ([`c9e25cf`](https://github.com/TimKleindick/general_manager/commit/c9e25cf8d7b09dfeb238f8c69daf9e55c5ad20b4))
+
+
 ## v0.32.2 (2026-03-09)
 
 ### Bug Fixes
