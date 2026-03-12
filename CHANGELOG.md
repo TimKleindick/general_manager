@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.33.0 (2026-03-12)
+
+### Bug Fixes
+
+- Address mypy and coverage regressions
+  ([`21745aa`](https://github.com/TimKleindick/general_manager/commit/21745aa58b3ff1ae987ba932c1980703179ccdd5))
+
+- Route reverse descriptors through shared resolver
+  ([`3bd2c4d`](https://github.com/TimKleindick/general_manager/commit/3bd2c4d9bc290661436612bed87db2be98e91f64))
+
+- Stabilize swappable auth existing-model relations
+  ([`b3050e0`](https://github.com/TimKleindick/general_manager/commit/b3050e0cea12cfbe223a14726ed7aa19f4d853a9))
+
+### Chores
+
+- Capture manager import lessons
+  ([`b52c59a`](https://github.com/TimKleindick/general_manager/commit/b52c59ad84e7045f715f0f7fa38614e823659e3f))
+
+### Features
+
+- Auto-import manager classes in django shell
+  ([`b9e2f7b`](https://github.com/TimKleindick/general_manager/commit/b9e2f7bb178b9f130cc3b6a289919dbce193117e))
+
+
 ## v0.32.4 (2026-03-11)
 
 ### Bug Fixes
