@@ -107,3 +107,29 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
         )
         if result.returncode != 0:
             self.fail(result.stderr or result.stdout or "swappable auth check failed")
+
+    def test_shell_auto_import_prefers_wrapper_for_swappable_user(self) -> None:
+        command = (
+            "import sys; "
+            "assert User is sys.modules['tests.custom_user_app.managers'].User; "
+            "assert Ticket is sys.modules['tests.custom_user_app.managers'].Ticket; "
+            "assert ReviewAssignment is sys.modules['tests.custom_user_app.managers'].ReviewAssignment; "
+            "assert User.__module__ == 'tests.custom_user_app.managers'; "
+            "assert User is not sys.modules['tests.custom_user_app.models'].User"
+        )
+        env = {
+            **os.environ,
+            "DJANGO_SETTINGS_MODULE": "tests.swappable_user_settings",
+        }
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, "-m", "django", "shell", "-c", command],
+            cwd=os.getcwd(),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            self.fail(
+                result.stderr or result.stdout or "shell auto-import check failed"
+            )
