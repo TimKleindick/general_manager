@@ -29,10 +29,15 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
             managers_module = sys.modules["tests.custom_user_app.managers"]
             User = managers_module.User
             Ticket = managers_module.Ticket
+            ReviewAssignment = managers_module.ReviewAssignment
             ticket_model = Ticket.Interface._model
+            review_assignment_model = ReviewAssignment.Interface._model
+            user_attribute_types = User.Interface.get_attribute_types()
 
             assert auth_model._general_manager_class is User
             assert Ticket.Interface.get_field_type("owner") is User
+            assert user_attribute_types["requested_review_assignments_list"]["type"] is ReviewAssignment
+            assert user_attribute_types["received_review_assignments_list"]["type"] is ReviewAssignment
 
             models_to_create = [
                 ContentType,
@@ -42,6 +47,8 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
                 auth_model.history.model,
                 ticket_model,
                 ticket_model.history.model,
+                review_assignment_model,
+                review_assignment_model.history.model,
             ]
 
             with connection.schema_editor() as editor:
@@ -60,11 +67,18 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
                 title="Inspect hyperdrive",
                 owner=manager_user,
             )
+            assignment = ReviewAssignment.create(
+                ignore_permission=True,
+                summary="Review docking protocol",
+                requester=manager_user,
+                reviewer=factory_user,
+            )
 
-            from tests.custom_user_app.managers import Ticket as ImportedTicket, User as ImportedManagerUser
+            from tests.custom_user_app.managers import ReviewAssignment as ImportedReviewAssignment, Ticket as ImportedTicket, User as ImportedManagerUser
 
             assert ImportedManagerUser is User
             assert ImportedTicket is Ticket
+            assert ImportedReviewAssignment is ReviewAssignment
             assert ImportedManagerUser is not auth_model
             assert auth_model._general_manager_class is User
             assert manager_user.username == "pilot"
@@ -72,6 +86,10 @@ class SwappableAuthUserManagerIntegrationTest(SimpleTestCase):
             assert factory_user.email.endswith("@example.com")
             assert isinstance(ticket.owner, User)
             assert ticket.owner.id == manager_user.id
+            assert assignment.requester.id == manager_user.id
+            assert assignment.reviewer.id == factory_user.id
+            assert list(manager_user.requested_review_assignments_list.all())[0].id == assignment.id
+            assert list(factory_user.received_review_assignments_list.all())[0].id == assignment.id
             assert Ticket.Interface.get_field_type("owner") is User
             """
         )

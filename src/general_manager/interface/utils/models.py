@@ -99,7 +99,11 @@ class GeneralManagerModel(GeneralManagerBasisModel):
     """Abstract model adding change-tracking metadata for writeable managers."""
 
     changed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
     )  # type: ignore[var-annotated]
     changed_by_id: int | None
 
