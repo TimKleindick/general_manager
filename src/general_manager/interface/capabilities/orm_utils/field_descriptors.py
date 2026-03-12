@@ -195,6 +195,7 @@ class _FieldDescriptorBuilder:
                 field=reverse_relation,
                 base_name=reverse_relation.name,
                 accessor_name=accessor_name,
+                relation_field_name=getattr(reverse_relation.field, "name", None),
             )
 
     def _register_collection_field(
@@ -203,6 +204,7 @@ class _FieldDescriptorBuilder:
         field: models.Field | models.ManyToManyRel | models.ManyToOneRel,
         base_name: str,
         accessor_name: str,
+        relation_field_name: str | None = None,
     ) -> None:
         """
         Register a collection relation as a FieldDescriptor under the generated "<base>_list" attribute.
@@ -214,13 +216,18 @@ class _FieldDescriptorBuilder:
             base_name (str): Candidate base name used to derive the final attribute name (final name will be "<base>_list").
             accessor_name (str): Attribute or relation name used by accessors to resolve related objects.
         """
-        field_base = self._resolve_collection_base_name(base_name, accessor_name)
-        attribute_name = f"{field_base}_list"
         related_model = self._resolve_related_model(
             getattr(field, "related_model", None)
         )
         if related_model is None or isinstance(field, GenericForeignKey):
             return
+        field_base = self._resolve_collection_base_name(
+            base_name=base_name,
+            fallback=accessor_name,
+            related_model=related_model,
+            relation_field_name=relation_field_name,
+        )
+        attribute_name = f"{field_base}_list"
 
         general_manager_class = getattr(related_model, "_general_manager_class", None)
         is_many_to_many = bool(getattr(field, "many_to_many", False))
@@ -233,8 +240,15 @@ class _FieldDescriptorBuilder:
                 related_model=related_model,
                 general_manager_class=general_manager_class,
                 source_model=self.model,
+                relation_field_name=relation_field_name,
             )
             relation_type = cast(type, general_manager_class)
+        elif relation_field_name is not None and not is_many_to_many:
+            accessor = _direct_reverse_accessor(
+                related_model=related_model,
+                relation_field_name=relation_field_name,
+            )
+            relation_type = cast(type, related_model)
         else:
             accessor = _direct_many_accessor(
                 self._resolve_many,
@@ -253,7 +267,14 @@ class _FieldDescriptorBuilder:
             accessor=accessor,
         )
 
-    def _resolve_collection_base_name(self, candidate: str, fallback: str) -> str:
+    def _resolve_collection_base_name(
+        self,
+        *,
+        base_name: str,
+        fallback: str,
+        related_model: type[models.Model],
+        relation_field_name: str | None = None,
+    ) -> str:
         """
         Selects a non-conflicting base name for a collection field.
 
@@ -267,11 +288,16 @@ class _FieldDescriptorBuilder:
         Raises:
                 DuplicateFieldNameError: If both `candidate` and `fallback` are already registered.
         """
-        if candidate in self._descriptors:
-            if fallback not in self._descriptors:
-                return fallback
-            raise DuplicateFieldNameError()
-        return candidate
+        candidates = [base_name, fallback]
+        related_model_name = related_model._meta.model_name
+        if relation_field_name:
+            candidates.append(f"{relation_field_name}_{related_model_name}")
+            candidates.append(relation_field_name)
+
+        for candidate in candidates:
+            if f"{candidate}_list" not in self._descriptors:
+                return candidate
+        raise DuplicateFieldNameError()
 
     def _register(
         self,
@@ -490,6 +516,7 @@ def _general_manager_many_accessor(
     related_model: type[models.Model],
     general_manager_class: type,
     source_model: type[models.Model],
+    relation_field_name: str | None = None,
 ) -> DescriptorAccessor:
     """
     Create an accessor that returns a manager filtered to objects related to the given source model instance.
@@ -503,11 +530,14 @@ def _general_manager_many_accessor(
     Returns:
         DescriptorAccessor: A callable that accepts an OrmInterfaceBase instance and returns the manager/QuerySet of related_model instances whose foreign-key fields pointing to `source_model` match the instance's primary key.
     """
-    related_fields = [
-        rel
-        for rel in related_model._meta.get_fields()
-        if getattr(rel, "related_model", None) == source_model
-    ]
+    if relation_field_name is not None:
+        related_fields = [related_model._meta.get_field(relation_field_name)]
+    else:
+        related_fields = [
+            rel
+            for rel in related_model._meta.get_fields()
+            if getattr(rel, "related_model", None) == source_model
+        ]
 
     def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
         """
@@ -548,6 +578,20 @@ def _direct_many_accessor(
             The resolved collection value for the field (typically a manager or queryset for the related objects).
         """
         return resolver(self, field_call, field_name)
+
+    return getter
+
+
+def _direct_reverse_accessor(
+    *,
+    related_model: type[models.Model],
+    relation_field_name: str,
+) -> DescriptorAccessor:
+    """Resolve a reverse one-to-many relation by filtering on the concrete FK name."""
+
+    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
+        manager = cast(Any, related_model._default_manager)
+        return manager.filter(**{relation_field_name: self.pk})
 
     return getter
 

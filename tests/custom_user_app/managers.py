@@ -38,4 +38,24 @@ class Ticket(GeneralManager):
         )
 
 
-__all__ = ["Ticket", "User"]
+class ReviewAssignment(GeneralManager):
+    id: int
+    summary: str
+    requester: User
+    reviewer: User
+
+    class Interface(DatabaseInterface):
+        summary = models.CharField(max_length=100)
+        requester = models.ForeignKey(
+            settings.AUTH_USER_MODEL,
+            on_delete=models.CASCADE,
+            related_name="requested_review_assignments",
+        )
+        reviewer = models.ForeignKey(
+            settings.AUTH_USER_MODEL,
+            on_delete=models.CASCADE,
+            related_name="received_review_assignments",
+        )
+
+
+__all__ = ["ReviewAssignment", "Ticket", "User"]
