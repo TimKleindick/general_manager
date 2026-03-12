@@ -531,10 +531,12 @@ def _general_manager_many_accessor(
         DescriptorAccessor: A callable that accepts an OrmInterfaceBase instance and returns the manager/QuerySet of related_model instances whose foreign-key fields pointing to `source_model` match the instance's primary key.
     """
     if relation_field_name is not None:
-        related_fields = [related_model._meta.get_field(relation_field_name)]
+        related_fields = [
+            cast(models.Field, related_model._meta.get_field(relation_field_name))
+        ]
     else:
         related_fields = [
-            rel
+            cast(models.Field, rel)
             for rel in related_model._meta.get_fields()
             if getattr(rel, "related_model", None) == source_model
         ]
