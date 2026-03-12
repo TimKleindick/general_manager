@@ -243,12 +243,6 @@ class _FieldDescriptorBuilder:
                 relation_field_name=relation_field_name,
             )
             relation_type = cast(type, general_manager_class)
-        elif relation_field_name is not None and not is_many_to_many:
-            accessor = _direct_reverse_accessor(
-                related_model=related_model,
-                relation_field_name=relation_field_name,
-            )
-            relation_type = cast(type, related_model)
         else:
             accessor = _direct_many_accessor(
                 self._resolve_many,
@@ -580,20 +574,6 @@ def _direct_many_accessor(
             The resolved collection value for the field (typically a manager or queryset for the related objects).
         """
         return resolver(self, field_call, field_name)
-
-    return getter
-
-
-def _direct_reverse_accessor(
-    *,
-    related_model: type[models.Model],
-    relation_field_name: str,
-) -> DescriptorAccessor:
-    """Resolve a reverse one-to-many relation by filtering on the concrete FK name."""
-
-    def getter(self: "OrmInterfaceBase") -> Any:  # type: ignore[name-defined]
-        manager = cast(Any, related_model._default_manager)
-        return manager.filter(**{relation_field_name: self.pk})
 
     return getter
 
