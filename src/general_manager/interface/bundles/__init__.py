@@ -7,6 +7,7 @@ from .database import (
     READ_ONLY_CAPABILITIES,
 )
 from .calculation import CALCULATION_CORE_CAPABILITIES
+from .request import REQUEST_CORE_CAPABILITIES
 
 __all__ = [
     "CALCULATION_CORE_CAPABILITIES",
@@ -14,4 +15,5 @@ __all__ = [
     "ORM_PERSISTENCE_CAPABILITIES",
     "ORM_WRITABLE_CAPABILITIES",
     "READ_ONLY_CAPABILITIES",
+    "REQUEST_CORE_CAPABILITIES",
 ]

@@ -14,6 +14,7 @@ from general_manager.interface.interfaces.database import DatabaseInterface
 from general_manager.interface.interfaces.existing_model import ExistingModelInterface
 from general_manager.interface.interfaces.read_only import ReadOnlyInterface
 from general_manager.interface.interfaces.calculation import CalculationInterface
+from general_manager.interface.interfaces.request import RequestInterface
 
 
 def test_capability_manifest_resolve_simple():
@@ -139,6 +140,20 @@ def test_default_manifest_existing_model_interface():
     assert "update" in plan.required
     assert "delete" in plan.required
     assert "history" in plan.required
+
+
+def test_default_manifest_request_interface():
+    """Test default manifest for RequestInterface."""
+    plan = CAPABILITY_MANIFEST.resolve(RequestInterface)
+
+    assert "read" in plan.required
+    assert "validation" in plan.required
+    assert "observability" in plan.required
+    assert "query" in plan.required
+    assert "request_lifecycle" in plan.required
+
+    assert "orm_support" not in plan.required
+    assert "orm_lifecycle" not in plan.required
 
 
 def test_default_flag_mapping():

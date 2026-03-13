@@ -9,10 +9,23 @@ __all__ = [
     "InterfaceBase",
     "OrmInterfaceBase",
     "ReadOnlyInterface",
+    "RequestField",
+    "RequestFilter",
+    "RequestInterface",
+    "RequestQueryOperation",
+    "RequestQueryPlan",
+    "RequestQueryResult",
 ]
 
 from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
+)
+from general_manager.interface.requests import (
+    RequestField,
+    RequestFilter,
+    RequestQueryOperation,
+    RequestQueryPlan,
+    RequestQueryResult,
 )
 from general_manager.interface.orm_interface import (
     OrmInterfaceBase,
@@ -26,4 +39,7 @@ from general_manager.interface.interfaces.existing_model import (
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.read_only import (
     ReadOnlyInterface,
+)
+from general_manager.interface.interfaces.request import (
+    RequestInterface,
 )

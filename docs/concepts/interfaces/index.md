@@ -8,6 +8,7 @@ GeneralManager ships with four main interface flavours:
 - [Existing model interfaces](existing_model_interface.md) wrap legacy Django models without generating new tables.
 - [Read-only interfaces](db_based_interface.md#read-only-data) synchronise static datasets from JSON.
 - [Calculation interfaces](computed_data_interfaces.md) compute values on the fly from inputs and related managers.
+- [Request interfaces](request_interface.md) connect managers to remote HTTP-style services through declarative request operations and filter mappings.
 
 All interfaces inherit from `general_manager.interface.base_interface.InterfaceBase`, which provides shared behaviour such as identification, validation, and integration with the dependency tracker.
 
