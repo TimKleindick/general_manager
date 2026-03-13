@@ -40,6 +40,10 @@
       "general_manager.interface.interfaces.read_only",
       "ReadOnlyInterface"
     ],
+    "RequestInterface": [
+      "general_manager.interface.interfaces.request",
+      "RequestInterface"
+    ],
     "Rule": [
       "general_manager.rule.rule",
       "Rule"
@@ -139,6 +143,10 @@
     "GroupBucket": [
       "general_manager.bucket.group_bucket",
       "GroupBucket"
+    ],
+    "RequestBucket": [
+      "general_manager.bucket.request_bucket",
+      "RequestBucket"
     ]
   },
   "general_manager.cache": {
@@ -265,6 +273,30 @@
     "ReadOnlyInterface": [
       "general_manager.interface.interfaces.read_only",
       "ReadOnlyInterface"
+    ],
+    "RequestField": [
+      "general_manager.interface.requests",
+      "RequestField"
+    ],
+    "RequestFilter": [
+      "general_manager.interface.requests",
+      "RequestFilter"
+    ],
+    "RequestInterface": [
+      "general_manager.interface.interfaces.request",
+      "RequestInterface"
+    ],
+    "RequestQueryOperation": [
+      "general_manager.interface.requests",
+      "RequestQueryOperation"
+    ],
+    "RequestQueryPlan": [
+      "general_manager.interface.requests",
+      "RequestQueryPlan"
+    ],
+    "RequestQueryResult": [
+      "general_manager.interface.requests",
+      "RequestQueryResult"
     ]
   },
   "general_manager.manager": {

@@ -22,6 +22,9 @@ from general_manager.interface.interfaces.existing_model import (
 from general_manager.interface.interfaces.read_only import (
     ReadOnlyInterface,
 )
+from general_manager.interface.interfaces.request import (
+    RequestInterface,
+)
 from general_manager.interface.capabilities import CapabilityName
 
 from .capability_models import CapabilityPlan
@@ -165,6 +168,21 @@ CAPABILITY_MANIFEST = CapabilityManifest(
         CalculationInterface: _plan(
             required=names(
                 "read", "validation", "observability", "query", "calculation_lifecycle"
+            ),
+            optional=names("notification", "scheduling", "access_control"),
+            flags={
+                "notifications": "notification",
+                "scheduling": "scheduling",
+                "access_control": "access_control",
+            },
+        ),
+        RequestInterface: _plan(
+            required=names(
+                "read",
+                "validation",
+                "observability",
+                "query",
+                "request_lifecycle",
             ),
             optional=names("notification", "scheduling", "access_control"),
             flags={

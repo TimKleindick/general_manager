@@ -58,6 +58,10 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
         "general_manager.interface.interfaces.read_only",
         "ReadOnlyInterface",
     ),
+    "RequestInterface": (
+        "general_manager.interface.interfaces.request",
+        "RequestInterface",
+    ),
     "ManagerBasedPermission": (
         "general_manager.permission.manager_based_permission",
         "ManagerBasedPermission",
@@ -198,6 +202,15 @@ INTERFACE_EXPORTS: LazyExportMap = {
     "ExistingModelInterface": "general_manager.interface.interfaces.existing_model",
     "ReadOnlyInterface": "general_manager.interface.interfaces.read_only",
     "CalculationInterface": "general_manager.interface.interfaces.calculation",
+    "RequestInterface": "general_manager.interface.interfaces.request",
+    "RequestField": ("general_manager.interface.requests", "RequestField"),
+    "RequestFilter": ("general_manager.interface.requests", "RequestFilter"),
+    "RequestQueryOperation": (
+        "general_manager.interface.requests",
+        "RequestQueryOperation",
+    ),
+    "RequestQueryPlan": ("general_manager.interface.requests", "RequestQueryPlan"),
+    "RequestQueryResult": ("general_manager.interface.requests", "RequestQueryResult"),
 }
 
 
@@ -228,6 +241,7 @@ BUCKET_EXPORTS: LazyExportMap = {
         "CalculationBucket",
     ),
     "GroupBucket": ("general_manager.bucket.group_bucket", "GroupBucket"),
+    "RequestBucket": ("general_manager.bucket.request_bucket", "RequestBucket"),
 }
 
 

@@ -21,6 +21,7 @@ CapabilityName = Literal[
     "access_control",
     "observability",
     "existing_model_resolution",
+    "request_lifecycle",
     "read_only_management",
     "soft_delete",
 ]
