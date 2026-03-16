@@ -203,14 +203,69 @@ INTERFACE_EXPORTS: LazyExportMap = {
     "ReadOnlyInterface": "general_manager.interface.interfaces.read_only",
     "CalculationInterface": "general_manager.interface.interfaces.calculation",
     "RequestInterface": "general_manager.interface.interfaces.request",
+    "RequestAuthProvider": (
+        "general_manager.interface.requests",
+        "RequestAuthProvider",
+    ),
+    "RequestAuthenticationError": (
+        "general_manager.interface.requests",
+        "RequestAuthenticationError",
+    ),
+    "RequestAuthorizationError": (
+        "general_manager.interface.requests",
+        "RequestAuthorizationError",
+    ),
+    "RequestConflictError": (
+        "general_manager.interface.requests",
+        "RequestConflictError",
+    ),
     "RequestField": ("general_manager.interface.requests", "RequestField"),
     "RequestFilter": ("general_manager.interface.requests", "RequestFilter"),
+    "RequestNotFoundError": (
+        "general_manager.interface.requests",
+        "RequestNotFoundError",
+    ),
+    "RequestMutationOperation": (
+        "general_manager.interface.requests",
+        "RequestMutationOperation",
+    ),
     "RequestQueryOperation": (
         "general_manager.interface.requests",
         "RequestQueryOperation",
     ),
     "RequestQueryPlan": ("general_manager.interface.requests", "RequestQueryPlan"),
     "RequestQueryResult": ("general_manager.interface.requests", "RequestQueryResult"),
+    "RequestRetryPolicy": ("general_manager.interface.requests", "RequestRetryPolicy"),
+    "RequestRateLimitedError": (
+        "general_manager.interface.requests",
+        "RequestRateLimitedError",
+    ),
+    "RequestRemoteError": ("general_manager.interface.requests", "RequestRemoteError"),
+    "RequestServerError": ("general_manager.interface.requests", "RequestServerError"),
+    "RequestTransportConfig": (
+        "general_manager.interface.requests",
+        "RequestTransportConfig",
+    ),
+    "RequestTransportError": (
+        "general_manager.interface.requests",
+        "RequestTransportError",
+    ),
+    "RequestTransportRequest": (
+        "general_manager.interface.requests",
+        "RequestTransportRequest",
+    ),
+    "RequestTransportResponse": (
+        "general_manager.interface.requests",
+        "RequestTransportResponse",
+    ),
+    "RequestTransportStatusError": (
+        "general_manager.interface.requests",
+        "RequestTransportStatusError",
+    ),
+    "SharedRequestTransport": (
+        "general_manager.interface.requests",
+        "SharedRequestTransport",
+    ),
 }
 
 

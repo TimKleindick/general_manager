@@ -24,14 +24,17 @@ type lookup = str  # e.g. "field__gt", "field__in", "field__contains", "field"
 type cache_keys = set[str]  # e.g. "cache_key_1", "cache_key_2"
 type identifier = str  # e.g. "{'id': 1}"", "{'project': Project(**{'id': 1})}", ...
 type dependency_index = dict[
-    Literal["filter", "exclude"],
+    Literal["filter", "exclude", "request_query"],
     dict[
         general_manager_name,
-        dict[attribute, dict[lookup, cache_keys]],
+        dict[attribute, dict[lookup, cache_keys]] | dict[identifier, cache_keys],
     ],
 ]
+type lookup_dependency_map = dict[lookup, cache_keys]
+type manager_dependency_section = dict[attribute, lookup_dependency_map]
+type request_query_manager_section = dict[identifier, cache_keys]
 
-type filter_type = Literal["filter", "exclude", "identification"]
+type filter_type = Literal["filter", "exclude", "identification", "request_query"]
 type Dependency = Tuple[general_manager_name, filter_type, str]
 
 logger = get_logger("cache.dependency_index")
@@ -60,6 +63,7 @@ LOCK_KEY = "dependency_index_lock"  # Cache key used for the dependency lock
 LOCK_TIMEOUT = 5  # Lock TTL in seconds
 UNDEFINED = object()  # Sentinel for undefined values
 ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
+REQUEST_QUERY_ACTION: Literal["request_query"] = "request_query"
 
 
 # -----------------------------------------------------------------------------
@@ -189,13 +193,7 @@ def parse_dependency_identifier(identifier: str) -> Any:
 # -----------------------------------------------------------------------------
 def record_dependencies(
     cache_key: str,
-    dependencies: Iterable[
-        tuple[
-            general_manager_name,
-            Literal["filter", "exclude", "identification"],
-            identifier,
-        ]
-    ],
+    dependencies: Iterable[Dependency],
 ) -> None:
     """
     Register a cache key as dependent on the given manager-level filters, exclusions, or identifications.
@@ -219,7 +217,11 @@ def record_dependencies(
                 params = parse_dependency_identifier(identifier)
                 if not isinstance(params, dict):
                     continue
-                section = idx[action_key].setdefault(model_name, {})
+                action_section = cast(
+                    dict[general_manager_name, manager_dependency_section],
+                    idx[action_key],
+                )
+                section = action_section.setdefault(model_name, {})
                 if len(params) > 1:
                     cache_dependencies = section.setdefault(
                         "__cache_dependencies__", {}
@@ -232,9 +234,21 @@ def record_dependencies(
                     )
                     lookup_map.setdefault(val_key, set()).add(cache_key)
 
+            elif action == "request_query":
+                request_index = cast(
+                    dict[str, dict[str, set[str]]],
+                    idx.setdefault("request_query", {}),
+                )
+                request_section = request_index.setdefault(model_name, {})
+                request_section.setdefault(identifier, set()).add(cache_key)
+
             else:
                 # Treat identification lookups as a simple filter on `id`
-                section = idx["filter"].setdefault(model_name, {})
+                filter_section = cast(
+                    dict[general_manager_name, manager_dependency_section],
+                    idx["filter"],
+                )
+                section = filter_section.setdefault(model_name, {})
                 lookup_map = section.setdefault("identification", {})
                 val_key = identifier
                 lookup_map.setdefault(val_key, set()).add(cache_key)
@@ -264,12 +278,16 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     try:
         idx = get_full_index()
         for action in ACTIONS:
-            action_section = idx[action]
+            action_section = cast(
+                dict[general_manager_name, manager_dependency_section],
+                idx[action],
+            )
             for mname, model_section in list(action_section.items()):
                 cache_dependencies = model_section.get("__cache_dependencies__", {})
                 for lookup, lookup_map in list(model_section.items()):
                     if lookup.startswith("__"):
                         continue
+                    lookup_map = cast(lookup_dependency_map, lookup_map)
                     for val_key, key_set in list(lookup_map.items()):
                         if cache_key in key_set:
                             key_set.remove(cache_key)
@@ -283,6 +301,18 @@ def remove_cache_key_from_index(cache_key: str) -> None:
                         model_section.pop("__cache_dependencies__", None)
                 if not model_section:
                     del action_section[mname]
+        request_query_section = cast(
+            dict[str, dict[str, set[str]]],
+            idx.get("request_query", {}),
+        )
+        for mname, query_section in list(request_query_section.items()):
+            for identifier, key_set in list(query_section.items()):
+                if cache_key in key_set:
+                    key_set.remove(cache_key)
+                    if not key_set:
+                        del query_section[identifier]
+            if not query_section:
+                del request_query_section[mname]
         set_full_index(idx)
     finally:
         release_lock()
@@ -366,6 +396,24 @@ def generic_cache_invalidation(
     """
     manager_name = sender.__name__
     idx = get_full_index()
+
+    request_queries = cast(
+        dict[str, set[str]],
+        idx.get("request_query", {}).get(manager_name, {}),
+    )
+    for identifier, cache_keys in list(request_queries.items()):
+        for ck in list(cache_keys):
+            logger.info(
+                "invalidating request query cache key",
+                context={
+                    "manager": manager_name,
+                    "key": ck,
+                    "identifier": identifier,
+                    "action": REQUEST_QUERY_ACTION,
+                },
+            )
+            invalidate_cache_key(ck)
+            remove_cache_key_from_index(ck)
 
     def _json_loads_val_key(val_key: Any) -> Any:
         if isinstance(val_key, str):
@@ -646,12 +694,17 @@ def generic_cache_invalidation(
         return False
 
     for action in ACTIONS:
-        model_section = idx[action].get(manager_name)
+        action_section = cast(
+            dict[general_manager_name, manager_dependency_section],
+            idx[action],
+        )
+        model_section = action_section.get(manager_name)
         if not isinstance(model_section, dict):
             continue
         for lookup, lookup_map in model_section.items():
             if lookup.startswith("__"):
                 continue
+            lookup_map = cast(lookup_dependency_map, lookup_map)
             # 1) get operator and attribute path
             parts = lookup.split("__")
             if parts[-1] in (

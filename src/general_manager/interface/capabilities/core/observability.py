@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Protocol, ClassVar
 
 from general_manager.logging import get_logger
@@ -79,6 +80,14 @@ class LoggingObservabilityCapability(BaseCapability):
             result (Any): The operation result whose type name is recorded in the logged context.
         """
         context = self._context(operation, target, payload)
+        result_metadata = getattr(result, "metadata", None)
+        if isinstance(result_metadata, Mapping):
+            if "status_code" in result_metadata:
+                context["status_code"] = result_metadata["status_code"]
+            if "retry_count" in result_metadata:
+                context["retry_count"] = result_metadata["retry_count"]
+            if "request_id" in result_metadata:
+                context["request_id"] = result_metadata["request_id"]
         context["result_type"] = type(result).__name__
         self._logger.debug("interface operation end", context=context)
 
@@ -105,6 +114,9 @@ class LoggingObservabilityCapability(BaseCapability):
         """
         context = self._context(operation, target, payload)
         context["error"] = repr(error)
+        context["error_class"] = type(error).__name__
+        if hasattr(error, "status_code"):
+            context["status_code"] = error.status_code
         self._logger.error("interface operation error", context=context)
 
     def _context(
@@ -135,4 +147,15 @@ class LoggingObservabilityCapability(BaseCapability):
             "operation": operation,
             "target": target_name,
             "payload_keys": sorted(payload.keys()),
+        } | {
+            key: payload[key]
+            for key in (
+                "service",
+                "method",
+                "path",
+                "status_code",
+                "retry_count",
+                "request_id",
+            )
+            if key in payload
         }

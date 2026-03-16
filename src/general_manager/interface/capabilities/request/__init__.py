@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any, ClassVar, TYPE_CHECKING, cast
+from django.core.exceptions import ValidationError
 
 from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.core.utils import with_observability
 from general_manager.interface.requests import (
+    InvalidRequestFilterConfigurationError,
+    RequestConfigurationError,
     RequestExcludeNotSupportedError,
     RequestFieldsRequiredError,
+    RequestField,
     RequestFilter,
     RequestFilterBinding,
     RequestLocalFallbackRequiredError,
@@ -22,11 +29,15 @@ from general_manager.interface.requests import (
     RequestQueryResult,
     RequestSingleResponseRequiredError,
     RequestLocation,
+    MissingRequestDetailOperationError,
     UnknownRequestFilterError,
+    UnknownRequestFilterOperationReferenceError,
     UnknownRequestOperationError,
     UnsupportedRequestLocationError,
+    validate_filter_key,
 )
 from general_manager.manager.input import Input
+from general_manager.rule import Rule
 
 from ..base import CapabilityName
 from ..builtin import BaseCapability, ValidationCapability
@@ -43,9 +54,84 @@ class RequestValidationCapability(ValidationCapability):
         request_interface_cls = cast(type["RequestInterface"], interface_cls)
         if not request_interface_cls.fields:
             raise RequestFieldsRequiredError(request_interface_cls.__name__)
-        for filter_key in request_interface_cls.filters:
-            # Query-operation-specific filters are validated when the operation is resolved.
-            _ = filter_key
+        if "detail" not in request_interface_cls.query_operations:
+            raise MissingRequestDetailOperationError(request_interface_cls.__name__)
+        if request_interface_cls.rules and not any(
+            (
+                request_interface_cls.create_operation,
+                request_interface_cls.update_operation,
+                request_interface_cls.delete_operation,
+            )
+        ):
+            raise RequestConfigurationError.rules_without_mutations(
+                request_interface_cls.__name__
+            )
+        for rule in request_interface_cls.rules:
+            if not isinstance(rule, Rule):
+                raise RequestConfigurationError.invalid_rule_type(
+                    request_interface_cls.__name__
+                )
+        for serializer_name in (
+            "create_serializer",
+            "update_serializer",
+            "response_serializer",
+        ):
+            serializer = getattr(request_interface_cls, serializer_name, None)
+            if serializer is not None and not callable(serializer):
+                raise RequestConfigurationError.serializer_not_callable(
+                    request_interface_cls.__name__,
+                    serializer_name,
+                )
+        auth_provider = getattr(request_interface_cls, "auth_provider", None)
+        if auth_provider is not None and not callable(
+            getattr(auth_provider, "apply", None)
+        ):
+            raise RequestConfigurationError.invalid_auth_provider(
+                request_interface_cls.__name__
+            )
+
+        declared_operations = set(request_interface_cls.query_operations)
+        for filter_key, spec in request_interface_cls.filters.items():
+            validate_filter_key(filter_key)
+            self._validate_filter_spec(
+                filter_key,
+                spec,
+                declared_operations=declared_operations,
+            )
+
+        for operation_name, operation in request_interface_cls.query_operations.items():
+            if not operation.name or not operation.path:
+                raise InvalidRequestFilterConfigurationError(operation_name)
+            duplicate_keys = set(request_interface_cls.filters).intersection(
+                operation.filters
+            )
+            if duplicate_keys:
+                raise InvalidRequestFilterConfigurationError(sorted(duplicate_keys)[0])
+            for filter_key, spec in operation.filters.items():
+                validate_filter_key(filter_key)
+                self._validate_filter_spec(
+                    filter_key,
+                    spec,
+                    declared_operations=declared_operations,
+                )
+
+    @staticmethod
+    def _validate_filter_spec(
+        filter_key: str,
+        spec: RequestFilter,
+        *,
+        declared_operations: set[str],
+    ) -> None:
+        if not spec.remote and spec.compiler is None and not spec.local_fallback:
+            raise InvalidRequestFilterConfigurationError(filter_key)
+        if spec.exclude_param is not None and not spec.allow_exclude:
+            raise InvalidRequestFilterConfigurationError(filter_key)
+        unknown_operations = set(spec.operation_names).difference(declared_operations)
+        if unknown_operations:
+            raise UnknownRequestFilterOperationReferenceError(
+                filter_key,
+                unknown_operations,
+            )
 
 
 class RequestReadCapability(BaseCapability):
@@ -68,11 +154,14 @@ class RequestReadCapability(BaseCapability):
             ) from error
 
         payload_snapshot = {
+            "service": interface_cls._parent_class.__name__,
             "operation": operation.name,
-            "identification": dict(interface_instance.identification),
+            "method": operation.method,
+            "path": operation.path,
+            "identification_keys": sorted(interface_instance.identification.keys()),
         }
 
-        def _perform() -> Mapping[str, Any]:
+        def _perform() -> RequestQueryResult:
             request_plan = RequestQueryPlan(
                 operation_name=operation.name,
                 action="detail",
@@ -87,16 +176,17 @@ class RequestReadCapability(BaseCapability):
                     interface_cls.__name__,
                     len(result.items),
                 )
-            payload = result.items[0]
-            interface_instance._request_payload_cache = payload
-            return payload
+            return result
 
-        return with_observability(
+        result = with_observability(
             target=interface_cls,
             operation="request.read.detail",
             payload=payload_snapshot,
             func=_perform,
         )
+        payload = result.items[0]
+        interface_instance._request_payload_cache = payload
+        return payload
 
     def get_attribute_types(
         self,
@@ -160,15 +250,55 @@ class RequestLifecycleCapability(BaseCapability):
 
         def _perform() -> tuple[dict[str, Any], type["RequestInterface"], None]:
             input_fields: dict[str, Input[Any]] = {}
+            request_fields: dict[str, RequestField] = {}
+            meta_class = getattr(interface, "Meta", None)
             for key, value in vars(interface).items():
                 if key.startswith("__"):
                     continue
                 if isinstance(value, Input):
                     input_fields[key] = value
+                elif isinstance(value, RequestField):
+                    request_fields[key] = value
             attrs["_interface_type"] = interface._interface_type
-            interface_cls = type(
-                interface.__name__, (interface,), {"input_fields": input_fields}
+            interface_cls = cast(
+                type["RequestInterface"],
+                type(interface.__name__, (interface,), {}),
             )
+            interface_cls.input_fields = input_fields
+            interface_cls.fields = request_fields
+            interface_cls.filters = dict(getattr(meta_class, "filters", {}))
+            interface_cls.query_operations = dict(
+                getattr(meta_class, "query_operations", {})
+            )
+            interface_cls.default_query_operation = getattr(
+                meta_class,
+                "default_query_operation",
+                interface.default_query_operation,
+            )
+            interface_cls.transport = getattr(meta_class, "transport", None)
+            interface_cls.transport_config = getattr(
+                meta_class, "transport_config", None
+            )
+            interface_cls.auth_provider = getattr(meta_class, "auth_provider", None)
+            interface_cls.create_operation = getattr(
+                meta_class, "create_operation", None
+            )
+            interface_cls.update_operation = getattr(
+                meta_class, "update_operation", None
+            )
+            interface_cls.delete_operation = getattr(
+                meta_class, "delete_operation", None
+            )
+            interface_cls.create_serializer = getattr(
+                meta_class, "create_serializer", None
+            )
+            interface_cls.update_serializer = getattr(
+                meta_class, "update_serializer", None
+            )
+            interface_cls.response_serializer = getattr(
+                meta_class, "response_serializer", None
+            )
+            interface_cls.rules = list(getattr(meta_class, "rules", []))
             attrs["Interface"] = interface_cls
             return attrs, interface_cls, None
 
@@ -268,6 +398,7 @@ class RequestQueryCapability(BaseCapability):
             filters=filter_map,
             excludes=exclude_map,
         )
+        self._track_request_dependency(interface_cls, request_plan)
         return RequestBucket(
             interface_cls._parent_class,
             interface_cls,
@@ -277,17 +408,35 @@ class RequestQueryCapability(BaseCapability):
             excludes=exclude_map,
         )
 
+    @staticmethod
+    def _track_request_dependency(
+        interface_cls: type["RequestInterface"],
+        request_plan: RequestQueryPlan,
+    ) -> None:
+        DependencyTracker.track(
+            interface_cls._parent_class.__name__,
+            "request_query",
+            serialize_dependency_identifier(
+                {
+                    "operation": request_plan.operation_name,
+                    "filters": dict(request_plan.filters),
+                    "excludes": dict(request_plan.excludes),
+                }
+            ),
+        )
+
     def execute_plan(
         self,
         interface_cls: type["RequestInterface"],
         request_plan: RequestQueryPlan,
     ) -> RequestQueryResult:
         payload_snapshot = {
+            "service": interface_cls._parent_class.__name__,
             "operation": request_plan.operation_name,
             "method": request_plan.method,
             "path": request_plan.path,
-            "query_params": dict(request_plan.query_params),
-            "path_params": dict(request_plan.path_params),
+            "query_param_keys": sorted(request_plan.query_params.keys()),
+            "path_param_keys": sorted(request_plan.path_params.keys()),
             "header_keys": sorted(request_plan.headers.keys()),
             "body_keys": sorted(request_plan.body.keys()) if request_plan.body else [],
             "local_predicates": [
@@ -477,9 +626,134 @@ class RequestQueryCapability(BaseCapability):
             target[key] = value
 
 
+class RequestCreateCapability(BaseCapability):
+    """Execute declared create operations for request-backed interfaces."""
+
+    name: ClassVar[CapabilityName] = "create"
+
+    def create(
+        self,
+        interface_cls: type["RequestInterface"],
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del creator_id, history_comment
+        operation = interface_cls.get_mutation_operation("create")
+        serializer = getattr(interface_cls, "create_serializer", None)
+        _apply_request_rules(interface_cls, kwargs)
+        body = serializer(kwargs) if callable(serializer) else kwargs
+        result = interface_cls.execute_request_plan(
+            RequestQueryPlan(
+                operation_name=operation.name,
+                action="create",
+                method=operation.method,
+                path=operation.path,
+                body=body,
+                metadata=operation.metadata,
+            )
+        )
+        if len(result.items) != 1:
+            raise RequestSingleResponseRequiredError(
+                interface_cls.__name__, len(result.items)
+            )
+        return interface_cls.extract_identification(result.items[0])
+
+
+class RequestUpdateCapability(BaseCapability):
+    """Execute declared update operations for request-backed interfaces."""
+
+    name: ClassVar[CapabilityName] = "update"
+
+    def update(
+        self,
+        interface_instance: "RequestInterface",
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del creator_id, history_comment
+        interface_cls = type(interface_instance)
+        operation = interface_cls.get_mutation_operation("update")
+        serializer = getattr(interface_cls, "update_serializer", None)
+        existing_values = {
+            field_name: getattr(interface_instance, field_name)
+            for field_name in interface_cls.fields
+        }
+        _apply_request_rules(interface_cls, {**existing_values, **kwargs})
+        body = serializer(kwargs) if callable(serializer) else kwargs
+        result = interface_cls.execute_request_plan(
+            RequestQueryPlan(
+                operation_name=operation.name,
+                action="update",
+                method=operation.method,
+                path=operation.path,
+                path_params=dict(interface_instance.identification),
+                body=body,
+                metadata=operation.metadata,
+            )
+        )
+        if len(result.items) != 1:
+            raise RequestSingleResponseRequiredError(
+                interface_cls.__name__, len(result.items)
+            )
+        interface_instance._request_payload_cache = result.items[0]
+        return interface_cls.extract_identification(result.items[0])
+
+
+class RequestDeleteCapability(BaseCapability):
+    """Execute declared delete operations for request-backed interfaces."""
+
+    name: ClassVar[CapabilityName] = "delete"
+
+    def delete(
+        self,
+        interface_instance: "RequestInterface",
+        *,
+        creator_id: int | None = None,
+        history_comment: str | None = None,
+    ) -> None:
+        del creator_id, history_comment
+        interface_cls = type(interface_instance)
+        operation = interface_cls.get_mutation_operation("delete")
+        interface_cls.execute_request_plan(
+            RequestQueryPlan(
+                operation_name=operation.name,
+                action="delete",
+                method=operation.method,
+                path=operation.path,
+                path_params=dict(interface_instance.identification),
+                metadata=operation.metadata,
+            )
+        )
+
+
+def _apply_request_rules(
+    interface_cls: type["RequestInterface"],
+    candidate_values: Mapping[str, Any],
+) -> None:
+    rules = cast(list[Rule[Any]], getattr(interface_cls, "rules", []))
+    if not rules:
+        return
+    candidate = SimpleNamespace(**candidate_values)
+    errors: dict[str, Any] = {}
+    for rule in rules:
+        if rule.evaluate(candidate) is False:
+            error_message = rule.get_error_message()
+            if error_message:
+                errors.update(error_message)
+    if errors:
+        raise ValidationError(errors)
+
+
 __all__ = [
+    "RequestCreateCapability",
+    "RequestDeleteCapability",
     "RequestLifecycleCapability",
     "RequestQueryCapability",
     "RequestReadCapability",
+    "RequestUpdateCapability",
     "RequestValidationCapability",
 ]

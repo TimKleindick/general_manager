@@ -2,12 +2,12 @@
 
 `RequestInterface` lets a manager read and query data from a remote HTTP-style service while keeping the familiar GeneralManager API (`filter()`, `exclude()`, `all()`, manager attribute access, and named collection operations).
 
-Unlike `DatabaseInterface`, a request interface does not create a Django model or ship a built-in HTTP transport. Instead, you declare:
+Unlike `DatabaseInterface`, a request interface does not create a Django model. Instead, you declare:
 
-- which manager attributes exist
-- which query filters are supported
-- which remote operations exist
-- how a compiled request plan is executed
+- manager fields as class attributes
+- request configuration inside `Interface.Meta`
+- explicit query and mutation operations
+- how a compiled request plan is executed, usually through a shared transport
 
 This keeps the public API familiar while making remote-service behavior explicit and strict.
 
@@ -23,12 +23,13 @@ Do not use it as a generic ad hoc HTTP client. Request interfaces are resource-f
 
 ## Mental model
 
-A request-backed manager has four layers:
+A request-backed manager has five layers:
 
 1. Manager API: callers use `Project.filter(status="active")`, `Project.exclude(...)`, `Project.all()`, or `Project.Interface.query_operation("search", ...)`.
-2. Filter compilation: declared `RequestFilter` objects translate manager lookups into request-plan fragments.
-3. Request plan: GeneralManager builds a `RequestQueryPlan` with method, path, query params, headers, body, path params, and optional local predicates.
-4. Execution hook: your interface implements `execute_request_plan()` and turns that plan into a real HTTP call.
+2. Field schema: `RequestField` class attributes define the remote resource shape exposed by the manager.
+3. Filter and operation config: `Interface.Meta` declares filters, query operations, mutation operations, auth provider, retry policy, and serializers.
+4. Request plan: GeneralManager builds a `RequestQueryPlan` with method, path, query params, headers, body, path params, and optional local predicates.
+5. Execution hook: the interface hands that plan to a shared transport, which turns it into a real HTTP call.
 
 The key design point is that callers never pass raw HTTP details. They only use declared manager filters and operations.
 
@@ -90,9 +91,25 @@ Use operations when the upstream service exposes multiple collection shapes, for
 - a POST-based search endpoint
 - a special status report endpoint
 
-### `execute_request_plan()`
+### Shared transport
 
-This is where your interface actually performs the remote call. GeneralManager hands you a normalized `RequestQueryPlan`; you return a `RequestQueryResult`.
+`RequestInterface` now supports a first-class shared transport path. In the common case you declare:
+
+- `transport`: an object implementing `SharedRequestTransport` or the `RequestTransport` protocol
+- `transport_config`: base URL, timeout, retry policy, and optional response normalizer
+- `auth_provider`: a provider-style hook on `Interface.Meta`
+
+Then the default `execute_request_plan()` implementation delegates to that transport.
+
+The shared transport is responsible for:
+
+- building the outbound request from the `RequestQueryPlan`
+- merging static operation query params, headers, and body fragments
+- enforcing timeout configuration
+- applying auth through `Meta.auth_provider`
+- applying framework retry policy from `Meta.retry_policy`
+- normalizing transport responses into `RequestQueryResult`
+- mapping upstream status failures into stable request exceptions
 
 ```python
 RequestQueryResult(
@@ -113,89 +130,122 @@ from typing import Any, ClassVar
 
 import requests
 
-from general_manager.interface import RequestInterface
-from general_manager.interface.requests import (
+from general_manager.interface import (
     RequestField,
     RequestFilter,
+    RequestInterface,
+    RequestMutationOperation,
+    RequestRetryPolicy,
+    RequestTransportConfig,
+    RequestTransportRequest,
+    RequestTransportResponse,
     RequestQueryOperation,
-    RequestQueryPlan,
-    RequestQueryResult,
+    SharedRequestTransport,
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+
+
+class BearerAuth:
+    def apply(self, request, *, interface_cls, operation, plan):
+        headers = dict(request.headers)
+        headers["Authorization"] = f"Bearer {interface_cls.Meta.api_token}"
+        return RequestTransportRequest(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            query_params=request.query_params,
+            headers=headers,
+            body=request.body,
+            timeout=request.timeout,
+            operation_name=request.operation_name,
+            metadata=request.metadata,
+        )
+
+
+class ProjectTransport(SharedRequestTransport):
+    def send(self, request, *, interface_cls, operation, plan, identification):
+        response = requests.request(
+            method=request.method,
+            url=request.url,
+            params=dict(request.query_params),
+            headers=dict(request.headers),
+            json=dict(request.body) if request.body else None,
+            timeout=request.timeout,
+        )
+        response.raise_for_status()
+        return RequestTransportResponse(
+            payload=response.json(),
+            status_code=response.status_code,
+            headers=response.headers,
+        )
 
 
 class RemoteProject(GeneralManager):
     class Interface(RequestInterface):
         id = Input(type=int)
 
-        fields: ClassVar[dict[str, RequestField]] = {
-            "id": RequestField(int),
-            "name": RequestField(str),
-            "status": RequestField(str, source="state"),
-            "updated_at": RequestField(datetime, source="modifiedAt"),
-        }
+        name = RequestField(str)
+        status = RequestField(str, source="state")
+        updated_at = RequestField(datetime, source="modifiedAt")
 
-        filters: ClassVar[dict[str, RequestFilter]] = {
-            "status": RequestFilter(
-                remote_name="state",
-                value_type=str,
-                supports_exclude=True,
-                exclude_remote_name="state_not",
-            ),
-            "name__icontains": RequestFilter(
-                remote_name="search",
-                value_type=str,
-            ),
-            "updated_at__gte": RequestFilter(
-                remote_name="modifiedAfter",
-                value_type=datetime,
-                serializer=lambda value: value.isoformat(),
-            ),
-            "page": RequestFilter(remote_name="page", value_type=int),
-            "page_size": RequestFilter(remote_name="pageSize", value_type=int),
-        }
-
-        query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
-            "detail": RequestQueryOperation(
-                name="detail",
-                method="GET",
-                path="/projects/{id}",
-            ),
-            "list": RequestQueryOperation(
-                name="list",
-                method="GET",
+        class Meta:
+            filters: ClassVar[dict[str, RequestFilter]] = {
+                "status": RequestFilter(
+                    remote_name="state",
+                    value_type=str,
+                    supports_exclude=True,
+                    exclude_remote_name="state_not",
+                ),
+                "name__icontains": RequestFilter(
+                    remote_name="search",
+                    value_type=str,
+                ),
+                "updated_at__gte": RequestFilter(
+                    remote_name="modifiedAfter",
+                    value_type=datetime,
+                    serializer=lambda value: value.isoformat(),
+                ),
+                "page": RequestFilter(remote_name="page", value_type=int),
+                "page_size": RequestFilter(remote_name="pageSize", value_type=int),
+            }
+            query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                "detail": RequestQueryOperation(
+                    name="detail",
+                    method="GET",
+                    path="/projects/{id}",
+                ),
+                "list": RequestQueryOperation(
+                    name="list",
+                    method="GET",
+                    path="/projects",
+                ),
+            }
+            create_operation = RequestMutationOperation(
+                name="create",
+                method="POST",
                 path="/projects",
-            ),
-        }
-
-        default_query_operation = "list"
-        base_url = "https://service.example.com/api"
-        api_token = "replace-me"
-
-        @classmethod
-        def execute_request_plan(cls, plan: RequestQueryPlan) -> RequestQueryResult:
-            response = requests.request(
-                method=plan.method,
-                url=f"{cls.base_url}{plan.path.format(**plan.path_params)}",
-                params=dict(plan.query_params),
-                headers={
-                    "Authorization": f"Bearer {cls.api_token}",
-                    **dict(plan.headers),
-                },
-                json=dict(plan.body) if plan.body else None,
+            )
+            update_operation = RequestMutationOperation(
+                name="update",
+                method="PATCH",
+                path="/projects/{id}",
+            )
+            api_token = "replace-me"
+            transport = ProjectTransport()
+            transport_config = RequestTransportConfig(
+                base_url="https://service.example.com/api",
                 timeout=10,
             )
-            response.raise_for_status()
-            payload = response.json()
-
-            if plan.operation_name == "detail":
-                return RequestQueryResult(items=(payload,))
-
-            return RequestQueryResult(
-                items=tuple(payload["items"]),
-                total_count=payload.get("totalCount"),
-            )
+            auth_provider = BearerAuth()
+            retry_policy = RequestRetryPolicy(max_attempts=2)
+            create_serializer = lambda payload: {
+                "name": payload["name"],
+                "state": payload["status"],
+            }
+            update_serializer = lambda payload: {
+                "state": payload["status"],
+            }
 ```
 
 Usage:
@@ -263,36 +313,28 @@ class RemoteProject(GeneralManager):
     class Interface(RequestInterface):
         id = Input(type=int)
 
-        fields = {
-            "id": RequestField(int),
-            "name": RequestField(str),
-        }
+        name = RequestField(str)
 
-        filters = {}
-
-        query_operations = {
-            "search": RequestQueryOperation(
-                name="search",
-                method="POST",
-                path="/projects/search",
-                filters={
-                    "query": RequestFilter(
-                        remote_name="q",
-                        location="body",
-                        value_type=str,
-                    ),
-                    "page": RequestFilter(
-                        remote_name="page",
-                        location="body",
-                        value_type=int,
-                    ),
-                },
-            ),
-        }
-
-        @classmethod
-        def execute_request_plan(cls, plan: RequestQueryPlan) -> RequestQueryResult:
-            ...
+        class Meta:
+            query_operations = {
+                "search": RequestQueryOperation(
+                    name="search",
+                    method="POST",
+                    path="/projects/search",
+                    filters={
+                        "query": RequestFilter(
+                            remote_name="q",
+                            location="body",
+                            value_type=str,
+                        ),
+                        "page": RequestFilter(
+                            remote_name="page",
+                            location="body",
+                            value_type=int,
+                        ),
+                    },
+                ),
+            }
 ```
 
 Usage:
@@ -400,17 +442,44 @@ You still declare every supported lookup explicitly in the `filters` mapping, fo
 
 ## Production guidance
 
-The current request interface gives you the declaration and planning layer. For production use, your `execute_request_plan()` implementation should also handle:
+The current request interface gives you the declaration, planning, and shared transport layer. For production use, configure your shared transport path to handle:
 
-- authentication and token refresh
+- provider-based authentication and token refresh
 - mandatory timeouts
-- retry policy for idempotent operations
+- retry policy for idempotent operations through `Meta.retry_policy`
 - structured logging and request IDs
 - response normalization and schema checks
 - rate-limit handling
 - secret masking in logs and errors
 
-If multiple managers talk to the same upstream service, factor the transport into a shared helper instead of duplicating HTTP code inside each interface.
+If multiple managers talk to the same upstream service, keep one shared transport and auth provider rather than duplicating request code inside each interface.
+
+Relevant public transport and error types are available from `general_manager.interface`, including:
+
+- `SharedRequestTransport`
+- `RequestTransportConfig`
+- `RequestRetryPolicy`
+- `RequestTransportRequest`
+- `RequestTransportResponse`
+- `RequestMutationOperation`
+- `RequestRemoteError`
+- `RequestTransportError`
+- `RequestAuthenticationError`
+- `RequestAuthorizationError`
+- `RequestNotFoundError`
+- `RequestConflictError`
+- `RequestRateLimitedError`
+- `RequestServerError`
+
+Mutation-specific configuration also lives in `Interface.Meta`:
+
+- `create_operation`
+- `update_operation`
+- `delete_operation`
+- `rules`
+- `create_serializer`
+- `update_serializer`
+- `response_serializer`
 
 ## Current limitations
 
@@ -418,22 +487,22 @@ The request interface is intentionally narrow in v1.
 
 Current limitations include:
 
-- no built-in HTTP transport
-- no automatic auth/retry implementation
 - no generic arbitrary endpoint invocation from managers
 - no ORM-style universal filtering across all remote APIs
-- request-specific dependency tracking and invalidation are not yet as complete as the ORM path
-- request-bucket equality/union semantics are still narrower than database buckets
+- retry policy is framework-managed, but custom transports that bypass `SharedRequestTransport.execute()` do not inherit it
+- request transports are normalized, but you still own service-specific provider auth logic and response shaping
+- observability is structured and sanitized, but metric/tracing backend wiring depends on the host application
 
 ## Recommended pattern
 
 For most integrations, this pattern works well:
 
 1. Start with one resource-oriented manager such as `RemoteProject`.
-2. Declare a small, explicit `fields` map.
+2. Declare a small, explicit set of `RequestField` class attributes.
 3. Declare only the filters the upstream service truly supports.
-4. Add a `"detail"` and `"list"` operation first.
-5. Add named operations such as `"search"` only when the upstream API has a genuinely different endpoint shape.
-6. Keep `execute_request_plan()` thin and move shared HTTP/auth logic into a reusable transport helper.
+4. Put filters, operations, transport config, auth provider, retry policy, rules, and serializers in `Interface.Meta`.
+5. Add a `"detail"` and `"list"` operation first.
+6. Add named operations such as `"search"` only when the upstream API has a genuinely different endpoint shape.
+7. Keep `transport.send()` thin and move shared HTTP/auth/error logic into a reusable transport helper.
 
 That keeps the GeneralManager API clean without hiding the real constraints of the remote service.

@@ -10,9 +10,12 @@ from general_manager.interface.capabilities.core.observability import (
     LoggingObservabilityCapability,
 )
 from general_manager.interface.capabilities.request import (
+    RequestCreateCapability,
+    RequestDeleteCapability,
     RequestLifecycleCapability,
     RequestQueryCapability,
     RequestReadCapability,
+    RequestUpdateCapability,
     RequestValidationCapability,
 )
 
@@ -24,6 +27,9 @@ REQUEST_CORE_CAPABILITIES = CapabilitySet(
         InterfaceCapabilityConfig(RequestReadCapability),
         InterfaceCapabilityConfig(RequestValidationCapability),
         InterfaceCapabilityConfig(RequestQueryCapability),
+        InterfaceCapabilityConfig(RequestCreateCapability),
+        InterfaceCapabilityConfig(RequestUpdateCapability),
+        InterfaceCapabilityConfig(RequestDeleteCapability),
         InterfaceCapabilityConfig(LoggingObservabilityCapability),
     ),
 )
