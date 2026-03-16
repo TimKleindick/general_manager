@@ -21,6 +21,24 @@ if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.interfaces.request import RequestInterface
 
 
+class RequestBucketTypeMismatchError(TypeError):
+    """Raised when attempting to combine request buckets with incompatible types."""
+
+    def __init__(self, bucket_type: type, other_type: type) -> None:
+        super().__init__(
+            f"Cannot combine {bucket_type.__name__} with {other_type.__name__}."
+        )
+
+
+class RequestBucketManagerMismatchError(TypeError):
+    """Raised when combining request buckets backed by different managers."""
+
+    def __init__(self, first_manager: type, second_manager: type) -> None:
+        super().__init__(
+            f"Cannot combine buckets for {first_manager.__name__} and {second_manager.__name__}."
+        )
+
+
 class RequestBucket(Bucket[GeneralManagerType]):
     """Lazy bucket backed by a compiled request query plan."""
 
@@ -81,10 +99,32 @@ class RequestBucket(Bucket[GeneralManagerType]):
         other: Bucket[GeneralManagerType] | GeneralManagerType,
     ) -> Bucket[GeneralManagerType]:
         if isinstance(other, RequestBucket):
+            if self._manager_class != other._manager_class:
+                raise RequestBucketManagerMismatchError(
+                    self._manager_class,
+                    other._manager_class,
+                )
             return self._from_items((*self._ensure_items(), *other._ensure_items()))
         if isinstance(other, self._manager_class):
             return self._from_items((*self._ensure_items(), other))
-        return self._from_items(self._ensure_items())
+        raise RequestBucketTypeMismatchError(self.__class__, type(other))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RequestBucket):
+            return False
+        if self._manager_class != other._manager_class:
+            return False
+        if self._operation_name != other._operation_name:
+            return False
+        if self.request_plan is not None and other.request_plan is not None:
+            return (
+                self.request_plan == other.request_plan
+                and self.filters == other.filters
+                and self.excludes == other.excludes
+            )
+        return tuple(item.identification for item in self._ensure_items()) == tuple(
+            item.identification for item in other._ensure_items()
+        )
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         yield from self._ensure_items()

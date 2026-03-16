@@ -243,6 +243,27 @@ class TestRecordDependencies(TestCase):
             {"day": "2024-07-24"},
         )
 
+    def test_record_request_query_dependencies(self):
+        identifier = serialize_dependency_identifier(
+            {
+                "operation": "search",
+                "filters": {"query": ["alpha"]},
+                "excludes": {},
+            }
+        )
+
+        record_dependencies(
+            "request-cache",
+            [("RemoteProject", "request_query", identifier)],
+        )
+
+        idx = get_full_index()
+        self.assertIn("request_query", idx)
+        self.assertEqual(
+            idx["request_query"]["RemoteProject"][identifier],
+            {"request-cache"},
+        )
+
     def test_parse_dependency_identifier_returns_none_for_non_json(self):
         self.assertIsNone(parse_dependency_identifier("{bad"))
         self.assertIsNone(parse_dependency_identifier(repr({"day": date(2024, 7, 24)})))

@@ -29,62 +29,61 @@ class RemoteProject(GeneralManager):
     class Interface(RequestInterface):
         id = Input(type=int)
 
-        fields: ClassVar[dict[str, RequestField]] = {
-            "id": RequestField(int),
-            "name": RequestField(str),
-            "status": RequestField(str),
-            "updated_at": RequestField(datetime),
-            "local_name": RequestField(str),
-        }
-        filters: ClassVar[dict[str, RequestFilter]] = {
-            "status": RequestFilter(
-                remote_name="state",
-                value_type=str,
-                supports_exclude=True,
-                exclude_remote_name="state_not",
-            ),
-            "name__icontains": RequestFilter(remote_name="search", value_type=str),
-            "updated_at__gte": RequestFilter(
-                remote_name="modifiedAfter",
-                value_type=datetime,
-            ),
-            "ordering": RequestFilter(remote_name="sort", value_type=str),
-            "page": RequestFilter(remote_name="page", value_type=int),
-            "page_size": RequestFilter(remote_name="pageSize", value_type=int),
-            "list_only": RequestFilter(
-                remote_name="listOnly",
-                value_type=str,
-                operation_names=frozenset({"list"}),
-            ),
-            "local_name__icontains": RequestFilter(
-                allow_local_fallback=True,
-                value_type=str,
-            ),
-        }
-        query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
-            "detail": RequestQueryOperation(
-                name="detail",
-                method="GET",
-                path="/projects/{id}",
-            ),
-            "list": RequestQueryOperation(
-                name="list",
-                method="GET",
-                path="/projects",
-            ),
-            "search": RequestQueryOperation(
-                name="search",
-                method="POST",
-                path="/projects/search",
-                filters={
-                    "search_only": RequestFilter(
-                        remote_name="q",
-                        location="body",
-                        value_type=str,
-                    )
-                },
-            ),
-        }
+        name = RequestField(str)
+        status = RequestField(str)
+        updated_at = RequestField(datetime)
+        local_name = RequestField(str)
+
+        class Meta:
+            filters: ClassVar[dict[str, RequestFilter]] = {
+                "status": RequestFilter(
+                    remote_name="state",
+                    value_type=str,
+                    supports_exclude=True,
+                    exclude_remote_name="state_not",
+                ),
+                "name__icontains": RequestFilter(remote_name="search", value_type=str),
+                "updated_at__gte": RequestFilter(
+                    remote_name="modifiedAfter",
+                    value_type=datetime,
+                ),
+                "ordering": RequestFilter(remote_name="sort", value_type=str),
+                "page": RequestFilter(remote_name="page", value_type=int),
+                "page_size": RequestFilter(remote_name="pageSize", value_type=int),
+                "list_only": RequestFilter(
+                    remote_name="listOnly",
+                    value_type=str,
+                    operation_names=frozenset({"list"}),
+                ),
+                "local_name__icontains": RequestFilter(
+                    allow_local_fallback=True,
+                    value_type=str,
+                ),
+            }
+            query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                "detail": RequestQueryOperation(
+                    name="detail",
+                    method="GET",
+                    path="/projects/{id}",
+                ),
+                "list": RequestQueryOperation(
+                    name="list",
+                    method="GET",
+                    path="/projects",
+                ),
+                "search": RequestQueryOperation(
+                    name="search",
+                    method="POST",
+                    path="/projects/search",
+                    filters={
+                        "search_only": RequestFilter(
+                            remote_name="q",
+                            location="body",
+                            value_type=str,
+                        )
+                    },
+                ),
+            }
 
         calls: ClassVar[list[dict[str, Any]]] = []
 
@@ -191,6 +190,14 @@ class TestRequestInterface(SimpleTestCase):
         bucket = RemoteProject.filter(status="active")
 
         self.assertIsInstance(bucket, RequestBucket)
+
+    def test_meta_configuration_is_normalized_onto_interface(self) -> None:
+        self.assertEqual(
+            set(RemoteProject.Interface.fields),
+            {"name", "status", "updated_at", "local_name"},
+        )
+        self.assertIn("status", RemoteProject.Interface.filters)
+        self.assertIn("detail", RemoteProject.Interface.query_operations)
 
     def test_filter_compiles_remote_request_plan(self) -> None:
         bucket = RemoteProject.filter(

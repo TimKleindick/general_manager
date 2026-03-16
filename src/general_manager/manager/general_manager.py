@@ -292,9 +292,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket containing manager instances that match the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        DependencyTracker.track(
-            cls.__name__, "filter", serialize_dependency_identifier(identifier_map)
-        )
+        if getattr(cls.Interface, "_interface_type", None) != "request":
+            DependencyTracker.track(
+                cls.__name__, "filter", serialize_dependency_identifier(identifier_map)
+            )
         logger.debug(
             "manager filter",
             context={
@@ -316,9 +317,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket of manager instances that do not satisfy the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        DependencyTracker.track(
-            cls.__name__, "exclude", serialize_dependency_identifier(identifier_map)
-        )
+        if getattr(cls.Interface, "_interface_type", None) != "request":
+            DependencyTracker.track(
+                cls.__name__,
+                "exclude",
+                serialize_dependency_identifier(identifier_map),
+            )
         logger.debug(
             "manager exclude",
             context={
