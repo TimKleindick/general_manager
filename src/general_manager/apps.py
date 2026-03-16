@@ -27,6 +27,7 @@ from general_manager.bootstrap import (
     register_system_checks,
     initialize_general_manager_classes,
     check_permission_class,
+    handle_remote_api,
     handle_graph_ql,
     add_graphql_url,
     _ensure_asgi_subscription_route,
@@ -180,6 +181,7 @@ class GeneralmanagerConfig(AppConfig):
             GeneralManagerMeta.pending_attribute_initialization,
             GeneralManagerMeta.all_classes,
         )
+        handle_remote_api(GeneralManagerMeta.all_classes)
         configure_audit_logger_from_settings(settings)
         configure_search_backend_from_settings(settings)
         configure_workflow_engine_from_settings(settings)
@@ -230,6 +232,12 @@ class GeneralmanagerConfig(AppConfig):
         pending_graphql_interfaces: list[Type[GeneralManager]],
     ) -> None:
         handle_graph_ql(pending_graphql_interfaces)
+
+    @staticmethod
+    def handle_remote_api(
+        manager_classes: list[Type[GeneralManager]],
+    ) -> None:
+        handle_remote_api(manager_classes)
 
     @staticmethod
     def add_graphql_url(schema: Any) -> None:

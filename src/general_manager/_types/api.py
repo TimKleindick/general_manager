@@ -6,6 +6,7 @@ __all__ = [
     "GraphQL",
     "MeasurementScalar",
     "MeasurementType",
+    "RemoteInvalidationClient",
     "graph_ql_mutation",
     "graph_ql_property",
 ]
@@ -15,3 +16,4 @@ from general_manager.api.graphql import MeasurementScalar
 from general_manager.api.graphql import MeasurementType
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.api.property import graph_ql_property
+from general_manager.api.remote_invalidation_client import RemoteInvalidationClient

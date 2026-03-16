@@ -62,6 +62,10 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
         "general_manager.interface.interfaces.request",
         "RequestInterface",
     ),
+    "RemoteManagerInterface": (
+        "general_manager.interface.interfaces.remote_manager",
+        "RemoteManagerInterface",
+    ),
     "ManagerBasedPermission": (
         "general_manager.permission.manager_based_permission",
         "ManagerBasedPermission",
@@ -82,6 +86,10 @@ API_EXPORTS: LazyExportMap = {
     "GraphQL": ("general_manager.api.graphql", "GraphQL"),
     "MeasurementType": ("general_manager.api.graphql", "MeasurementType"),
     "MeasurementScalar": ("general_manager.api.graphql", "MeasurementScalar"),
+    "RemoteInvalidationClient": (
+        "general_manager.api.remote_invalidation_client",
+        "RemoteInvalidationClient",
+    ),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
     "graph_ql_mutation": ("general_manager.api.mutation", "graph_ql_mutation"),
 }
@@ -203,6 +211,7 @@ INTERFACE_EXPORTS: LazyExportMap = {
     "ReadOnlyInterface": "general_manager.interface.interfaces.read_only",
     "CalculationInterface": "general_manager.interface.interfaces.calculation",
     "RequestInterface": "general_manager.interface.interfaces.request",
+    "RemoteManagerInterface": "general_manager.interface.interfaces.remote_manager",
     "RequestAuthProvider": (
         "general_manager.interface.requests",
         "RequestAuthProvider",

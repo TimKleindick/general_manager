@@ -40,6 +40,10 @@
       "general_manager.interface.interfaces.read_only",
       "ReadOnlyInterface"
     ],
+    "RemoteManagerInterface": [
+      "general_manager.interface.interfaces.remote_manager",
+      "RemoteManagerInterface"
+    ],
     "RequestInterface": [
       "general_manager.interface.interfaces.request",
       "RequestInterface"
@@ -117,6 +121,10 @@
     "MeasurementType": [
       "general_manager.api.graphql",
       "MeasurementType"
+    ],
+    "RemoteInvalidationClient": [
+      "general_manager.api.remote_invalidation_client",
+      "RemoteInvalidationClient"
     ],
     "graph_ql_mutation": [
       "general_manager.api.mutation",
@@ -302,6 +310,10 @@
       "general_manager.interface.interfaces.read_only",
       "ReadOnlyInterface"
     ],
+    "RemoteManagerInterface": [
+      "general_manager.interface.interfaces.remote_manager",
+      "RemoteManagerInterface"
+    ],
     "RequestAuthProvider": [
       "general_manager.interface.requests",
       "RequestAuthProvider"
@@ -334,13 +346,13 @@
       "general_manager.interface.requests",
       "RequestMetricsBackend"
     ],
-    "RequestNotFoundError": [
-      "general_manager.interface.requests",
-      "RequestNotFoundError"
-    ],
     "RequestMutationOperation": [
       "general_manager.interface.requests",
       "RequestMutationOperation"
+    ],
+    "RequestNotFoundError": [
+      "general_manager.interface.requests",
+      "RequestNotFoundError"
     ],
     "RequestQueryOperation": [
       "general_manager.interface.requests",
@@ -354,14 +366,6 @@
       "general_manager.interface.requests",
       "RequestQueryResult"
     ],
-    "RequestRetryPolicy": [
-      "general_manager.interface.requests",
-      "RequestRetryPolicy"
-    ],
-    "RequestSchemaError": [
-      "general_manager.interface.requests",
-      "RequestSchemaError"
-    ],
     "RequestRateLimitedError": [
       "general_manager.interface.requests",
       "RequestRateLimitedError"
@@ -369,6 +373,14 @@
     "RequestRemoteError": [
       "general_manager.interface.requests",
       "RequestRemoteError"
+    ],
+    "RequestRetryPolicy": [
+      "general_manager.interface.requests",
+      "RequestRetryPolicy"
+    ],
+    "RequestSchemaError": [
+      "general_manager.interface.requests",
+      "RequestSchemaError"
     ],
     "RequestServerError": [
       "general_manager.interface.requests",

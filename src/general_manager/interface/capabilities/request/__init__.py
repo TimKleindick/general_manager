@@ -311,7 +311,6 @@ class RequestLifecycleCapability(BaseCapability):
         def _perform() -> tuple[dict[str, Any], type["RequestInterface"], None]:
             input_fields: dict[str, Input[Any]] = {}
             request_fields: dict[str, RequestField] = {}
-            meta_class = getattr(interface, "Meta", None)
             for key, value in vars(interface).items():
                 if key.startswith("__"):
                     continue
@@ -326,40 +325,40 @@ class RequestLifecycleCapability(BaseCapability):
             )
             interface_cls.input_fields = input_fields
             interface_cls.fields = request_fields
-            interface_cls.filters = dict(getattr(meta_class, "filters", {}))
+            interface_cls.filters = dict(getattr(interface, "filters", {}))
             interface_cls.query_operations = dict(
-                getattr(meta_class, "query_operations", {})
+                getattr(interface, "query_operations", {})
             )
             interface_cls.default_query_operation = getattr(
-                meta_class,
+                interface,
                 "default_query_operation",
                 interface.default_query_operation,
             )
-            interface_cls.transport = getattr(meta_class, "transport", None)
+            interface_cls.transport = getattr(interface, "transport", None)
             interface_cls.transport_config = getattr(
-                meta_class, "transport_config", None
+                interface, "transport_config", None
             )
-            interface_cls.auth_provider = getattr(meta_class, "auth_provider", None)
-            interface_cls.retry_policy = getattr(meta_class, "retry_policy", None)
+            interface_cls.auth_provider = getattr(interface, "auth_provider", None)
+            interface_cls.retry_policy = getattr(interface, "retry_policy", None)
             interface_cls.create_operation = getattr(
-                meta_class, "create_operation", None
+                interface, "create_operation", None
             )
             interface_cls.update_operation = getattr(
-                meta_class, "update_operation", None
+                interface, "update_operation", None
             )
             interface_cls.delete_operation = getattr(
-                meta_class, "delete_operation", None
+                interface, "delete_operation", None
             )
             interface_cls.create_serializer = getattr(
-                meta_class, "create_serializer", None
+                interface, "create_serializer", None
             )
             interface_cls.update_serializer = getattr(
-                meta_class, "update_serializer", None
+                interface, "update_serializer", None
             )
             interface_cls.response_serializer = getattr(
-                meta_class, "response_serializer", None
+                interface, "response_serializer", None
             )
-            interface_cls.rules = list(getattr(meta_class, "rules", []))
+            interface_cls.rules = list(getattr(interface, "rules", []))
             attrs["Interface"] = interface_cls
             return attrs, interface_cls, None
 
