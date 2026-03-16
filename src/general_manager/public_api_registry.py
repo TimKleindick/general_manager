@@ -207,6 +207,34 @@ INTERFACE_EXPORTS: LazyExportMap = {
         "general_manager.interface.requests",
         "RequestAuthProvider",
     ),
+    "BasicAuthProvider": (
+        "general_manager.interface.requests",
+        "BasicAuthProvider",
+    ),
+    "BearerTokenAuthProvider": (
+        "general_manager.interface.requests",
+        "BearerTokenAuthProvider",
+    ),
+    "FieldMappingSerializer": (
+        "general_manager.interface.requests",
+        "FieldMappingSerializer",
+    ),
+    "HeaderApiKeyAuthProvider": (
+        "general_manager.interface.requests",
+        "HeaderApiKeyAuthProvider",
+    ),
+    "NoopRequestMetricsBackend": (
+        "general_manager.interface.requests",
+        "NoopRequestMetricsBackend",
+    ),
+    "NoopRequestTraceBackend": (
+        "general_manager.interface.requests",
+        "NoopRequestTraceBackend",
+    ),
+    "QueryApiKeyAuthProvider": (
+        "general_manager.interface.requests",
+        "QueryApiKeyAuthProvider",
+    ),
     "RequestAuthenticationError": (
         "general_manager.interface.requests",
         "RequestAuthenticationError",
@@ -236,6 +264,11 @@ INTERFACE_EXPORTS: LazyExportMap = {
     "RequestQueryPlan": ("general_manager.interface.requests", "RequestQueryPlan"),
     "RequestQueryResult": ("general_manager.interface.requests", "RequestQueryResult"),
     "RequestRetryPolicy": ("general_manager.interface.requests", "RequestRetryPolicy"),
+    "RequestSchemaError": ("general_manager.interface.requests", "RequestSchemaError"),
+    "RequestMetricsBackend": (
+        "general_manager.interface.requests",
+        "RequestMetricsBackend",
+    ),
     "RequestRateLimitedError": (
         "general_manager.interface.requests",
         "RequestRateLimitedError",
@@ -262,9 +295,17 @@ INTERFACE_EXPORTS: LazyExportMap = {
         "general_manager.interface.requests",
         "RequestTransportStatusError",
     ),
+    "RequestTraceBackend": (
+        "general_manager.interface.requests",
+        "RequestTraceBackend",
+    ),
     "SharedRequestTransport": (
         "general_manager.interface.requests",
         "SharedRequestTransport",
+    ),
+    "UrllibRequestTransport": (
+        "general_manager.interface.requests",
+        "UrllibRequestTransport",
     ),
 }
 

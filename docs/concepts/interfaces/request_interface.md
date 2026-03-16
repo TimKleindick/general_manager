@@ -101,6 +101,8 @@ Use operations when the upstream service exposes multiple collection shapes, for
 
 Then the default `execute_request_plan()` implementation delegates to that transport.
 
+For most HTTP integrations, start with the built-in `UrllibRequestTransport`. Keep a custom `SharedRequestTransport` subclass only when the upstream service needs special request signing, non-JSON wire behavior, or custom response parsing.
+
 The shared transport is responsible for:
 
 - building the outbound request from the `RequestQueryPlan`
@@ -108,6 +110,7 @@ The shared transport is responsible for:
 - enforcing timeout configuration
 - applying auth through `Meta.auth_provider`
 - applying framework retry policy from `Meta.retry_policy`
+- adding idempotency keys for retried non-idempotent requests when configured
 - normalizing transport responses into `RequestQueryResult`
 - mapping upstream status failures into stable request exceptions
 
@@ -122,63 +125,28 @@ RequestQueryResult(
 
 The example below shows a manager backed by a remote project service.
 
+For a fuller cookbook-style version of the same pattern, see the [request interface end-to-end recipe](../../examples/request_interface_end_to_end.md).
+
 ```python
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, ClassVar
 
-import requests
-
 from general_manager.interface import (
+    BearerTokenAuthProvider,
+    FieldMappingSerializer,
     RequestField,
     RequestFilter,
     RequestInterface,
     RequestMutationOperation,
     RequestRetryPolicy,
     RequestTransportConfig,
-    RequestTransportRequest,
-    RequestTransportResponse,
     RequestQueryOperation,
-    SharedRequestTransport,
+    UrllibRequestTransport,
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
-
-
-class BearerAuth:
-    def apply(self, request, *, interface_cls, operation, plan):
-        headers = dict(request.headers)
-        headers["Authorization"] = f"Bearer {interface_cls.Meta.api_token}"
-        return RequestTransportRequest(
-            method=request.method,
-            url=request.url,
-            path=request.path,
-            query_params=request.query_params,
-            headers=headers,
-            body=request.body,
-            timeout=request.timeout,
-            operation_name=request.operation_name,
-            metadata=request.metadata,
-        )
-
-
-class ProjectTransport(SharedRequestTransport):
-    def send(self, request, *, interface_cls, operation, plan, identification):
-        response = requests.request(
-            method=request.method,
-            url=request.url,
-            params=dict(request.query_params),
-            headers=dict(request.headers),
-            json=dict(request.body) if request.body else None,
-            timeout=request.timeout,
-        )
-        response.raise_for_status()
-        return RequestTransportResponse(
-            payload=response.json(),
-            status_code=response.status_code,
-            headers=response.headers,
-        )
 
 
 class RemoteProject(GeneralManager):
@@ -231,21 +199,22 @@ class RemoteProject(GeneralManager):
                 method="PATCH",
                 path="/projects/{id}",
             )
-            api_token = "replace-me"
-            transport = ProjectTransport()
+            transport = UrllibRequestTransport()
             transport_config = RequestTransportConfig(
                 base_url="https://service.example.com/api",
                 timeout=10,
             )
-            auth_provider = BearerAuth()
-            retry_policy = RequestRetryPolicy(max_attempts=2)
-            create_serializer = lambda payload: {
-                "name": payload["name"],
-                "state": payload["status"],
-            }
-            update_serializer = lambda payload: {
-                "state": payload["status"],
-            }
+            auth_provider = BearerTokenAuthProvider(token=lambda: "replace-me")
+            retry_policy = RequestRetryPolicy(
+                max_attempts=3,
+                base_backoff_seconds=0.25,
+                max_backoff_seconds=2.0,
+                jitter_ratio=0.25,
+            )
+            create_serializer = FieldMappingSerializer(
+                {"name": "name", "state": "status"}
+            )
+            update_serializer = FieldMappingSerializer({"state": "status"})
 ```
 
 Usage:
@@ -456,6 +425,12 @@ If multiple managers talk to the same upstream service, keep one shared transpor
 
 Relevant public transport and error types are available from `general_manager.interface`, including:
 
+- `UrllibRequestTransport`
+- `BearerTokenAuthProvider`
+- `HeaderApiKeyAuthProvider`
+- `QueryApiKeyAuthProvider`
+- `BasicAuthProvider`
+- `FieldMappingSerializer`
 - `SharedRequestTransport`
 - `RequestTransportConfig`
 - `RequestRetryPolicy`
@@ -481,6 +456,18 @@ Mutation-specific configuration also lives in `Interface.Meta`:
 - `update_serializer`
 - `response_serializer`
 
+For production use, configure your shared transport path to handle:
+
+- provider-based authentication and token refresh
+- mandatory timeouts
+- retry policy for idempotent operations through `Meta.retry_policy`
+- capped backoff and jitter through `RequestRetryPolicy`
+- structured logging and request IDs
+- optional metrics and trace hooks through `RequestTransportConfig`
+- response normalization and schema checks
+- rate-limit handling
+- secret masking in logs and errors
+
 ## Current limitations
 
 The request interface is intentionally narrow in v1.
@@ -489,9 +476,16 @@ Current limitations include:
 
 - no generic arbitrary endpoint invocation from managers
 - no ORM-style universal filtering across all remote APIs
-- retry policy is framework-managed, but custom transports that bypass `SharedRequestTransport.execute()` do not inherit it
+- retry policy, metrics, and trace hooks are framework-managed only for transports that go through `SharedRequestTransport.execute()`
 - request transports are normalized, but you still own service-specific provider auth logic and response shaping
 - observability is structured and sanitized, but metric/tracing backend wiring depends on the host application
+
+## Troubleshooting
+
+- `RequestConfigurationError` at class definition time usually means `Interface.Meta` contains an invalid `auth_provider`, `retry_policy`, serializer, or legacy top-level request config.
+- `RequestSchemaError` means the transport or serializer returned the wrong payload shape. Check the upstream JSON body, `response_normalizer`, and `response_serializer`.
+- If retry behavior seems missing, confirm the integration uses `SharedRequestTransport.execute()` and not a custom transport path that bypasses it.
+- If auth is missing, check both `Meta.auth_provider` and `transport_config.auth_provider`; the interface-level provider takes precedence.
 
 ## Recommended pattern
 

@@ -250,6 +250,14 @@
     ]
   },
   "general_manager.interface": {
+    "BasicAuthProvider": [
+      "general_manager.interface.requests",
+      "BasicAuthProvider"
+    ],
+    "BearerTokenAuthProvider": [
+      "general_manager.interface.requests",
+      "BearerTokenAuthProvider"
+    ],
     "CalculationInterface": [
       "general_manager.interface.interfaces.calculation",
       "CalculationInterface"
@@ -262,13 +270,33 @@
       "general_manager.interface.interfaces.existing_model",
       "ExistingModelInterface"
     ],
+    "FieldMappingSerializer": [
+      "general_manager.interface.requests",
+      "FieldMappingSerializer"
+    ],
+    "HeaderApiKeyAuthProvider": [
+      "general_manager.interface.requests",
+      "HeaderApiKeyAuthProvider"
+    ],
     "InterfaceBase": [
       "general_manager.interface.base_interface",
       "InterfaceBase"
     ],
+    "NoopRequestMetricsBackend": [
+      "general_manager.interface.requests",
+      "NoopRequestMetricsBackend"
+    ],
+    "NoopRequestTraceBackend": [
+      "general_manager.interface.requests",
+      "NoopRequestTraceBackend"
+    ],
     "OrmInterfaceBase": [
       "general_manager.interface.orm_interface",
       "OrmInterfaceBase"
+    ],
+    "QueryApiKeyAuthProvider": [
+      "general_manager.interface.requests",
+      "QueryApiKeyAuthProvider"
     ],
     "ReadOnlyInterface": [
       "general_manager.interface.interfaces.read_only",
@@ -302,6 +330,10 @@
       "general_manager.interface.interfaces.request",
       "RequestInterface"
     ],
+    "RequestMetricsBackend": [
+      "general_manager.interface.requests",
+      "RequestMetricsBackend"
+    ],
     "RequestNotFoundError": [
       "general_manager.interface.requests",
       "RequestNotFoundError"
@@ -326,6 +358,10 @@
       "general_manager.interface.requests",
       "RequestRetryPolicy"
     ],
+    "RequestSchemaError": [
+      "general_manager.interface.requests",
+      "RequestSchemaError"
+    ],
     "RequestRateLimitedError": [
       "general_manager.interface.requests",
       "RequestRateLimitedError"
@@ -337,6 +373,10 @@
     "RequestServerError": [
       "general_manager.interface.requests",
       "RequestServerError"
+    ],
+    "RequestTraceBackend": [
+      "general_manager.interface.requests",
+      "RequestTraceBackend"
     ],
     "RequestTransportConfig": [
       "general_manager.interface.requests",
@@ -361,6 +401,10 @@
     "SharedRequestTransport": [
       "general_manager.interface.requests",
       "SharedRequestTransport"
+    ],
+    "UrllibRequestTransport": [
+      "general_manager.interface.requests",
+      "UrllibRequestTransport"
     ]
   },
   "general_manager.manager": {

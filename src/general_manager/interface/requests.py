@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import base64
 from dataclasses import dataclass, field
+import json
+import random
 from types import MappingProxyType
 import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request as UrlRequest, urlopen as stdlib_urlopen
+from uuid import uuid4
 from typing import Any, Callable, Literal, Mapping, Protocol, cast, runtime_checkable
 
 RequestAction = Literal[
@@ -30,6 +37,41 @@ SUPPORTED_REQUEST_LOOKUPS = frozenset(
 
 class RequestInterfaceError(ValueError):
     """Raised when a request-backed interface or bucket receives invalid input."""
+
+
+class RequestSchemaError(RequestInterfaceError):
+    """Raised when a request payload or serializer returns an invalid schema."""
+
+    @classmethod
+    def serializer_must_return_mappings(
+        cls, interface_name: str
+    ) -> "RequestSchemaError":
+        return cls(
+            f"{interface_name} response_serializer must return mapping payloads."
+        )
+
+    @classmethod
+    def non_mapping_payload(
+        cls,
+        interface_name: str,
+        operation_name: str,
+    ) -> "RequestSchemaError":
+        return cls(
+            f"{interface_name} returned a non-mapping payload for "
+            f"operation '{operation_name}'."
+        )
+
+    @classmethod
+    def non_mapping_json_list(cls) -> "RequestSchemaError":
+        return cls("HTTP transport received a non-mapping JSON list payload.")
+
+    @classmethod
+    def non_object_json_payload(cls) -> "RequestSchemaError":
+        return cls("HTTP transport received a non-object JSON payload.")
+
+    @classmethod
+    def unsupported_url_scheme(cls, url: str) -> "RequestSchemaError":
+        return cls(f"HTTP transport only supports http/https URLs, got '{url}'.")
 
 
 class RequestConfigurationError(ValueError):
@@ -66,6 +108,14 @@ class RequestConfigurationError(ValueError):
     @classmethod
     def invalid_auth_provider(cls, interface_name: str) -> "RequestConfigurationError":
         return cls(f"{interface_name} auth_provider must define apply(...).")
+
+    @classmethod
+    def invalid_retry_policy(
+        cls,
+        interface_name: str,
+        reason: str,
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} retry_policy is invalid: {reason}.")
 
 
 class MissingRequestTransportError(RequestConfigurationError):
@@ -304,6 +354,143 @@ class RequestTransportResponse:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
+class RequestMetricsBackend(Protocol):
+    """Protocol for recording request-interface metrics."""
+
+    def record_request(
+        self,
+        *,
+        service: str,
+        operation: str,
+        method: str,
+        status_code: int,
+        outcome: str,
+        duration: float,
+        retry_count: int,
+    ) -> None: ...
+
+    def record_error(
+        self,
+        *,
+        service: str,
+        operation: str,
+        method: str,
+        error_class: str,
+        status_code: int | None,
+        retry_count: int,
+    ) -> None: ...
+
+
+class NoopRequestMetricsBackend:
+    """Default metrics backend used when request metrics are not configured."""
+
+    def record_request(
+        self,
+        *,
+        service: str,
+        operation: str,
+        method: str,
+        status_code: int,
+        outcome: str,
+        duration: float,
+        retry_count: int,
+    ) -> None:
+        return None
+
+    def record_error(
+        self,
+        *,
+        service: str,
+        operation: str,
+        method: str,
+        error_class: str,
+        status_code: int | None,
+        retry_count: int,
+    ) -> None:
+        return None
+
+
+class RequestTraceBackend(Protocol):
+    """Protocol for optional request tracing hooks."""
+
+    def on_request_start(
+        self,
+        *,
+        service: str,
+        operation: str,
+        method: str,
+        path: str,
+    ) -> object: ...
+
+    def on_request_end(
+        self,
+        *,
+        trace_context: object,
+        service: str,
+        operation: str,
+        method: str,
+        path: str,
+        status_code: int,
+        request_id: str | None,
+        retry_count: int,
+    ) -> None: ...
+
+    def on_request_error(
+        self,
+        *,
+        trace_context: object,
+        service: str,
+        operation: str,
+        method: str,
+        path: str,
+        error: Exception,
+        status_code: int | None,
+        retry_count: int,
+    ) -> None: ...
+
+
+class NoopRequestTraceBackend:
+    """Default tracing backend used when request tracing is not configured."""
+
+    def on_request_start(
+        self,
+        *,
+        service: str,
+        operation: str,
+        method: str,
+        path: str,
+    ) -> object:
+        return None
+
+    def on_request_end(
+        self,
+        *,
+        trace_context: object,
+        service: str,
+        operation: str,
+        method: str,
+        path: str,
+        status_code: int,
+        request_id: str | None,
+        retry_count: int,
+    ) -> None:
+        return None
+
+    def on_request_error(
+        self,
+        *,
+        trace_context: object,
+        service: str,
+        operation: str,
+        method: str,
+        path: str,
+        error: Exception,
+        status_code: int | None,
+        retry_count: int,
+    ) -> None:
+        return None
+
+
 @runtime_checkable
 class RequestAuthProvider(Protocol):
     """Protocol for applying authentication to an outbound transport request."""
@@ -338,6 +525,8 @@ class RequestTransportConfig:
     auth_provider: RequestAuthProvider | None = None
     response_normalizer: RequestResponseNormalizer | None = None
     retry_policy: "RequestRetryPolicy | None" = None
+    metrics_backend: RequestMetricsBackend | None = None
+    trace_backend: RequestTraceBackend | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,12 +537,45 @@ class RequestRetryPolicy:
     retryable_status_codes: frozenset[int] = frozenset({429, 500, 502, 503, 504})
     retryable_exceptions: tuple[type[BaseException], ...] = (TimeoutError, OSError)
     base_backoff_seconds: float = 0.0
+    backoff_multiplier: float = 2.0
+    max_backoff_seconds: float | None = None
+    jitter_ratio: float = 0.0
     retry_non_idempotent_methods: bool = False
+    idempotency_key_header: str | None = None
+    idempotency_key_factory: Callable[[], str] | None = None
 
     def allows_method(self, method: str) -> bool:
         if self.retry_non_idempotent_methods:
             return True
         return method.upper() in {"GET", "HEAD", "OPTIONS", "DELETE"}
+
+    def compute_backoff_seconds(
+        self,
+        *,
+        retry_count: int,
+        random_factor: float | None = None,
+    ) -> float:
+        if self.base_backoff_seconds <= 0:
+            return 0.0
+        backoff = self.base_backoff_seconds * (
+            self.backoff_multiplier ** (retry_count - 1)
+        )
+        if self.jitter_ratio > 0:
+            factor = (
+                random_factor
+                if random_factor is not None
+                else random.SystemRandom().uniform(-1.0, 1.0)
+            )
+            backoff *= 1 + (self.jitter_ratio * factor)
+        if self.max_backoff_seconds is not None:
+            backoff = min(backoff, self.max_backoff_seconds)
+        return max(backoff, 0.0)
+
+    def build_idempotency_key(self) -> str:
+        factory = self.idempotency_key_factory
+        if factory is not None:
+            return factory()
+        return str(uuid4())
 
 
 class RequestTransportStatusError(RequestTransportError):
@@ -372,6 +594,150 @@ class RequestTransportStatusError(RequestTransportError):
         self.request = request
         self.payload = payload
         self.headers = MappingProxyType(dict(headers or {}))
+
+
+def _resolve_secret(value: str | Callable[[], str]) -> str:
+    resolved = value() if callable(value) else value
+    return str(resolved)
+
+
+@dataclass(frozen=True, slots=True)
+class BearerTokenAuthProvider:
+    """Apply a bearer token to the `Authorization` header."""
+
+    token: str | Callable[[], str]
+    header_name: str = "Authorization"
+
+    def apply(
+        self,
+        request: RequestTransportRequest,
+        *,
+        interface_cls: type[Any],
+        operation: "RequestOperation",
+        plan: "RequestPlan",
+    ) -> RequestTransportRequest:
+        headers = dict(request.headers)
+        headers[self.header_name] = f"Bearer {_resolve_secret(self.token)}"
+        return RequestTransportRequest(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            query_params=request.query_params,
+            headers=headers,
+            body=request.body,
+            timeout=request.timeout,
+            operation_name=request.operation_name,
+            metadata=request.metadata,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class HeaderApiKeyAuthProvider:
+    """Apply an API key to a configured request header."""
+
+    header_name: str
+    api_key: str | Callable[[], str]
+
+    def apply(
+        self,
+        request: RequestTransportRequest,
+        *,
+        interface_cls: type[Any],
+        operation: "RequestOperation",
+        plan: "RequestPlan",
+    ) -> RequestTransportRequest:
+        headers = dict(request.headers)
+        headers[self.header_name] = _resolve_secret(self.api_key)
+        return RequestTransportRequest(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            query_params=request.query_params,
+            headers=headers,
+            body=request.body,
+            timeout=request.timeout,
+            operation_name=request.operation_name,
+            metadata=request.metadata,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QueryApiKeyAuthProvider:
+    """Apply an API key to a configured query-string parameter."""
+
+    param_name: str
+    api_key: str | Callable[[], str]
+
+    def apply(
+        self,
+        request: RequestTransportRequest,
+        *,
+        interface_cls: type[Any],
+        operation: "RequestOperation",
+        plan: "RequestPlan",
+    ) -> RequestTransportRequest:
+        query_params = dict(request.query_params)
+        query_params[self.param_name] = _resolve_secret(self.api_key)
+        return RequestTransportRequest(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            query_params=query_params,
+            headers=request.headers,
+            body=request.body,
+            timeout=request.timeout,
+            operation_name=request.operation_name,
+            metadata=request.metadata,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BasicAuthProvider:
+    """Apply HTTP basic auth to the `Authorization` header."""
+
+    username: str | Callable[[], str]
+    password: str | Callable[[], str]
+    header_name: str = "Authorization"
+
+    def apply(
+        self,
+        request: RequestTransportRequest,
+        *,
+        interface_cls: type[Any],
+        operation: "RequestOperation",
+        plan: "RequestPlan",
+    ) -> RequestTransportRequest:
+        username = _resolve_secret(self.username)
+        password = _resolve_secret(self.password)
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode(
+            "ascii"
+        )
+        headers = dict(request.headers)
+        headers[self.header_name] = f"Basic {token}"
+        return RequestTransportRequest(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            query_params=request.query_params,
+            headers=headers,
+            body=request.body,
+            timeout=request.timeout,
+            operation_name=request.operation_name,
+            metadata=request.metadata,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FieldMappingSerializer:
+    """Map one dictionary shape into another using declared key names."""
+
+    field_map: Mapping[str, str]
+
+    def __call__(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            target_key: payload[source_key]
+            for target_key, source_key in self.field_map.items()
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,6 +864,7 @@ class RequestOperation:
     static_query_params: Mapping[str, Any] = field(default_factory=dict)
     static_headers: Mapping[str, Any] = field(default_factory=dict)
     static_body: Mapping[str, Any] | None = None
+    timeout: float | int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "filters", MappingProxyType(dict(self.filters)))
@@ -624,12 +991,31 @@ class SharedRequestTransport(ABC):
         if config is None:
             raise MissingRequestTransportError(interface_cls.__name__)
 
-        retry_policy = config.retry_policy or RequestRetryPolicy()
+        retry_policy = (
+            getattr(interface_cls, "retry_policy", None)
+            or config.retry_policy
+            or RequestRetryPolicy()
+        )
         base_request = self._build_request(
             config=config, operation=operation, plan=plan
         )
+        base_request = self._with_idempotency_key(
+            request=base_request,
+            operation=operation,
+            retry_policy=retry_policy,
+        )
         last_error: Exception | BaseException | None = None
         retry_count = 0
+        metrics_backend = config.metrics_backend or NoopRequestMetricsBackend()
+        trace_backend = config.trace_backend or NoopRequestTraceBackend()
+        service_name = interface_cls.__name__
+        trace_context = trace_backend.on_request_start(
+            service=service_name,
+            operation=operation.name,
+            method=operation.method,
+            path=base_request.path,
+        )
+        started_at = time.monotonic()
 
         for attempt in range(1, retry_policy.max_attempts + 1):
             request = base_request
@@ -661,16 +1047,70 @@ class SharedRequestTransport(ABC):
                 ):
                     mapped_error = map_request_transport_error(error)
                     mapped_error.retry_count = retry_count
+                    metrics_backend.record_error(
+                        service=service_name,
+                        operation=operation.name,
+                        method=operation.method,
+                        error_class=type(mapped_error).__name__,
+                        status_code=mapped_error.status_code,
+                        retry_count=retry_count,
+                    )
+                    trace_backend.on_request_error(
+                        trace_context=trace_context,
+                        service=service_name,
+                        operation=operation.name,
+                        method=operation.method,
+                        path=base_request.path,
+                        error=mapped_error,
+                        status_code=mapped_error.status_code,
+                        retry_count=retry_count,
+                    )
                     raise mapped_error from error
             except retry_policy.retryable_exceptions as error:
                 last_error = error
                 if not self._should_retry_exception(retry_policy, operation, attempt):
                     transport_error = RequestTransportError(str(error))
                     transport_error.retry_count = retry_count
+                    metrics_backend.record_error(
+                        service=service_name,
+                        operation=operation.name,
+                        method=operation.method,
+                        error_class=type(transport_error).__name__,
+                        status_code=None,
+                        retry_count=retry_count,
+                    )
+                    trace_backend.on_request_error(
+                        trace_context=trace_context,
+                        service=service_name,
+                        operation=operation.name,
+                        method=operation.method,
+                        path=base_request.path,
+                        error=transport_error,
+                        status_code=None,
+                        retry_count=retry_count,
+                    )
                     raise transport_error from error
             except ValueError as error:
                 transport_error = RequestTransportError(str(error))
                 transport_error.retry_count = retry_count
+                metrics_backend.record_error(
+                    service=service_name,
+                    operation=operation.name,
+                    method=operation.method,
+                    error_class=type(transport_error).__name__,
+                    status_code=None,
+                    retry_count=retry_count,
+                )
+                trace_backend.on_request_error(
+                    trace_context=trace_context,
+                    service=service_name,
+                    operation=operation.name,
+                    method=operation.method,
+                    path=base_request.path,
+                    error=transport_error,
+                    status_code=None,
+                    retry_count=retry_count,
+                )
                 raise transport_error from error
 
             retry_count += 1
@@ -679,13 +1119,73 @@ class SharedRequestTransport(ABC):
             if isinstance(last_error, RequestTransportStatusError):
                 mapped_error = map_request_transport_error(last_error)
                 mapped_error.retry_count = retry_count
+                metrics_backend.record_error(
+                    service=service_name,
+                    operation=operation.name,
+                    method=operation.method,
+                    error_class=type(mapped_error).__name__,
+                    status_code=mapped_error.status_code,
+                    retry_count=retry_count,
+                )
+                trace_backend.on_request_error(
+                    trace_context=trace_context,
+                    service=service_name,
+                    operation=operation.name,
+                    method=operation.method,
+                    path=base_request.path,
+                    error=mapped_error,
+                    status_code=mapped_error.status_code,
+                    retry_count=retry_count,
+                )
                 raise mapped_error from last_error
             transport_error = RequestTransportError(str(last_error))
             transport_error.retry_count = retry_count
+            metrics_backend.record_error(
+                service=service_name,
+                operation=operation.name,
+                method=operation.method,
+                error_class=type(transport_error).__name__,
+                status_code=None,
+                retry_count=retry_count,
+            )
+            trace_backend.on_request_error(
+                trace_context=trace_context,
+                service=service_name,
+                operation=operation.name,
+                method=operation.method,
+                path=base_request.path,
+                error=transport_error,
+                status_code=None,
+                retry_count=retry_count,
+            )
             raise transport_error from last_error
 
         normalizer = config.response_normalizer or default_request_response_normalizer
-        return normalizer(response, interface_cls, operation, plan)
+        result = normalizer(response, interface_cls, operation, plan)
+        duration = max(time.monotonic() - started_at, 0.0)
+        retry_count_value = cast(int, result.metadata.get("retry_count", 0))
+        status_code = cast(int, result.metadata.get("status_code", 0))
+        request_id = cast(str | None, result.metadata.get("request_id"))
+        metrics_backend.record_request(
+            service=service_name,
+            operation=operation.name,
+            method=operation.method,
+            status_code=status_code,
+            outcome="success",
+            duration=duration,
+            retry_count=retry_count_value,
+        )
+        trace_backend.on_request_end(
+            trace_context=trace_context,
+            service=service_name,
+            operation=operation.name,
+            method=operation.method,
+            path=base_request.path,
+            status_code=status_code,
+            request_id=request_id,
+            retry_count=retry_count_value,
+        )
+        return result
 
     @staticmethod
     def _should_retry_status(
@@ -712,9 +1212,10 @@ class SharedRequestTransport(ABC):
 
     @staticmethod
     def _sleep_backoff(retry_policy: "RequestRetryPolicy", retry_count: int) -> None:
-        if retry_policy.base_backoff_seconds <= 0:
+        seconds = retry_policy.compute_backoff_seconds(retry_count=retry_count)
+        if seconds <= 0:
             return
-        time.sleep(retry_policy.base_backoff_seconds * retry_count)
+        time.sleep(seconds)
 
     @staticmethod
     def _with_retry_count(
@@ -778,9 +1279,42 @@ class SharedRequestTransport(ABC):
             query_params=query_params,
             headers=headers,
             body=body or None,
-            timeout=config.timeout,
+            timeout=operation.timeout
+            if operation.timeout is not None
+            else config.timeout,
             operation_name=plan.operation_name,
             metadata=plan.metadata,
+        )
+
+    @staticmethod
+    def _with_idempotency_key(
+        *,
+        request: RequestTransportRequest,
+        operation: RequestOperation,
+        retry_policy: "RequestRetryPolicy",
+    ) -> RequestTransportRequest:
+        if (
+            retry_policy.idempotency_key_header is None
+            or retry_policy.max_attempts <= 1
+            or not retry_policy.retry_non_idempotent_methods
+            or operation.method.upper() in {"GET", "HEAD", "OPTIONS", "DELETE"}
+        ):
+            return request
+        headers = dict(request.headers)
+        headers.setdefault(
+            retry_policy.idempotency_key_header,
+            retry_policy.build_idempotency_key(),
+        )
+        return RequestTransportRequest(
+            method=request.method,
+            url=request.url,
+            path=request.path,
+            query_params=request.query_params,
+            headers=headers,
+            body=request.body,
+            timeout=request.timeout,
+            operation_name=request.operation_name,
+            metadata=request.metadata,
         )
 
     @staticmethod
@@ -823,7 +1357,16 @@ def default_request_response_normalizer(
 
     if isinstance(payload, Mapping):
         return RequestQueryResult(items=(payload,), metadata=metadata)
-    return RequestQueryResult(items=tuple(payload), metadata=metadata)
+    items = tuple(payload)
+    if not all(isinstance(item, Mapping) for item in items):
+        raise RequestSchemaError.non_mapping_payload(
+            interface_cls.__name__,
+            operation.name,
+        )
+    return RequestQueryResult(
+        items=cast(tuple[Mapping[str, Any], ...], items),
+        metadata=metadata,
+    )
 
 
 def map_request_transport_error(
@@ -850,6 +1393,82 @@ def map_request_transport_error(
     mapped.request = error.request
     mapped.headers = error.headers
     return mapped
+
+
+class UrllibRequestTransport(SharedRequestTransport):
+    """First-party shared transport backed by Python's stdlib HTTP client."""
+
+    def __init__(
+        self,
+        *,
+        urlopen: Callable[..., Any] | None = None,
+        json_dumps: Callable[[Any], str] | None = None,
+    ) -> None:
+        self._urlopen = urlopen or stdlib_urlopen
+        self._json_dumps = json_dumps or json.dumps
+
+    def send(
+        self,
+        request: RequestTransportRequest,
+        *,
+        interface_cls: type[Any],
+        operation: RequestOperation,
+        plan: RequestPlan,
+        identification: dict[str, Any] | None,
+    ) -> RequestTransportResponse:
+        url = self._build_url(request)
+        if urlsplit(url).scheme not in {"http", "https"}:
+            raise RequestSchemaError.unsupported_url_scheme(url)
+        body_bytes: bytes | None = None
+        headers = dict(request.headers)
+        if request.body is not None:
+            body_bytes = self._json_dumps(dict(request.body)).encode("utf-8")
+            headers.setdefault("Content-Type", "application/json")
+
+        raw_request = UrlRequest(  # noqa: S310 - scheme is restricted above
+            url=url,
+            data=body_bytes,
+            headers=headers,
+            method=request.method,
+        )
+        try:
+            raw_response = self._urlopen(raw_request, timeout=request.timeout)
+            payload = self._decode_payload(raw_response.read())
+            return RequestTransportResponse(
+                payload=payload,
+                status_code=int(getattr(raw_response, "status", 200)),
+                headers=dict(getattr(raw_response, "headers", {})),
+            )
+        except HTTPError as error:
+            raise RequestTransportStatusError(
+                status_code=error.code,
+                request=request,
+                payload=self._decode_payload(error.read()),
+                headers=dict(error.headers.items()),
+            ) from error
+        except URLError as error:
+            raise OSError(str(error.reason)) from error
+
+    @staticmethod
+    def _build_url(request: RequestTransportRequest) -> str:
+        if not request.query_params:
+            return request.url
+        query_string = urlencode(list(request.query_params.items()), doseq=True)
+        separator = "&" if "?" in request.url else "?"
+        return f"{request.url}{separator}{query_string}"
+
+    @staticmethod
+    def _decode_payload(payload_bytes: bytes) -> RequestResponse:
+        if not payload_bytes:
+            return {}
+        decoded = json.loads(payload_bytes.decode("utf-8"))
+        if isinstance(decoded, Mapping):
+            return cast(Mapping[str, Any], decoded)
+        if isinstance(decoded, list):
+            if not all(isinstance(item, Mapping) for item in decoded):
+                raise RequestSchemaError.non_mapping_json_list()
+            return cast(list[Mapping[str, Any]], decoded)
+        raise RequestSchemaError.non_object_json_payload()
 
 
 def resolve_request_value(

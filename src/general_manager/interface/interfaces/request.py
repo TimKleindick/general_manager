@@ -20,6 +20,8 @@ from general_manager.interface.requests import (
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
+    RequestRetryPolicy,
+    RequestSchemaError,
     RequestTransport,
     RequestTransportConfig,
     UnknownRequestOperationError,
@@ -43,6 +45,7 @@ class RequestInterface(InterfaceBase):
     transport: ClassVar[RequestTransport | None] = None
     transport_config: ClassVar[RequestTransportConfig | None] = None
     auth_provider: ClassVar[RequestAuthProvider | None] = None
+    retry_policy: ClassVar[RequestRetryPolicy | None] = None
     create_serializer: ClassVar[Any | None] = None
     update_serializer: ClassVar[Any | None] = None
     response_serializer: ClassVar[Any | None] = None
@@ -88,6 +91,7 @@ class RequestInterface(InterfaceBase):
         cls.transport = getattr(meta_class, "transport", None)
         cls.transport_config = getattr(meta_class, "transport_config", None)
         cls.auth_provider = getattr(meta_class, "auth_provider", None)
+        cls.retry_policy = getattr(meta_class, "retry_policy", None)
         cls.create_operation = getattr(meta_class, "create_operation", None)
         cls.update_operation = getattr(meta_class, "update_operation", None)
         cls.delete_operation = getattr(meta_class, "delete_operation", None)
@@ -125,6 +129,7 @@ class RequestInterface(InterfaceBase):
             static_query_params=operation.static_query_params,
             static_headers=operation.static_headers,
             static_body=operation.static_body,
+            timeout=operation.timeout,
         )
 
     @classmethod
@@ -212,8 +217,11 @@ class RequestInterface(InterfaceBase):
         serializer = cls.response_serializer
         if not callable(serializer):
             return result
+        normalized_items = tuple(serializer(item) for item in result.items)
+        if not all(isinstance(item, Mapping) for item in normalized_items):
+            raise RequestSchemaError.serializer_must_return_mappings(cls.__name__)
         return RequestQueryResult(
-            items=tuple(serializer(item) for item in result.items),
+            items=cast(tuple[Mapping[str, Any], ...], normalized_items),
             total_count=result.total_count,
             metadata=result.metadata,
         )
