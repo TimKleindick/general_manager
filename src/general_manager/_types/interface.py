@@ -9,6 +9,7 @@ __all__ = [
     "InterfaceBase",
     "OrmInterfaceBase",
     "ReadOnlyInterface",
+    "RemoteManagerInterface",
     "RequestField",
     "RequestFilter",
     "RequestInterface",
@@ -39,6 +40,9 @@ from general_manager.interface.interfaces.existing_model import (
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.read_only import (
     ReadOnlyInterface,
+)
+from general_manager.interface.interfaces.remote_manager import (
+    RemoteManagerInterface,
 )
 from general_manager.interface.interfaces.request import (
     RequestInterface,

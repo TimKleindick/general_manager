@@ -2,6 +2,8 @@
 
 `RequestInterface` lets a manager read and query data from a remote HTTP-style service while keeping the familiar GeneralManager API (`filter()`, `exclude()`, `all()`, manager attribute access, and named collection operations).
 
+If both services use GeneralManager, prefer `RemoteManagerInterface` for the client side and `RemoteAPI` on the server side. That layer builds on top of `RequestInterface` and synthesizes the standard GeneralManager REST contract for you.
+
 Unlike `DatabaseInterface`, a request interface does not create a Django model. Instead, you declare:
 
 - manager fields as class attributes

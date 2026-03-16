@@ -16,6 +16,8 @@ from unittest.mock import ANY
 from simple_history.models import HistoricalChanges
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.remote_api import clear_remote_api_urls
+from general_manager.api.remote_invalidation import clear_remote_invalidation_routes
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.cache.cache_decorator import _SENTINEL
 from general_manager.manager.general_manager import GeneralManager
@@ -74,6 +76,12 @@ def _default_graphql_url_clear() -> None:
         if view_name in {"GraphQLView", "GeneralManagerGraphQLView"}:
             urlconf.urlpatterns.remove(pattern)
             break
+
+
+def _default_remote_api_url_clear() -> None:
+    """Remove auto-generated RemoteAPI URL patterns from the root URLconf."""
+    clear_remote_api_urls()
+    clear_remote_invalidation_routes()
 
 
 def _get_historical_changes_related_models(
@@ -228,6 +236,7 @@ class GMTestCaseMeta(type):
                     )(cls)
             # 2) clear URL patterns
             _default_graphql_url_clear()
+            _default_remote_api_url_clear()
             # 3) register models & create tables
             preexisting_tables = set(connection.introspection.table_names())
             known_tables = set(preexisting_tables)
@@ -267,6 +276,7 @@ class GMTestCaseMeta(type):
             GeneralmanagerConfig.initialize_general_manager_classes(
                 cls.general_manager_classes, cls.general_manager_classes
             )
+            GeneralmanagerConfig.handle_remote_api(cls.general_manager_classes)
             GeneralmanagerConfig.install_startup_hook_runner()
             GeneralmanagerConfig.register_system_checks()
             GeneralmanagerConfig.handle_graph_ql(cls.general_manager_classes)

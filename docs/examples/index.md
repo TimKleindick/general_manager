@@ -11,6 +11,7 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 - [Custom audit logger](audit_logger_custom.md)
 - [Existing model interface recipes](existing_model_interface.md)
 - [Request interface end-to-end](request_interface_end_to_end.md)
+- [Remote manager interface end-to-end](remote_manager_interface_end_to_end.md)
 - [Startup hooks with custom ordering](startup_hooks.md)
 
 Contributions are welcome—add your own recipes as your project evolves.

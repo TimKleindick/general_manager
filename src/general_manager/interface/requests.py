@@ -117,6 +117,46 @@ class RequestConfigurationError(ValueError):
     ) -> "RequestConfigurationError":
         return cls(f"{interface_name} retry_policy is invalid: {reason}.")
 
+    @classmethod
+    def unmapped_remote_error(cls, interface_name: str) -> "RequestConfigurationError":
+        return cls(f"{interface_name} received an unmapped remote error payload.")
+
+    @classmethod
+    def missing_remote_manager_fields(
+        cls, interface_name: str
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} must declare request fields.")
+
+    @classmethod
+    def missing_remote_manager_name(
+        cls, interface_name: str
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} must define Meta.remote_manager.")
+
+    @classmethod
+    def missing_remote_base_url(
+        cls, interface_name: str
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} must define Meta.base_url.")
+
+    @classmethod
+    def missing_remote_protocol_version(
+        cls, interface_name: str
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} must define Meta.protocol_version.")
+
+    @classmethod
+    def invalid_remote_base_url(
+        cls, interface_name: str
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} base_url must be an absolute http/https URL.")
+
+    @classmethod
+    def invalid_remote_base_path(
+        cls, interface_name: str, reason: str
+    ) -> "RequestConfigurationError":
+        return cls(f"{interface_name} base_path is invalid: {reason}.")
+
 
 class MissingRequestTransportError(RequestConfigurationError):
     """Raised when a request interface omits its transport."""
@@ -286,6 +326,9 @@ class RequestRemoteError(RequestInterfaceError):
     request: RequestTransportRequest | None = None
     headers: Mapping[str, Any] | None = None
     retry_count: int = 0
+    error_code: str | None = None
+    details: Mapping[str, Any] | None = None
+    request_id: str | None = None
 
 
 class RequestTransportError(RequestRemoteError):
@@ -1392,6 +1435,25 @@ def map_request_transport_error(
     mapped.status_code = status_code
     mapped.request = error.request
     mapped.headers = error.headers
+    payload = getattr(error, "payload", None)
+    if isinstance(payload, Mapping):
+        error_code = payload.get("error_code")
+        if isinstance(error_code, str):
+            mapped.error_code = error_code
+        details = payload.get("details")
+        if isinstance(details, Mapping):
+            mapped.details = cast(Mapping[str, Any], details)
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            request_id = metadata.get("request_id")
+            if isinstance(request_id, str):
+                mapped.request_id = request_id
+    if mapped.request_id is None and error.headers is not None:
+        header_request_id = error.headers.get("X-Request-ID") or error.headers.get(
+            "x-request-id"
+        )
+        if isinstance(header_request_id, str):
+            mapped.request_id = header_request_id
     return mapped
 
 

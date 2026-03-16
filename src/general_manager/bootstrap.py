@@ -24,6 +24,8 @@ from django.urls import path, re_path
 
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.api.graphql import GraphQL
+from general_manager.api.remote_api import add_remote_api_urls
+from general_manager.api.remote_invalidation import ensure_remote_invalidation_route
 from general_manager.api.property import graph_ql_property
 from general_manager.logging import get_logger
 from general_manager.interface.infrastructure.startup_hooks import (
@@ -267,6 +269,14 @@ def initialize_general_manager_classes(
                 )
     for general_manager_class in all_classes:
         check_permission_class(general_manager_class)
+
+
+def handle_remote_api(
+    manager_classes: list[Type[GeneralManager]],
+) -> None:
+    """Generate REST routes for opt-in RemoteAPI manager exposures."""
+    add_remote_api_urls(manager_classes)
+    ensure_remote_invalidation_route(manager_classes)
 
 
 # ---------------------------------------------------------------------------
