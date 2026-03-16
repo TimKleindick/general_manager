@@ -27,6 +27,7 @@ from general_manager.interface.requests import (
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
+    RequestRetryPolicy,
     RequestSingleResponseRequiredError,
     RequestLocation,
     MissingRequestDetailOperationError,
@@ -89,6 +90,41 @@ class RequestValidationCapability(ValidationCapability):
             raise RequestConfigurationError.invalid_auth_provider(
                 request_interface_cls.__name__
             )
+        retry_policy = getattr(request_interface_cls, "retry_policy", None)
+        if retry_policy is not None:
+            if not isinstance(retry_policy, RequestRetryPolicy):
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "must use RequestRetryPolicy",
+                )
+            if retry_policy.max_attempts < 1:
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "max_attempts must be at least 1",
+                )
+            if retry_policy.base_backoff_seconds < 0:
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "base_backoff_seconds cannot be negative",
+                )
+            if retry_policy.backoff_multiplier < 1:
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "backoff_multiplier must be at least 1",
+                )
+            if (
+                retry_policy.max_backoff_seconds is not None
+                and retry_policy.max_backoff_seconds < 0
+            ):
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "max_backoff_seconds cannot be negative",
+                )
+            if not 0 <= retry_policy.jitter_ratio <= 1:
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "jitter_ratio must be between 0 and 1",
+                )
 
         declared_operations = set(request_interface_cls.query_operations)
         for filter_key, spec in request_interface_cls.filters.items():
@@ -192,16 +228,29 @@ class RequestReadCapability(BaseCapability):
         self,
         interface_cls: type["RequestInterface"],
     ) -> dict[str, dict[str, Any]]:
-        return {
+        attribute_types = {
             name: {
-                "type": field.field_type,
-                "default": field.default,
-                "is_editable": field.is_editable,
-                "is_required": field.is_required,
-                "is_derived": field.is_derived,
+                "type": input_field.type,
+                "default": None,
+                "is_editable": False,
+                "is_required": input_field.required,
+                "is_derived": False,
             }
-            for name, field in interface_cls.fields.items()
+            for name, input_field in interface_cls.input_fields.items()
         }
+        attribute_types.update(
+            {
+                name: {
+                    "type": field.field_type,
+                    "default": field.default,
+                    "is_editable": field.is_editable,
+                    "is_required": field.is_required,
+                    "is_derived": field.is_derived,
+                }
+                for name, field in interface_cls.fields.items()
+            }
+        )
+        return attribute_types
 
     def get_attributes(
         self,
@@ -213,12 +262,20 @@ class RequestReadCapability(BaseCapability):
             payload = cast(Mapping[str, Any], interface_instance.get_data())
             return interface_cls.resolve_payload_value(payload, field_name)
 
-        return {
-            name: lambda interface_instance, name=name: _resolve_field(
-                interface_instance, name
-            )
-            for name in interface_cls.fields.keys()
+        attributes = {
+            name: lambda interface_instance,
+            name=name: interface_instance.identification[name]
+            for name in interface_cls.input_fields.keys()
         }
+        attributes.update(
+            {
+                name: lambda interface_instance, name=name: _resolve_field(
+                    interface_instance, name
+                )
+                for name in interface_cls.fields.keys()
+            }
+        )
+        return attributes
 
     def get_field_type(
         self,
@@ -226,9 +283,12 @@ class RequestReadCapability(BaseCapability):
         field_name: str,
     ) -> type[Any]:
         field = interface_cls.fields.get(field_name)
-        if field is None:
-            raise KeyError(field_name)
-        return field.field_type
+        if field is not None:
+            return field.field_type
+        input_field = interface_cls.input_fields.get(field_name)
+        if input_field is not None:
+            return input_field.type
+        raise KeyError(field_name)
 
 
 class RequestLifecycleCapability(BaseCapability):
@@ -280,6 +340,7 @@ class RequestLifecycleCapability(BaseCapability):
                 meta_class, "transport_config", None
             )
             interface_cls.auth_provider = getattr(meta_class, "auth_provider", None)
+            interface_cls.retry_policy = getattr(meta_class, "retry_policy", None)
             interface_cls.create_operation = getattr(
                 meta_class, "create_operation", None
             )

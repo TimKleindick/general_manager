@@ -19,6 +19,7 @@ from general_manager.interface.requests import (
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
+    RequestRetryPolicy,
     UnknownRequestFilterOperationReferenceError,
 )
 from general_manager.manager.general_manager import GeneralManager
@@ -389,6 +390,29 @@ class RequestValidationCapabilityTests(SimpleTestCase):
                             ),
                         }
                         auth_provider = object()
+
+    def test_validation_rejects_invalid_retry_policy(self) -> None:
+        with self.assertRaises(RequestConfigurationError):
+
+            class InvalidRetryPolicyProject(GeneralManager):
+                class Interface(RequestInterface):
+                    id = Input(type=int)
+                    name = RequestField(str)
+
+                    class Meta:
+                        query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                            "detail": RequestQueryOperation(
+                                name="detail",
+                                method="GET",
+                                path="/items/{id}",
+                            ),
+                            "list": RequestQueryOperation(
+                                name="list",
+                                method="GET",
+                                path="/items",
+                            ),
+                        }
+                        retry_policy = RequestRetryPolicy(max_attempts=0)
 
 
 class RequestBucketHardeningTests(SimpleTestCase):
