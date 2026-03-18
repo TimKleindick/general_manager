@@ -6,9 +6,20 @@ from typing import Any, ClassVar, Mapping, cast
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.interface.bundles.request import REQUEST_CORE_CAPABILITIES
+from general_manager.interface.bundles.request import (
+    REQUEST_CORE_CAPABILITIES,
+)
 from general_manager.interface.capabilities.base import CapabilityName
-from general_manager.interface.capabilities.configuration import CapabilityConfigEntry
+from general_manager.interface.capabilities.configuration import (
+    CapabilityConfigEntry,
+    InterfaceCapabilityConfig,
+    iter_capability_entries,
+)
+from general_manager.interface.capabilities.request import (
+    RequestCreateCapability,
+    RequestDeleteCapability,
+    RequestUpdateCapability,
+)
 from general_manager.interface.requests import (
     MissingRequestPayloadFieldError,
     MissingRequestTransportError,
@@ -99,6 +110,36 @@ class RequestInterface(InterfaceBase):
         cls.update_serializer = getattr(meta_class, "update_serializer", None)
         cls.response_serializer = getattr(meta_class, "response_serializer", None)
         cls.rules = list(getattr(meta_class, "rules", []))
+        cls._sync_configured_capabilities()
+
+    @classmethod
+    def _sync_configured_capabilities(cls) -> None:
+        base_capabilities = tuple(getattr(cls, "configured_capabilities", tuple()))
+        mutation_capabilities: list[InterfaceCapabilityConfig] = []
+        if cls.create_operation is not None:
+            mutation_capabilities.append(
+                InterfaceCapabilityConfig(RequestCreateCapability)
+            )
+        if cls.update_operation is not None:
+            mutation_capabilities.append(
+                InterfaceCapabilityConfig(RequestUpdateCapability)
+            )
+        if cls.delete_operation is not None:
+            mutation_capabilities.append(
+                InterfaceCapabilityConfig(RequestDeleteCapability)
+            )
+        existing_handlers = {
+            config.handler for config in iter_capability_entries(base_capabilities)
+        }
+        cls.configured_capabilities = base_capabilities + tuple(
+            capability
+            for capability in mutation_capabilities
+            if capability.handler not in existing_handlers
+        )
+        cls.capability_overrides = dict(getattr(cls, "capability_overrides", {}))
+        for name, override in cls._build_configured_capability_overrides().items():
+            cls.capability_overrides[name] = override
+        cls._configured_capabilities_applied = False
 
     @classmethod
     def get_query_operation(
@@ -140,6 +181,11 @@ class RequestInterface(InterfaceBase):
         if hasattr(handler, "for_operation"):
             return handler.for_operation(cls, operation_name, **kwargs)
         raise NotImplementedError
+
+    def set_request_payload_cache(self, payload: Mapping[str, Any] | None) -> None:
+        """Cache the raw response payload used to populate request-backed fields."""
+
+        self._request_payload_cache = payload
 
     @classmethod
     def get_mutation_operation(cls, action: str) -> RequestMutationOperation:

@@ -115,6 +115,8 @@ class RequestCachingIntegrationTest(GeneralManagerTransactionTestCase):
         cls.RemoteProject = RemoteProject
         cls.general_manager_classes = [RemoteProject]
         cls.RemoteProject._attributes = cls.RemoteProject.Interface.get_attributes()
+        GeneralManagerMeta.all_classes = cls.general_manager_classes
+        super().setUpClass()
         GeneralManagerMeta.create_at_properties_for_attributes(
             cls.RemoteProject._attributes.keys(),
             cls.RemoteProject,

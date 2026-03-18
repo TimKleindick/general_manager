@@ -39,8 +39,21 @@ class RequestBucketManagerMismatchError(TypeError):
         )
 
 
+class RequestBucketSortAttributeError(AttributeError):
+    """Raised when sorting a request bucket by an attribute that is missing."""
+
+    def __init__(self, instance: object, attribute: str) -> None:
+        super().__init__(f"{instance!r} is missing sort attribute {attribute!r}.")
+
+
 class RequestBucket(Bucket[GeneralManagerType]):
-    """Lazy bucket backed by a compiled request query plan."""
+    """Lazy bucket backed by a compiled request query plan.
+
+    Pickling preserves the compiled request plan and any serialized items, but
+    unpickling does not re-run network requests. Buckets restored from pickle
+    are marked materialized with whatever items were serialized, so callers
+    should only pickle materialized buckets if they expect to preserve results.
+    """
 
     def __init__(
         self,
@@ -89,8 +102,18 @@ class RequestBucket(Bucket[GeneralManagerType]):
         self.request_plan = state["request_plan"]
         self.filters = dict(state["filters"])
         self.excludes = dict(state["excludes"])
-        self._data = tuple(state["items"])
         self._raw_items = tuple(state["raw_items"])
+        if self._raw_items:
+            self._data = tuple(
+                self._manager_class(
+                    **self._interface_cls.extract_identification(payload)
+                )
+                for payload in self._raw_items
+            )
+            for manager, payload in zip(self._data, self._raw_items, strict=False):
+                manager._interface.set_request_payload_cache(payload)
+        else:
+            self._data = tuple(state["items"])
         self._count_override = state["count_override"]
         self._materialized = True
 
@@ -223,10 +246,17 @@ class RequestBucket(Bucket[GeneralManagerType]):
     ) -> Bucket[GeneralManagerType]:
         items = list(self._ensure_items())
         key_names = (key,) if isinstance(key, str) else key
-        items.sort(
-            key=lambda instance: tuple(getattr(instance, part) for part in key_names),
-            reverse=reverse,
-        )
+
+        def _sort_key(instance: GeneralManagerType) -> tuple[Any, ...]:
+            values: list[Any] = []
+            for part in key_names:
+                try:
+                    values.append(getattr(instance, part))
+                except AttributeError as error:
+                    raise RequestBucketSortAttributeError(instance, part) from error
+            return tuple(values)
+
+        items.sort(key=_sort_key, reverse=reverse)
         return self._from_items(tuple(items))
 
     def none(self) -> Bucket[GeneralManagerType]:
@@ -275,7 +305,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
             for payload in raw_items
         )
         for manager, payload in zip(self._data, raw_items, strict=False):
-            manager._interface._request_payload_cache = payload
+            manager._interface.set_request_payload_cache(payload)
         self._materialized = True
         return cast(tuple[GeneralManagerType, ...], self._data)
 

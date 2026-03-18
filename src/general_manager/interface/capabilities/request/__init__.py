@@ -323,6 +323,8 @@ class RequestLifecycleCapability(BaseCapability):
                 type["RequestInterface"],
                 type(interface.__name__, (interface,), {}),
             )
+            interface_cls.__module__ = interface.__module__
+            interface_cls.__qualname__ = interface.__qualname__
             interface_cls.input_fields = input_fields
             interface_cls.fields = request_fields
             interface_cls.filters = dict(getattr(interface, "filters", {}))
@@ -359,6 +361,7 @@ class RequestLifecycleCapability(BaseCapability):
                 interface, "response_serializer", None
             )
             interface_cls.rules = list(getattr(interface, "rules", []))
+            interface_cls._sync_configured_capabilities()
             attrs["Interface"] = interface_cls
             return attrs, interface_cls, None
 
