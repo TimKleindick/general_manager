@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from importlib import import_module, util
+from importlib import import_module
 import re
 from uuid import uuid4
 from typing import Any, TYPE_CHECKING, cast
@@ -118,14 +119,24 @@ class RemoteInvalidationConsumer:
         self._channel_name = await channel_layer.new_channel()
         await channel_layer.group_add(self._group_name, self._channel_name)
         await send({"type": "websocket.accept"})
+        receive_task = asyncio.create_task(receive())
+        event_task = asyncio.create_task(channel_layer.receive(self._channel_name))
         try:
             while True:
-                message = await receive()
-                message_type = message["type"]
-                if message_type == "websocket.disconnect":
-                    break
-                if message_type == "websocket.receive":
-                    event = await channel_layer.receive(self._channel_name)
+                done, _ = await asyncio.wait(
+                    {receive_task, event_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                disconnect = False
+                if receive_task in done:
+                    message = receive_task.result()
+                    message_type = message["type"]
+                    if message_type == "websocket.disconnect":
+                        disconnect = True
+                    else:
+                        receive_task = asyncio.create_task(receive())
+                if event_task in done:
+                    event = event_task.result()
                     if event.get("type") == "gm.remote.invalidation":
                         await send(
                             {
@@ -142,7 +153,18 @@ class RemoteInvalidationConsumer:
                                 ),
                             }
                         )
+                    if not disconnect:
+                        event_task = asyncio.create_task(
+                            channel_layer.receive(self._channel_name)
+                        )
+                if disconnect:
+                    event_task.cancel()
+                    await asyncio.gather(event_task, return_exceptions=True)
+                    break
         finally:
+            receive_task.cancel()
+            event_task.cancel()
+            await asyncio.gather(receive_task, event_task, return_exceptions=True)
             if self._group_name is not None and self._channel_name is not None:
                 await channel_layer.group_discard(self._group_name, self._channel_name)
 
@@ -222,18 +244,43 @@ def clear_remote_invalidation_routes() -> None:
     if not asgi_path:
         return
     try:
-        module_path, _ = asgi_path.rsplit(".", 1)
+        module_path, attr_name = asgi_path.rsplit(".", 1)
     except ValueError:
         return
-    spec = util.find_spec(module_path)
-    if spec is None:
+    try:
+        from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
+        from channels.routing import ProtocolTypeRouter, URLRouter  # type: ignore[import-untyped]
+    except ImportError:  # pragma: no cover - optional dependency
         return
-    asgi_module = import_module(module_path)
+    try:
+        asgi_module = import_module(module_path)
+    except ImportError:
+        return
     websocket_patterns = getattr(asgi_module, "websocket_urlpatterns", None)
     if websocket_patterns is None:
         return
-    websocket_patterns[:] = [
+    websocket_patterns = [
         route
         for route in websocket_patterns
-        if not getattr(route, "_general_manager_remote_ws", False)
+        if not (
+            getattr(route, "_general_manager_remote_ws", False)
+            or getattr(route, "_general_manager_remote_ws_key", None) is not None
+        )
     ]
+    cast(Any, asgi_module).websocket_urlpatterns = websocket_patterns
+    application = getattr(asgi_module, attr_name, None)
+    if application is None:
+        return
+    if hasattr(application, "application_mapping") and isinstance(
+        application.application_mapping, dict
+    ):
+        application.application_mapping["websocket"] = AuthMiddlewareStack(
+            URLRouter(list(websocket_patterns))
+        )
+    else:
+        cast(Any, asgi_module).application = ProtocolTypeRouter(
+            {
+                "http": application,
+                "websocket": AuthMiddlewareStack(URLRouter(list(websocket_patterns))),
+            }
+        )
