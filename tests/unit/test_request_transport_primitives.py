@@ -436,6 +436,83 @@ def test_urllib_request_transport_uses_operation_timeout_override() -> None:
     assert captured_timeout == [5]
 
 
+def test_urllib_request_transport_preserves_request_schema_errors() -> None:
+    def fake_urlopen(
+        request: Any, timeout: float | int | None = None
+    ) -> FakeUrlopenResponse:
+        del request, timeout
+        return FakeUrlopenResponse(status=200, payload=["not-a-mapping"])
+
+    transport = UrllibRequestTransport(urlopen=fake_urlopen)
+
+    with pytest.raises(RequestSchemaError):
+        transport.execute(
+            interface_cls=type(
+                "SchemaInterface",
+                (),
+                {
+                    "transport_config": RequestTransportConfig(
+                        base_url="https://service.example.test"
+                    ),
+                    "auth_provider": None,
+                    "__name__": "SchemaInterface",
+                },
+            ),
+            operation=RequestQueryOperation(
+                name="list",
+                method="GET",
+                path="/projects",
+            ),
+            plan=RequestQueryPlan(
+                operation_name="list",
+                action="filter",
+                method="GET",
+                path="/projects",
+            ),
+        )
+
+
+def test_urllib_request_transport_percent_encodes_path_parameters() -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(
+        request: Any, timeout: float | int | None = None
+    ) -> FakeUrlopenResponse:
+        del timeout
+        captured["url"] = request.full_url
+        return FakeUrlopenResponse(status=200, payload={"id": "folder/item"})
+
+    transport = UrllibRequestTransport(urlopen=fake_urlopen)
+    result = transport.execute(
+        interface_cls=type(
+            "PathInterface",
+            (),
+            {
+                "transport_config": RequestTransportConfig(
+                    base_url="https://service.example.test/api"
+                ),
+                "auth_provider": None,
+                "__name__": "PathInterface",
+            },
+        ),
+        operation=RequestQueryOperation(
+            name="detail",
+            method="GET",
+            path="/projects/{id}",
+        ),
+        plan=RequestQueryPlan(
+            operation_name="detail",
+            action="detail",
+            method="GET",
+            path="/projects/{id}",
+            path_params={"id": "folder/item"},
+        ),
+    )
+
+    assert captured["url"] == "https://service.example.test/api/projects/folder%2Fitem"
+    assert result.items == ({"id": "folder/item"},)
+
+
 def test_shared_transport_emits_metrics_and_trace_hooks() -> None:
     metrics = RecordingMetricsBackend()
     trace = RecordingTraceBackend()

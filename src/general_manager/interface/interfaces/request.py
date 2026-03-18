@@ -36,6 +36,7 @@ from general_manager.interface.requests import (
     RequestTransport,
     RequestTransportConfig,
     UnknownRequestOperationError,
+    default_request_response_normalizer,
     resolve_request_value,
 )
 
@@ -251,15 +252,19 @@ class RequestInterface(InterfaceBase):
             operation = cls.get_mutation_operation(plan.action)
         else:
             operation = cls.get_query_operation(plan.operation_name)
-        result = cast(
-            RequestQueryResult,
-            transport.execute(
+        result = transport.execute(
+            interface_cls=cls,
+            operation=operation,
+            plan=plan,
+            identification=dict(plan.path_params),
+        )
+        if not isinstance(result, RequestQueryResult):
+            result = default_request_response_normalizer(
+                result,
                 interface_cls=cls,
                 operation=operation,
                 plan=plan,
-                identification=dict(plan.path_params),
-            ),
-        )
+            )
         serializer = cls.response_serializer
         if not callable(serializer):
             return result

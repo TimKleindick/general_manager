@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime
 import json
 from importlib import import_module
 import re
-from uuid import uuid4
+from uuid import UUID, uuid4
 from typing import Any, TYPE_CHECKING, cast
 
 from asgiref.sync import async_to_sync
@@ -26,6 +27,23 @@ if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
 
 logger = get_logger("api.remote.ws")
+
+
+def _json_safe_identification_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return str(value)
+
+
+def _json_safe_identification(identification: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: _json_safe_identification_value(value)
+        for key, value in identification.items()
+    }
 
 
 def remote_invalidation_group_name(config: RemoteAPIConfig) -> str:
@@ -60,7 +78,7 @@ def emit_remote_invalidation(
         "base_path": config.base_path,
         "resource_name": config.resource_name,
         "action": action,
-        "identification": dict(instance.identification)
+        "identification": _json_safe_identification(dict(instance.identification))
         if instance is not None
         else None,
         "event_id": str(uuid4()),
