@@ -100,6 +100,7 @@ class RemoteManagerInterface(RequestInterface):
         )
 
         normalized_base_path = cls.base_path.rstrip("/") or "/gm"
+        cls.base_path = normalized_base_path
         resource_path = f"{normalized_base_path}/{cls.remote_manager}".rstrip("/")
         protocol_headers = {
             "X-General-Manager-Protocol-Version": cls.protocol_version,
@@ -161,7 +162,12 @@ class RemoteManagerInterface(RequestInterface):
     def get_websocket_invalidation_url(cls) -> str:
         parsed = urlsplit(cls.base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
-        path = f"{cls.base_path.rstrip('/')}/ws/{cls.remote_manager}"
+        normalized_base_path = cls.base_path.rstrip("/") or "/gm"
+        base_url_path = parsed.path.rstrip("/")
+        if base_url_path:
+            path = f"{base_url_path}{normalized_base_path}/ws/{cls.remote_manager}"
+        else:
+            path = f"{normalized_base_path}/ws/{cls.remote_manager}"
         query = urlencode({"version": cls.protocol_version})
         return urlunsplit((scheme, parsed.netloc, path, query, ""))
 

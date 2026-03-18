@@ -202,15 +202,18 @@ class RemoteInvalidationClient:
             )
             for task in pending:
                 task.cancel()
+            results = await asyncio.gather(*done)
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
-            event_task = next(iter(done))
-            url, event = await event_task
-            return self._dispatch(url, event)
         except Exception:
             for url in tasks.values():
                 await self._close_connection(url)
             raise
+        else:
+            handled = 0
+            for url, event in results:
+                handled += self._dispatch(url, event)
+            return handled
 
     async def _listen_url(self, url: str) -> None:
         while not self._closed:

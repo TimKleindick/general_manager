@@ -308,6 +308,44 @@ def _error_payload(
     return response
 
 
+def _remote_api_error_details(error: Exception) -> tuple[str, str, int]:
+    if isinstance(error, ObjectDoesNotExist):
+        return "Resource not found.", "not_found", 404
+    if isinstance(error, PermissionError):
+        return "Permission denied.", "permission_denied", 403
+    if isinstance(error, RuntimeError):
+        return "Internal server error.", "internal_error", 500
+    return "Invalid request.", "invalid_request", 400
+
+
+def _remote_api_error_payload(
+    *,
+    config: RemoteAPIConfig,
+    request_id: str,
+    error: Exception,
+    operation: str,
+    method: str,
+) -> JsonResponse:
+    error_message, error_code, status = _remote_api_error_details(error)
+    logger.exception(
+        "remote api request failed",
+        context={
+            "operation": operation,
+            "method": method,
+            "error_class": error.__class__.__name__,
+            "error_code": error_code,
+            "request_id": request_id,
+        },
+    )
+    return _error_payload(
+        config=config,
+        request_id=request_id,
+        error=error_message,
+        error_code=error_code,
+        status=status,
+    )
+
+
 def _apply_ordering(
     bucket: Any, ordering: str | list[str] | tuple[str, ...] | None
 ) -> Any:
@@ -382,12 +420,12 @@ def _build_query_view(config: RemoteAPIConfig):
             ValidationError,
             ValueError,
         ) as error:
-            return _error_payload(
+            return _remote_api_error_payload(
                 config=config,
                 request_id=request_id,
-                error=str(error),
-                error_code="query_failed",
-                status=400,
+                error=error,
+                operation="query",
+                method=request.method,
             )
 
     return view
@@ -404,23 +442,49 @@ def _build_item_view(config: RemoteAPIConfig):
         )
         try:
             _check_protocol_version(request, config)
-            manager = config.manager_cls(id=_coerce_identifier(config, identifier))
-            if method == "GET" and config.allow_detail:
+            if method == "GET":
+                if not config.allow_detail:
+                    return _error_payload(
+                        config=config,
+                        request_id=request_id,
+                        error="Method not allowed.",
+                        error_code="method_not_allowed",
+                        status=405,
+                    )
+                manager = config.manager_cls(id=_coerce_identifier(config, identifier))
                 return _success_payload(
                     items=[_serialize_manager(manager)],
                     config=config,
                     request_id=request_id,
                 )
-            if method == "PATCH" and config.allow_update:
+            if method == "PATCH":
+                if not config.allow_update:
+                    return _error_payload(
+                        config=config,
+                        request_id=request_id,
+                        error="Method not allowed.",
+                        error_code="method_not_allowed",
+                        status=405,
+                    )
+                manager = config.manager_cls(id=_coerce_identifier(config, identifier))
                 payload = _parse_json_body(request)
-                updated = manager.update(ignore_permission=True, **payload)
+                updated = manager.update(**payload)
                 return _success_payload(
                     items=[_serialize_manager(updated)],
                     config=config,
                     request_id=request_id,
                 )
-            if method == "DELETE" and config.allow_delete:
-                manager.delete(ignore_permission=True)
+            if method == "DELETE":
+                if not config.allow_delete:
+                    return _error_payload(
+                        config=config,
+                        request_id=request_id,
+                        error="Method not allowed.",
+                        error_code="method_not_allowed",
+                        status=405,
+                    )
+                manager = config.manager_cls(id=_coerce_identifier(config, identifier))
+                manager.delete()
                 return _success_payload(
                     items=[],
                     config=config,
@@ -444,14 +508,12 @@ def _build_item_view(config: RemoteAPIConfig):
             ValidationError,
             ValueError,
         ) as error:
-            return _error_payload(
+            return _remote_api_error_payload(
                 config=config,
                 request_id=request_id,
-                error=str(error),
-                error_code="not_found"
-                if method == "GET"
-                else f"{method.lower()}_failed",
-                status=404 if method == "GET" else 400,
+                error=error,
+                operation=method.lower(),
+                method=method,
             )
 
     return view
@@ -471,7 +533,7 @@ def _build_create_view(config: RemoteAPIConfig):
         try:
             _check_protocol_version(request, config)
             payload = _parse_json_body(request)
-            manager = config.manager_cls.create(ignore_permission=True, **payload)
+            manager = config.manager_cls.create(**payload)
             return _success_payload(
                 items=[_serialize_manager(manager)],
                 config=config,
@@ -489,12 +551,12 @@ def _build_create_view(config: RemoteAPIConfig):
             ValidationError,
             ValueError,
         ) as error:
-            return _error_payload(
+            return _remote_api_error_payload(
                 config=config,
                 request_id=request_id,
-                error=str(error),
-                error_code="create_failed",
-                status=400,
+                error=error,
+                operation="create",
+                method="POST",
             )
 
     return view

@@ -118,7 +118,7 @@ class RemoteManagerQueryCapability(RequestQueryCapability):
             body["operation"] = operation.name
         return RequestQueryPlan(
             operation_name=operation.name,
-            action="all" if not filters and not excludes else "filter",
+            action="all" if not normalized_filters and not excludes else "filter",
             method=operation.method,
             path=operation.path,
             headers=dict(operation.static_headers),
