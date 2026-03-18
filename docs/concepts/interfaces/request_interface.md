@@ -417,8 +417,10 @@ The current request interface gives you the declaration, planning, and shared tr
 
 - provider-based authentication and token refresh
 - mandatory timeouts
-- retry policy for idempotent operations through `Meta.retry_policy`
+- retry policy through `Meta.retry_policy`
+- capped backoff and jitter through `RequestRetryPolicy`
 - structured logging and request IDs
+- optional metrics and trace hooks through `RequestTransportConfig`
 - response normalization and schema checks
 - rate-limit handling
 - secret masking in logs and errors
@@ -457,18 +459,6 @@ Mutation-specific configuration also lives in `Interface.Meta`:
 - `create_serializer`
 - `update_serializer`
 - `response_serializer`
-
-For production use, configure your shared transport path to handle:
-
-- provider-based authentication and token refresh
-- mandatory timeouts
-- retry policy for idempotent operations through `Meta.retry_policy`
-- capped backoff and jitter through `RequestRetryPolicy`
-- structured logging and request IDs
-- optional metrics and trace hooks through `RequestTransportConfig`
-- response normalization and schema checks
-- rate-limit handling
-- secret masking in logs and errors
 
 ## Current limitations
 
