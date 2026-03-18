@@ -10,7 +10,7 @@ import random
 from types import MappingProxyType
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen as stdlib_urlopen
 from uuid import uuid4
 from typing import Any, Callable, Literal, Mapping, Protocol, cast, runtime_checkable
@@ -1176,6 +1176,26 @@ class SharedRequestTransport(ABC):
                     )
                     raise transport_error from error
             except ValueError as error:
+                if isinstance(error, RequestSchemaError):
+                    metrics_backend.record_error(
+                        service=service_name,
+                        operation=operation.name,
+                        method=operation.method,
+                        error_class=type(error).__name__,
+                        status_code=None,
+                        retry_count=retry_count,
+                    )
+                    trace_backend.on_request_error(
+                        trace_context=trace_context,
+                        service=service_name,
+                        operation=operation.name,
+                        method=operation.method,
+                        path=base_request.path,
+                        error=error,
+                        status_code=None,
+                        retry_count=retry_count,
+                    )
+                    raise
                 transport_error = RequestTransportError(str(error))
                 transport_error.retry_count = retry_count
                 metrics_backend.record_error(
@@ -1337,7 +1357,10 @@ class SharedRequestTransport(ABC):
         operation: RequestOperation,
         plan: RequestPlan,
     ) -> RequestTransportRequest:
-        path = plan.path.format(**plan.path_params)
+        encoded_path_params = {
+            key: quote(str(value), safe="") for key, value in plan.path_params.items()
+        }
+        path = plan.path.format(**encoded_path_params)
         query_params = SharedRequestTransport._merge_request_parts(
             operation.static_query_params,
             plan.query_params,

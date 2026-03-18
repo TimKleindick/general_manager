@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from typing import Any, ClassVar
 
 from asgiref.testing import ApplicationCommunicator
 from asgiref.sync import sync_to_async
 from django.db.models import CharField
+from django.http import HttpResponse
 from django.test import Client, override_settings
 
 from general_manager.api import RemoteInvalidationClient
@@ -48,9 +49,11 @@ class DjangoClientTransport(SharedRequestTransport):
             raise AssertionError
 
         body = json.dumps(dict(request.body)) if request.body is not None else None
+        query = urlencode(request.query_params, doseq=True)
+        full_path = f"{request.path}?{query}" if query else request.path
         response = self.client.generic(
             request.method,
-            request.path,
+            full_path,
             data=body,
             content_type="application/json",
             **{
@@ -112,6 +115,40 @@ class ASGIWebSocketConnection:
                 {"type": "websocket.disconnect", "code": 1000}
             )
         await self.communicator.wait()
+
+
+class DjangoClientTransportTests(GeneralManagerTransactionTestCase):
+    def test_send_preserves_query_string(self) -> None:
+        transport = DjangoClientTransport()
+        calls: list[tuple[str, str]] = []
+
+        class FakeClient:
+            def generic(self, method: str, path: str, **kwargs: Any) -> HttpResponse:
+                del kwargs
+                calls.append((method, path))
+                response = HttpResponse(
+                    json.dumps({"items": [], "metadata": {}}),
+                    content_type="application/json",
+                )
+                response.status_code = 200
+                return response
+
+        transport.client = FakeClient()  # type: ignore[assignment]
+
+        transport.send(
+            RequestTransportRequest(
+                method="GET",
+                url="https://service.example.test/projects?page=2",
+                path="/projects",
+                query_params={"page": 2, "search": "alpha"},
+            ),
+            interface_cls=object,
+            operation=object(),
+            plan=object(),
+            identification=None,
+        )
+
+        self.assertEqual(calls, [("GET", "/projects?page=2&search=alpha")])
 
 
 @override_settings(AUTOCREATE_GRAPHQL=False)

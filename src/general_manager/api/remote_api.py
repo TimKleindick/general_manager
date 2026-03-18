@@ -74,6 +74,14 @@ class RemoteAPIConfigurationError(ValueError):
         )
 
 
+class RemoteAPIRequestError(ValueError):
+    """Raised when a remote API request cannot be parsed safely."""
+
+    @classmethod
+    def malformed_json(cls) -> "RemoteAPIRequestError":
+        return cls("Malformed JSON in request body.")
+
+
 @dataclass(frozen=True, slots=True)
 class RemoteAPIConfig:
     manager_cls: type["GeneralManager"]
@@ -235,7 +243,10 @@ def _check_protocol_version(request: HttpRequest, config: RemoteAPIConfig) -> No
 def _parse_json_body(request: HttpRequest) -> dict[str, Any]:
     if not request.body:
         return {}
-    return json.loads(request.body.decode("utf-8"))
+    try:
+        return json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise RemoteAPIRequestError.malformed_json() from error
 
 
 def _coerce_identifier(config: RemoteAPIConfig, identifier: str) -> Any:

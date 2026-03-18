@@ -18,6 +18,8 @@ from general_manager.interface.requests import (
     RequestQueryPlan,
     RequestQueryResult,
     RequestSingleResponseRequiredError,
+    RequestTransportConfig,
+    RequestTransportResponse,
     UnknownRequestFilterError,
 )
 from general_manager.manager.general_manager import GeneralManager
@@ -286,6 +288,69 @@ class TestRequestInterface(SimpleTestCase):
             dict(round_tripped.body or {}), {"filters": {"status": "active"}}
         )
         self.assertEqual(dict(round_tripped.metadata), {"request_id": "req-1"})
+
+    def test_len_reflects_current_page_size_not_remote_total(self) -> None:
+        bucket = RemoteProject.filter(page=1, page_size=1)
+
+        self.assertEqual(len(bucket), 1)
+        self.assertEqual(bucket.count(), 2)
+
+    def test_execute_request_plan_normalizes_transport_response_before_serializing(
+        self,
+    ) -> None:
+        class ResponseTransport:
+            def execute(
+                self,
+                *,
+                interface_cls: type[Any],
+                operation: Any,
+                plan: Any,
+                identification: dict[str, Any] | None = None,
+            ) -> RequestTransportResponse:
+                del interface_cls, operation, plan, identification
+                return RequestTransportResponse(
+                    payload={"id": 7, "name": "Alpha"},
+                    status_code=200,
+                )
+
+        class SerializedProject(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/projects/{id}",
+                        ),
+                        "list": RequestQueryOperation(
+                            name="list",
+                            method="GET",
+                            path="/projects",
+                        ),
+                    }
+                    transport = ResponseTransport()
+                    transport_config = RequestTransportConfig(
+                        base_url="https://service.example.test"
+                    )
+                    response_serializer = staticmethod(
+                        lambda item: {"id": item["id"], "name": item["name"].upper()}
+                    )
+
+        result = SerializedProject.Interface.execute_request_plan(
+            RequestQueryPlan(
+                operation_name="detail",
+                action="detail",
+                method="GET",
+                path="/projects/{id}",
+                path_params={"id": 7},
+            )
+        )
+
+        self.assertEqual(result.items, ({"id": 7, "name": "ALPHA"},))
+        self.assertEqual(result.metadata["status_code"], 200)
 
     def test_materialized_bucket_filter_still_validates_declared_filters(self) -> None:
         materialized = RemoteProject.filter(status="active")[:1]

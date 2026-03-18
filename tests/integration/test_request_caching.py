@@ -153,7 +153,18 @@ class RequestCachingIntegrationTest(GeneralManagerTransactionTestCase):
             parse_dependency_identifier(identifier)
             for identifier in request_section.keys()
         ]
-        operations = {entry["operation"] for entry in parsed_identifiers}
+        operations = set()
+        for identifier, entry in zip(
+            request_section.keys(),
+            parsed_identifiers,
+            strict=False,
+        ):
+            self.assertIsNotNone(
+                entry,
+                msg=f"Expected dependency identifier to parse as JSON: {identifier!r}",
+            )
+            assert entry is not None
+            operations.add(entry["operation"])
         self.assertEqual(operations, {"list", "search"})
 
     def test_request_query_invalidation_is_safe_and_does_not_trigger_detail_reads(

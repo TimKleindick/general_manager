@@ -250,6 +250,37 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
         self.assertEqual(payload["error_code"], "internal_error")
         self.assertNotIn("database leaked", payload["error"])
 
+    def test_create_view_rejects_malformed_json_without_leaking_details(self) -> None:
+        factory = RequestFactory()
+        manager_cls = MagicMock()
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=True,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+        )
+
+        response = _build_create_view(config)(
+            factory.post(
+                "/gm/projects",
+                data='{"name":',
+                content_type="application/json",
+            )
+        )
+        payload = json.loads(response.content.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(payload["error"], "Invalid request.")
+        self.assertEqual(payload["error_code"], "invalid_request")
+        self.assertNotIn("JSONDecodeError", payload["error"])
+        self.assertNotIn('{"name":', payload["error"])
+
     def test_item_view_get_maps_object_does_not_exist(self) -> None:
         factory = RequestFactory()
         manager_cls = MagicMock(side_effect=ObjectDoesNotExist("secret missing"))

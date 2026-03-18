@@ -234,7 +234,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         return items[item]
 
     def __len__(self) -> int:
-        return self.count()
+        return len(self._ensure_items())
 
     def __contains__(self, item: GeneralManagerType) -> bool:
         return item in self._ensure_items()
