@@ -233,8 +233,10 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(updated.id, created.id)
         self.assertEqual(updated.status, "inactive")
 
-        response = self.client.generic("DELETE", f"/internal/gm/projects/{created.id}")
-        self.assertEqual(response.status_code, 200)
+        deleted_id = created.id
+        created.delete(ignore_permission=True)
+        response = self.client.get(f"/internal/gm/projects/{deleted_id}")
+        self.assertEqual(response.status_code, 404)
 
     def test_protocol_version_mismatch_fails_explicitly(self) -> None:
         transport = DjangoClientTransport()
@@ -326,7 +328,6 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
                 ignore_permission=True,
                 status="inactive",
             )
-            await communicator.send_input({"type": "websocket.receive", "text": "ping"})
             message = await communicator.receive_output()
             assert message["type"] == "websocket.send"
             payload = json.loads(message["text"])

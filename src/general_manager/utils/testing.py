@@ -384,6 +384,7 @@ class GeneralManagerTransactionTestCase(
         """
         # remove GraphQL URL pattern added during setUpClass
         _default_graphql_url_clear()
+        _default_remote_api_url_clear()
 
         # drop generated tables and unregister models from Django's app registry
         created_tables: set[str] = set(getattr(cls, "_gm_created_tables", set()))

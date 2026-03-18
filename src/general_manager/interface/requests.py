@@ -980,6 +980,31 @@ class RequestPlan:
         )
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
+    def __reduce__(self) -> tuple[Any, tuple[dict[str, Any]]]:
+        return (
+            _restore_request_plan,
+            (
+                {
+                    "operation_name": self.operation_name,
+                    "action": self.action,
+                    "method": self.method,
+                    "path": self.path,
+                    "query_params": dict(self.query_params),
+                    "headers": dict(self.headers),
+                    "path_params": dict(self.path_params),
+                    "body": dict(self.body) if self.body is not None else None,
+                    "local_predicates": tuple(self.local_predicates),
+                    "filters": {
+                        key: tuple(values) for key, values in self.filters.items()
+                    },
+                    "excludes": {
+                        key: tuple(values) for key, values in self.excludes.items()
+                    },
+                    "metadata": dict(self.metadata),
+                },
+            ),
+        )
+
     @property
     def local_filters(self) -> dict[str, Any]:
         return {
@@ -990,6 +1015,23 @@ class RequestPlan:
 
 
 RequestQueryPlan = RequestPlan
+
+
+def _restore_request_plan(state: Mapping[str, Any]) -> RequestPlan:
+    return RequestPlan(
+        operation_name=state["operation_name"],
+        action=state["action"],
+        method=state["method"],
+        path=state["path"],
+        query_params=state["query_params"],
+        headers=state["headers"],
+        path_params=state["path_params"],
+        body=state["body"],
+        local_predicates=tuple(state["local_predicates"]),
+        filters=state["filters"],
+        excludes=state["excludes"],
+        metadata=state["metadata"],
+    )
 
 
 @dataclass(frozen=True, slots=True)

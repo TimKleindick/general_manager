@@ -27,13 +27,23 @@ REQUEST_CORE_CAPABILITIES = CapabilitySet(
         InterfaceCapabilityConfig(RequestReadCapability),
         InterfaceCapabilityConfig(RequestValidationCapability),
         InterfaceCapabilityConfig(RequestQueryCapability),
+        InterfaceCapabilityConfig(LoggingObservabilityCapability),
+    ),
+)
+
+REQUEST_MUTATION_CAPABILITIES = CapabilitySet(
+    label="request_mutation",
+    entries=(
         InterfaceCapabilityConfig(RequestCreateCapability),
         InterfaceCapabilityConfig(RequestUpdateCapability),
         InterfaceCapabilityConfig(RequestDeleteCapability),
-        InterfaceCapabilityConfig(LoggingObservabilityCapability),
     ),
 )
 
 REQUEST_CAPABILITIES = REQUEST_CORE_CAPABILITIES
 
-__all__ = ["REQUEST_CAPABILITIES", "REQUEST_CORE_CAPABILITIES"]
+__all__ = [
+    "REQUEST_CAPABILITIES",
+    "REQUEST_CORE_CAPABILITIES",
+    "REQUEST_MUTATION_CAPABILITIES",
+]

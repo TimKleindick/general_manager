@@ -6,6 +6,7 @@ from django.test import SimpleTestCase
 
 from general_manager.bucket.request_bucket import (
     RequestBucketManagerMismatchError,
+    RequestBucketSortAttributeError,
     RequestBucketTypeMismatchError,
 )
 from general_manager.interface import RequestInterface
@@ -444,3 +445,63 @@ class RequestBucketHardeningTests(SimpleTestCase):
 
         with self.assertRaises(RequestBucketManagerMismatchError):
             _ = left | right
+
+    def test_request_bucket_sort_reports_missing_attribute(self) -> None:
+        bucket = EqualityProject.filter(status="active")
+
+        with self.assertRaises(RequestBucketSortAttributeError) as context:
+            bucket.sort("missing")
+
+        self.assertIn("missing", str(context.exception))
+        self.assertIn("EqualityProject", str(context.exception))
+
+    def test_request_interface_clone_preserves_mutation_capabilities(self) -> None:
+        class MutationProject(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/items/{id}",
+                        ),
+                        "list": RequestQueryOperation(
+                            name="list",
+                            method="GET",
+                            path="/items",
+                        ),
+                    }
+                    create_operation = RequestMutationOperation(
+                        name="create",
+                        method="POST",
+                        path="/items",
+                    )
+                    update_operation = RequestMutationOperation(
+                        name="update",
+                        method="PATCH",
+                        path="/items/{id}",
+                    )
+                    delete_operation = RequestMutationOperation(
+                        name="delete",
+                        method="DELETE",
+                        path="/items/{id}",
+                    )
+
+        self.assertEqual(
+            MutationProject.Interface.get_mutation_operation("create").path,
+            "/items",
+        )
+        self.assertEqual(
+            MutationProject.Interface.get_mutation_operation("update").path,
+            "/items/{id}",
+        )
+        self.assertEqual(
+            MutationProject.Interface.get_mutation_operation("delete").path,
+            "/items/{id}",
+        )
+        self.assertIsNotNone(MutationProject.Interface.get_capability_handler("create"))
+        self.assertIsNotNone(MutationProject.Interface.get_capability_handler("update"))
+        self.assertIsNotNone(MutationProject.Interface.get_capability_handler("delete"))

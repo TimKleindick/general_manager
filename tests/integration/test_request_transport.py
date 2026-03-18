@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from datetime import datetime
 from typing import Any, ClassVar
 from unittest import mock
@@ -7,6 +8,7 @@ from unittest import mock
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
+from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
     RequestAuthenticationError,
@@ -745,3 +747,40 @@ class RequestTransportIntegrationTest(SimpleTestCase):
         )
         self.assertEqual(end_context["status_code"], 200)
         self.assertEqual(end_context["retry_count"], 1)
+
+    def test_request_bucket_pickle_preserves_materialized_items(self) -> None:
+        bucket = TransportBackedProject.filter(status="active")
+        items = list(bucket)
+        request_count = len(TransportBackedProject.Interface.transport.requests)
+
+        round_tripped = pickle.loads(pickle.dumps(bucket))  # noqa: S301
+
+        self.assertIsInstance(round_tripped, RequestBucket)
+        self.assertEqual(round_tripped.request_plan, bucket.request_plan)
+        self.assertEqual(
+            [item.name for item in round_tripped], [item.name for item in items]
+        )
+        self.assertEqual(
+            round_tripped[0]._interface._request_payload_cache["name"],
+            "Alpha",
+        )
+        self.assertEqual(
+            len(TransportBackedProject.Interface.transport.requests),
+            request_count,
+        )
+
+    def test_request_bucket_pickle_restores_lazy_bucket_without_rerunning_transport(
+        self,
+    ) -> None:
+        bucket = TransportBackedProject.filter(status="active")
+        request_count = len(TransportBackedProject.Interface.transport.requests)
+
+        round_tripped = pickle.loads(pickle.dumps(bucket))  # noqa: S301
+
+        self.assertIsInstance(round_tripped, RequestBucket)
+        self.assertEqual(round_tripped.request_plan, bucket.request_plan)
+        self.assertEqual(list(round_tripped), [])
+        self.assertEqual(
+            len(TransportBackedProject.Interface.transport.requests),
+            request_count,
+        )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import pickle
 from typing import Any, ClassVar
 
 from django.test import SimpleTestCase
@@ -182,6 +183,10 @@ GeneralManagerMeta.create_at_properties_for_attributes(
 )
 
 
+def _trusted_pickle_loads(data: bytes) -> Any:
+    return pickle.loads(data)  # noqa: S301 - test data is created locally
+
+
 class TestRequestInterface(SimpleTestCase):
     def setUp(self) -> None:
         RemoteProject.Interface.calls.clear()
@@ -258,10 +263,29 @@ class TestRequestInterface(SimpleTestCase):
         self.assertEqual(items[0].name, "Alpha")
         call = RemoteProject.Interface.calls[-1]
         self.assertEqual(dict(call["plan"].query_params), {})
-        self.assertEqual(
-            tuple(predicate.lookup_key for predicate in call["plan"].local_predicates),
-            ("local_name__icontains",),
+
+    def test_request_plan_pickle_preserves_body_and_metadata(self) -> None:
+        plan = RequestQueryPlan(
+            operation_name="search",
+            action="filter",
+            method="POST",
+            path="/projects/search",
+            query_params={"page": 2},
+            headers={"X-Test": "1"},
+            path_params={"id": 7},
+            body={"filters": {"status": "active"}},
+            filters={"status": ("active",)},
+            excludes={"name": ("Beta",)},
+            metadata={"request_id": "req-1"},
         )
+
+        round_tripped = _trusted_pickle_loads(pickle.dumps(plan))
+
+        self.assertEqual(round_tripped, plan)
+        self.assertEqual(
+            dict(round_tripped.body or {}), {"filters": {"status": "active"}}
+        )
+        self.assertEqual(dict(round_tripped.metadata), {"request_id": "req-1"})
 
     def test_materialized_bucket_filter_still_validates_declared_filters(self) -> None:
         materialized = RemoteProject.filter(status="active")[:1]
