@@ -296,6 +296,32 @@ def test_retry_policy_supports_capped_jittered_backoff() -> None:
     assert backoff == pytest.approx(2.5)
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_attempts": 0}, "max_attempts"),
+        ({"base_backoff_seconds": -1.0}, "base_backoff_seconds"),
+        ({"backoff_multiplier": 0.0}, "backoff_multiplier"),
+        (
+            {"base_backoff_seconds": 2.0, "max_backoff_seconds": 1.0},
+            "max_backoff_seconds",
+        ),
+        ({"jitter_ratio": 1.5}, "jitter_ratio"),
+        ({"idempotency_key_header": "Idempotency-Key"}, "idempotency_key_factory"),
+        (
+            {"idempotency_key_factory": lambda: "idem-123"},
+            "idempotency_key_header",
+        ),
+    ],
+)
+def test_retry_policy_rejects_invalid_configuration(
+    kwargs: dict[str, Any],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        RequestRetryPolicy(**kwargs)
+
+
 def test_retry_policy_applies_idempotency_key_on_retried_non_idempotent_methods() -> (
     None
 ):
@@ -470,6 +496,14 @@ def test_urllib_request_transport_preserves_request_schema_errors() -> None:
                 path="/projects",
             ),
         )
+
+
+@pytest.mark.parametrize("payload_bytes", [b"\xff", b"{"])
+def test_urllib_request_transport_rejects_invalid_encoded_payloads(
+    payload_bytes: bytes,
+) -> None:
+    with pytest.raises(RequestSchemaError):
+        UrllibRequestTransport._decode_payload(payload_bytes)
 
 
 def test_urllib_request_transport_percent_encodes_path_parameters() -> None:

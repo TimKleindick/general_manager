@@ -159,7 +159,7 @@ class RequestInterface(InterfaceBase):
                     filters=cls.filters,
                 )
             raise UnknownRequestOperationError(resolved_name)
-        if operation.filters:
+        if operation.filters is not None:
             return operation
         return RequestQueryOperation(
             name=operation.name,

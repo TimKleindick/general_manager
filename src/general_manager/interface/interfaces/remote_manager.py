@@ -54,16 +54,25 @@ def _normalize_remote_envelope(
         payload = response
 
     if isinstance(payload, list):
+        if not all(isinstance(item, Mapping) for item in payload):
+            raise RequestSchemaError.non_object_json_payload()
         return RequestQueryResult(items=tuple(payload), metadata=metadata)
     if not isinstance(payload, dict):
         raise RequestSchemaError.non_object_json_payload()
-    if "error" in payload:
-        raise RequestConfigurationError.unmapped_remote_error(interface_cls.__name__)
     items = payload.get("items", [])
     if not isinstance(items, list):
         raise RequestSchemaError.non_object_json_payload()
-    metadata.update(payload.get("metadata", {}))
     total_count = payload.get("total_count")
+    payload_metadata = payload.get("metadata", {})
+    if not all(isinstance(item, Mapping) for item in items):
+        raise RequestSchemaError.non_object_json_payload()
+    if not isinstance(payload_metadata, Mapping):
+        raise RequestSchemaError.non_object_json_payload()
+    if total_count is not None and not isinstance(total_count, int):
+        raise RequestSchemaError.non_object_json_payload()
+    if "error" in payload:
+        raise RequestConfigurationError.unmapped_remote_error(interface_cls.__name__)
+    metadata.update(payload_metadata)
     return RequestQueryResult(
         items=tuple(items), total_count=total_count, metadata=metadata
     )
@@ -92,12 +101,14 @@ class RemoteManagerInterface(RequestInterface):
 
         meta_class = getattr(cls, "Meta", None)
         cls.base_url = getattr(meta_class, "base_url", "")
-        cls.base_path = getattr(meta_class, "base_path", "/gm")
+        raw_base_path = getattr(meta_class, "base_path", None)
+        cls.base_path = "/gm" if raw_base_path is None else raw_base_path
         cls.remote_manager = getattr(meta_class, "remote_manager", "")
         cls.protocol_version = getattr(meta_class, "protocol_version", "v1")
         cls.websocket_invalidation_enabled = bool(
             getattr(meta_class, "websocket_invalidation_enabled", False)
         )
+        validate_remote_manager_meta(cls)
 
         normalized_base_path = cls.base_path.rstrip("/") or "/gm"
         cls.base_path = normalized_base_path
@@ -156,7 +167,6 @@ class RemoteManagerInterface(RequestInterface):
                 metrics_backend=transport_config.metrics_backend,
                 trace_backend=transport_config.trace_backend,
             )
-        validate_remote_manager_meta(cls)
 
     @classmethod
     def get_websocket_invalidation_url(cls) -> str:

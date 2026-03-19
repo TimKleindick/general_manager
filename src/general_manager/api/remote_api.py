@@ -94,6 +94,7 @@ class RemoteAPIConfig:
     allow_delete: bool
     websocket_invalidation: bool
     protocol_version: str
+    identifier_type: type[Any] | None = None
 
 
 def _normalize_base_path(raw: str | None) -> str:
@@ -140,6 +141,18 @@ def get_remote_api_config(
             getattr(remote_api, "websocket_invalidation", False)
         ),
         protocol_version=str(getattr(remote_api, "protocol_version", "v1")),
+        identifier_type=getattr(
+            getattr(manager_cls, "Interface", None),
+            "input_fields",
+            {},
+        )
+        .get("id", None)
+        .type
+        if getattr(getattr(manager_cls, "Interface", None), "input_fields", {}).get(
+            "id"
+        )
+        is not None
+        else None,
     )
     if not any(
         (
@@ -250,7 +263,7 @@ def _parse_json_body(request: HttpRequest) -> dict[str, Any]:
 
 
 def _coerce_identifier(config: RemoteAPIConfig, identifier: str) -> Any:
-    return int(identifier) if identifier.isdigit() else identifier
+    return int(identifier) if config.identifier_type is int else identifier
 
 
 def _request_id(

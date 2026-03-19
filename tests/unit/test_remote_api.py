@@ -9,13 +9,24 @@ from django.test import RequestFactory, SimpleTestCase
 from general_manager.api.remote_api import (
     RemoteAPIConfig,
     RemoteAPIConfigurationError,
+    _coerce_identifier,
     _build_create_view,
     _build_item_view,
     _build_query_view,
     build_remote_api_registry,
 )
 from general_manager.interface import RemoteManagerInterface
-from general_manager.interface.requests import RequestConfigurationError, RequestField
+from general_manager.interface.interfaces.remote_manager import (
+    _normalize_remote_envelope,
+)
+from general_manager.interface.requests import (
+    RequestConfigurationError,
+    RequestField,
+    RequestQueryOperation,
+    RequestQueryPlan,
+    RequestSchemaError,
+    RequestTransportResponse,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 
@@ -105,6 +116,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_item_view(config)(factory.post("/gm/projects/1"), "1")
@@ -127,6 +139,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=True,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
         item_view = _build_item_view(config)
 
@@ -172,6 +185,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_item_view(config)(
@@ -204,6 +218,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_query_view(config)(
@@ -234,6 +249,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_query_view(config)(
@@ -264,6 +280,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_create_view(config)(
@@ -295,6 +312,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_item_view(config)(factory.get("/gm/projects/7"), "7")
@@ -321,6 +339,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         with patch(
@@ -353,6 +372,7 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             allow_delete=False,
             websocket_invalidation=False,
             protocol_version="v1",
+            identifier_type=int,
         )
 
         response = _build_create_view(config)(
@@ -393,6 +413,69 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
                         base_url = "ftp://testserver"
                         remote_manager = "projects"
                         protocol_version = "v1"
+
+    def test_invalid_remote_manager_slug_is_rejected_at_class_definition(self) -> None:
+        with self.assertRaises(RequestConfigurationError):
+
+            class InvalidRemoteProject(GeneralManager):
+                class Interface(RemoteManagerInterface):
+                    id = Input(type=int)
+                    name = RequestField(str)
+
+                    class Meta:
+                        base_url = "http://testserver"
+                        remote_manager = "Projects_Internal"
+                        protocol_version = "v1"
+
+    def test_root_base_path_is_rejected_at_class_definition(self) -> None:
+        with self.assertRaises(RequestConfigurationError):
+
+            class InvalidRemoteProject(GeneralManager):
+                class Interface(RemoteManagerInterface):
+                    id = Input(type=int)
+                    name = RequestField(str)
+
+                    class Meta:
+                        base_url = "http://testserver"
+                        base_path = "/"
+                        remote_manager = "projects"
+                        protocol_version = "v1"
+
+    def test_item_identifier_preserves_leading_zero_strings_for_string_ids(
+        self,
+    ) -> None:
+        config = RemoteAPIConfig(
+            manager_cls=MagicMock(),
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=True,
+            allow_create=False,
+            allow_update=False,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=str,
+        )
+
+        self.assertEqual(_coerce_identifier(config, "00042"), "00042")
+
+    def test_remote_envelope_rejects_non_mapping_items(self) -> None:
+        with self.assertRaises(RequestSchemaError):
+            _normalize_remote_envelope(
+                RequestTransportResponse(
+                    payload={"items": ["bad-item"]},  # type: ignore[list-item]
+                    status_code=200,
+                ),
+                RemoteManagerInterface,
+                RequestQueryOperation(name="list", method="GET", path="/projects"),
+                RequestQueryPlan(
+                    operation_name="list",
+                    action="filter",
+                    method="GET",
+                    path="/projects",
+                ),
+            )
 
     def test_websocket_url_defaults_from_http_base_url(self) -> None:
         class RemoteProject(GeneralManager):

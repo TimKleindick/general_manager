@@ -9,6 +9,7 @@ from importlib import import_module
 import re
 from uuid import UUID, uuid4
 from typing import Any, TYPE_CHECKING, cast
+from urllib.parse import parse_qs
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
@@ -114,7 +115,9 @@ class RemoteInvalidationConsumer:
         url_kwargs = scope.get("url_route", {}).get("kwargs", {})
         base_path = "/" + str(url_kwargs["base_path"]).strip("/")
         resource_name = str(url_kwargs["resource_name"])
-        protocol_version = scope.get("query_string", b"").decode("utf-8")
+        query_string = scope.get("query_string", b"")
+        query_params = parse_qs(query_string.decode("utf-8")) if query_string else {}
+        protocol_version = query_params.get("version", [None])[0]
         manager_configs = build_remote_api_registry(
             cast(list[type["GeneralManager"]], GeneralManagerMeta.all_classes)
         )
@@ -122,10 +125,7 @@ class RemoteInvalidationConsumer:
         if config is None or not config.websocket_invalidation:
             await send({"type": "websocket.close", "code": 4404})
             return
-        if (
-            protocol_version
-            and protocol_version != f"version={config.protocol_version}"
-        ):
+        if protocol_version and protocol_version != config.protocol_version:
             await send({"type": "websocket.close", "code": 4406})
             return
         channel_layer = _get_channel_layer_safe()

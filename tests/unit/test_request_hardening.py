@@ -9,6 +9,7 @@ from general_manager.bucket.request_bucket import (
     RequestBucketSortAttributeError,
     RequestBucketTypeMismatchError,
 )
+from general_manager.interface.capabilities.request import RequestLifecycleCapability
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
     InvalidRequestFilterConfigurationError,
@@ -393,7 +394,7 @@ class RequestValidationCapabilityTests(SimpleTestCase):
                         auth_provider = object()
 
     def test_validation_rejects_invalid_retry_policy(self) -> None:
-        with self.assertRaises(RequestConfigurationError):
+        with self.assertRaises(ValueError):
 
             class InvalidRetryPolicyProject(GeneralManager):
                 class Interface(RequestInterface):
@@ -490,18 +491,15 @@ class RequestBucketHardeningTests(SimpleTestCase):
                         path="/items/{id}",
                     )
 
-        self.assertEqual(
-            MutationProject.Interface.get_mutation_operation("create").path,
-            "/items",
+        _, cloned, _ = RequestLifecycleCapability().pre_create(
+            name="MutationProject",
+            attrs={"__module__": __name__},
+            interface=MutationProject.Interface,
         )
-        self.assertEqual(
-            MutationProject.Interface.get_mutation_operation("update").path,
-            "/items/{id}",
-        )
-        self.assertEqual(
-            MutationProject.Interface.get_mutation_operation("delete").path,
-            "/items/{id}",
-        )
-        self.assertIsNotNone(MutationProject.Interface.get_capability_handler("create"))
-        self.assertIsNotNone(MutationProject.Interface.get_capability_handler("update"))
-        self.assertIsNotNone(MutationProject.Interface.get_capability_handler("delete"))
+
+        self.assertEqual(cloned.get_mutation_operation("create").path, "/items")
+        self.assertEqual(cloned.get_mutation_operation("update").path, "/items/{id}")
+        self.assertEqual(cloned.get_mutation_operation("delete").path, "/items/{id}")
+        self.assertIsNotNone(cloned.get_capability_handler("create"))
+        self.assertIsNotNone(cloned.get_capability_handler("update"))
+        self.assertIsNotNone(cloned.get_capability_handler("delete"))

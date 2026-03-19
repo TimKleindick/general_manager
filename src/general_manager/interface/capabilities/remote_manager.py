@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any, ClassVar, TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -23,6 +24,8 @@ if TYPE_CHECKING:  # pragma: no cover
         RemoteManagerInterface,
     )
     from general_manager.interface.interfaces.request import RequestInterface
+
+_REMOTE_MANAGER_TOKEN_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class RemoteManagerQueryCapability(RequestQueryCapability):
@@ -148,13 +151,27 @@ def validate_remote_manager_meta(interface_cls: type["RemoteManagerInterface"]) 
     parsed = urlsplit(interface_cls.base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RequestConfigurationError.invalid_remote_base_url(interface_cls.__name__)
-    if not interface_cls.base_path.startswith("/"):
+    if not _REMOTE_MANAGER_TOKEN_RE.match(interface_cls.remote_manager):
+        raise RequestConfigurationError.invalid_remote_base_url(interface_cls.__name__)
+    base_path = interface_cls.base_path
+    if base_path == "/":
+        raise RequestConfigurationError.invalid_remote_base_path(
+            interface_cls.__name__,
+            "cannot be '/'",
+        )
+    if not base_path.startswith("/"):
         raise RequestConfigurationError.invalid_remote_base_path(
             interface_cls.__name__,
             "must start with '/'",
         )
-    if "//" in interface_cls.base_path:
+    if "//" in base_path:
         raise RequestConfigurationError.invalid_remote_base_path(
             interface_cls.__name__,
             "cannot contain empty path segments",
+        )
+    segments = [segment for segment in base_path.split("/") if segment]
+    if any(not _REMOTE_MANAGER_TOKEN_RE.match(segment) for segment in segments):
+        raise RequestConfigurationError.invalid_remote_base_path(
+            interface_cls.__name__,
+            "must use lowercase slug segments",
         )

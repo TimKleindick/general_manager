@@ -34,6 +34,34 @@ SUPPORTED_REQUEST_LOOKUPS = frozenset(
     {"exact", "in", "contains", "icontains", "gt", "gte", "lt", "lte", "isnull"}
 )
 
+_RETRY_POLICY_MAX_ATTEMPTS_ERROR = "RequestRetryPolicy.max_attempts must be at least 1."
+_RETRY_POLICY_BASE_BACKOFF_ERROR = (
+    "RequestRetryPolicy.base_backoff_seconds cannot be negative."
+)
+_RETRY_POLICY_BACKOFF_MULTIPLIER_ERROR = (
+    "RequestRetryPolicy.backoff_multiplier must be greater than 0."
+)
+_RETRY_POLICY_JITTER_ERROR = "RequestRetryPolicy.jitter_ratio must be between 0 and 1."
+_RETRY_POLICY_MAX_BACKOFF_ERROR = (
+    "RequestRetryPolicy.max_backoff_seconds must be greater than or equal to "
+    "base_backoff_seconds."
+)
+_RETRY_POLICY_MISSING_HEADER_ERROR = (
+    "RequestRetryPolicy.idempotency_key_header is required when "
+    "idempotency_key_factory is provided."
+)
+_RETRY_POLICY_MISSING_FACTORY_ERROR = (
+    "RequestRetryPolicy.idempotency_key_factory is required when "
+    "idempotency_key_header is provided."
+)
+_RETRY_POLICY_NON_CALLABLE_FACTORY_ERROR = (
+    "RequestRetryPolicy.idempotency_key_factory must be callable."
+)
+
+
+def _invalid_retry_policy(reason: str) -> ValueError:
+    return ValueError(reason)
+
 
 class RequestInterfaceError(ValueError):
     """Raised when a request-backed interface or bucket receives invalid input."""
@@ -586,6 +614,29 @@ class RequestRetryPolicy:
     retry_non_idempotent_methods: bool = False
     idempotency_key_header: str | None = None
     idempotency_key_factory: Callable[[], str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise _invalid_retry_policy(_RETRY_POLICY_MAX_ATTEMPTS_ERROR)
+        if self.base_backoff_seconds < 0.0:
+            raise _invalid_retry_policy(_RETRY_POLICY_BASE_BACKOFF_ERROR)
+        if self.backoff_multiplier <= 0.0:
+            raise _invalid_retry_policy(_RETRY_POLICY_BACKOFF_MULTIPLIER_ERROR)
+        if not 0.0 <= self.jitter_ratio <= 1.0:
+            raise _invalid_retry_policy(_RETRY_POLICY_JITTER_ERROR)
+        if (
+            self.max_backoff_seconds is not None
+            and self.max_backoff_seconds < self.base_backoff_seconds
+        ):
+            raise _invalid_retry_policy(_RETRY_POLICY_MAX_BACKOFF_ERROR)
+        if self.idempotency_key_header is None and self.idempotency_key_factory is None:
+            return
+        if self.idempotency_key_header is None:
+            raise _invalid_retry_policy(_RETRY_POLICY_MISSING_HEADER_ERROR)
+        if self.idempotency_key_factory is None:
+            raise _invalid_retry_policy(_RETRY_POLICY_MISSING_FACTORY_ERROR)
+        if not callable(self.idempotency_key_factory):
+            raise _invalid_retry_policy(_RETRY_POLICY_NON_CALLABLE_FACTORY_ERROR)
 
     def allows_method(self, method: str) -> bool:
         if self.retry_non_idempotent_methods:
@@ -1588,7 +1639,10 @@ class UrllibRequestTransport(SharedRequestTransport):
     def _decode_payload(payload_bytes: bytes) -> RequestResponse:
         if not payload_bytes:
             return {}
-        decoded = json.loads(payload_bytes.decode("utf-8"))
+        try:
+            decoded = json.loads(payload_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RequestSchemaError.non_object_json_payload() from error
         if isinstance(decoded, Mapping):
             return cast(Mapping[str, Any], decoded)
         if isinstance(decoded, list):

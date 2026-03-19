@@ -390,6 +390,56 @@ class TestRequestInterface(SimpleTestCase):
             {"q": "alpha"},
         )
 
+    def test_operation_specific_filters_fall_back_to_interface_filters(self) -> None:
+        items = list(
+            RemoteProject.Interface.query_operation(
+                "search",
+                search_only="alpha",
+                status="active",
+            )
+        )
+
+        self.assertEqual(len(items), 1)
+        plan = RemoteProject.Interface.calls[-1]["plan"]
+        self.assertEqual(dict(plan.query_params), {"state": "active"})
+        self.assertEqual(dict(plan.body), {"q": "alpha"})
+
+    def test_explicit_empty_operation_filters_do_not_inherit_interface_filters(
+        self,
+    ) -> None:
+        class EmptyFilterProject(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    filters: ClassVar[dict[str, RequestFilter]] = {
+                        "status": RequestFilter(remote_name="state", value_type=str),
+                    }
+                    query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                        "detail": RequestQueryOperation(
+                            name="detail",
+                            method="GET",
+                            path="/items/{id}",
+                        ),
+                        "list": RequestQueryOperation(
+                            name="list",
+                            method="GET",
+                            path="/items",
+                        ),
+                        "search": RequestQueryOperation(
+                            name="search",
+                            method="GET",
+                            path="/items/search",
+                            filters={},
+                        ),
+                    }
+
+        self.assertEqual(
+            EmptyFilterProject.Interface.get_query_operation("search").filters,
+            {},
+        )
+
     def test_prefetched_payload_is_used_for_attributes(self) -> None:
         project = RemoteProject.filter(status="active").first()
 

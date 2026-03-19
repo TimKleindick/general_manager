@@ -17,6 +17,7 @@ from general_manager.interface import DatabaseInterface, RemoteManagerInterface
 from general_manager.interface.requests import (
     RequestNotFoundError,
     RequestField,
+    RequestPlan,
     RequestTransportRequest,
     RequestTransportResponse,
     RequestTransportStatusError,
@@ -41,7 +42,7 @@ class DjangoClientTransport(SharedRequestTransport):
         *,
         interface_cls: type[Any],
         operation: Any,
-        plan: Any,
+        plan: RequestPlan,
         identification: dict[str, Any] | None,
     ) -> RequestTransportResponse:
         del interface_cls, operation, plan, identification
@@ -62,7 +63,9 @@ class DjangoClientTransport(SharedRequestTransport):
                 )
             },
         )
-        payload = json.loads(response.content.decode("utf-8"))
+        payload = None
+        if response.status_code != 204 and response.content:
+            payload = json.loads(response.content.decode("utf-8"))
         if response.status_code >= 400:
             raise RequestTransportStatusError(
                 status_code=response.status_code,
@@ -378,6 +381,28 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
             }
             assert isinstance(payload["event_id"], str)
 
+            await communicator.send_input(
+                {"type": "websocket.disconnect", "code": 1000}
+            )
+            await communicator.wait()
+
+        asyncio.run(run_test())
+
+    def test_websocket_invalidation_accepts_additional_query_parameters(self) -> None:
+        async def run_test() -> None:
+            communicator = ApplicationCommunicator(
+                application,
+                {
+                    "type": "websocket",
+                    "path": "/internal/gm/ws/projects",
+                    "query_string": b"foo=bar&version=v1",
+                    "headers": [],
+                    "subprotocols": [],
+                },
+            )
+            await communicator.send_input({"type": "websocket.connect"})
+            accept = await communicator.receive_output()
+            assert accept["type"] == "websocket.accept"
             await communicator.send_input(
                 {"type": "websocket.disconnect", "code": 1000}
             )
