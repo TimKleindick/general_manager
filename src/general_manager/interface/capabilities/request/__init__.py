@@ -145,17 +145,18 @@ class RequestValidationCapability(ValidationCapability):
             if not operation.name or not operation.path:
                 raise InvalidRequestFilterConfigurationError(operation_name)
             duplicate_keys = set(request_interface_cls.filters).intersection(
-                operation.filters
+                operation.filters or ()
             )
             if duplicate_keys:
                 raise InvalidRequestFilterConfigurationError(sorted(duplicate_keys)[0])
-            for filter_key, spec in operation.filters.items():
-                validate_filter_key(filter_key)
-                self._validate_filter_spec(
-                    filter_key,
-                    spec,
-                    declared_operations=declared_operations,
-                )
+            if operation.filters is not None:
+                for filter_key, spec in operation.filters.items():
+                    validate_filter_key(filter_key)
+                    self._validate_filter_spec(
+                        filter_key,
+                        spec,
+                        declared_operations=declared_operations,
+                    )
 
     @staticmethod
     def _validate_filter_spec(
@@ -744,17 +745,17 @@ class RequestUpdateCapability(BaseCapability):
         operation = interface_cls.get_mutation_operation("update")
         serializer = getattr(interface_cls, "update_serializer", None)
         cached_payload = getattr(interface_instance, "_request_payload_cache", None)
-        existing_values = dict(interface_cls.fields)
-        if cached_payload is not None:
-            existing_values.update(cast(Mapping[str, Any], cached_payload))
+        existing_values = dict(
+            cast(
+                Mapping[str, Any],
+                cached_payload
+                if cached_payload is not None
+                else interface_instance.get_data(),
+            )
+        )
         existing_values.update(dict(interface_instance.identification))
         candidate_values = {**existing_values, **kwargs}
         _apply_request_rules(interface_cls, candidate_values)
-        if cached_payload is None:
-            existing_values = dict(
-                cast(Mapping[str, Any], interface_instance.get_data())
-            )
-            existing_values.update(dict(interface_instance.identification))
         body = serializer(kwargs) if callable(serializer) else kwargs
         result = interface_cls.execute_request_plan(
             RequestQueryPlan(

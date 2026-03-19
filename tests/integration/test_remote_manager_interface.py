@@ -137,7 +137,7 @@ class ASGIWebSocketConnection:
             await self.communicator.send_input(
                 {"type": "websocket.disconnect", "code": 1000}
             )
-        await self.communicator.wait()
+            await self.communicator.wait()
 
 
 class DjangoClientTransportTests(GeneralManagerTransactionTestCase):
@@ -204,6 +204,17 @@ class DjangoClientTransportTests(GeneralManagerTransactionTestCase):
         )
 
         self.assertEqual(calls, [("GET", "/projects?search=a%2Bb")])
+
+
+class ASGIWebSocketConnectionTests(GeneralManagerTransactionTestCase):
+    def test_close_without_connect_is_safe(self) -> None:
+        async def run_test() -> None:
+            connection = ASGIWebSocketConnection(
+                "ws://testserver/internal/gm/ws/projects?version=v1"
+            )
+            await connection.close()
+
+        asyncio.run(run_test())
 
 
 @override_settings(AUTOCREATE_GRAPHQL=False)
@@ -413,14 +424,14 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
                 },
             )
             await communicator.send_input({"type": "websocket.connect"})
-            accept = await communicator.receive_output()
+            accept = await asyncio.wait_for(communicator.receive_output(), timeout=5)
             assert accept["type"] == "websocket.accept"
 
             await sync_to_async(self.project.update)(
                 ignore_permission=True,
                 status="inactive",
             )
-            message = await communicator.receive_output()
+            message = await asyncio.wait_for(communicator.receive_output(), timeout=5)
             assert message["type"] == "websocket.send"
             payload = json.loads(message["text"])
             assert payload == {

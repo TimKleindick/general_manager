@@ -25,6 +25,7 @@ from general_manager.interface.requests import (
     SharedRequestTransport,
     UrllibRequestTransport,
     default_request_response_normalizer,
+    resolve_request_value,
 )
 
 
@@ -509,6 +510,16 @@ def test_urllib_request_transport_rejects_invalid_encoded_payloads(
 ) -> None:
     with pytest.raises(RequestSchemaError):
         UrllibRequestTransport._decode_payload(payload_bytes)
+
+
+def test_resolve_request_value_rejects_empty_path() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        resolve_request_value({"id": 1}, ())
+
+
+def test_resolve_request_value_rejects_non_string_path_parts() -> None:
+    with pytest.raises(TypeError, match="only strings"):
+        resolve_request_value({"id": 1}, ("id", 1))  # type: ignore[arg-type]
 
 
 def test_urllib_request_transport_percent_encodes_path_parameters() -> None:

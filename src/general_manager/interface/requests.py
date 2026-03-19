@@ -66,6 +66,10 @@ _RETRY_POLICY_EXCEPTIONS_ERROR = (
 _RETRY_POLICY_HEADER_ERROR = (
     "RequestRetryPolicy.idempotency_key_header must be a non-empty string."
 )
+_RESOLVE_REQUEST_EMPTY_PATH_ERROR = "resolve_request_value path must not be empty."
+_RESOLVE_REQUEST_PATH_TYPE_ERROR = (
+    "resolve_request_value path must contain only strings."
+)
 
 
 def _invalid_retry_policy(reason: str) -> ValueError:
@@ -1679,6 +1683,11 @@ def resolve_request_value(
     payload: Mapping[str, Any] | object, path: tuple[str, ...]
 ) -> Any:
     """Resolve a dotted field path from a mapping/object payload."""
+
+    if not path:
+        raise ValueError(_RESOLVE_REQUEST_EMPTY_PATH_ERROR)
+    if any(not isinstance(part, str) for part in path):
+        raise TypeError(_RESOLVE_REQUEST_PATH_TYPE_ERROR)
 
     current: Any = payload
     for part in path:

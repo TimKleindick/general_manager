@@ -88,11 +88,12 @@ class RequestInterface(InterfaceBase):
                     legacy_key,
                 )
         meta_class = getattr(cls, "Meta", None)
-        cls.fields = {
-            key: value
-            for key, value in vars(cls).items()
-            if isinstance(value, RequestField)
-        }
+        fields: dict[str, RequestField] = {}
+        for base in reversed(cls.__mro__):
+            for key, value in vars(base).items():
+                if isinstance(value, RequestField):
+                    fields[key] = value
+        cls.fields = fields
         cls.filters = dict(getattr(meta_class, "filters", {}))
         cls.query_operations = dict(getattr(meta_class, "query_operations", {}))
         cls.default_query_operation = getattr(
