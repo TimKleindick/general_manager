@@ -66,7 +66,7 @@ class FakeCachingTransport(SharedRequestTransport):
 
 class RequestCachingIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         class RemoteProject(GeneralManager):
             class Interface(RequestInterface):
                 id = Input(type=int)

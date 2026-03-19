@@ -155,7 +155,7 @@ class RemoteInvalidationConsumer:
                         receive_task = asyncio.create_task(receive())
                 if event_task in done:
                     event = event_task.result()
-                    if event.get("type") == "gm.remote.invalidation":
+                    if not disconnect and event.get("type") == "gm.remote.invalidation":
                         await send(
                             {
                                 "type": "websocket.send",

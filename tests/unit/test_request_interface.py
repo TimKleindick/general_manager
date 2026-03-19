@@ -214,6 +214,30 @@ class TestRequestInterface(SimpleTestCase):
         self.assertIn("status", RemoteProject.Interface.filters)
         self.assertIn("detail", RemoteProject.Interface.query_operations)
 
+    def test_inherited_request_fields_are_preserved(self) -> None:
+        class BaseRequest(RequestInterface):
+            id = Input(type=int)
+            name = RequestField(str)
+
+            class Meta:
+                query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                    "detail": RequestQueryOperation(
+                        name="detail",
+                        method="GET",
+                        path="/items/{id}",
+                    ),
+                    "list": RequestQueryOperation(
+                        name="list",
+                        method="GET",
+                        path="/items",
+                    ),
+                }
+
+        class DerivedRequest(BaseRequest):
+            status = RequestField(str)
+
+        self.assertEqual(set(DerivedRequest.fields), {"name", "status"})
+
     def test_filter_compiles_remote_request_plan(self) -> None:
         bucket = RemoteProject.filter(
             status="active",
@@ -239,6 +263,24 @@ class TestRequestInterface(SimpleTestCase):
                 "pageSize": 50,
                 "sort": "-updated_at",
             },
+        )
+
+    def test_chained_remote_filter_normalizes_scalar_lookup_values(self) -> None:
+        list(RemoteProject.filter(status="active").filter(name__icontains="alp"))
+
+        call = RemoteProject.Interface.calls[-1]
+        self.assertEqual(
+            dict(call["plan"].query_params),
+            {"state": "active", "search": "alp"},
+        )
+
+    def test_chained_remote_exclude_normalizes_scalar_lookup_values(self) -> None:
+        list(RemoteProject.filter(status="active").exclude(status="inactive"))
+
+        call = RemoteProject.Interface.calls[-1]
+        self.assertEqual(
+            dict(call["plan"].query_params),
+            {"state": "active", "state_not": "inactive"},
         )
 
     def test_unknown_filter_fails_early(self) -> None:

@@ -662,7 +662,11 @@ class RequestTransportIntegrationTest(SimpleTestCase):
                 ignore_permission=True,
             )
 
-        self.assertEqual(RuleProtectedProject.Interface.transport.requests, [])
+        self.assertEqual(len(RuleProtectedProject.Interface.transport.requests), 1)
+        self.assertEqual(
+            RuleProtectedProject.Interface.transport.requests[0].operation_name,
+            "detail",
+        )
 
     def test_request_rules_do_not_run_for_queries(self) -> None:
         items = list(RuleProtectedProject.filter(status="active"))

@@ -117,6 +117,15 @@ class RequestBucket(Bucket[GeneralManagerType]):
         self._count_override = state["count_override"]
         self._materialized = True
 
+    @staticmethod
+    def _normalize_lookup_kwargs(
+        kwargs: Mapping[str, Any],
+    ) -> dict[str, tuple[Any, ...]]:
+        return {
+            key: value if isinstance(value, tuple) else (value,)
+            for key, value in kwargs.items()
+        }
+
     def __or__(
         self,
         other: Bucket[GeneralManagerType] | GeneralManagerType,
@@ -169,7 +178,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         return handler.build_bucket(  # type: ignore[return-value]
             self._interface_cls,
             operation_name=self._operation_name,
-            filters={**self.filters, **kwargs},
+            filters={**self.filters, **self._normalize_lookup_kwargs(kwargs)},
             excludes=self.excludes,
         )
 
@@ -191,7 +200,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
             self._interface_cls,
             operation_name=self._operation_name,
             filters=self.filters,
-            excludes={**self.excludes, **kwargs},
+            excludes={**self.excludes, **self._normalize_lookup_kwargs(kwargs)},
         )
 
     def first(self) -> GeneralManagerType | None:
