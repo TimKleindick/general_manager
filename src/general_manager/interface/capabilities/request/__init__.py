@@ -745,10 +745,11 @@ class RequestUpdateCapability(BaseCapability):
         serializer = getattr(interface_cls, "update_serializer", None)
         cached_payload = getattr(interface_instance, "_request_payload_cache", None)
         existing_values = dict(interface_cls.fields)
-        existing_values.update(dict(interface_instance.identification))
         if cached_payload is not None:
             existing_values.update(cast(Mapping[str, Any], cached_payload))
-        _apply_request_rules(interface_cls, {**existing_values, **kwargs})
+        existing_values.update(dict(interface_instance.identification))
+        candidate_values = {**existing_values, **kwargs}
+        _apply_request_rules(interface_cls, candidate_values)
         if cached_payload is None:
             existing_values = dict(
                 cast(Mapping[str, Any], interface_instance.get_data())

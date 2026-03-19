@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 from django.test import SimpleTestCase
 
 from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.interface.bundles import REQUEST_CAPABILITIES
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
     InvalidRequestFilterValueError,
@@ -197,6 +198,13 @@ class TestRequestInterface(SimpleTestCase):
         bucket = RemoteProject.filter(status="active")
 
         self.assertIsInstance(bucket, RequestBucket)
+
+    def test_request_capabilities_alias_is_reexported_from_bundles_package(
+        self,
+    ) -> None:
+        self.assertIs(
+            REQUEST_CAPABILITIES, RemoteProject.Interface.configured_capabilities[0]
+        )
 
     def test_meta_configuration_is_normalized_onto_interface(self) -> None:
         self.assertEqual(
@@ -447,6 +455,24 @@ class TestRequestInterface(SimpleTestCase):
         assert project is not None
         self.assertEqual(project.name, "Alpha")
         self.assertEqual(len(RemoteProject.Interface.calls), 1)
+
+    def test_ensure_items_marks_truthy_prefetched_data_as_materialized(self) -> None:
+        bucket = RemoteProject.filter(status="active")
+        project = RemoteProject(id=1)
+        project._interface.set_request_payload_cache(
+            {
+                "id": 1,
+                "name": "Alpha",
+                "status": "active",
+                "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+                "local_name": "Alpha Local",
+            }
+        )
+        bucket._data = (project,)
+        bucket._materialized = False
+
+        self.assertEqual(bucket._ensure_items(), (project,))
+        self.assertTrue(bucket._materialized)
 
     def test_direct_manager_read_uses_detail_operation(self) -> None:
         project = RemoteProject(id=5)

@@ -57,6 +57,15 @@ _RETRY_POLICY_MISSING_FACTORY_ERROR = (
 _RETRY_POLICY_NON_CALLABLE_FACTORY_ERROR = (
     "RequestRetryPolicy.idempotency_key_factory must be callable."
 )
+_RETRY_POLICY_STATUS_CODES_ERROR = (
+    "RequestRetryPolicy.retryable_status_codes must be a frozenset of integers."
+)
+_RETRY_POLICY_EXCEPTIONS_ERROR = (
+    "RequestRetryPolicy.retryable_exceptions must be a tuple of exception types."
+)
+_RETRY_POLICY_HEADER_ERROR = (
+    "RequestRetryPolicy.idempotency_key_header must be a non-empty string."
+)
 
 
 def _invalid_retry_policy(reason: str) -> ValueError:
@@ -618,6 +627,15 @@ class RequestRetryPolicy:
     def __post_init__(self) -> None:
         if self.max_attempts < 1:
             raise _invalid_retry_policy(_RETRY_POLICY_MAX_ATTEMPTS_ERROR)
+        if not isinstance(self.retryable_status_codes, frozenset) or not all(
+            isinstance(code, int) for code in self.retryable_status_codes
+        ):
+            raise _invalid_retry_policy(_RETRY_POLICY_STATUS_CODES_ERROR)
+        if not isinstance(self.retryable_exceptions, tuple) or not all(
+            isinstance(exc, type) and issubclass(exc, BaseException)
+            for exc in self.retryable_exceptions
+        ):
+            raise _invalid_retry_policy(_RETRY_POLICY_EXCEPTIONS_ERROR)
         if self.base_backoff_seconds < 0.0:
             raise _invalid_retry_policy(_RETRY_POLICY_BASE_BACKOFF_ERROR)
         if self.backoff_multiplier <= 0.0:
@@ -631,6 +649,11 @@ class RequestRetryPolicy:
             raise _invalid_retry_policy(_RETRY_POLICY_MAX_BACKOFF_ERROR)
         if self.idempotency_key_header is None and self.idempotency_key_factory is None:
             return
+        if self.idempotency_key_header is not None and (
+            not isinstance(self.idempotency_key_header, str)
+            or not self.idempotency_key_header.strip()
+        ):
+            raise _invalid_retry_policy(_RETRY_POLICY_HEADER_ERROR)
         if self.idempotency_key_header is None:
             raise _invalid_retry_policy(_RETRY_POLICY_MISSING_HEADER_ERROR)
         if self.idempotency_key_factory is None:

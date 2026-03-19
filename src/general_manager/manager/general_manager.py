@@ -69,6 +69,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """Return a user-friendly representation showing the identification."""
         return f"{self.__class__.__name__}(**{self.__id})"
 
+    @classmethod
+    def _is_request_interface(cls) -> bool:
+        return getattr(cls.Interface, "_interface_type", None) == "request"
+
     def __repr__(self) -> str:
         """Return a detailed representation of the manager instance."""
         return f"{self.__class__.__name__}(**{self.__id})"
@@ -298,7 +302,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket containing manager instances that match the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        if getattr(cls.Interface, "_interface_type", None) != "request":
+        if not cls._is_request_interface():
             DependencyTracker.track(
                 cls.__name__, "filter", serialize_dependency_identifier(identifier_map)
             )
@@ -323,7 +327,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             Bucket[Self]: Bucket of manager instances that do not satisfy the lookups.
         """
         identifier_map = cls.__parse_identification(kwargs) or kwargs
-        if getattr(cls.Interface, "_interface_type", None) != "request":
+        if not cls._is_request_interface():
             DependencyTracker.track(
                 cls.__name__,
                 "exclude",

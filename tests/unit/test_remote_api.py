@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.test import RequestFactory, SimpleTestCase
 
 from general_manager.api.remote_api import (
     RemoteAPIConfig,
     RemoteAPIConfigurationError,
     _coerce_identifier,
+    _extract_identifier_type,
     _build_create_view,
     _build_item_view,
     _build_query_view,
+    get_remote_api_config,
     build_remote_api_registry,
 )
 from general_manager.interface import RemoteManagerInterface
@@ -32,6 +34,31 @@ from general_manager.manager.input import Input
 
 
 class RemoteAPIRegistryTests(SimpleTestCase):
+    def test_get_remote_api_config_handles_missing_interface_identifier_type(
+        self,
+    ) -> None:
+        class Project(GeneralManager):
+            class RemoteAPI:
+                enabled = True
+                base_path = "/internal/gm"
+                resource_name = "projects"
+                allow_detail = True
+
+        config = get_remote_api_config(Project)
+
+        self.assertIsNotNone(config)
+        assert config is not None
+        self.assertIsNone(config.identifier_type)
+
+    def test_extract_identifier_type_handles_missing_input_field(self) -> None:
+        class DummyManager:
+            class Interface:
+                pass
+
+        DummyManager.Interface.input_fields = {}
+
+        self.assertIsNone(_extract_identifier_type(DummyManager))
+
     def test_duplicate_base_path_and_resource_name_is_rejected(self) -> None:
         class FirstProject(GeneralManager):
             class RemoteAPI:
@@ -202,6 +229,39 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
         self.assertEqual(payload["error"], "Invalid request.")
         self.assertEqual(payload["error_code"], "invalid_request")
         self.assertNotIn("secret failure", payload["error"])
+
+    def test_item_view_maps_validation_error(self) -> None:
+        factory = RequestFactory()
+        manager_instance = MagicMock()
+        manager_instance.update.side_effect = ValidationError("bad data")
+        manager_cls = MagicMock(return_value=manager_instance)
+        config = RemoteAPIConfig(
+            manager_cls=manager_cls,
+            base_path="/gm",
+            resource_name="projects",
+            allow_filter=False,
+            allow_detail=False,
+            allow_create=False,
+            allow_update=True,
+            allow_delete=False,
+            websocket_invalidation=False,
+            protocol_version="v1",
+            identifier_type=int,
+        )
+
+        response = _build_item_view(config)(
+            factory.patch(
+                "/gm/projects/7",
+                data=json.dumps({"name": "Updated"}),
+                content_type="application/json",
+            ),
+            "7",
+        )
+        payload = json.loads(response.content.decode("utf-8"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(payload["error"], "Validation failed.")
+        self.assertEqual(payload["error_code"], "validation_error")
 
     def test_query_view_maps_permission_error(self) -> None:
         factory = RequestFactory()
