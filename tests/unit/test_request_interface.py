@@ -516,6 +516,41 @@ class TestRequestInterface(SimpleTestCase):
         self.assertEqual(bucket._ensure_items(), (project,))
         self.assertTrue(bucket._materialized)
 
+    def test_request_bucket_hydrates_items_from_raw_items(self) -> None:
+        payload = {
+            "id": 1,
+            "name": "Alpha",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Alpha Local",
+        }
+        bucket = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            raw_items=(payload,),
+        )
+
+        item = bucket.first()
+
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.name, "Alpha")
+        self.assertTrue(bucket._materialized)
+
+    def test_all_preserves_existing_request_filters(self) -> None:
+        bucket = RemoteProject.filter(status="active")
+
+        list(bucket.all())
+
+        call = RemoteProject.Interface.calls[-1]
+        self.assertEqual(dict(call["plan"].query_params), {"state": "active"})
+
+    def test_lookup_normalization_preserves_tuple_arity(self) -> None:
+        self.assertEqual(
+            RequestBucket._normalize_lookup_kwargs({"page": (1, 2)}),
+            {"page": (1, 2)},
+        )
+
     def test_direct_manager_read_uses_detail_operation(self) -> None:
         project = RemoteProject(id=5)
 

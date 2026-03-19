@@ -74,10 +74,24 @@ class RequestBucket(Bucket[GeneralManagerType]):
         self.request_plan = request_plan
         self.filters = dict(filters or {})
         self.excludes = dict(excludes or {})
-        self._data = tuple(items or ())
         self._raw_items = tuple(raw_items or ())
+        if items is not None:
+            self._data = tuple(items)
+        elif self._raw_items:
+            self._data = tuple(
+                self._manager_class(
+                    **self._interface_cls.extract_identification(payload)
+                )
+                for payload in self._raw_items
+            )
+            for manager, payload in zip(self._data, self._raw_items, strict=False):
+                manager._interface.set_request_payload_cache(payload)
+        else:
+            self._data = tuple()
         self._count_override = count_override
-        self._materialized = items is not None or request_plan is None
+        self._materialized = (
+            items is not None or bool(self._raw_items) or request_plan is None
+        )
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         return (
@@ -224,6 +238,8 @@ class RequestBucket(Bucket[GeneralManagerType]):
         return handler.build_bucket(  # type: ignore[return-value]
             self._interface_cls,
             operation_name=self._operation_name,
+            filters=self.filters,
+            excludes=self.excludes,
         )
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
@@ -250,7 +266,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
 
     def sort(
         self,
-        key: tuple[str] | str,
+        key: tuple[str, ...] | str,
         reverse: bool = False,
     ) -> Bucket[GeneralManagerType]:
         items = list(self._ensure_items())
@@ -336,7 +352,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         handler.validate_lookups(
             self._interface_cls,
             operation_name=self._operation_name,
-            filters={key: (value,) for key, value in kwargs.items()},
+            filters=self._normalize_lookup_kwargs(kwargs),
         )
 
     def _validate_materialized_excludes(self, kwargs: Mapping[str, Any]) -> None:
@@ -344,7 +360,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         handler.validate_lookups(
             self._interface_cls,
             operation_name=self._operation_name,
-            excludes={key: (value,) for key, value in kwargs.items()},
+            excludes=self._normalize_lookup_kwargs(kwargs),
         )
 
 

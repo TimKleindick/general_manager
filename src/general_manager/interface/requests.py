@@ -175,6 +175,15 @@ class RequestConfigurationError(ValueError):
         return cls(f"{interface_name} must define Meta.remote_manager.")
 
     @classmethod
+    def invalid_remote_manager_name(
+        cls, interface_name: str
+    ) -> "RequestConfigurationError":
+        return cls(
+            f"{interface_name} remote_manager must be a lowercase slug using only "
+            "letters, digits, and hyphens."
+        )
+
+    @classmethod
     def missing_remote_base_url(
         cls, interface_name: str
     ) -> "RequestConfigurationError":

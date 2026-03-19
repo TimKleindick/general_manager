@@ -152,7 +152,9 @@ def validate_remote_manager_meta(interface_cls: type["RemoteManagerInterface"]) 
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RequestConfigurationError.invalid_remote_base_url(interface_cls.__name__)
     if not _REMOTE_MANAGER_TOKEN_RE.match(interface_cls.remote_manager):
-        raise RequestConfigurationError.invalid_remote_base_url(interface_cls.__name__)
+        raise RequestConfigurationError.invalid_remote_manager_name(
+            interface_cls.__name__
+        )
     base_path = interface_cls.base_path
     if base_path == "/":
         raise RequestConfigurationError.invalid_remote_base_path(

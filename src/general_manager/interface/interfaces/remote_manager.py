@@ -8,8 +8,7 @@ from typing import Any, ClassVar, cast
 
 from general_manager.cache.dependency_index import (
     get_full_index,
-    invalidate_cache_key,
-    remove_cache_key_from_index,
+    invalidate_and_remove_cache_keys,
 )
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.base_interface import CapabilityOverride
@@ -195,8 +194,10 @@ class RemoteManagerInterface(RequestInterface):
             dict[str, set[str]],
             idx.get("request_query", {}).get(manager_name, {}),
         )
-        for cache_keys in list(request_queries.values()):
-            for cache_key in list(cache_keys):
-                invalidate_cache_key(cache_key)
-                remove_cache_key_from_index(cache_key)
+        cache_keys = {
+            cache_key
+            for keys_for_identifier in request_queries.values()
+            for cache_key in keys_for_identifier
+        }
+        invalidate_and_remove_cache_keys(cache_keys)
         return True
