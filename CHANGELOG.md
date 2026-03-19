@@ -2,6 +2,58 @@
 
 <!-- version list -->
 
+## v0.34.0 (2026-03-19)
+
+### Bug Fixes
+
+- Harden remote request validation
+  ([`256642e`](https://github.com/TimKleindick/general_manager/commit/256642ece01ce40601bbf230006e1d78cbac1a95))
+
+- Preserve request bucket cache state
+  ([`85b8c38`](https://github.com/TimKleindick/general_manager/commit/85b8c38eff3ec86bfbec433af210d5302e47ecd7))
+
+- Tighten request invalidation flows
+  ([`439ed20`](https://github.com/TimKleindick/general_manager/commit/439ed2050a699a36b8377b55b1f3d0951b11229f))
+
+- **remote-manager**: Harden api and invalidation paths
+  ([`4818947`](https://github.com/TimKleindick/general_manager/commit/481894792dda76ac60f2200984ec658cd2d012c2))
+
+- **request**: Harden transport and invalidation edge cases
+  ([`2e2d7ec`](https://github.com/TimKleindick/general_manager/commit/2e2d7ecbeb3eae37574eb2ca3081e8d2f0f0e319))
+
+- **request-interface**: Enhance identifier handling and validation in API configurations
+  ([`c140521`](https://github.com/TimKleindick/general_manager/commit/c1405211081d977ddcd704a7d55019d31b269623))
+
+- **request-interface**: Implement request query cache invalidation and enhance dependency
+  management
+  ([`88a58c3`](https://github.com/TimKleindick/general_manager/commit/88a58c3596f47bb2a8f9b2b33d68ad5159a425ac))
+
+- **request-interface**: Preserve mutation and request state
+  ([`9041d11`](https://github.com/TimKleindick/general_manager/commit/9041d1191a14af97e575d371a8c5814e928a8447))
+
+### Documentation
+
+- Enhance request interface with cloning and websocket invalidation tests
+  ([`2012bcb`](https://github.com/TimKleindick/general_manager/commit/2012bcb113c3b3ed10391d4a738a35ed217dbaec))
+
+- **request-interface**: Refine guidance and lessons
+  ([`38eb452`](https://github.com/TimKleindick/general_manager/commit/38eb45207d10ce53d7b8a83bafd9cc852f418571))
+
+### Features
+
+- Add remote manager interface
+  ([`05998ed`](https://github.com/TimKleindick/general_manager/commit/05998ed3083039f69cdf9dd470db0af6cb5c6344))
+
+- Add RequestInterface and related request handling capabilities
+  ([`34b17a0`](https://github.com/TimKleindick/general_manager/commit/34b17a0818259c0661a0e8aed9d9cce879d81dd6))
+
+- Harden request transport path
+  ([`05ebe26`](https://github.com/TimKleindick/general_manager/commit/05ebe26cbfd87ba81e00c923d758eea61c95adde))
+
+- Redesign request interface
+  ([`9da30e6`](https://github.com/TimKleindick/general_manager/commit/9da30e6cdba69d3eb1f6d87bfb955c784c74437c))
+
+
 ## v0.33.0 (2026-03-12)
 
 ### Bug Fixes
