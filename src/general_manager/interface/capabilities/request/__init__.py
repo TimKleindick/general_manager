@@ -17,7 +17,6 @@ from general_manager.interface.requests import (
     RequestConfigurationError,
     RequestExcludeNotSupportedError,
     RequestFieldsRequiredError,
-    RequestField,
     RequestFilter,
     RequestFilterBinding,
     RequestLocalFallbackRequiredError,
@@ -107,23 +106,30 @@ class RequestValidationCapability(ValidationCapability):
                     request_interface_cls.__name__,
                     "base_backoff_seconds cannot be negative",
                 )
-            if retry_policy.backoff_multiplier < 1:
+            if retry_policy.backoff_multiplier <= 0:
                 raise RequestConfigurationError.invalid_retry_policy(
                     request_interface_cls.__name__,
-                    "backoff_multiplier must be at least 1",
+                    "backoff_multiplier must be greater than 0",
                 )
             if (
                 retry_policy.max_backoff_seconds is not None
-                and retry_policy.max_backoff_seconds < 0
+                and retry_policy.max_backoff_seconds < retry_policy.base_backoff_seconds
             ):
                 raise RequestConfigurationError.invalid_retry_policy(
                     request_interface_cls.__name__,
-                    "max_backoff_seconds cannot be negative",
+                    "max_backoff_seconds must be at least base_backoff_seconds",
                 )
             if not 0 <= retry_policy.jitter_ratio <= 1:
                 raise RequestConfigurationError.invalid_retry_policy(
                     request_interface_cls.__name__,
                     "jitter_ratio must be between 0 and 1",
+                )
+            if (retry_policy.idempotency_key_header is None) != (
+                retry_policy.idempotency_key_factory is None
+            ):
+                raise RequestConfigurationError.invalid_retry_policy(
+                    request_interface_cls.__name__,
+                    "idempotency key header and factory must be configured together",
                 )
 
         declared_operations = set(request_interface_cls.query_operations)
@@ -309,15 +315,13 @@ class RequestLifecycleCapability(BaseCapability):
         }
 
         def _perform() -> tuple[dict[str, Any], type["RequestInterface"], None]:
-            input_fields: dict[str, Input[Any]] = {}
-            request_fields: dict[str, RequestField] = {}
-            for key, value in vars(interface).items():
-                if key.startswith("__"):
-                    continue
-                if isinstance(value, Input):
-                    input_fields[key] = value
-                elif isinstance(value, RequestField):
-                    request_fields[key] = value
+            input_fields = dict(interface.input_fields)
+            if not input_fields:
+                for base in reversed(interface.__mro__):
+                    for key, value in vars(base).items():
+                        if isinstance(value, Input):
+                            input_fields[key] = value
+            request_fields = dict(interface.fields)
             attrs["_interface_type"] = interface._interface_type
             interface_cls = cast(
                 type["RequestInterface"],
@@ -587,10 +591,8 @@ class RequestQueryCapability(BaseCapability):
         operation: RequestQueryOperation,
         lookup_key: str,
     ) -> RequestFilter:
-        if operation.filters:
+        if operation.filters is not None and lookup_key in operation.filters:
             spec = operation.filters.get(lookup_key)
-            if spec is None:
-                raise UnknownRequestFilterError(lookup_key, operation.name)
         else:
             spec = interface_cls.filters.get(lookup_key)
         if spec is None:
@@ -741,11 +743,17 @@ class RequestUpdateCapability(BaseCapability):
         interface_cls = type(interface_instance)
         operation = interface_cls.get_mutation_operation("update")
         serializer = getattr(interface_cls, "update_serializer", None)
-        existing_values = {
-            field_name: getattr(interface_instance, field_name)
-            for field_name in interface_cls.fields
-        }
+        cached_payload = getattr(interface_instance, "_request_payload_cache", None)
+        existing_values = dict(interface_cls.fields)
+        existing_values.update(dict(interface_instance.identification))
+        if cached_payload is not None:
+            existing_values.update(cast(Mapping[str, Any], cached_payload))
         _apply_request_rules(interface_cls, {**existing_values, **kwargs})
+        if cached_payload is None:
+            existing_values = dict(
+                cast(Mapping[str, Any], interface_instance.get_data())
+            )
+            existing_values.update(dict(interface_instance.identification))
         body = serializer(kwargs) if callable(serializer) else kwargs
         result = interface_cls.execute_request_plan(
             RequestQueryPlan(
@@ -762,8 +770,13 @@ class RequestUpdateCapability(BaseCapability):
             raise RequestSingleResponseRequiredError(
                 interface_cls.__name__, len(result.items)
             )
-        interface_instance._request_payload_cache = result.items[0]
-        return interface_cls.extract_identification(result.items[0])
+        merged = {
+            **existing_values,
+            **dict(interface_instance.identification),
+            **result.items[0],
+        }
+        interface_instance._request_payload_cache = merged
+        return interface_cls.extract_identification(merged)
 
 
 class RequestDeleteCapability(BaseCapability):

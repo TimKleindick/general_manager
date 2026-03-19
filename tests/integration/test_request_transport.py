@@ -19,6 +19,7 @@ from general_manager.interface.requests import (
     RequestMutationOperation,
     RequestNotFoundError,
     RequestQueryOperation,
+    RequestPlan,
     RequestRateLimitedError,
     RequestRetryPolicy,
     RequestServerError,
@@ -42,7 +43,7 @@ class FakeBearerAuth:
         *,
         interface_cls: type[Any],
         operation: RequestQueryOperation,
-        plan: Any,
+        plan: RequestPlan,
     ) -> RequestTransportRequest:
         headers = dict(request.headers)
         headers["Authorization"] = f"Bearer {interface_cls.Meta.api_token}"
@@ -69,7 +70,7 @@ class FakeSharedTransport(SharedRequestTransport):
         *,
         interface_cls: type[Any],
         operation: RequestQueryOperation,
-        plan: Any,
+        plan: RequestPlan,
         identification: dict[str, Any] | None,
     ) -> RequestTransportResponse:
         self.requests.append(request)
@@ -166,7 +167,7 @@ class FakeFlakySharedTransport(SharedRequestTransport):
         *,
         interface_cls: type[Any],
         operation: RequestQueryOperation,
-        plan: Any,
+        plan: RequestPlan,
         identification: dict[str, Any] | None,
     ) -> RequestTransportResponse:
         self.requests.append(request)
@@ -196,7 +197,7 @@ class FakeSerializedTransport(SharedRequestTransport):
         *,
         interface_cls: type[Any],
         operation: RequestQueryOperation,
-        plan: Any,
+        plan: RequestPlan,
         identification: dict[str, Any] | None,
     ) -> RequestTransportResponse:
         self.requests.append(request)
@@ -245,6 +246,40 @@ class FakeSerializedTransport(SharedRequestTransport):
                     "modifiedAt": datetime(2026, 3, 16, 9, 0, 0),
                 }
             ],
+            status_code=200,
+        )
+
+
+class FakePartialUpdateTransport(SharedRequestTransport):
+    def __init__(self) -> None:
+        self.requests: list[RequestTransportRequest] = []
+
+    def send(
+        self,
+        request: RequestTransportRequest,
+        *,
+        interface_cls: type[Any],
+        operation: RequestQueryOperation,
+        plan: RequestPlan,
+        identification: dict[str, Any] | None,
+    ) -> RequestTransportResponse:
+        del interface_cls, plan
+        self.requests.append(request)
+        if operation.name == "detail":
+            return RequestTransportResponse(
+                payload={
+                    "id": identification["id"] if identification is not None else 42,
+                    "name": "Detail Alpha",
+                    "status": "active",
+                    "updated_at": datetime(2026, 3, 18, 10, 0, 0),
+                },
+                status_code=200,
+            )
+        return RequestTransportResponse(
+            payload={
+                "status": dict(request.body or {})["status"],
+                "updated_at": datetime(2026, 3, 18, 11, 0, 0),
+            },
             status_code=200,
         )
 
@@ -498,6 +533,46 @@ GeneralManagerMeta.create_at_properties_for_attributes(
 )
 
 
+class PartialUpdateProject(GeneralManager):
+    class Interface(RequestInterface):
+        id = Input(type=int)
+
+        name = RequestField(str)
+        status = RequestField(str)
+        updated_at = RequestField(datetime)
+
+        class Meta:
+            query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                "detail": RequestQueryOperation(
+                    name="detail",
+                    method="GET",
+                    path="/partial/{id}",
+                ),
+                "list": RequestQueryOperation(
+                    name="list",
+                    method="GET",
+                    path="/partial",
+                ),
+            }
+            update_operation = RequestMutationOperation(
+                name="update",
+                method="PATCH",
+                path="/partial/{id}",
+            )
+            transport = FakePartialUpdateTransport()
+            transport_config = RequestTransportConfig(
+                base_url="https://api.example.test",
+                timeout=15,
+            )
+
+
+PartialUpdateProject._attributes = PartialUpdateProject.Interface.get_attributes()
+GeneralManagerMeta.create_at_properties_for_attributes(
+    PartialUpdateProject._attributes.keys(),
+    PartialUpdateProject,
+)
+
+
 class RequestTransportIntegrationTest(SimpleTestCase):
     def setUp(self) -> None:
         TransportBackedProject.Interface.transport.requests.clear()
@@ -506,6 +581,7 @@ class RequestTransportIntegrationTest(SimpleTestCase):
         RuleProtectedProject.Interface.transport.requests.clear()
         RuleProtectedProject.Interface.Meta.api_token = "good-token"  # noqa: S105
         SerializedTransportProject.Interface.transport.requests.clear()
+        PartialUpdateProject.Interface.transport.requests.clear()
 
     def test_transport_executes_filter_and_lazy_detail_reads(self) -> None:
         bucket = TransportBackedProject.filter(status="active", page=2)
@@ -616,6 +692,16 @@ class RequestTransportIntegrationTest(SimpleTestCase):
         self.assertEqual(project.identification, {"id": 21})
         request = SerializedTransportProject.Interface.transport.requests[-1]
         self.assertEqual(dict(request.body or {}), {"payloadStatus": "inactive"})
+
+    def test_partial_update_response_preserves_existing_cached_fields(self) -> None:
+        project = PartialUpdateProject(id=42).update(
+            status="inactive",
+            ignore_permission=True,
+        )
+
+        self.assertEqual(project.status, "inactive")
+        self.assertEqual(project.name, "Detail Alpha")
+        self.assertEqual(len(PartialUpdateProject.Interface.transport.requests), 2)
 
     def test_response_serializer_normalizes_query_and_detail_payloads(self) -> None:
         item = SerializedTransportProject.filter(status="active").first()

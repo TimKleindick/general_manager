@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Iterator, Self, Type
 
 from general_manager.api.property import GraphQLProperty
@@ -232,7 +233,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             history_comment=history_comment,
             **kwargs,
         )
+        payload_cache = getattr(self._interface, "_request_payload_cache", None)
         self._reload_interface_state()
+        if isinstance(payload_cache, Mapping) and hasattr(
+            self._interface, "set_request_payload_cache"
+        ):
+            self._interface.set_request_payload_cache(payload_cache)
         logger.info(
             "manager updated",
             context={

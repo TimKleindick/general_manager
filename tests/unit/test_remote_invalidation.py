@@ -26,8 +26,29 @@ def _unwrap_websocket_router():
 
 
 class RemoteInvalidationRouteTests(SimpleTestCase):
+    def setUp(self) -> None:
+        self._original_websocket_urlpatterns = list(testing_asgi.websocket_urlpatterns)
+        self._original_application = testing_asgi.application
+        application_mapping = getattr(
+            testing_asgi.application, "application_mapping", {}
+        )
+        self._original_websocket_application = (
+            application_mapping.get("websocket")
+            if isinstance(application_mapping, dict)
+            else None
+        )
+
     def tearDown(self) -> None:
         clear_remote_invalidation_routes()
+        testing_asgi.websocket_urlpatterns[:] = self._original_websocket_urlpatterns
+        testing_asgi.application = self._original_application
+        application_mapping = getattr(
+            testing_asgi.application, "application_mapping", {}
+        )
+        if self._original_websocket_application is not None and isinstance(
+            application_mapping, dict
+        ):
+            application_mapping["websocket"] = self._original_websocket_application
 
     def test_clear_remote_invalidation_routes_rebuilds_live_router(self) -> None:
         if testing_asgi.websocket_urlpatterns:
