@@ -7,7 +7,7 @@ import re
 from uuid import uuid4
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Mapping, TYPE_CHECKING
+from typing import Any, Mapping, TYPE_CHECKING, cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -97,6 +97,17 @@ class RemoteAPIConfig:
     identifier_type: type[Any] | None = None
 
 
+def _extract_identifier_type(manager_cls: type["GeneralManager"]) -> type[Any] | None:
+    interface = getattr(manager_cls, "Interface", None)
+    if interface is None:
+        return None
+    input_fields = getattr(interface, "input_fields", None)
+    if input_fields is None:
+        return None
+    id_field = input_fields.get("id")
+    return cast(type[Any] | None, getattr(id_field, "type", None))
+
+
 def _normalize_base_path(raw: str | None) -> str:
     base_path = (raw or "/gm").strip()
     if not base_path.startswith("/"):
@@ -141,18 +152,7 @@ def get_remote_api_config(
             getattr(remote_api, "websocket_invalidation", False)
         ),
         protocol_version=str(getattr(remote_api, "protocol_version", "v1")),
-        identifier_type=getattr(
-            getattr(manager_cls, "Interface", None),
-            "input_fields",
-            {},
-        )
-        .get("id", None)
-        .type
-        if getattr(getattr(manager_cls, "Interface", None), "input_fields", {}).get(
-            "id"
-        )
-        is not None
-        else None,
+        identifier_type=_extract_identifier_type(manager_cls),
     )
     if not any(
         (
@@ -337,6 +337,8 @@ def _remote_api_error_details(error: Exception) -> tuple[str, str, int]:
         return "Resource not found.", "not_found", 404
     if isinstance(error, PermissionError):
         return "Permission denied.", "permission_denied", 403
+    if isinstance(error, ValidationError):
+        return "Validation failed.", "validation_error", 400
     if isinstance(error, RuntimeError):
         return "Internal server error.", "internal_error", 500
     return "Invalid request.", "invalid_request", 400

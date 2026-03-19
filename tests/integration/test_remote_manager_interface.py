@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from typing import Any, ClassVar
 
 from asgiref.testing import ApplicationCommunicator
@@ -50,7 +50,27 @@ class DjangoClientTransport(SharedRequestTransport):
             raise AssertionError
 
         body = json.dumps(dict(request.body)) if request.body is not None else None
-        query = urlencode(request.query_params, doseq=True)
+        request_query = urlsplit(request.url).query
+        query = request_query
+        if request.query_params:
+            encoded_pairs = [
+                (key, str(value))
+                for key, raw_value in request.query_params.items()
+                for value in (
+                    raw_value if isinstance(raw_value, list | tuple) else (raw_value,)
+                )
+            ]
+            existing_pairs = set(parse_qsl(request_query, keep_blank_values=True))
+            extra_pairs = [
+                (key, value)
+                for key, value in encoded_pairs
+                if (key, value) not in existing_pairs
+            ]
+            if extra_pairs:
+                extra_query = urlencode(extra_pairs, doseq=True)
+                query = (
+                    f"{request_query}&{extra_query}" if request_query else extra_query
+                )
         full_path = f"{request.path}?{query}" if query else request.path
         response = self.client.generic(
             request.method,
@@ -152,6 +172,38 @@ class DjangoClientTransportTests(GeneralManagerTransactionTestCase):
         )
 
         self.assertEqual(calls, [("GET", "/projects?page=2&search=alpha")])
+
+    def test_send_prefers_original_encoded_query_string(self) -> None:
+        transport = DjangoClientTransport()
+        calls: list[tuple[str, str]] = []
+
+        class FakeClient:
+            def generic(self, method: str, path: str, **kwargs: Any) -> HttpResponse:
+                del kwargs
+                calls.append((method, path))
+                response = HttpResponse(
+                    json.dumps({"items": [], "metadata": {}}),
+                    content_type="application/json",
+                )
+                response.status_code = 200
+                return response
+
+        transport.client = FakeClient()  # type: ignore[assignment]
+
+        transport.send(
+            RequestTransportRequest(
+                method="GET",
+                url="https://service.example.test/projects?search=a%2Bb",
+                path="/projects",
+                query_params={"search": "a+b"},
+            ),
+            interface_cls=object,
+            operation=object(),
+            plan=object(),
+            identification=None,
+        )
+
+        self.assertEqual(calls, [("GET", "/projects?search=a%2Bb")])
 
 
 @override_settings(AUTOCREATE_GRAPHQL=False)

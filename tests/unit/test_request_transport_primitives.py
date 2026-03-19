@@ -307,6 +307,11 @@ def test_retry_policy_supports_capped_jittered_backoff() -> None:
             "max_backoff_seconds",
         ),
         ({"jitter_ratio": 1.5}, "jitter_ratio"),
+        ({"retryable_status_codes": {503}}, "retryable_status_codes"),
+        ({"retryable_status_codes": frozenset({"503"})}, "retryable_status_codes"),
+        ({"retryable_exceptions": [TimeoutError]}, "retryable_exceptions"),
+        ({"retryable_exceptions": (object,)}, "retryable_exceptions"),
+        ({"idempotency_key_header": ""}, "idempotency_key_header"),
         ({"idempotency_key_header": "Idempotency-Key"}, "idempotency_key_factory"),
         (
             {"idempotency_key_factory": lambda: "idem-123"},

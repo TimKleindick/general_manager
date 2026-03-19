@@ -268,6 +268,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
 
     def _ensure_items(self) -> tuple[GeneralManagerType, ...]:
         if self._data:
+            self._materialized = True
             return cast(tuple[GeneralManagerType, ...], self._data)
         if self._materialized:
             return cast(tuple[GeneralManagerType, ...], self._data)
