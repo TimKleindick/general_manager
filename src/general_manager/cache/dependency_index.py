@@ -335,6 +335,50 @@ def invalidate_cache_key(cache_key: str) -> None:
     cache.delete(cache_key)
 
 
+def _remove_cache_keys_from_index_locked(
+    idx: dependency_index,
+    cache_keys: tuple[str, ...],
+) -> None:
+    """Remove cache keys from all dependency-index sections while the lock is held."""
+    for action in ACTIONS:
+        action_section = cast(
+            dict[general_manager_name, manager_dependency_section],
+            idx[action],
+        )
+        for mname, model_section in list(action_section.items()):
+            cache_dependencies = model_section.get("__cache_dependencies__", {})
+            for lookup, lookup_map in list(model_section.items()):
+                if lookup.startswith("__"):
+                    continue
+                lookup_map = cast(lookup_dependency_map, lookup_map)
+                for val_key, key_set in list(lookup_map.items()):
+                    for cache_key in cache_keys:
+                        key_set.discard(cache_key)
+                    if not key_set:
+                        del lookup_map[val_key]
+                if not lookup_map:
+                    del model_section[lookup]
+            if cache_dependencies:
+                for cache_key in cache_keys:
+                    cache_dependencies.pop(cache_key, None)
+                if not cache_dependencies:
+                    model_section.pop("__cache_dependencies__", None)
+            if not model_section:
+                del action_section[mname]
+    request_query_section = cast(
+        dict[str, dict[str, set[str]]],
+        idx.get("request_query", {}),
+    )
+    for mname, query_section in list(request_query_section.items()):
+        for identifier, key_set in list(query_section.items()):
+            for cache_key in cache_keys:
+                key_set.discard(cache_key)
+            if not key_set:
+                del query_section[identifier]
+        if not query_section:
+            del request_query_section[mname]
+
+
 def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
     """
     Delete cache keys and remove their dependency-index entries under one lock.
@@ -350,44 +394,40 @@ def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
         idx = get_full_index()
         for cache_key in keys:
             cache.delete(cache_key)
-        for action in ACTIONS:
-            action_section = cast(
-                dict[general_manager_name, manager_dependency_section],
-                idx[action],
-            )
-            for mname, model_section in list(action_section.items()):
-                cache_dependencies = model_section.get("__cache_dependencies__", {})
-                for lookup, lookup_map in list(model_section.items()):
-                    if lookup.startswith("__"):
-                        continue
-                    lookup_map = cast(lookup_dependency_map, lookup_map)
-                    for val_key, key_set in list(lookup_map.items()):
-                        for cache_key in keys:
-                            key_set.discard(cache_key)
-                        if not key_set:
-                            del lookup_map[val_key]
-                    if not lookup_map:
-                        del model_section[lookup]
-                if cache_dependencies:
-                    for cache_key in keys:
-                        cache_dependencies.pop(cache_key, None)
-                    if not cache_dependencies:
-                        model_section.pop("__cache_dependencies__", None)
-                if not model_section:
-                    del action_section[mname]
-        request_query_section = cast(
-            dict[str, dict[str, set[str]]],
-            idx.get("request_query", {}),
-        )
-        for mname, query_section in list(request_query_section.items()):
-            for identifier, key_set in list(query_section.items()):
-                for cache_key in keys:
-                    key_set.discard(cache_key)
-                if not key_set:
-                    del query_section[identifier]
-            if not query_section:
-                del request_query_section[mname]
+        _remove_cache_keys_from_index_locked(idx, keys)
         set_full_index(idx)
+    finally:
+        release_lock()
+
+
+def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
+    """
+    Invalidate all request-query cache keys tracked for a manager atomically.
+
+    Returns:
+        tuple[str, ...]: The cache keys that were invalidated.
+    """
+    acquire_lock_with_retry("invalidate_request_query_dependencies")
+    try:
+        idx = get_full_index()
+        request_queries = cast(
+            request_query_manager_section,
+            idx.get("request_query", {}).get(manager_name, {}),
+        )
+        cache_keys = tuple(
+            dict.fromkeys(
+                cache_key
+                for key_set in request_queries.values()
+                for cache_key in key_set
+            )
+        )
+        if not cache_keys:
+            return ()
+        for cache_key in cache_keys:
+            cache.delete(cache_key)
+        _remove_cache_keys_from_index_locked(idx, cache_keys)
+        set_full_index(idx)
+        return cache_keys
     finally:
         release_lock()
 
@@ -453,25 +493,17 @@ def generic_cache_invalidation(
         old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
     manager_name = sender.__name__
+    invalidated_request_query_keys = invalidate_request_query_dependencies(manager_name)
+    for cache_key in invalidated_request_query_keys:
+        logger.info(
+            "invalidating request query cache key",
+            context={
+                "manager": manager_name,
+                "key": cache_key,
+                "action": REQUEST_QUERY_ACTION,
+            },
+        )
     idx = get_full_index()
-
-    request_queries = cast(
-        dict[str, set[str]],
-        idx.get("request_query", {}).get(manager_name, {}),
-    )
-    for identifier, cache_keys in list(request_queries.items()):
-        for ck in list(cache_keys):
-            logger.info(
-                "invalidating request query cache key",
-                context={
-                    "manager": manager_name,
-                    "key": ck,
-                    "identifier": identifier,
-                    "action": REQUEST_QUERY_ACTION,
-                },
-            )
-            invalidate_cache_key(ck)
-            remove_cache_key_from_index(ck)
 
     def _json_loads_val_key(val_key: Any) -> Any:
         if isinstance(val_key, str):

@@ -7,6 +7,7 @@ from general_manager.cache.dependency_index import (
     record_dependencies,
     remove_cache_key_from_index,
     invalidate_cache_key,
+    invalidate_request_query_dependencies,
     capture_old_values,
     generic_cache_invalidation,
     parse_dependency_identifier,
@@ -509,6 +510,51 @@ class TestInvalidateCacheKey(TestCase):
         self.assertIsNone(cache.get("xyz789"))
 
 
+@override_settings(CACHES=TEST_CACHES)
+class TestInvalidateRequestQueryDependencies(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_invalidates_only_target_manager_request_query_keys(self):
+        cache.set("remote-a", {"value": 1}, None)
+        cache.set("remote-b", {"value": 2}, None)
+        cache.set("other-manager", {"value": 3}, None)
+        set_full_index(
+            {
+                "filter": {},
+                "exclude": {},
+                "request_query": {
+                    "RemoteProject": {
+                        "query-a": {"remote-a"},
+                        "query-b": {"remote-b"},
+                    },
+                    "OtherProject": {
+                        "query-c": {"other-manager"},
+                    },
+                },
+            }
+        )
+
+        invalidated = invalidate_request_query_dependencies("RemoteProject")
+
+        self.assertEqual(invalidated, ("remote-a", "remote-b"))
+        self.assertIsNone(cache.get("remote-a"))
+        self.assertIsNone(cache.get("remote-b"))
+        self.assertEqual(cache.get("other-manager"), {"value": 3})
+        self.assertEqual(
+            get_full_index(),
+            {
+                "filter": {},
+                "exclude": {},
+                "request_query": {
+                    "OtherProject": {
+                        "query-c": {"other-manager"},
+                    },
+                },
+            },
+        )
+
+
 class DummyManager:
     __name__ = "DummyManager"  # manager_name = sender.__name__
 
@@ -662,6 +708,33 @@ class MissingAttrManager:
 
 
 class GenericCacheInvalidationTests(TestCase):
+    @patch("general_manager.cache.dependency_index.get_full_index")
+    @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
+    @patch("general_manager.cache.dependency_index.invalidate_cache_key")
+    @patch(
+        "general_manager.cache.dependency_index.invalidate_request_query_dependencies"
+    )
+    def test_request_query_invalidation_uses_batch_helper(
+        self,
+        mock_invalidate_request_queries,
+        mock_invalidate,
+        mock_remove,
+        mock_get_index,
+    ):
+        mock_invalidate_request_queries.return_value = ("rq-1", "rq-2")
+        mock_get_index.return_value = {"filter": {}, "exclude": {}}
+        inst = DummyManager2(status="active", count=1)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values={"status": "inactive"},
+        )
+
+        mock_invalidate_request_queries.assert_called_once_with("DummyManager2")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
     @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
