@@ -7,8 +7,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from typing import Any, ClassVar, cast
 
 from general_manager.cache.dependency_index import (
-    get_full_index,
-    invalidate_and_remove_cache_keys,
+    invalidate_request_query_dependencies,
 )
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.base_interface import CapabilityOverride
@@ -189,15 +188,5 @@ class RemoteManagerInterface(RequestInterface):
         ):
             return False
         manager_name = cls._parent_class.__name__
-        idx = get_full_index()
-        request_queries = cast(
-            dict[str, set[str]],
-            idx.get("request_query", {}).get(manager_name, {}),
-        )
-        cache_keys = {
-            cache_key
-            for keys_for_identifier in request_queries.values()
-            for cache_key in keys_for_identifier
-        }
-        invalidate_and_remove_cache_keys(cache_keys)
+        invalidate_request_query_dependencies(manager_name)
         return True
