@@ -76,20 +76,23 @@ class TestFullIndex(TestCase):
     def test_get_full_index_without_setting_first(self):
         idx = get_full_index()
         self.assertIsInstance(idx, dict)
-        self.assertSetEqual(set(idx.keys()), {"filter", "exclude"})
+        self.assertSetEqual(set(idx.keys()), {"filter", "exclude", "request_query"})
         self.assertIsInstance(idx["filter"], dict)
         self.assertIsInstance(idx["exclude"], dict)
+        self.assertIsInstance(idx["request_query"], dict)
 
     def test_set_full_index(self):
         idx = get_full_index()
         self.assertIsInstance(idx, dict)
-        self.assertSetEqual(set(idx.keys()), {"filter", "exclude"})
+        self.assertSetEqual(set(idx.keys()), {"filter", "exclude", "request_query"})
         self.assertIsInstance(idx["filter"], dict)
         self.assertIsInstance(idx["exclude"], dict)
+        self.assertIsInstance(idx["request_query"], dict)
 
         new_idx: dependency_index = {
             "filter": {"project": {"name": {"value1": {"1", "2", "3"}}}},
             "exclude": {},
+            "request_query": {},
         }
         set_full_index(new_idx)
         idx = get_full_index()
@@ -123,6 +126,7 @@ class TestRecordDependencies(TestCase):
                     },
                 },
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -158,6 +162,7 @@ class TestRecordDependencies(TestCase):
                     },
                 },
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -188,6 +193,7 @@ class TestRecordDependencies(TestCase):
                     },
                 },
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -202,6 +208,7 @@ class TestRecordDependencies(TestCase):
             {
                 "filter": {},
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -298,6 +305,7 @@ class TestRecordDependencies(TestCase):
                     },
                 },
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -336,6 +344,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
             {
                 "filter": {},
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -366,6 +375,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                     },
                 },
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -391,6 +401,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                     },
                 },
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -402,6 +413,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
             {
                 "filter": {},
                 "exclude": {},
+                "request_query": {},
             },
         )
 
@@ -414,7 +426,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
         )
         remove_cache_key_from_index("combo")
         idx = get_full_index()
-        self.assertEqual(idx, {"filter": {}, "exclude": {}})
+        self.assertEqual(idx, {"filter": {}, "exclude": {}, "request_query": {}})
 
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):

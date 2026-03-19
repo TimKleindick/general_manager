@@ -474,6 +474,21 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
                         remote_manager = "projects"
                         protocol_version = "v1"
 
+    def test_invalid_remote_manager_name_reports_specific_error(self) -> None:
+        with self.assertRaises(RequestConfigurationError) as context:
+
+            class InvalidRemoteProject(GeneralManager):
+                class Interface(RemoteManagerInterface):
+                    id = Input(type=int)
+                    name = RequestField(str)
+
+                    class Meta:
+                        base_url = "http://testserver"
+                        remote_manager = "Projects_Invalid"
+                        protocol_version = "v1"
+
+        self.assertIn("remote_manager", str(context.exception))
+
     def test_invalid_remote_manager_slug_is_rejected_at_class_definition(self) -> None:
         with self.assertRaises(RequestConfigurationError):
 

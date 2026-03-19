@@ -130,11 +130,12 @@ def get_full_index() -> dependency_index:
     Fetch the dependency index from cache, initialising it on first access.
 
     Returns:
-        dependency_index: Mapping of tracked filters and excludes keyed by manager name.
+        dependency_index: Mapping of tracked `filter`, `exclude`, and
+        `request_query` dependencies keyed by manager name.
     """
     cached_index = cache.get(INDEX_KEY, None)
     if cached_index is None:
-        idx: dependency_index = {"filter": {}, "exclude": {}}
+        idx: dependency_index = {"filter": {}, "exclude": {}, "request_query": {}}
         cache.set(INDEX_KEY, idx, None)
         return idx
     return cast(dependency_index, cached_index)
@@ -332,6 +333,63 @@ def invalidate_cache_key(cache_key: str) -> None:
         None
     """
     cache.delete(cache_key)
+
+
+def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
+    """
+    Delete cache keys and remove their dependency-index entries under one lock.
+
+    Parameters:
+        cache_keys (Iterable[str]): Cache keys to invalidate and remove.
+    """
+    keys = tuple(dict.fromkeys(cache_keys))
+    if not keys:
+        return
+    acquire_lock_with_retry("invalidate_and_remove_cache_keys")
+    try:
+        idx = get_full_index()
+        for cache_key in keys:
+            cache.delete(cache_key)
+        for action in ACTIONS:
+            action_section = cast(
+                dict[general_manager_name, manager_dependency_section],
+                idx[action],
+            )
+            for mname, model_section in list(action_section.items()):
+                cache_dependencies = model_section.get("__cache_dependencies__", {})
+                for lookup, lookup_map in list(model_section.items()):
+                    if lookup.startswith("__"):
+                        continue
+                    lookup_map = cast(lookup_dependency_map, lookup_map)
+                    for val_key, key_set in list(lookup_map.items()):
+                        for cache_key in keys:
+                            key_set.discard(cache_key)
+                        if not key_set:
+                            del lookup_map[val_key]
+                    if not lookup_map:
+                        del model_section[lookup]
+                if cache_dependencies:
+                    for cache_key in keys:
+                        cache_dependencies.pop(cache_key, None)
+                    if not cache_dependencies:
+                        model_section.pop("__cache_dependencies__", None)
+                if not model_section:
+                    del action_section[mname]
+        request_query_section = cast(
+            dict[str, dict[str, set[str]]],
+            idx.get("request_query", {}),
+        )
+        for mname, query_section in list(request_query_section.items()):
+            for identifier, key_set in list(query_section.items()):
+                for cache_key in keys:
+                    key_set.discard(cache_key)
+                if not key_set:
+                    del query_section[identifier]
+            if not query_section:
+                del request_query_section[mname]
+        set_full_index(idx)
+    finally:
+        release_lock()
 
 
 @receiver(pre_data_change)
