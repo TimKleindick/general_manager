@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING, ClassVar, cast
 
+from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from django.db.models import NOT_PROVIDED
 
@@ -130,6 +131,11 @@ class OrmMutationCapability(BaseCapability):
                 else transaction.atomic()
             )
             with atomic_context:
+                _assign_history_actor(
+                    instance,
+                    creator_id=creator_id,
+                    database_alias=database_alias,
+                )
                 try:
                     instance.changed_by_id = creator_id  # type: ignore[attr-defined]
                 except AttributeError:
@@ -419,12 +425,17 @@ class OrmDeleteCapability(BaseCapability):
             history_comment_local = (
                 f"{history_comment} (deleted)" if history_comment else "Deleted"
             )
+            database_alias = support.get_database_alias(interface_instance.__class__)
+            _assign_history_actor(
+                instance,
+                creator_id=creator_id,
+                database_alias=database_alias,
+            )
             try:
                 instance.changed_by_id = creator_id  # type: ignore[attr-defined]
             except AttributeError:
                 pass
             call_update_change_reason(instance, history_comment_local)
-            database_alias = support.get_database_alias(interface_instance.__class__)
             atomic_context = (
                 transaction.atomic(using=database_alias)
                 if database_alias
@@ -528,6 +539,27 @@ def _normalize_payload(
     normalized_simple = normalizer.normalize_simple_values(simple_kwargs)
     normalized_many = normalizer.normalize_many_values(many_to_many_kwargs)
     return normalized_simple, normalized_many
+
+
+def _assign_history_actor(
+    instance: models.Model,
+    *,
+    creator_id: int | None,
+    database_alias: str | None,
+) -> None:
+    """Assign the current history actor for simple-history-backed writes."""
+    if hasattr(instance, "changed_by_id"):
+        return
+
+    if creator_id is None:
+        instance._history_user = None  # type: ignore[attr-defined]
+        return
+
+    user_model = get_user_model()
+    manager = user_model._default_manager
+    if database_alias:
+        manager = manager.db_manager(database_alias)
+    instance._history_user = manager.get(pk=creator_id)  # type: ignore[attr-defined]
 
 
 def _mutation_capability_for(

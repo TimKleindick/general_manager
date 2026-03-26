@@ -1,10 +1,9 @@
 """Django model mixins and helpers backing GeneralManager interfaces."""
 
 from __future__ import annotations
-from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar
+from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar, cast
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser
-from django.conf import settings
 from simple_history.models import HistoricalRecords  # type: ignore
 from django.core.exceptions import ValidationError
 
@@ -98,21 +97,15 @@ class SoftDeleteGeneralManagerModel(SoftDeleteMixin, GeneralManagerBasisModel):
 class GeneralManagerModel(GeneralManagerBasisModel):
     """Abstract model adding change-tracking metadata for writeable managers."""
 
-    changed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="+",
-    )  # type: ignore[var-annotated]
-    changed_by_id: int | None
-
     @property
     def _history_user(self) -> AbstractBaseUser | None:
         """
         Returns the user who last modified this model instance, or None if no user is set.
         """
-        return self.changed_by
+        history_user = getattr(self, "_gm_history_user", None)
+        if history_user is not None:
+            return cast(AbstractBaseUser, history_user)
+        return cast(AbstractBaseUser | None, getattr(self, "changed_by", None))
 
     @_history_user.setter
     def _history_user(self, value: AbstractBaseUser | None) -> None:
@@ -122,7 +115,11 @@ class GeneralManagerModel(GeneralManagerBasisModel):
         Parameters:
             value (AbstractBaseUser | None): The user to associate with the latest modification, or `None` to clear the recorded user.
         """
-        self.changed_by = value
+        self._gm_history_user = value
+        try:
+            self.changed_by = value
+        except AttributeError:
+            pass
 
     class Meta:  # type: ignore
         abstract = True

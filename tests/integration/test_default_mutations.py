@@ -63,6 +63,10 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         }
         """
 
+    def _latest_history_user(self, manager):
+        history = manager._interface._instance.history.order_by("-history_date").first()
+        return history.history_user
+
     def test_create_project(self):
         """
         Tests successful creation of a TestProject instance via GraphQL mutation with all required and optional fields.
@@ -92,7 +96,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(project.name, "Test Project")
         self.assertEqual(project.number, 42)
         self.assertEqual(project.budget, "2000 EUR")
-        self.assertEqual(project.changed_by, self.user)
+        self.assertEqual(self._latest_history_user(project), self.user)
 
     def test_create_project_without_budget(self):
         """
@@ -235,6 +239,10 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         }
         """
 
+    def _latest_history_user(self, manager):
+        history = manager._interface._instance.history.order_by("-history_date").first()
+        return history.history_user
+
     def test_create_project_without_login(self):
         """
         Test that creating a TestProject without authentication fails due to permission restrictions.
@@ -257,7 +265,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         """
         Test that a TestProject2 instance can be created without authentication when public create permissions are enabled.
 
-        Verifies that the mutation succeeds, the created record matches the input data, and the `changed_by` field is set to None.
+        Verifies that the mutation succeeds, the created record matches the input data, and the latest history record has no user attribution.
         """
         variables = {
             "name": "Test Project",
@@ -282,7 +290,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         self.assertEqual(project.name, "Test Project")
         self.assertEqual(project.number, 42)
         self.assertEqual(project.budget, "2000 EUR")
-        self.assertEqual(project.changed_by, None)
+        self.assertIsNone(self._latest_history_user(project))
 
 
 class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
@@ -357,10 +365,14 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             }
             """
 
+    def _latest_history_user(self, manager):
+        history = manager._interface._instance.history.order_by("-history_date").first()
+        return history.history_user
+
     def test_update_project(self):
         """
         Tests successful update of a TestProject instance via GraphQL mutation with all fields.
-        Verifies that the mutation response indicates success, the returned data matches the updated values, and the updated database record has the correct field values and is attributed to the test user.
+        Verifies that the mutation response indicates success, the returned data matches the updated values, and the latest history record is attributed to the test user.
         """
         variables = {
             "id": self.project.id,
@@ -384,7 +396,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(updated_project.name, "Updated Project")
         self.assertEqual(updated_project.number, 1)
         self.assertEqual(updated_project.budget, "2000 EUR")
-        self.assertEqual(updated_project.changed_by, self.user)
+        self.assertEqual(self._latest_history_user(updated_project), self.user)
 
     def test_update_project_without_budget(self):
         """
@@ -413,7 +425,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(updated_project.name, "Updated Project Without Budget")
         self.assertEqual(updated_project.number, 1)
         self.assertEqual(updated_project.budget, "1000 EUR")
-        self.assertEqual(updated_project.changed_by, self.user)
+        self.assertEqual(self._latest_history_user(updated_project), self.user)
 
 
 class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
