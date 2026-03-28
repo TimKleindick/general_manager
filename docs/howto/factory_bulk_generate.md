@@ -61,6 +61,67 @@ Project.Factory(name="Launch Project", start_date=date.today())
 
 For complex scenarios, define `@classmethod` helpers that produce pre-wired object graphs (projects with members, factories with related measurements, etc.).
 
+## Use `_adjustmentMethod` for complex data creation
+
+When a single factory call needs to fan out into multiple records, or when the final payload depends on derived values, define `Factory._adjustmentMethod`.
+
+`_adjustmentMethod` receives the keyword arguments passed to the factory after relation values have been normalized. It must return either:
+
+- one `dict[str, Any]` for a single record
+- a `list[dict[str, Any]]` for multiple records
+
+`Factory.create(...)` validates and saves every returned record, then wraps the saved models back into their `GeneralManager` class. `Factory.build(...)` runs the same adjustment logic but returns unsaved model instances.
+
+Example:
+
+```python
+from typing import Any
+from django.db.models import CharField, PositiveIntegerField
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import GeneralManager
+
+class Fleet(GeneralManager):
+    label: str
+    capacity: int
+
+    class Interface(DatabaseInterface):
+        label = CharField(max_length=64)
+        capacity = PositiveIntegerField()
+
+        class Factory:
+            @staticmethod
+            def _adjustmentMethod(
+                *,
+                label: str = "Fleet",
+                capacity: int = 0,
+                count: int = 1,
+                **extra: Any,
+            ) -> list[dict[str, Any]]:
+                records: list[dict[str, Any]] = []
+                for index in range(count):
+                    record = {
+                        "label": f"{label}-{index}",
+                        "capacity": capacity + index,
+                    }
+                    if "changed_by" in extra:
+                        record["changed_by"] = extra["changed_by"]
+                    records.append(record)
+                return records
+```
+
+```python
+fleets = Fleet.Factory.create(label="North", capacity=10, count=3)
+
+assert [fleet.label for fleet in fleets] == [
+    "North-0",
+    "North-1",
+    "North-2",
+]
+assert [fleet.capacity for fleet in fleets] == [10, 11, 12]
+```
+
+Use this hook when the number of records is dynamic, when values need to be generated from a shared seed, or when the created objects must stay internally consistent. Keep `_adjustmentMethod` focused on shaping record dictionaries; validation still happens later through the normal model `full_clean()` and save flow.
+
 ## Step 4: Integrate with pytest fixtures
 
 ```python

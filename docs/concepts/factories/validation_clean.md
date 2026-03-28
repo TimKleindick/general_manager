@@ -9,7 +9,7 @@ Factories respect the same validation pipeline as your application code. Underst
 ## Factory interaction
 
 - `AutoFactory._model_creation()` assigns field values, runs `full_clean()`, and saves the model. Validation errors bubble up, making faulty fixtures obvious.
-- Override `AutoFactory._adjustmentMethod` to perform additional preprocessing (for example, generating related objects) before the model is saved.
+- Override `AutoFactory._adjustmentMethod` when complex fixture setup needs to reshape incoming kwargs into one or more record dictionaries before validation and save. See [Generate Bulk Test Data](../../howto/factory_bulk_generate.md#use-_adjustmentmethod-for-complex-data-creation) for the full pattern.
 
 ## Best practices
 
