@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.35.1 (2026-03-29)
+
+### Bug Fixes
+
+- Guard orm audit attribution
+  ([`ed4efd4`](https://github.com/TimKleindick/general_manager/commit/ed4efd4fab83b3d3a39773088544d16e232b9f16))
+
+- Keep GeneralManager change attribution in history only
+  ([`7ec1ad0`](https://github.com/TimKleindick/general_manager/commit/7ec1ad0b1f3cf0bcf39c025b2e1c7cf2b94a4ac5))
+
+
 ## v0.35.0 (2026-03-29)
 
 ### Documentation
