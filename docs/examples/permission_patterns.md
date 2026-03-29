@@ -7,12 +7,15 @@ Allow users to edit their own profile while administrators can edit any profile.
 ```python
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+    OverrideManagerPermission,
+)
 
 class Profile(GeneralManager):
     user: User
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__ = ["isAuthenticated"]
         __update__ = ["isAdmin", "isSelf"]
 ```
@@ -25,7 +28,7 @@ Chain permissions using `__based_on__` for nested workflows.
 class WorkPackage(GeneralManager):
     project: Project
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __based_on__ = "project"
         __update__ = ["isProjectManager", "isWorkPackageOwner"]
 ```
@@ -38,7 +41,7 @@ Hide sensitive attributes from unauthorised users by returning `None`.
 class Contract(GeneralManager):
     total_value: Measurement
 
-    class Permission(ManagerBasedPermission):
+    class Permission(OverrideManagerPermission):
         total_value = {
             "read": ["isFinanceTeam"],
         }

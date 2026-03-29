@@ -7,12 +7,12 @@ This guide adds attribute-based permissions and validation rules to a manager.
 ```python
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import AdditiveManagerPermission
 
 class Project(GeneralManager):
     ...
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__ = ["public"]
         __create__ = ["is_staff", "group:project-admin"]
         __update__ = ["isProjectManager"]

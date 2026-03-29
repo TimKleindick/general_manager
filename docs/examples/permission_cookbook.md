@@ -1,14 +1,17 @@
 # Permission Cookbook
 
-These recipes provide drop-in patterns for the permission system. They highlight how `ManagerBasedPermission` composes with reusable checks, attribute overrides, and queryset filters.
+These recipes provide drop-in patterns for the permission system. They highlight how `AdditiveManagerPermission` and `OverrideManagerPermission` compose with reusable checks, attribute overrides, and queryset filters.
 
 ## Attribute-level rule sets
 
 ```python
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+    OverrideManagerPermission,
+)
 
 
-class InvoicePermission(ManagerBasedPermission):
+class InvoicePermission(AdditiveManagerPermission):
     __read__ = ["isAuthenticated"]
     __create__ = ["inGroup:finance"]
     __update__ = ["inGroup:finance"]
@@ -25,7 +28,7 @@ class InvoicePermission(ManagerBasedPermission):
 ## Delegating through `__based_on__`
 
 ```python
-class InvoiceAttachmentPermission(ManagerBasedPermission):
+class InvoiceAttachmentPermission(OverrideManagerPermission):
     __based_on__ = "invoice"
     __read__ = ["isAuthenticated"]
     __create__ = ["inGroup:finance"]

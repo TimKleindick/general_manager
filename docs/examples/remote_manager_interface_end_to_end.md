@@ -13,7 +13,7 @@ from django.db.models import CharField
 
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.permission import ManagerBasedPermission
+from general_manager.permission import AdditiveManagerPermission
 
 
 class Project(GeneralManager):
@@ -21,7 +21,7 @@ class Project(GeneralManager):
         name = CharField(max_length=200)
         status = CharField(max_length=50)
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__: ClassVar[list[str]] = ["public"]
         __create__: ClassVar[list[str]] = ["public"]
         __update__: ClassVar[list[str]] = ["public"]

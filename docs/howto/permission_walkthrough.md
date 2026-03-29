@@ -1,14 +1,14 @@
 # Enforce Permissions Step by Step
 
-This tutorial walks through building and validating permissions for a `GeneralManager`. It uses the built-in [`ManagerBasedPermission`](../concepts/permission/manager_based_permission.md) class and the reusable checks from the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks).
+This tutorial walks through building and validating permissions for a `GeneralManager`. It uses the explicit additive [`AdditiveManagerPermission`](../concepts/permission/manager_based_permission.md) class and the reusable checks from the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks).
 
 ## 1. Model the access rules
 
-Start by encoding who may create, read, update, or delete each attribute. `ManagerBasedPermission` exposes class attributes (`__read__`, `__create__`, `__update__`, `__delete__`) plus per-field overrides. Every string in these lists maps to a registered permission function.
+Start by encoding who may create, read, update, or delete each attribute. `AdditiveManagerPermission` exposes class attributes (`__read__`, `__create__`, `__update__`, `__delete__`) plus per-field overrides. Every string in these lists maps to a registered permission function.
 
 ```python
 from general_manager.manager import GeneralManager
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import AdditiveManagerPermission
 
 
 class Project(GeneralManager):
@@ -16,7 +16,7 @@ class Project(GeneralManager):
     status: str
     sensitive_note: str
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__ = ["isAuthenticated"]
         __create__ = ["isAuthenticated"]
         __update__ = ["isSelf", "inGroup:project_admins"]
@@ -46,7 +46,7 @@ GENERAL_MANAGER = {
 }
 ```
 
-When this setting is absent, `ManagerBasedPermission` falls back to the values
+When this setting is absent, `AdditiveManagerPermission` falls back to the values
 shown above.
 
 ## 2. Attach filters for queryset access
@@ -69,20 +69,22 @@ Add `"belongsToCustomer:customer"` to `__read__` to produce filters automaticall
 
 ## 3. Chain permissions with `__based_on__`
 
-Complex domains often reuse another manager's permission logic. Setting `__based_on__` delegates to that nested manager. The implementation documented under [`ManagerBasedPermission`](../api/permission.md#core-classes) validates the attribute, forwards CRUD checks, and merges queryset filters.
+Complex domains often reuse another manager's permission logic. Setting `__based_on__` delegates to that nested manager. The implementation documented under the manager-based permission classes validates the attribute, forwards CRUD checks, and merges queryset filters.
 
 ```python
 class ProjectDocument(GeneralManager):
     project: Project
     file_path: str
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __based_on__ = "project"
         __create__ = ["isAuthenticated"]
         file_path = {"read": ["isAuthenticated"], "update": ["isSelf"]}
 ```
 
 When a user fails a delegated check, the action is denied immediately. Filters returned from `Project.Permission.get_permission_filter()` are namespaced as `{"filter": {"project__...": ...}}`, keeping queryset logic consistent.
+
+If you need a field-specific rule to replace the class-level CRUD rule instead of adding an extra gate, switch to `OverrideManagerPermission`. `__based_on__` still stays an outer gate in that mode.
 
 If `project` is `None` at runtime, implicit CRUD rules on the current
 permission fall back to `GENERAL_MANAGER["DEFAULT_PERMISSIONS"]` (or to

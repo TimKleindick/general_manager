@@ -70,6 +70,14 @@ GENERAL_MANAGER_EXPORTS: LazyExportMap = {
         "general_manager.permission.manager_based_permission",
         "ManagerBasedPermission",
     ),
+    "AdditiveManagerPermission": (
+        "general_manager.permission.manager_based_permission",
+        "AdditiveManagerPermission",
+    ),
+    "OverrideManagerPermission": (
+        "general_manager.permission.manager_based_permission",
+        "OverrideManagerPermission",
+    ),
     "register_permission": (
         "general_manager.permission.permission_checks",
         "register_permission",
@@ -162,6 +170,10 @@ UTILS_EXPORTS: LazyExportMap = {
 
 
 PERMISSION_EXPORTS: LazyExportMap = {
+    "AdditiveManagerPermission": (
+        "general_manager.permission.manager_based_permission",
+        "AdditiveManagerPermission",
+    ),
     "BasePermission": ("general_manager.permission.base_permission", "BasePermission"),
     "ManagerBasedPermission": (
         "general_manager.permission.manager_based_permission",
@@ -178,6 +190,10 @@ PERMISSION_EXPORTS: LazyExportMap = {
     "permission_functions": (
         "general_manager.permission.permission_checks",
         "permission_functions",
+    ),
+    "OverrideManagerPermission": (
+        "general_manager.permission.manager_based_permission",
+        "OverrideManagerPermission",
     ),
     "configure_audit_logger": (
         "general_manager.permission.audit",

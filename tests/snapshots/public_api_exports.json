@@ -8,6 +8,10 @@
       "general_manager.interface.interfaces.database",
       "DatabaseInterface"
     ],
+    "AdditiveManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "AdditiveManagerPermission"
+    ],
     "ExistingModelInterface": [
       "general_manager.interface.interfaces.existing_model",
       "ExistingModelInterface"
@@ -99,6 +103,10 @@
     "permission_functions": [
       "general_manager.permission.permission_checks",
       "permission_functions"
+    ],
+    "OverrideManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "OverrideManagerPermission"
     ],
     "register_permission": [
       "general_manager.permission.permission_checks",
@@ -472,6 +480,10 @@
     ]
   },
   "general_manager.permission": {
+    "AdditiveManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "AdditiveManagerPermission"
+    ],
     "AuditLogger": [
       "general_manager.permission.audit",
       "AuditLogger"
@@ -511,6 +523,10 @@
     "permission_functions": [
       "general_manager.permission.permission_checks",
       "permission_functions"
+    ],
+    "OverrideManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "OverrideManagerPermission"
     ],
     "register_permission": [
       "general_manager.permission.permission_checks",

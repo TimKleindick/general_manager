@@ -18,7 +18,7 @@ The full documentation is published on GitHub Pages: [GeneralManager Documentati
 
 - **Domain-first modelling**: Describe rich business entities in plain Python and let GeneralManager project them onto the Django ORM.
 - **GraphQL without boilerplate**: Generate a complete API, then extend it with custom queries and mutations when needed.
-- **Attribute-based access control**: Enforce permissions with `ManagerBasedPermission` down to single fields and operations.
+- **Attribute-based access control**: Enforce permissions with explicit additive or override manager-based permission classes down to single fields and operations.
 - **Deterministic calculations**: Ship reusable interfaces e.g. for volume distributions, KPI calculations, and derived data.
 - **Factory-powered testing**: Create large, realistic datasets quickly for demos, QA, and load tests.
 - **Composable interfaces**: Connect to databases, spreadsheets, or computed sources with the same consistent abstractions.
@@ -44,7 +44,7 @@ from django.db.models import CharField, DateField
 from general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
 from general_manager.measurement import Measurement, MeasurementField
-from general_manager.permission import ManagerBasedPermission
+from general_manager.permission import AdditiveManagerPermission
 
 
 class Project(GeneralManager):
@@ -59,7 +59,7 @@ class Project(GeneralManager):
         end_date = DateField(null=True, blank=True)
         total_capex = MeasurementField(base_unit="EUR", null=True, blank=True)
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__ = ["public"]
         __create__ = ["isAdmin"]
         __update__ = ["isAdmin"]
@@ -71,7 +71,7 @@ Project.Factory.createBatch(10)
 The example above defines a project model, exposes it through the auto-generated GraphQL schema, and produces ten sample records with a single call. The full documentation walks through extending this setup with custom rules, interfaces, and queries.
 
 If you want global permission defaults for managers that use
-`ManagerBasedPermission`, configure them in Django settings:
+`AdditiveManagerPermission` or `OverrideManagerPermission`, configure them in Django settings:
 
 ```python
 GENERAL_MANAGER = {

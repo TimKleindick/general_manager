@@ -1,7 +1,11 @@
 from django.test import TestCase
+from general_manager.bootstrap import check_permission_class
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import InvalidManagerStateError
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+    ManagerBasedPermission,
+)
 from unittest.mock import patch
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
@@ -135,6 +139,15 @@ class GeneralManagerTestCase(TestCase):
             "GeneralManager", "identification", '{"id": "dummy_id"}'
         )
         self.assertIsInstance(manager, GeneralManager)
+
+    def test_check_permission_class_defaults_to_additive_permission(self):
+        """Managers without an explicit Permission should default to AdditiveManagerPermission."""
+
+        class PermissionlessManager:
+            pass
+
+        check_permission_class(PermissionlessManager)  # type: ignore[arg-type]
+        self.assertIs(PermissionlessManager.Permission, AdditiveManagerPermission)
 
     def test_str_and_repr(self):
         # Test string representation
