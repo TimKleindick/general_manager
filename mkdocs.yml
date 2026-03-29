@@ -91,6 +91,7 @@ nav:
           - concepts/permission/index.md
           - concepts/permission/manager_based_permission.md
           - concepts/permission/object_level.md
+          - concepts/permission/examples.md
       - Interfaces:
           - concepts/interfaces/index.md
           - concepts/interfaces/capability-first.md
