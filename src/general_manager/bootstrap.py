@@ -14,18 +14,20 @@ import os
 import re
 import sys
 from importlib import import_module, util
-from typing import TYPE_CHECKING, Any, Callable, Type
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Type
 
 import graphene  # type: ignore[import]
 from django.conf import settings
 from django.core.checks import register
 from django.core.management.base import BaseCommand
 from django.urls import path, re_path
+from graphql import GraphQLDirective, specified_directives
 
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.api.graphql import GraphQL
 from general_manager.api.remote_api import add_remote_api_urls
 from general_manager.api.remote_invalidation import ensure_remote_invalidation_route
+from general_manager.conf import get_setting
 from general_manager.api.property import graph_ql_property
 from general_manager.logging import get_logger
 from general_manager.interface.infrastructure.startup_hooks import (
@@ -60,6 +62,37 @@ class InvalidPermissionClassError(TypeError):
 
     def __init__(self, permission_name: str) -> None:
         super().__init__(f"{permission_name} must be a subclass of BasePermission.")
+
+
+class InvalidGraphQLDirectiveError(TypeError):
+    """Raised when GRAPHQL_DIRECTIVES contains an invalid entry."""
+
+    def __init__(self, *, index: int, directive: object) -> None:
+        directive_type = type(directive).__name__
+        super().__init__(
+            "GRAPHQL_DIRECTIVES must contain GraphQLDirective instances; "
+            f"entry {index} is {directive_type}."
+        )
+
+
+class InvalidGraphQLDirectivesSettingError(TypeError):
+    """Raised when GRAPHQL_DIRECTIVES is not iterable."""
+
+    def __init__(self, directives: object) -> None:
+        directive_type = type(directives).__name__
+        super().__init__(
+            "GRAPHQL_DIRECTIVES must be an iterable of GraphQLDirective "
+            f"instances; got {directive_type}."
+        )
+
+
+class DuplicateGraphQLDirectiveError(ValueError):
+    """Raised when a custom directive name collides with another directive."""
+
+    def __init__(self, directive_name: str) -> None:
+        super().__init__(
+            f"Duplicate GraphQL directive name '{directive_name}' is not allowed."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +317,49 @@ def handle_remote_api(
 # ---------------------------------------------------------------------------
 
 
+def _normalize_graphql_directives(
+    directives: Iterable[GraphQLDirective] | GraphQLDirective | None,
+) -> tuple[GraphQLDirective, ...]:
+    """Validate a settings-provided directive collection and preserve order."""
+    if directives is None:
+        return ()
+
+    if isinstance(directives, GraphQLDirective):
+        candidates: Iterable[object] = (directives,)
+    else:
+        if isinstance(directives, (str, bytes)) or not isinstance(directives, Iterable):
+            raise InvalidGraphQLDirectivesSettingError(directives)
+        candidates = directives
+
+    normalized: list[GraphQLDirective] = []
+    for index, directive in enumerate(candidates):
+        if not isinstance(directive, GraphQLDirective):
+            raise InvalidGraphQLDirectiveError(index=index, directive=directive)
+        normalized.append(directive)
+    return tuple(normalized)
+
+
+def _build_schema_directives(
+    directives: Iterable[GraphQLDirective] | GraphQLDirective | None = None,
+) -> tuple[GraphQLDirective, ...]:
+    """Return built-in directives followed by validated custom directives."""
+    custom_directives = _normalize_graphql_directives(directives)
+    used_names = {directive.name for directive in specified_directives}
+
+    for directive in custom_directives:
+        if directive.name in used_names:
+            raise DuplicateGraphQLDirectiveError(directive.name)
+        used_names.add(directive.name)
+
+    return (*specified_directives, *custom_directives)
+
+
+def _get_configured_graphql_directives() -> tuple[GraphQLDirective, ...]:
+    """Resolve and validate custom GraphQL directives from Django settings."""
+    configured = get_setting("GRAPHQL_DIRECTIVES", ())
+    return _normalize_graphql_directives(configured)
+
+
 def handle_graph_ql(
     pending_graphql_interfaces: list[Type[GeneralManager]],
 ) -> None:
@@ -330,6 +406,9 @@ def handle_graph_ql(
         schema_kwargs["mutation"] = GraphQL._mutation_class
     if GraphQL._subscription_class is not None:
         schema_kwargs["subscription"] = GraphQL._subscription_class
+    custom_directives = _get_configured_graphql_directives()
+    if custom_directives:
+        schema_kwargs["directives"] = _build_schema_directives(custom_directives)
     schema = graphene.Schema(**schema_kwargs)
     GraphQL._schema = schema
     add_graphql_url(schema)
@@ -342,8 +421,6 @@ def handle_graph_ql(
 
 def add_graphql_url(schema: graphene.Schema) -> None:
     """Add a GraphQL endpoint to the project's URL configuration."""
-    from general_manager.conf import get_setting
-
     graph_ql_url = get_setting("GRAPHQL_URL", "graphql")
     root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
     logger.debug(

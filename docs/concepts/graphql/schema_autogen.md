@@ -30,3 +30,19 @@ For bucket-returning fields, the schema registers list fields and page types. `P
 - Override `_map_field_to_graphene_read` to customise how specific Python types map to GraphQL fields (for example, using Relay nodes).
 - Register additional scalars or enums by updating `GraphQL.graphql_type_registry` before building the schema.
 - Combine auto-generated queries with handcrafted ones by subclassing the generated query root and adding custom fields.
+- Register additional schema directives with `GENERAL_MANAGER["GRAPHQL_DIRECTIVES"]`:
+
+```python
+from graphql import DirectiveLocation, GraphQLDirective
+
+GENERAL_MANAGER = {
+    "GRAPHQL_DIRECTIVES": [
+        GraphQLDirective(
+            name="scenario",
+            locations=[DirectiveLocation.FIELD],
+        )
+    ]
+}
+```
+
+This setting only adds directives to the generated schema. If a directive needs runtime behavior, implement that separately with Graphene middleware or a custom execution context.
