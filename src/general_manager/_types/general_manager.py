@@ -3,6 +3,7 @@ from __future__ import annotations
 """Type-only imports for public API re-exports."""
 
 __all__ = [
+    "AdditiveManagerPermission",
     "CalculationInterface",
     "DatabaseInterface",
     "ExistingModelInterface",
@@ -10,6 +11,7 @@ __all__ = [
     "GraphQL",
     "Input",
     "ManagerBasedPermission",
+    "OverrideManagerPermission",
     "ReadOnlyInterface",
     "Rule",
     "get_logger",
@@ -31,7 +33,13 @@ from general_manager.interface.interfaces.existing_model import (
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.input import Input
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+)
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import (
+    OverrideManagerPermission,
+)
 from general_manager.interface.interfaces.read_only import (
     ReadOnlyInterface,
 )

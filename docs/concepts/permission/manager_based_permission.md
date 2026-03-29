@@ -1,16 +1,21 @@
 # Manager-Based Permissions
 
-`ManagerBasedPermission` (`general_manager.permission.manager_based_permission.ManagerBasedPermission`) is the default implementation used by most managers. It interprets class-level lists that describe who may perform CRUD actions.
+GeneralManager now exposes two explicit manager-based permission classes:
+
+- `AdditiveManagerPermission`: attribute-specific rules add an extra gate on top of the class-level CRUD rule.
+- `OverrideManagerPermission`: attribute-specific rules replace the class-level CRUD rule for that field/action.
+
+`ManagerBasedPermission` remains available as a compatibility alias for `AdditiveManagerPermission`, but new code should use the explicit class names.
 
 ## Configuration
 
 ```python
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import AdditiveManagerPermission
 
 class Project(GeneralManager):
     ...
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__ = ["public"]
         __create__ = ["isAdmin"]
         __update__ = ["isAdmin", "isProjectManager"]
@@ -27,7 +32,7 @@ If any expression evaluates to `True`, the action is allowed.
 ## Default permissions from settings
 
 If a permission class does not define one or more CRUD lists explicitly,
-`ManagerBasedPermission` fills them from Django settings:
+`AdditiveManagerPermission` and `OverrideManagerPermission` fill them from Django settings:
 
 ```python
 GENERAL_MANAGER = {
@@ -46,7 +51,7 @@ values are used as the built-in fallback.
 This affects three places:
 
 - subclasses that omit `__read__`, `__create__`, `__update__`, or `__delete__`
-- direct use of `ManagerBasedPermission` as a manager's default permission class
+- direct use of `AdditiveManagerPermission`, `OverrideManagerPermission`, or the `ManagerBasedPermission` compatibility alias
 - `__based_on__` permissions when the delegated manager attribute exists but is `None`
 
 For `__based_on__` subclasses, implicit CRUD defaults are still initialised as
@@ -60,17 +65,39 @@ own CRUD list for that action.
 Define nested dictionaries to restrict specific attributes:
 
 ```python
-class Permission(ManagerBasedPermission):
+class Permission(AdditiveManagerPermission):
     total_capex = {
         "update": ["isFinanceTeam"],
     }
 ```
 
-Bucket operations respect attribute-level restrictions when populating results.
+### Merge semantics
+
+Use `AdditiveManagerPermission` when a field-specific rule should add a second requirement:
+
+```python
+class Permission(AdditiveManagerPermission):
+    __update__ = ["isAdmin"]
+    total_capex = {"update": ["isFinanceTeam"]}
+```
+
+For `total_capex`, the user must satisfy both `isAdmin` and `isFinanceTeam`.
+
+Use `OverrideManagerPermission` when a field-specific rule should replace the class-level CRUD rule:
+
+```python
+class Permission(OverrideManagerPermission):
+    __update__ = ["isAdmin"]
+    total_capex = {"update": ["isFinanceTeam"]}
+```
+
+For `total_capex`, only `isFinanceTeam` is evaluated locally; the class-level `__update__` rule still applies to other attributes.
+
+When `__based_on__` is set, delegated permissions always remain an outer gate in both classes.
 
 ## Permission filters
 
-`ManagerBasedPermission.get_permission_filter()` converts expressions into Django queryset filters. Buckets apply these filters automatically so unauthorised records do not show up in listings.
+`AdditiveManagerPermission.get_permission_filter()` and `OverrideManagerPermission.get_permission_filter()` convert read expressions into Django queryset filters. Buckets apply these filters automatically so unauthorised records do not show up in listings.
 
 ## Custom permission functions
 

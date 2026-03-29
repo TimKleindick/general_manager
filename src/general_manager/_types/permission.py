@@ -3,12 +3,14 @@ from __future__ import annotations
 """Type-only imports for public API re-exports."""
 
 __all__ = [
+    "AdditiveManagerPermission",
     "AuditLogger",
     "BasePermission",
     "DatabaseAuditLogger",
     "FileAuditLogger",
     "ManagerBasedPermission",
     "MutationPermission",
+    "OverrideManagerPermission",
     "PermissionAuditEvent",
     "configure_audit_logger",
     "configure_audit_logger_from_settings",
@@ -16,11 +18,17 @@ __all__ = [
     "register_permission",
 ]
 
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+)
 from general_manager.permission.audit import AuditLogger
 from general_manager.permission.base_permission import BasePermission
 from general_manager.permission.audit import DatabaseAuditLogger
 from general_manager.permission.audit import FileAuditLogger
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import (
+    OverrideManagerPermission,
+)
 from general_manager.permission.mutation_permission import MutationPermission
 from general_manager.permission.audit import PermissionAuditEvent
 from general_manager.permission.audit import configure_audit_logger

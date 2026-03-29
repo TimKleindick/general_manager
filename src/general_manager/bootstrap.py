@@ -229,7 +229,7 @@ def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
     """Validate and normalize a GeneralManager class's Permission attribute."""
     from general_manager.permission.base_permission import BasePermission
     from general_manager.permission.manager_based_permission import (
-        ManagerBasedPermission,
+        AdditiveManagerPermission,
     )
 
     if hasattr(general_manager_class, "Permission"):
@@ -240,7 +240,7 @@ def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
             permission_name = getattr(permission, "__name__", repr(permission))
             raise InvalidPermissionClassError(permission_name)
     else:
-        general_manager_class.Permission = ManagerBasedPermission
+        general_manager_class.Permission = AdditiveManagerPermission
 
 
 def initialize_general_manager_classes(

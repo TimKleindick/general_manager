@@ -4,6 +4,10 @@
 
 ::: general_manager.permission.base_permission.BasePermission
 
+::: general_manager.permission.manager_based_permission.AdditiveManagerPermission
+
+::: general_manager.permission.manager_based_permission.OverrideManagerPermission
+
 ::: general_manager.permission.manager_based_permission.ManagerBasedPermission
 
 ::: general_manager.permission.mutation_permission.MutationPermission

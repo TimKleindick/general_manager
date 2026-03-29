@@ -44,12 +44,12 @@ python manage.py migrate
 Managers enforce access checks through the nested `Permission` class. Grant access based on attributes, user groups, or custom callables.
 
 ```python
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import AdditiveManagerPermission
 
 class Material(GeneralManager):
     ...
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __read__ = ["public"]
         __create__ = ["isAdmin"]
         __update__ = ["isAdmin"]

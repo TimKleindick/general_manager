@@ -1,20 +1,20 @@
 # Object-Level Delegation
 
-Complex domains often need permissions that depend on related objects. `ManagerBasedPermission` supports this through the `__based_on__` attribute, which delegates evaluation to the permission class of another manager.
+Complex domains often need permissions that depend on related objects. Both `AdditiveManagerPermission` and `OverrideManagerPermission` support this through the `__based_on__` attribute, which delegates evaluation to the permission class of another manager.
 
 ```python
 class ProjectMember(GeneralManager):
     project: Project
     user: User
 
-    class Permission(ManagerBasedPermission):
+    class Permission(AdditiveManagerPermission):
         __based_on__ = "project"
         __create__ = ["isProjectManager"]
         __update__ = ["isProjectManager"]
         __delete__ = ["isProjectManager"]
 ```
 
-When the permission class encounters `__based_on__`, it loads the referenced manager (either an attribute or a nested manager type) and invokes its permission checks. If the delegation returns `False`, the original action is denied.
+When the permission class encounters `__based_on__`, it loads the referenced manager (either an attribute or a nested manager type) and invokes its permission checks. If the delegation returns `False`, the original action is denied before local additive or override rules are considered.
 
 ## Permission data manager
 
