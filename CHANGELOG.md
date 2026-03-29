@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.35.0 (2026-03-29)
+
+### Documentation
+
+- Document _adjustmentMethod for complex factory data
+  ([`3b614fc`](https://github.com/TimKleindick/general_manager/commit/3b614fc5c4ddbb840e4dbbdb002c5380ea448cda))
+
+- Patch InterfaceBase in unit tests to resolve metaclass conflict with OrmInterfaceBase
+  ([`297a58a`](https://github.com/TimKleindick/general_manager/commit/297a58a7fde8ad4432e5f0ba9d5d3fb6ed7d5ff5))
+
+### Features
+
+- **graphql**: Support custom schema directives
+  ([`8e7bfd2`](https://github.com/TimKleindick/general_manager/commit/8e7bfd2fa0328b026f98cf4d6546f908a613c9ac))
+
+
 ## v0.34.0 (2026-03-19)
 
 ### Bug Fixes
