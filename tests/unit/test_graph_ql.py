@@ -4,22 +4,30 @@ import json
 from decimal import Decimal
 from datetime import date, datetime
 import graphene
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
 from typing import ClassVar
 
+from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
     MeasurementType,
     GraphQL,
     get_read_permission_filter,
 )
+from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.base_interface import InterfaceBase
-from graphql import GraphQLError
+from general_manager.interface.orm_interface import OrmInterfaceBase  # noqa: F401
+from graphql import (
+    DirectiveLocation,
+    GraphQLError,
+    GraphQLDirective,
+    specified_directives,
+)
 
 
 class GraphQLPropertyTests(TestCase):
@@ -255,6 +263,138 @@ class GraphQLTests(TestCase):
         self.assertIsInstance(arguments["id"].type, graphene.NonNull)
         self.assertNotIsInstance(arguments["as_of"].type, graphene.NonNull)
         self.assertNotIsInstance(arguments["dependency_id"].type, graphene.NonNull)
+
+
+class GraphQLDirectiveRegistrationTests(TestCase):
+    def setUp(self) -> None:
+        GraphQL.reset_registry()
+
+    def tearDown(self) -> None:
+        GraphQL.reset_registry()
+        super().tearDown()
+
+    @staticmethod
+    def _directive(name: str) -> GraphQLDirective:
+        return GraphQLDirective(name=name, locations=[DirectiveLocation.FIELD])
+
+    def _build_bootstrap_schema(
+        self, *, with_subscription: bool = False
+    ) -> graphene.Schema:
+        GraphQL._query_fields = {
+            "ping": graphene.String(),
+            "resolve_ping": lambda *_args, **_kwargs: "pong",
+        }
+        if with_subscription:
+            GraphQL._subscription_fields = {
+                "ping": graphene.String(),
+                "resolve_ping": lambda *_args, **_kwargs: "pong",
+            }
+        with (
+            patch.object(gm_bootstrap.GraphQL, "register_search_query", autospec=True),
+            patch("general_manager.bootstrap.add_graphql_url"),
+        ):
+            gm_bootstrap.handle_graph_ql([])
+        schema = GraphQL.get_schema()
+        self.assertIsNotNone(schema)
+        return schema  # type: ignore[return-value]
+
+    def test_build_schema_directives_uses_specified_directives_by_default(self) -> None:
+        directives = gm_bootstrap._build_schema_directives()
+        self.assertEqual(directives, specified_directives)
+
+    def test_build_schema_directives_merges_custom_directives_with_builtins(
+        self,
+    ) -> None:
+        custom = self._directive("scenario")
+
+        directives = gm_bootstrap._build_schema_directives([custom])
+
+        self.assertEqual(
+            [directive.name for directive in directives[:-1]],
+            [directive.name for directive in specified_directives],
+        )
+        self.assertEqual(directives[-1].name, "scenario")
+
+    def test_build_schema_directives_rejects_invalid_scalar_setting(self) -> None:
+        with self.assertRaisesRegex(
+            TypeError,
+            "GRAPHQL_DIRECTIVES must be an iterable of GraphQLDirective instances",
+        ):
+            gm_bootstrap._normalize_graphql_directives("scenario")
+
+    def test_build_schema_directives_rejects_invalid_entry(self) -> None:
+        with self.assertRaisesRegex(
+            TypeError,
+            "GRAPHQL_DIRECTIVES must contain GraphQLDirective instances",
+        ):
+            gm_bootstrap._build_schema_directives(["scenario"])  # type: ignore[list-item]
+
+    def test_build_schema_directives_rejects_duplicate_custom_names(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "Duplicate GraphQL directive name 'scenario' is not allowed",
+        ):
+            gm_bootstrap._build_schema_directives(
+                [self._directive("scenario"), self._directive("scenario")]
+            )
+
+    def test_build_schema_directives_rejects_builtin_name_collision(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "Duplicate GraphQL directive name 'include' is not allowed",
+        ):
+            gm_bootstrap._build_schema_directives([self._directive("include")])
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_DIRECTIVES": [
+                GraphQLDirective(name="scenario", locations=[DirectiveLocation.FIELD])
+            ]
+        }
+    )
+    def test_handle_graphql_merges_custom_directives_and_http_execution_works(
+        self,
+    ) -> None:
+        schema = self._build_bootstrap_schema()
+
+        directive_names = [
+            directive.name for directive in schema.graphql_schema.directives
+        ]
+        self.assertIn("scenario", directive_names)
+        self.assertIn("include", directive_names)
+        self.assertIn("skip", directive_names)
+
+        view = GeneralManagerGraphQLView(schema=schema)
+        request = MagicMock()
+        request.method = "POST"
+
+        result = view.execute_graphql_request(
+            request,
+            {},
+            "query { ping @scenario }",
+            None,
+            None,
+            False,
+        )
+        self.assertIsNone(result.errors)
+        self.assertEqual(result.data, {"ping": "pong"})
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_DIRECTIVES": [
+                GraphQLDirective(name="scenario", locations=[DirectiveLocation.FIELD])
+            ]
+        }
+    )
+    def test_schema_with_subscription_root_exposes_merged_directives(self) -> None:
+        schema = self._build_bootstrap_schema(with_subscription=True)
+
+        self.assertIsNotNone(schema.graphql_schema.subscription_type)
+        directive_names = [
+            directive.name for directive in schema.graphql_schema.directives
+        ]
+        self.assertIn("scenario", directive_names)
+        self.assertIn("include", directive_names)
 
 
 class TestGetReadPermissionFilter(TestCase):
