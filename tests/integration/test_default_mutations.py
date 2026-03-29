@@ -11,6 +11,7 @@ from general_manager.utils.testing import (
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from typing import ClassVar
 from django.core.exceptions import ObjectDoesNotExist
+from unittest.mock import patch
 
 
 class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
@@ -488,6 +489,13 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
         }
         """
 
+    def _latest_delete_history_record(self):
+        return (
+            self.TestProject.Interface._model.history.filter(id=self.project.id)
+            .order_by("-history_date")
+            .first()
+        )
+
     def test_delete_project(self):
         """
         Verifies that deleting a TestProject via the GraphQL delete mutation reports success and the project is no longer retrievable.
@@ -506,3 +514,31 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
 
         with self.assertRaises(ObjectDoesNotExist):
             self.TestProject(self.project.id)
+
+    def test_delete_project_sets_history_user_for_database_alias_branch(self):
+        """
+        Verifies that hard delete attributes the delete history row to the current actor when the database-alias path is used.
+        """
+        variables = {
+            "id": self.project.id,
+        }
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support."
+            "OrmPersistenceSupportCapability.get_database_alias",
+            return_value="default",
+        ):
+            response = self.query(self.delete_mutation, variables=variables)
+
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertTrue(data["deleteTestProject"]["success"])
+
+        with self.assertRaises(ObjectDoesNotExist):
+            self.TestProject(self.project.id)
+
+        history_record = self._latest_delete_history_record()
+        self.assertIsNotNone(history_record)
+        self.assertEqual(history_record.history_type, "-")
+        self.assertEqual(history_record.history_user, self.user)

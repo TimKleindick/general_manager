@@ -18,6 +18,7 @@ from general_manager.interface.utils.errors import (
     InvalidFieldValueError,
     MissingActivationSupportError,
 )
+from general_manager.interface.utils.models import model_has_field
 
 from ._compat import call_update_change_reason, call_with_observability
 from .support import get_support_capability, is_soft_delete_enabled
@@ -136,10 +137,8 @@ class OrmMutationCapability(BaseCapability):
                     creator_id=creator_id,
                     database_alias=database_alias,
                 )
-                try:
+                if model_has_field(instance, "changed_by"):
                     instance.changed_by_id = creator_id  # type: ignore[attr-defined]
-                except AttributeError:
-                    pass
                 instance.full_clean()
                 if database_alias:
                     instance.save(using=database_alias)
@@ -431,10 +430,8 @@ class OrmDeleteCapability(BaseCapability):
                 creator_id=creator_id,
                 database_alias=database_alias,
             )
-            try:
+            if model_has_field(instance, "changed_by"):
                 instance.changed_by_id = creator_id  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
             call_update_change_reason(instance, history_comment_local)
             atomic_context = (
                 transaction.atomic(using=database_alias)
@@ -548,7 +545,7 @@ def _assign_history_actor(
     database_alias: str | None,
 ) -> None:
     """Assign the current history actor for simple-history-backed writes."""
-    if hasattr(instance, "changed_by_id"):
+    if model_has_field(instance, "changed_by"):
         return
 
     if creator_id is None:
