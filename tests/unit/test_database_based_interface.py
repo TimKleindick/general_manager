@@ -18,7 +18,10 @@ from general_manager.interface.bundles.database import (
     ORM_PERSISTENCE_CAPABILITIES,
     ORM_WRITABLE_CAPABILITIES,
 )
-from general_manager.interface.utils.models import get_full_clean_methode
+from general_manager.interface.utils.models import (
+    GeneralManagerModel,
+    get_full_clean_methode,
+)
 from general_manager.interface.utils.errors import (
     InvalidFieldTypeError,
     InvalidFieldValueError,
@@ -974,6 +977,14 @@ class WritableInterfaceTestModel(models.Model):
         app_label = "general_manager"
 
 
+class HistoryOnlyAuditModel(GeneralManagerModel):
+    __module__ = "general_manager.models"
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "general_manager"
+
+
 class OrmWritableInterfaceTestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
@@ -1424,6 +1435,17 @@ class OrmWritableInterfaceTestCase(TransactionTestCase):
 
         saved_instance = WritableInterfaceTestModel.objects.get(pk=pk)
         self.assertIsNone(saved_instance.changed_by_id)
+
+    def test_history_user_setter_skips_missing_changed_by_field(self):
+        """
+        Setting `_history_user` on models without a `changed_by` field should not create a transient attribute.
+        """
+        instance = HistoryOnlyAuditModel(name="History only")
+
+        instance._history_user = self.user1
+
+        self.assertNotIn("changed_by", instance.__dict__)
+        self.assertEqual(instance._history_user, self.user1)
 
 
 class PayloadNormalizerTestCase(TransactionTestCase):

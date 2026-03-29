@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Type, ClassVar, Any, Callable, TYPE_CHECKING, TypeVar, cast
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser
+from django.core.exceptions import FieldDoesNotExist
 from simple_history.models import HistoricalRecords  # type: ignore
 from django.core.exceptions import ValidationError
 
@@ -13,6 +14,15 @@ if TYPE_CHECKING:
     from general_manager.rule.rule import Rule
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
+
+
+def model_has_field(instance: models.Model, field_name: str) -> bool:
+    """Return whether the model defines a concrete field with the given name."""
+    try:
+        instance._meta.get_field(field_name)
+    except FieldDoesNotExist:
+        return False
+    return True
 
 
 def get_full_clean_methode(model: Type[models.Model]) -> Callable[..., None]:
@@ -105,6 +115,8 @@ class GeneralManagerModel(GeneralManagerBasisModel):
         history_user = getattr(self, "_gm_history_user", None)
         if history_user is not None:
             return cast(AbstractBaseUser, history_user)
+        if not model_has_field(self, "changed_by"):
+            return None
         return cast(AbstractBaseUser | None, getattr(self, "changed_by", None))
 
     @_history_user.setter
@@ -116,10 +128,8 @@ class GeneralManagerModel(GeneralManagerBasisModel):
             value (AbstractBaseUser | None): The user to associate with the latest modification, or `None` to clear the recorded user.
         """
         self._gm_history_user = value
-        try:
+        if model_has_field(self, "changed_by"):
             self.changed_by = value
-        except AttributeError:
-            pass
 
     class Meta:  # type: ignore
         abstract = True
