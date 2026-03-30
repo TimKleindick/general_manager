@@ -464,30 +464,6 @@ class MutationDecoratorTests(TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.int, 10)
 
-    def test_mutation_permission_empty_lists_allow(self):
-        """Empty mutation permissions should behave like allow-all."""
-
-        class AllowEmptyPermission(MutationPermission):
-            __mutate__: ClassVar[List[str]] = []
-
-        self.assertIsNone(AllowEmptyPermission.check({"value": 1}, AnonymousUser()))
-
-    def test_mutation_permission_ignores_non_list_public_attributes(self):
-        """Only list[str] class attributes should be treated as field permissions."""
-
-        class MixedPermission(MutationPermission):
-            __mutate__: ClassVar[List[str]] = []
-            field: ClassVar[List[str]] = ["public"]
-            helper_constant: ClassVar[str] = "not-a-permission-list"
-
-        permission = MixedPermission({"field": "value"}, User())
-
-        self.assertIn("field", permission._MutationPermission__attribute_permissions)
-        self.assertNotIn(
-            "helper_constant",
-            permission._MutationPermission__attribute_permissions,
-        )
-
     def test_mutation_with_tuple_unpacking_duplicate_names_raises(self):
         """Enforce that duplicate output field names trigger an error."""
         from general_manager.api.mutation import DuplicateMutationOutputNameError
@@ -568,3 +544,28 @@ class MutationDecoratorTests(TestCase):
         self.assertTrue(hasattr(args_class, "float_val"))
         self.assertTrue(hasattr(args_class, "str_val"))
         self.assertTrue(hasattr(args_class, "bool_val"))
+
+
+def test_mutation_permission_empty_lists_allow() -> None:
+    """Empty mutation permissions should behave like allow-all."""
+
+    class AllowEmptyPermission(MutationPermission):
+        __mutate__: ClassVar[List[str]] = []
+
+    assert AllowEmptyPermission.check({"value": 1}, AnonymousUser()) is None
+
+
+def test_mutation_permission_ignores_non_list_public_attributes() -> None:
+    """Only list[str] class attributes should be treated as field permissions."""
+
+    class MixedPermission(MutationPermission):
+        __mutate__: ClassVar[List[str]] = []
+        field: ClassVar[List[str]] = ["public"]
+        helper_constant: ClassVar[str] = "not-a-permission-list"
+
+    permission = MixedPermission({"field": "value"}, User())
+
+    assert "field" in permission._MutationPermission__attribute_permissions
+    assert (
+        "helper_constant" not in permission._MutationPermission__attribute_permissions
+    )
