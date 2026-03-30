@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
 
@@ -21,6 +21,7 @@ from general_manager.logging import get_logger
 
 
 logger = get_logger("permission.mutation")
+_UNSET_MUTATE_PERMISSIONS = object()
 
 
 class MutationPermission:
@@ -41,7 +42,16 @@ class MutationPermission:
         self._data: PermissionDataManager = PermissionDataManager(data)
         self._request_user = request_user
         self.__attribute_permissions = self.__get_attribute_permissions()
-        self._mutate_permissions: list[str] = getattr(self.__class__, "__mutate__", [])
+        mutate_permissions: object = getattr(
+            self.__class__,
+            "__mutate__",
+            _UNSET_MUTATE_PERMISSIONS,
+        )
+        self._mutate_permissions: list[str] | None
+        if mutate_permissions is _UNSET_MUTATE_PERMISSIONS:
+            self._mutate_permissions = None
+        else:
+            self._mutate_permissions = cast(list[str], mutate_permissions)
 
         self.__overall_result: bool | None = None
 
@@ -69,7 +79,7 @@ class MutationPermission:
 
     def describe_permissions(self, attribute: str) -> tuple[str, ...]:
         """Return mutate-level and attribute-specific permissions for the field."""
-        base_permissions = tuple(self._mutate_permissions)
+        base_permissions = tuple(self._mutate_permissions or [])
         attribute_permissions = tuple(self.__attribute_permissions.get(attribute, []))
         return base_permissions + attribute_permissions
 
@@ -172,11 +182,13 @@ class MutationPermission:
 
     def __check_specific_permission(
         self,
-        permissions: list[str],
+        permissions: list[str] | None,
     ) -> bool:
         """Return True when any permission expression evaluates to True."""
+        if permissions is None:
+            return False
         # Empty permissions list means no restrictions, so the field is allowed.
-        if not permissions:
+        if permissions == []:
             return True
         for permission in permissions:
             if validate_permission_string(permission, self.data, self.request_user):

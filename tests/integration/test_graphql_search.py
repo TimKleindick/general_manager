@@ -316,7 +316,12 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
-        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        contexts = [
+            context
+            for call in logger_mock.info.call_args_list
+            for context in [call.kwargs.get("context")]
+            if isinstance(context, dict)
+        ]
         matching = [
             context
             for context in contexts
@@ -346,7 +351,12 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
-        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        contexts = [
+            context
+            for call in logger_mock.info.call_args_list
+            for context in [call.kwargs.get("context")]
+            if isinstance(context, dict)
+        ]
         matching = [
             context
             for context in contexts
@@ -459,7 +469,12 @@ class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
-        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        contexts = [
+            context
+            for call in logger_mock.info.call_args_list
+            for context in [call.kwargs.get("context")]
+            if isinstance(context, dict)
+        ]
         matching = [
             context
             for context in contexts
