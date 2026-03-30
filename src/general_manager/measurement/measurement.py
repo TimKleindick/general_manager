@@ -3,6 +3,7 @@
 # units.py
 from __future__ import annotations
 from typing import Any, Callable
+import math
 import pint
 from decimal import Decimal, getcontext, InvalidOperation
 from operator import eq, ne, lt, le, gt, ge
@@ -117,6 +118,46 @@ def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Dec
         _build_quantity(value, source_unit), target_unit
     )
     return _decimal_from_magnitude(converted_quantity.magnitude)
+
+
+OFFSET_COMPARISON_REL_TOL = 1e-9
+OFFSET_COMPARISON_ABS_TOL = 1e-9
+
+
+def _compare_magnitudes(
+    left: Decimal,
+    right: Decimal,
+    operation: Callable[..., bool],
+    *,
+    tolerant: bool,
+) -> bool:
+    """Compare magnitudes, using tolerance for float-backed offset-unit paths."""
+
+    if not tolerant:
+        return operation(left, right)
+
+    left_float = float(left)
+    right_float = float(right)
+    is_close = math.isclose(
+        left_float,
+        right_float,
+        rel_tol=OFFSET_COMPARISON_REL_TOL,
+        abs_tol=OFFSET_COMPARISON_ABS_TOL,
+    )
+
+    if operation is eq:
+        return is_close
+    if operation is ne:
+        return not is_close
+    if operation is lt:
+        return not is_close and left_float < right_float
+    if operation is le:
+        return is_close or left_float < right_float
+    if operation is gt:
+        return not is_close and left_float > right_float
+    if operation is ge:
+        return is_close or left_float > right_float
+    return operation(left_float, right_float)
 
 
 class InvalidMeasurementInitializationError(ValueError):
@@ -663,9 +704,14 @@ class Measurement:
             other_converted = _convert_quantity(
                 other_quantity, str(self_quantity.units)
             )
-            return operation(
-                _decimal_from_magnitude(self_quantity.magnitude),
-                _decimal_from_magnitude(other_converted.magnitude),
+            left = _decimal_from_magnitude(self_quantity.magnitude)
+            right = _decimal_from_magnitude(other_converted.magnitude)
+            return _compare_magnitudes(
+                left,
+                right,
+                operation,
+                tolerant=_unit_uses_offset(self_quantity)
+                or _unit_uses_offset(other_converted),
             )
         except pint.DimensionalityError as error:
             raise IncomparableMeasurementError() from error

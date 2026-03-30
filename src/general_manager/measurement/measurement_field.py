@@ -395,7 +395,10 @@ class MeasurementField(models.Field):
             value = Measurement.from_string(value)
         if isinstance(value, Measurement):
             try:
-                return convert_magnitude(value.magnitude, value.unit, self.base_unit)
+                converted = convert_magnitude(
+                    value.magnitude, value.unit, self.base_unit
+                )
+                return self._normalize_base_magnitude(converted)
             except pint.errors.DimensionalityError as e:
                 raise ValidationError(
                     {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
