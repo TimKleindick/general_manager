@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.36.2 (2026-03-30)
+
+### Bug Fixes
+
+- Address measurement review follow-ups
+  ([`bb6c608`](https://github.com/TimKleindick/general_manager/commit/bb6c608ff2cf944cd76e9649df6d021ad76a63ab))
+
+- Support offset measurement units
+  ([`ff83ef8`](https://github.com/TimKleindick/general_manager/commit/ff83ef8ee9dddd7193c787fc87fd8077f050b6e8))
+
+
 ## v0.36.1 (2026-03-30)
 
 ### Bug Fixes
