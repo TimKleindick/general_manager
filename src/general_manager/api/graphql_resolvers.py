@@ -10,10 +10,12 @@ without risk of circular imports.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, TYPE_CHECKING, TypeVar, cast
+from dataclasses import dataclass
+from typing import Any, Callable, Generic, TYPE_CHECKING, TypeVar, cast
 
 import graphene  # type: ignore[import]
 
+from general_manager.logging import get_logger
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
@@ -22,9 +24,24 @@ from general_manager.api.graphql_errors import get_read_permission_filter
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
     from general_manager.bucket.group_bucket import GroupBucket
-    from general_manager.permission.base_permission import BasePermission
+    from general_manager.permission.base_permission import (
+        BasePermission,
+        ReadPermissionPlan,
+    )
 
 GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
+logger = get_logger("api.graphql")
+
+
+@dataclass(slots=True)
+class ReadAuthorizationResult(Generic[GeneralManagerT]):
+    queryset: Bucket[GeneralManagerT]
+    candidate_count: int
+    authorized_count: int
+    denied_count: int
+    backend_shape: str
+    requires_instance_check: bool
+    instance_check_reasons: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -104,16 +121,202 @@ def apply_permission_filters(
     Returns:
         Queryset constrained by read permissions.
     """
-    permission_filters = get_read_permission_filter(general_manager_class, info)
-    if not permission_filters:
-        return queryset
+    result = apply_read_authorization(
+        queryset,
+        general_manager_class,
+        info,
+        source="list",
+    )
+    return result.queryset
 
-    filtered_queryset: Bucket[GeneralManagerT] = queryset.none()
-    for perm_filter, perm_exclude in permission_filters:
-        qs_perm = queryset.exclude(**perm_exclude).filter(**perm_filter)
-        filtered_queryset = filtered_queryset | qs_perm
 
-    return filtered_queryset
+def apply_read_authorization(
+    queryset: Bucket[GeneralManagerT],
+    general_manager_class: type[GeneralManagerT],
+    info: GraphQLResolveInfo,
+    *,
+    source: str,
+) -> ReadAuthorizationResult:
+    """Apply read prefilters plus the final row gate and emit aggregate observability."""
+    permission_plan = get_read_permission_filter(general_manager_class, info)
+    backend_shape = get_backend_shape(general_manager_class)
+    instance_check_reasons = resolve_instance_check_reasons(
+        permission_plan,
+        backend_shape=backend_shape,
+    )
+
+    filtered_queryset = queryset
+    if not permission_plan.requires_instance_check and permission_plan.filters == [
+        {"filter": {}, "exclude": {}}
+    ]:
+        candidate_count = len(queryset)
+        result = ReadAuthorizationResult(
+            queryset=queryset,
+            candidate_count=candidate_count,
+            authorized_count=candidate_count,
+            denied_count=0,
+            backend_shape=backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=instance_check_reasons,
+        )
+        return result
+
+    if permission_plan.filters:
+        filtered_queryset = queryset.none()
+        for permission_filter in permission_plan.filters:
+            filter_dict = permission_filter.get("filter", {})
+            exclude_dict = permission_filter.get("exclude", {})
+            if not filter_dict and not exclude_dict:
+                qs_perm = queryset
+            else:
+                qs_perm = queryset.filter(**filter_dict).exclude(**exclude_dict)
+            filtered_queryset = filtered_queryset | qs_perm
+
+    result = filter_queryset_by_read_permission(
+        filtered_queryset,
+        general_manager_class,
+        info,
+        requires_instance_check=permission_plan.requires_instance_check,
+        instance_check_reasons=instance_check_reasons,
+        backend_shape=backend_shape,
+    )
+    if result.requires_instance_check:
+        log_read_authorization_summary(
+            general_manager_class=general_manager_class,
+            source=source,
+            result=result,
+        )
+    return result
+
+
+def filter_queryset_by_read_permission(
+    queryset: Bucket[GeneralManagerT],
+    general_manager_class: type[GeneralManagerT],
+    info: GraphQLResolveInfo,
+    *,
+    requires_instance_check: bool = True,
+    instance_check_reasons: tuple[str, ...] = (),
+    backend_shape: str = "unknown",
+) -> ReadAuthorizationResult:
+    """Apply final row-level read authorization to a bucket."""
+    if not requires_instance_check:
+        candidate_count = len(queryset)
+        return ReadAuthorizationResult(
+            queryset=queryset,
+            candidate_count=candidate_count,
+            authorized_count=candidate_count,
+            denied_count=0,
+            backend_shape=backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=instance_check_reasons,
+        )
+
+    PermissionClass: type[BasePermission] | None = getattr(
+        general_manager_class, "Permission", None
+    )
+    if PermissionClass is None:
+        candidate_count = len(queryset)
+        return ReadAuthorizationResult(
+            queryset=queryset,
+            candidate_count=candidate_count,
+            authorized_count=candidate_count,
+            denied_count=0,
+            backend_shape=backend_shape,
+            requires_instance_check=False,
+            instance_check_reasons=instance_check_reasons,
+        )
+
+    authorized_ids: list[Any] = []
+    authorized_instances: list[GeneralManagerT] = []
+    candidate_count = 0
+    for instance in queryset:
+        candidate_count += 1
+        if PermissionClass(instance, info.context.user).can_read_instance():
+            instance_id = getattr(instance, "identification", {}).get("id")
+            if instance_id is None:
+                authorized_instances.append(instance)
+            else:
+                authorized_ids.append(instance_id)
+
+    authorized_queryset = (
+        queryset.filter(id__in=authorized_ids) if authorized_ids else queryset.none()
+    )
+    for instance in authorized_instances:
+        authorized_queryset = authorized_queryset | instance
+    authorized_count = len(authorized_ids) + len(authorized_instances)
+    return ReadAuthorizationResult(
+        queryset=authorized_queryset,
+        candidate_count=candidate_count,
+        authorized_count=authorized_count,
+        denied_count=max(candidate_count - authorized_count, 0),
+        backend_shape=backend_shape,
+        requires_instance_check=True,
+        instance_check_reasons=instance_check_reasons,
+    )
+
+
+def get_backend_shape(general_manager_class: type[GeneralManager]) -> str:
+    """Classify the manager's interface into a stable backend-shape label."""
+    from general_manager.interface import (
+        CalculationInterface,
+        DatabaseInterface,
+        ExistingModelInterface,
+        ReadOnlyInterface,
+        RequestInterface,
+    )
+
+    interface = getattr(general_manager_class, "Interface", None)
+    if not isinstance(interface, type):
+        return "unknown"
+    if issubclass(interface, DatabaseInterface):
+        return "database"
+    if issubclass(interface, ReadOnlyInterface):
+        return "read_only"
+    if issubclass(interface, ExistingModelInterface):
+        return "existing_model"
+    if issubclass(interface, RequestInterface):
+        return "request"
+    if issubclass(interface, CalculationInterface):
+        return "calculation"
+    return "custom"
+
+
+def resolve_instance_check_reasons(
+    permission_plan: ReadPermissionPlan,
+    *,
+    backend_shape: str,
+) -> tuple[str, ...]:
+    """Return stable reason labels for why the final instance gate was required."""
+    reasons = set(permission_plan.instance_check_reasons)
+    if (
+        permission_plan.requires_instance_check
+        and not reasons
+        and backend_shape != "database"
+    ):
+        reasons.add("no_prefilter_backend")
+    return tuple(sorted(reasons))
+
+
+def log_read_authorization_summary(
+    *,
+    general_manager_class: type[GeneralManager],
+    source: str,
+    result: ReadAuthorizationResult,
+) -> None:
+    """Emit one aggregate structured log event for a read-authorization pass."""
+    logger.info(
+        "graphql read authorization summary",
+        context={
+            "source": source,
+            "manager": general_manager_class.__name__,
+            "backend_shape": result.backend_shape,
+            "candidate_count": result.candidate_count,
+            "authorized_count": result.authorized_count,
+            "denied_count": result.denied_count,
+            "requires_instance_check": result.requires_instance_check,
+            "instance_check_reasons": list(result.instance_check_reasons),
+        },
+    )
 
 
 def apply_pagination(
@@ -170,6 +373,17 @@ def check_read_permission(
         return PermissionClass(instance, info.context.user).check_permission(
             "read", field_name
         )
+    return True
+
+
+def can_read_instance(
+    instance: GeneralManager,
+    info: GraphQLResolveInfo,
+) -> bool:
+    """Return whether the request user may see that *instance* exists."""
+    PermissionClass: type[BasePermission] | None = getattr(instance, "Permission", None)
+    if PermissionClass:
+        return PermissionClass(instance, info.context.user).can_read_instance()
     return True
 
 
@@ -252,7 +466,12 @@ def create_list_resolver(
                 base_queryset = fallback_manager_class.filter(include_inactive=True)
             else:
                 base_queryset = fallback_manager_class.all()
-        manager_class = getattr(base_queryset, "_manager_class", fallback_manager_class)
+        manager_class = getattr(base_queryset, "_manager_class", None)
+        if not (
+            isinstance(manager_class, type)
+            and issubclass(manager_class, GeneralManager)
+        ):
+            manager_class = fallback_manager_class
         qs = apply_permission_filters(base_queryset, manager_class, info)
         qs = apply_query_parameters(qs, filter, exclude, sort_by, reverse)
         qs_grouped = apply_grouping(qs, group_by)

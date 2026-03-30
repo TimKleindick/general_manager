@@ -5,6 +5,7 @@ from django.contrib.auth.models import User, AnonymousUser
 from django.utils.crypto import get_random_string
 from unittest.mock import Mock, patch
 
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.permission.base_permission import BasePermission
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
@@ -295,8 +296,8 @@ class ManagerBasedPermissionTests(TestCase):
         permission = CustomManagerBasedPermission(self.mock_instance, self.user)
         filters = permission.get_permission_filter()
 
-        # Should have at least the based_on filters (prefixed with manager__) and one for __read__
-        self.assertGreaterEqual(len(filters), 2)
+        # Delegated and local read filters are now combined as a single AND group.
+        self.assertEqual(len(filters), 1)
 
         # Check that the based_on filter keys are properly prefixed
         self.assertEqual(filters[0]["filter"], {"manager__user": "test"})
@@ -471,6 +472,32 @@ class ManagerBasedPermissionTests(TestCase):
         self.assertTrue(result1)  # isAuthenticated passes
         self.assertFalse(result2)  # isAdmin fails for regular user
 
+    def test_additive_attribute_specific_result_does_not_poison_generic_cache(
+        self,
+    ) -> None:
+        """Attribute-specific denies must not be reused for generic fields."""
+        permission = CustomManagerBasedPermission(self.mock_instance, self.user)
+
+        specific_result = permission.check_permission("create", "specific_attribute")
+        generic_result = permission.check_permission("create", "generic_attr")
+
+        self.assertFalse(specific_result)
+        self.assertTrue(generic_result)
+
+    def test_override_attribute_specific_result_does_not_poison_generic_cache(
+        self,
+    ) -> None:
+        """Attribute-specific allows must not be reused for generic fields."""
+        permission = CustomOverrideManagerPermission(
+            self.mock_instance, cast("AbstractUser", self.anonymous_user)
+        )
+
+        specific_result = permission.check_permission("update", "specific_attribute")
+        generic_result = permission.check_permission("update", "generic_attr")
+
+        self.assertTrue(specific_result)
+        self.assertFalse(generic_result)
+
     def test_get_permission_filter_with_empty_based_on(self) -> None:
         """Test get_permission_filter when based_on returns no filters."""
         based_on_permission = Mock()
@@ -513,6 +540,121 @@ class ManagerBasedPermissionTests(TestCase):
                 found_prefixed = True
                 break
         self.assertTrue(found_prefixed)
+
+    def test_read_permission_plan_requires_instance_check_for_unfilterable_rules(
+        self,
+    ) -> None:
+        """Unfilterable read rules must not degrade to allow-all queryset filters."""
+
+        class StaffOnlyPermission(AdditiveManagerPermission):
+            __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        permission = StaffOnlyPermission(
+            self.mock_instance, cast("AbstractUser", self.anonymous_user)
+        )
+        plan = permission.get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+
+    def test_read_permission_plan_combines_based_on_and_local_filters_with_and(
+        self,
+    ) -> None:
+        """Delegated and local read filters should combine into the same filter group."""
+        based_on_permission = Mock()
+        based_on_permission.get_read_permission_plan.return_value = Mock(
+            filters=[{"filter": {"status": "public"}, "exclude": {}}],
+            requires_instance_check=False,
+        )
+        self.mock_check.return_value = based_on_permission
+
+        class FilterablePermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["relatedUserField:owner"]
+
+        permission = FilterablePermission(self.mock_instance, self.user)
+        plan = permission.get_read_permission_plan()
+
+        self.assertEqual(
+            plan.filters,
+            [
+                {
+                    "filter": {
+                        "manager__status": "public",
+                        "owner_id": self.user.id,
+                    },
+                    "exclude": {},
+                }
+            ],
+        )
+
+    def test_read_permission_plan_handles_class_context_based_on_via_instance_gate(
+        self,
+    ) -> None:
+        """Class-level planning should not fail when __based_on__ exists only on instances."""
+
+        self.check_patcher.stop()
+
+        class ChildPermission(ManagerBasedPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["public"]
+
+        permission = ChildPermission(GeneralManager, self.user)
+        plan = permission.get_read_permission_plan()
+
+        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertTrue(plan.requires_instance_check)
+        self.assertIn("based_on_class_context", plan.instance_check_reasons)
+        self.assertIn("unfilterable_read_rule", plan.instance_check_reasons)
+
+    def test_read_permission_plan_marks_filter_key_collisions_for_instance_checks(
+        self,
+    ) -> None:
+        """Conflicting delegated/local filter keys should fall back to instance checks."""
+        based_on_permission = Mock()
+        based_on_permission.get_read_permission_plan.return_value = Mock(
+            filters=[{"filter": {"status": "delegated"}, "exclude": {}}],
+            requires_instance_check=False,
+        )
+        self.mock_check.return_value = based_on_permission
+
+        class ConflictingPermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["conflictingFilter"]
+
+        permission = ConflictingPermission(self.mock_instance, self.user)
+        with patch.object(
+            permission,
+            "_get_permission_filter_info",
+            return_value=(
+                {"filter": {"manager__status": "local"}, "exclude": {}},
+                True,
+            ),
+        ):
+            plan = permission.get_read_permission_plan()
+
+        self.assertEqual(
+            plan.filters,
+            [{"filter": {"manager__status": "delegated"}, "exclude": {}}],
+        )
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(plan.instance_check_reasons, ("filter_key_conflict",))
+
+    def test_based_on_denial_blocks_row_visibility(self) -> None:
+        """Row visibility must respect delegated denial even when local reads are permissive."""
+        based_on_permission = Mock()
+        based_on_permission.can_read_instance.return_value = False
+        self.mock_check.return_value = based_on_permission
+
+        class DelegatedPublicPermission(AdditiveManagerPermission):
+            __based_on__: ClassVar[Optional[str]] = "manager"
+            __read__: ClassVar[list[str]] = ["public"]
+
+        permission = DelegatedPublicPermission(
+            self.mock_instance, cast("AbstractUser", self.anonymous_user)
+        )
+        self.assertFalse(permission.can_read_instance())
 
     def test_check_specific_permission_returns_true_for_any_match(self) -> None:
         """Test that __check_specific_permission returns True if any permission passes."""
@@ -596,6 +738,54 @@ class ManagerBasedPermissionTests(TestCase):
         )
         result = permission.check_permission("update", "specific_attribute")
         self.assertFalse(result)
+
+    def test_can_read_instance_ignores_attribute_specific_read_override(self) -> None:
+        """Row visibility should be governed by the class-level read rule only."""
+        permission = CustomOverrideManagerPermission(
+            self.mock_instance, cast("AbstractUser", self.anonymous_user)
+        )
+
+        self.assertTrue(permission.can_read_instance())
+
+    def test_get_read_permission_plan_marks_unfilterable_permissions(self) -> None:
+        """Non-filterable read permissions should require an instance-level check."""
+
+        class AdminReadPermission(ManagerBasedPermission):
+            __based_on__ = None
+            __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        permission = AdminReadPermission(
+            self.mock_instance, cast("AbstractUser", self.anonymous_user)
+        )
+        plan = permission.get_read_permission_plan()
+
+        self.assertTrue(plan.requires_instance_check)
+        self.assertEqual(plan.filters, [{"filter": {}, "exclude": {}}])
+        self.assertEqual(plan.instance_check_reasons, ("unfilterable_read_rule",))
+
+    def test_get_read_permission_plan_combines_based_on_with_local_read_filters(
+        self,
+    ) -> None:
+        """Delegated and local read filters should combine as one AND-prefilter group."""
+        based_on_permission = Mock()
+        based_on_permission.get_read_permission_plan.return_value.filters = [
+            {"filter": {"status": "public"}, "exclude": {"archived": True}}
+        ]
+        based_on_permission.get_read_permission_plan.return_value.requires_instance_check = False
+        self.mock_check.return_value = based_on_permission
+
+        permission = CustomManagerBasedPermission(self.mock_instance, self.user)
+        plan = permission.get_read_permission_plan()
+
+        self.assertEqual(
+            plan.filters,
+            [
+                {
+                    "filter": {"manager__status": "public"},
+                    "exclude": {"manager__archived": True},
+                }
+            ],
+        )
 
     def test_check_permission_fails_if_based_on_denies(self) -> None:
         """Test that based_on denial overrides other permissions."""
@@ -858,6 +1048,20 @@ class ManagerBasedPermissionTests(TestCase):
 
         # Should include specific_attribute
         self.assertIn("specific_attribute", attr_perms)
+
+    def test_iter_permission_attributes_ignores_transient_runtime_state(self) -> None:
+        """Delete/audit enumeration should prefer declared manager attributes."""
+        fake_manager = type("FakeManager", (), {})()
+        fake_manager._attributes = {"name": object(), "status": object()}
+        fake_manager.name = "Visible"
+        fake_manager.status = "open"
+        fake_manager.transient_runtime_value = "ignore-me"
+        fake_manager._cache = "ignore-me-too"
+
+        self.assertEqual(
+            BasePermission._iter_permission_attributes(fake_manager),  # type: ignore[arg-type]
+            ("name", "status"),
+        )
 
     def test_describe_permissions_for_delete_action(self) -> None:
         """Test describe_permissions returns correct permissions for delete."""

@@ -126,9 +126,10 @@ class OrderPermission(AdditiveManagerPermission):
 
 Result:
 
-- item-level permission checks still work on individual managers
-- bucket/list queries can be filtered before records are returned
+- bucket/list queries can be narrowed before records are materialised
+- row visibility is still enforced per instance before results and counts are returned
 - the same rule stays reusable across GraphQL and manager-level access
+- GraphQL emits one aggregate structured log summary for the read path, so observability tooling can see when the final instance gate did the real work
 
 ## Example 5: focused permission tests
 

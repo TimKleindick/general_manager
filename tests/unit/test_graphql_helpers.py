@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 from django.test import SimpleTestCase
 from graphql.language.ast import StringValueNode
@@ -19,7 +21,11 @@ from typing import ClassVar
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
-from general_manager.permission.base_permission import BasePermission
+from general_manager.permission.base_permission import (
+    BasePermission,
+    ReadPermissionPlan,
+)
+from general_manager.api.graphql_resolvers import resolve_instance_check_reasons
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
 
@@ -138,8 +144,135 @@ class GraphQLHelperTests(SimpleTestCase):
 
     def test_permission_filter_helper(self) -> None:
         info = _Info()
-        filters = get_read_permission_filter(_DummyManager, info)
-        assert filters == [({"status": "public"}, {})]
+        plan = get_read_permission_filter(_DummyManager, info)
+        assert plan.filters == [{"filter": {"status": "public"}, "exclude": {}}]
+        assert plan.requires_instance_check is True
+        assert plan.instance_check_reasons in ((), ("no_prefilter_backend",))
+
+    def test_apply_permission_filters_enforces_instance_read_gate(self) -> None:
+        class AdminOnlyPermission(BasePermission):
+            def check_permission(self, *args, **kwargs) -> bool:
+                return False
+
+            def can_read_instance(self) -> bool:
+                return False
+
+            def get_permission_filter(self):
+                return [{"filter": {}, "exclude": {}}]
+
+        class AdminOnlyManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = AdminOnlyPermission
+
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [AdminOnlyManager],
+            [AdminOnlyManager],
+        )
+        info = _Info()
+        queryset = SimpleBucket(
+            AdminOnlyManager,
+            [AdminOnlyManager(id=1)],
+        )
+
+        filtered = GraphQL._apply_permission_filters(queryset, AdminOnlyManager, info)
+        assert list(filtered) == []
+
+    def test_apply_permission_filters_logs_aggregate_summary(self) -> None:
+        class AdminOnlyPermission(BasePermission):
+            def check_permission(self, *args, **kwargs) -> bool:
+                return False
+
+            def can_read_instance(self) -> bool:
+                return False
+
+            def get_permission_filter(self):
+                return [{"filter": {}, "exclude": {}}]
+
+        class AdminOnlyManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = AdminOnlyPermission
+
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [AdminOnlyManager],
+            [AdminOnlyManager],
+        )
+        info = _Info()
+        queryset = SimpleBucket(AdminOnlyManager, [AdminOnlyManager(id=1)])
+
+        with (
+            mock.patch(
+                "general_manager.api.graphql_resolvers.get_read_permission_filter",
+                return_value=ReadPermissionPlan(
+                    filters=[{"filter": {}, "exclude": {}}],
+                    requires_instance_check=True,
+                    instance_check_reasons=("unfilterable_read_rule",),
+                ),
+            ),
+            mock.patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
+        ):
+            filtered = GraphQL._apply_permission_filters(
+                queryset, AdminOnlyManager, info
+            )
+
+        assert list(filtered) == []
+        logger_mock.info.assert_called_once()
+        context = logger_mock.info.call_args.kwargs["context"]
+        assert context["source"] == "list"
+        assert context["manager"] == "AdminOnlyManager"
+        assert context["candidate_count"] == 1
+        assert context["authorized_count"] == 0
+        assert context["denied_count"] == 1
+        assert context["requires_instance_check"] is True
+        assert context["instance_check_reasons"] == ["unfilterable_read_rule"]
+
+    def test_resolve_instance_check_reasons_marks_custom_backend_fallback(self) -> None:
+        reasons = resolve_instance_check_reasons(
+            ReadPermissionPlan(
+                filters=[{"filter": {}, "exclude": {}}],
+                requires_instance_check=True,
+            ),
+            backend_shape="custom",
+        )
+
+        assert reasons == ("no_prefilter_backend",)
+
+    def test_create_list_resolver_runs_row_gate_once_per_candidate(self) -> None:
+        class CountingPermission(BasePermission):
+            check_count = 0
+
+            def check_permission(self, *args, **kwargs) -> bool:
+                return True
+
+            def can_read_instance(self) -> bool:
+                type(self).check_count += 1
+                return True
+
+            def get_permission_filter(self):
+                return [{"filter": {}, "exclude": {}}]
+
+        class CountingManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = CountingPermission
+
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [CountingManager],
+            [CountingManager],
+        )
+        info = _Info()
+        queryset = SimpleBucket(
+            CountingManager,
+            [CountingManager(id=1), CountingManager(id=2)],
+        )
+        resolver = GraphQL._create_list_resolver(
+            lambda _self, _include_inactive: queryset,
+            CountingManager,
+        )
+
+        with mock.patch.object(SimpleBucket, "filter", return_value=queryset):
+            result = resolver(object(), info)
+
+        assert result["pageInfo"]["total_count"] == 2
+        assert CountingPermission.check_count == 2
 
     def test_graphql_error_types(self) -> None:
         """

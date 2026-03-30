@@ -1,18 +1,24 @@
 # type: ignore
 from typing import ClassVar
+from unittest.mock import patch
 
-from django.db.models import CharField
+from django.db.models import CASCADE, CharField, ForeignKey
 from django.core.management import call_command
 
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.permission.manager_based_permission import ManagerBasedPermission
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+    ManagerBasedPermission,
+)
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.config import IndexConfig
 from general_manager.search.indexer import SearchIndexer
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+from django.contrib.auth import get_user_model
+from django.utils.crypto import get_random_string
 
 
 class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
@@ -219,21 +225,194 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
             ["Gamma Team", "Beta Team", "Beta Project", "Alpha Team", "Alpha Project"],
         )
 
+
+class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+
+        class AdminOnlyProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=200)
+                status = CharField(max_length=50)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["isAdmin"]
+                __create__: ClassVar[list[str]] = ["public"]
+
+            class SearchConfig:
+                indexes: ClassVar[list[IndexConfig]] = [
+                    IndexConfig(
+                        name="global",
+                        fields=["name", "status"],
+                        filters=["status"],
+                    )
+                ]
+
+        cls.general_manager_classes = [AdminOnlyProject]
+        cls.AdminOnlyProject = AdminOnlyProject
+        GeneralManagerMeta.all_classes = cls.general_manager_classes
+
+    def setUp(self):
+        super().setUp()
+        password = get_random_string(12)
+        self.user = get_user_model().objects.create_user(
+            username="search-hardening-user", password=password
+        )
+        self.client.login(username="search-hardening-user", password=password)
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        self.AdminOnlyProject.Factory.create(name="Internal Alpha", status="private")
+        SearchIndexer(backend).reindex_manager(self.AdminOnlyProject)
+
+    def tearDown(self):
+        configure_search_backend(None)
+        super().tearDown()
+
+    def test_non_admin_search_hides_rows_and_total(self):
+        query = """
+        query {
+            search(index: "global", query: "Internal") {
+                total
+                results {
+                    __typename
+                    ... on AdminOnlyProjectType { id name status }
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["results"], [])
+
     def test_graphql_search_types_filter(self):
         query = """
         query {
-            search(index: "global", query: "Alpha", types: ["Project"]) {
+            search(index: "global", query: "Alpha", types: ["AdminOnlyProject"]) {
                 total
-                results { __typename ... on ProjectType { name } }
+                results { __typename ... on AdminOnlyProjectType { name } }
             }
         }
         """
         response = self.query(query)
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]["search"]
-        self.assertEqual(payload["total"], 1)
-        self.assertEqual(len(payload["results"]), 1)
-        self.assertEqual(payload["results"][0]["__typename"], "ProjectType")
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["results"], [])
+
+    def test_non_admin_search_logs_aggregate_read_summary(self):
+        query = """
+        query {
+            search(index: "global", query: "Internal") {
+                total
+            }
+        }
+        """
+
+        with patch("general_manager.api.graphql_search.logger") as logger_mock:
+            response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        matching = [
+            context
+            for context in contexts
+            if context.get("source") == "search"
+            and context.get("manager") == "AdminOnlyProject"
+        ]
+        self.assertEqual(len(matching), 1)
+        context = matching[0]
+        self.assertEqual(context["candidate_count"], 1)
+        self.assertEqual(context["authorized_count"], 0)
+        self.assertEqual(context["denied_count"], 1)
+        self.assertTrue(context["requires_instance_check"])
+        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+
+
+class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+
+        class RestrictedProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=200)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["isAdmin"]
+                __create__: ClassVar[list[str]] = ["public"]
+
+        class DelegatedDocument(GeneralManager):
+            class Interface(DatabaseInterface):
+                title = CharField(max_length=200)
+                project = ForeignKey(
+                    "general_manager.RestrictedProject",
+                    on_delete=CASCADE,
+                )
+
+            class Permission(AdditiveManagerPermission):
+                __based_on__: ClassVar[str] = "project"
+                __read__: ClassVar[list[str]] = ["public"]
+                __create__: ClassVar[list[str]] = ["public"]
+
+            class SearchConfig:
+                indexes: ClassVar[list[IndexConfig]] = [
+                    IndexConfig(
+                        name="global",
+                        fields=["title"],
+                    )
+                ]
+
+        cls.general_manager_classes = [RestrictedProject, DelegatedDocument]
+        cls.RestrictedProject = RestrictedProject
+        cls.DelegatedDocument = DelegatedDocument
+        GeneralManagerMeta.all_classes = cls.general_manager_classes
+
+    def setUp(self):
+        super().setUp()
+        password = get_random_string(12)
+        self.user = get_user_model().objects.create_user(
+            username="search-based-on-hardening-user",
+            password=password,
+        )
+        self.client.login(
+            username="search-based-on-hardening-user",
+            password=password,
+        )
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        project = self.RestrictedProject.Factory.create(name="Hidden Project")
+        self.DelegatedDocument.Factory.create(
+            title="Hidden Spec",
+            project=project,
+        )
+        SearchIndexer(backend).reindex_manager(self.DelegatedDocument)
+
+    def tearDown(self):
+        configure_search_backend(None)
+        super().tearDown()
+
+    def test_non_admin_search_hides_based_on_denied_rows_and_total(self):
+        query = """
+        query {
+            search(index: "global", query: "Hidden") {
+                total
+                results {
+                    __typename
+                    ... on DelegatedDocumentType { title }
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["results"], [])
 
 
 class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):
@@ -425,6 +604,68 @@ class TestGraphQLSearchPermissionAcrossManagersIntegration(
         payload = response.json()["data"]["search"]
         names = {item["name"] for item in payload["results"]}
         self.assertEqual(names, {"Public Alpha", "Internal Alpha"})
+
+
+class TestGraphQLSearchUnfilterablePermissionIntegration(
+    GeneralManagerTransactionTestCase
+):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+
+        class AdminOnlyProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=200)
+                status = CharField(max_length=50)
+
+            class Permission(ManagerBasedPermission):
+                __read__: ClassVar[list[str]] = ["isAdmin"]
+                __create__: ClassVar[list[str]] = ["public"]
+                __update__: ClassVar[list[str]] = ["public"]
+                __delete__: ClassVar[list[str]] = ["public"]
+
+            class SearchConfig:
+                indexes: ClassVar[list[IndexConfig]] = [
+                    IndexConfig(
+                        name="global",
+                        fields=["name", "status"],
+                        filters=["status"],
+                    )
+                ]
+
+        cls.general_manager_classes = [AdminOnlyProject]
+        cls.AdminOnlyProject = AdminOnlyProject
+        GeneralManagerMeta.all_classes = cls.general_manager_classes
+
+    def setUp(self):
+        super().setUp()
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        self.AdminOnlyProject.Factory.create(name="Secret Project", status="private")
+        indexer = SearchIndexer(backend)
+        indexer.reindex_manager(self.AdminOnlyProject)
+
+    def tearDown(self):
+        configure_search_backend(None)
+        super().tearDown()
+
+    def test_graphql_search_excludes_rows_for_unfilterable_read_permissions(self):
+        query = """
+        query {
+            search(index: "global", query: "") {
+                total
+                results {
+                    __typename
+                    ... on AdminOnlyProjectType { name status }
+                }
+            }
+        }
+        """
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["results"], [])
 
 
 class TestSearchIndexCommandIntegration(GeneralManagerTransactionTestCase):

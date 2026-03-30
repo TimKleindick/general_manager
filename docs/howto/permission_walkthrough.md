@@ -51,7 +51,7 @@ shown above.
 
 ## 2. Attach filters for queryset access
 
-Read permissions do more than guard individual attribute access. The GraphQL API calls [`get_permission_filter`](../concepts/graphql/security.md#permission-enforcement) to narrow the queryset before results are returned. Each permission function may provide a filter companion.
+Read permissions do more than guard individual attribute access. The GraphQL API calls [`get_permission_filter`](../concepts/graphql/security.md#permission-enforcement) to narrow the queryset before results are returned, then applies a final per-instance read check. Each permission function may provide a filter companion.
 
 ```python
 from general_manager.permission.permission_checks import register_permission
@@ -65,7 +65,9 @@ def can_access_customer(instance, user, config):
     return getattr(instance, customer_field).owner_id == user.id
 ```
 
-Add `"belongsToCustomer:customer"` to `__read__` to produce filters automatically when the GraphQL layer runs the resolver. Use `python -m pytest` with fixtures that hit `get_permission_filter()` to ensure the queryset matches expectations.
+Add `"belongsToCustomer:customer"` to `__read__` to produce filters automatically when the GraphQL layer runs the resolver. Use `python -m pytest` with fixtures that hit `get_permission_filter()` and list/search responses so both the prefilter and the final instance gate match expectations.
+
+On production paths, these list/search checks also emit aggregate structured logs through the standard `get_logger(..., context=...)` pattern. That gives you candidate/authorized/denied counts plus reason labels such as unfilterable read rules or delegated `__based_on__` fallbacks without logging one event per row.
 
 ## 3. Chain permissions with `__based_on__`
 
