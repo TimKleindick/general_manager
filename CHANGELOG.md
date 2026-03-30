@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.36.1 (2026-03-30)
+
+### Bug Fixes
+
+- Support compound measurement units
+  ([`2aea8d4`](https://github.com/TimKleindick/general_manager/commit/2aea8d4d65f857e6feddc73a7fb2b630bccba6ab))
+
+### Refactoring
+
+- Avoid requantizing measurement display units
+  ([`90daa3a`](https://github.com/TimKleindick/general_manager/commit/90daa3a3aa02e664c27b86975152edc04198c2ab))
+
+- Rename measurement parser magnitude variable
+  ([`5cec220`](https://github.com/TimKleindick/general_manager/commit/5cec22069562e9765a5dfdc88475e7a84beebe01))
+
+
 ## v0.36.0 (2026-03-30)
 
 ### Bug Fixes
