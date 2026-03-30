@@ -58,6 +58,17 @@ class MeasurementTestCase(TestCase):
     def test_offset_unit_comparison(self):
         self.assertEqual(Measurement(25, "degC"), Measurement(298.15, "K"))
 
+    def test_offset_unit_comparison_uses_tolerance_for_equivalent_values(self):
+        freezing_f = Measurement(32, "degF")
+        freezing_c = Measurement(0, "degC")
+
+        self.assertEqual(freezing_f, freezing_c)
+        self.assertFalse(freezing_f != freezing_c)
+        self.assertFalse(freezing_f < freezing_c)
+        self.assertFalse(freezing_f > freezing_c)
+        self.assertTrue(freezing_f <= freezing_c)
+        self.assertTrue(freezing_f >= freezing_c)
+
     def test_addition_same_units(self):
         m1 = Measurement(1, "meter")
         m2 = Measurement(2, "meter")

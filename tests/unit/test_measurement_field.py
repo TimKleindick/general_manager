@@ -176,6 +176,11 @@ class MeasurementFieldTests(TestCase):
         self.assertIn("must be multiplicative", str(ctx.exception))
         self.assertIn("Use a unit like 'K'", str(ctx.exception))
 
+    def test_get_prep_value_normalizes_offset_unit_storage_magnitude(self):
+        field = self.TestModel._meta.get_field("temperature")
+        prepared = field.get_prep_value(Measurement(70, "degF"))
+        self.assertEqual(prepared, Decimal("294.2611111111"))
+
     def test_edge_case_very_large_value1(self):
         """
         The Value is bigger than the maximum total digits allowed in this field
