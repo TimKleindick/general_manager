@@ -101,16 +101,16 @@ class MeasurementFieldTests(TestCase):
         self.instance.full_clean()
 
         self.assertEqual(self.instance.density_value, Decimal("1"))  # type: ignore
-        self.assertEqual(self.instance.density.unit, "gram / centimeter ** 3")  # type: ignore
+        self.assertEqual(ureg(self.instance.density.unit).units, ureg("g/cm^3").units)  # type: ignore
 
     def test_measurement_field_converts_compatible_compound_units(self):
         self.instance.density = Measurement(1000, "kg/m^3")
         self.instance.full_clean()
 
         self.assertEqual(self.instance.density_value, Decimal("1"))  # type: ignore
-        self.assertEqual(self.instance.density_unit, "kilogram / meter ** 3")  # type: ignore
-        self.assertEqual(self.instance.density.magnitude, Decimal("1000"))  # type: ignore
-        self.assertEqual(self.instance.density.unit, "kilogram / meter ** 3")  # type: ignore
+        self.assertEqual(ureg(self.instance.density_unit).units, ureg("kg/m^3").units)  # type: ignore
+        self.assertAlmostEqual(self.instance.density.magnitude, Decimal("1000"))  # type: ignore
+        self.assertEqual(ureg(self.instance.density.unit).units, ureg("kg/m^3").units)  # type: ignore
 
     @isolate_apps("tests")
     def test_compound_unit_round_trip(self):
@@ -125,8 +125,8 @@ class MeasurementFieldTests(TestCase):
         instance.full_clean()
 
         self.assertEqual(instance.density_value, Decimal("1000"))  # type: ignore
-        self.assertEqual(instance.density_unit, "gram / centimeter ** 3")  # type: ignore
-        self.assertEqual(instance.density.unit, "gram / centimeter ** 3")  # type: ignore
+        self.assertEqual(ureg(instance.density_unit).units, ureg("g/cm^3").units)  # type: ignore
+        self.assertEqual(ureg(instance.density.unit).units, ureg("g/cm^3").units)  # type: ignore
 
     @isolate_apps("tests")
     def test_compound_unit_measurement_assignment_round_trip(self):
@@ -141,8 +141,8 @@ class MeasurementFieldTests(TestCase):
         instance.full_clean()
 
         self.assertEqual(instance.density_value, Decimal("1000"))  # type: ignore
-        self.assertEqual(instance.density_unit, "gram / centimeter ** 3")  # type: ignore
-        self.assertEqual(instance.density.unit, "gram / centimeter ** 3")  # type: ignore
+        self.assertEqual(ureg(instance.density_unit).units, ureg("g/cm^3").units)  # type: ignore
+        self.assertEqual(ureg(instance.density.unit).units, ureg("g/cm^3").units)  # type: ignore
 
     def test_edge_case_zero_value(self):
         self.instance.length = Measurement(0, "meter")

@@ -411,10 +411,7 @@ class MeasurementField(models.Field):
             qty_orig = qty_base.to(unit)
         except pint.errors.DimensionalityError:
             qty_orig = qty_base
-        magnitude = Measurement.format_decimal(
-            self._normalize_base_magnitude(qty_orig.magnitude)
-        )
-        return Measurement(magnitude, str(qty_orig.units))
+        return Measurement(Decimal(str(qty_orig.magnitude)), str(qty_orig.units))
 
     def __set__(
         self,
