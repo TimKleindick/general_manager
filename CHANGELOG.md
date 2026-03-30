@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.36.0 (2026-03-30)
+
+### Bug Fixes
+
+- Harden mutation permission defaults
+  ([`4087278`](https://github.com/TimKleindick/general_manager/commit/40872785420e17affeab7edb203116a460aba752))
+
+- Tighten permission docs and validation
+  ([`00c024b`](https://github.com/TimKleindick/general_manager/commit/00c024bfff9dc4ce5016bda5f92a5df20bd578c6))
+
+### Documentation
+
+- Add practical permission examples
+  ([`bd19d59`](https://github.com/TimKleindick/general_manager/commit/bd19d59ba6a6734e7ab2651dbe38fc3e12301a9b))
+
+### Features
+
+- Add permission read observability
+  ([`de5f177`](https://github.com/TimKleindick/general_manager/commit/de5f177fdcd1423ded6033f7dddf1f4c1a710d56))
+
+- Split manager-based permission semantics
+  ([`4a8dca5`](https://github.com/TimKleindick/general_manager/commit/4a8dca50ba3c3123ed83ae0fcad8301791122e16))
+
+
 ## v0.35.1 (2026-03-29)
 
 ### Bug Fixes
