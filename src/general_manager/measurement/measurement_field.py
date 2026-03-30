@@ -7,7 +7,13 @@ from django.core.exceptions import ValidationError
 from django.db.models.expressions import Col
 from decimal import Decimal, InvalidOperation
 import pint
-from general_manager.measurement.measurement import Measurement, ureg, currency_units
+from general_manager.measurement.measurement import (
+    Measurement,
+    _unit_uses_offset,
+    convert_magnitude,
+    currency_units,
+    ureg,
+)
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models import Lookup, Transform
 from typing import Any, cast
@@ -24,6 +30,16 @@ class MeasurementFieldNotEditableError(ValidationError):
             field_name (str): Name of the field that was attempted to be modified; used to compose the error message.
         """
         super().__init__(f"{field_name} is not editable.")
+
+
+class InvalidMeasurementFieldBaseUnitError(ValueError):
+    """Raised when a measurement field uses an offset unit as its base unit."""
+
+    def __init__(self, base_unit: str) -> None:
+        super().__init__(
+            f"MeasurementField base_unit '{base_unit}' must be multiplicative. "
+            "Use a unit like 'K' for absolute temperatures instead of an offset unit."
+        )
 
 
 class MeasurementField(models.Field):
@@ -55,6 +71,8 @@ class MeasurementField(models.Field):
             unique (bool): If True, the backing value column is created with a unique constraint.
             **kwargs (Any): Additional keyword arguments forwarded to the base Field implementation.
         """
+        if _unit_uses_offset(base_unit):
+            raise InvalidMeasurementFieldBaseUnitError(base_unit)
         self.base_unit = base_unit
         self.base_dimension = ureg.parse_expression(self.base_unit).dimensionality
 
@@ -377,7 +395,7 @@ class MeasurementField(models.Field):
             value = Measurement.from_string(value)
         if isinstance(value, Measurement):
             try:
-                return Decimal(str(value.quantity.to(self.base_unit).magnitude))
+                return convert_magnitude(value.magnitude, value.unit, self.base_unit)
             except pint.errors.DimensionalityError as e:
                 raise ValidationError(
                     {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
@@ -406,12 +424,12 @@ class MeasurementField(models.Field):
         unit = getattr(instance, self.unit_attr)
         if val is None or unit is None:
             return None
-        qty_base = ureg.Quantity(Decimal(str(val)), self.base_unit)
         try:
-            qty_orig = qty_base.to(unit)
+            magnitude = convert_magnitude(Decimal(str(val)), self.base_unit, unit)
         except pint.errors.DimensionalityError:
-            qty_orig = qty_base
-        return Measurement(Decimal(str(qty_orig.magnitude)), str(qty_orig.units))
+            magnitude = Decimal(str(val))
+            unit = self.base_unit
+        return Measurement(magnitude, str(unit))
 
     def __set__(
         self,
@@ -461,7 +479,7 @@ class MeasurementField(models.Field):
                 raise ValidationError({self.name: ["Unit cannot be a currency."]})
 
         try:
-            base_mag = value.quantity.to(self.base_unit).magnitude
+            base_mag = convert_magnitude(value.magnitude, value.unit, self.base_unit)
         except pint.errors.DimensionalityError as e:
             raise ValidationError(
                 {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}

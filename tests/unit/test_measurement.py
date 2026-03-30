@@ -49,6 +49,15 @@ class MeasurementTestCase(TestCase):
         converted = m.to("meter")
         self.assertEqual(str(converted), "1000 meter")
 
+    def test_offset_unit_conversion(self):
+        m = Measurement(25, "degC")
+        converted = m.to("degF")
+        self.assertEqual(converted.unit, "degree_Fahrenheit")
+        self.assertAlmostEqual(float(converted.magnitude), 77.0)
+
+    def test_offset_unit_comparison(self):
+        self.assertEqual(Measurement(25, "degC"), Measurement(298.15, "K"))
+
     def test_addition_same_units(self):
         m1 = Measurement(1, "meter")
         m2 = Measurement(2, "meter")

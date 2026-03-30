@@ -9,7 +9,10 @@ from general_manager.measurement.measurement import (
     Measurement,
     ureg,
 )
-from general_manager.measurement.measurement_field import MeasurementField
+from general_manager.measurement.measurement_field import (
+    InvalidMeasurementFieldBaseUnitError,
+    MeasurementField,
+)
 from django.db import connection, models
 
 
@@ -29,6 +32,7 @@ class MeasurementFieldTests(TestCase):
             length = MeasurementField(base_unit="meter", null=True, blank=True)
             price = MeasurementField(base_unit="USD", null=True, blank=True)
             density = MeasurementField(base_unit="g/cm^3", null=True, blank=True)
+            temperature = MeasurementField(base_unit="K", null=True, blank=True)
 
             class Meta:
                 app_label = "my_app"
@@ -149,6 +153,28 @@ class MeasurementFieldTests(TestCase):
         self.instance.full_clean()
         self.assertEqual(self.instance.length.quantity.magnitude, Decimal("0"))
         self.assertEqual(self.instance.length.quantity.units, ureg("meter"))
+
+    def test_offset_unit_assignment_to_kelvin_base_unit(self):
+        self.instance.temperature = Measurement(25, "degC")
+        self.instance.full_clean()
+        self.assertEqual(self.instance.temperature_value, Decimal("298.15"))  # type: ignore
+        self.assertEqual(self.instance.temperature_unit, "degree_Celsius")  # type: ignore
+        self.assertEqual(self.instance.temperature.unit, "degree_Celsius")  # type: ignore
+        self.assertAlmostEqual(float(self.instance.temperature.magnitude), 25.0)  # type: ignore
+
+    def test_offset_unit_descriptor_reconstruction_from_kelvin_storage(self):
+        self.instance.temperature_value = Decimal("298.15")  # type: ignore
+        self.instance.temperature_unit = "degC"  # type: ignore
+        temperature = self.instance.temperature
+        self.assertIsNotNone(temperature)
+        self.assertEqual(temperature.unit, "degree_Celsius")  # type: ignore[union-attr]
+        self.assertAlmostEqual(float(temperature.magnitude), 25.0)  # type: ignore[union-attr]
+
+    def test_offset_unit_base_unit_is_rejected(self):
+        with self.assertRaises(InvalidMeasurementFieldBaseUnitError) as ctx:
+            MeasurementField(base_unit="degC")
+        self.assertIn("must be multiplicative", str(ctx.exception))
+        self.assertIn("Use a unit like 'K'", str(ctx.exception))
 
     def test_edge_case_very_large_value1(self):
         """
