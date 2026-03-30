@@ -331,6 +331,36 @@ class TestGraphQLSearchReadHardening(GeneralManagerTransactionTestCase):
         self.assertTrue(context["requires_instance_check"])
         self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
 
+    def test_admin_search_logs_authorized_read_summary(self):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        query = """
+        query {
+            search(index: "global", query: "Internal") {
+                total
+            }
+        }
+        """
+
+        with patch("general_manager.api.graphql_search.logger") as logger_mock:
+            response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        matching = [
+            context
+            for context in contexts
+            if context.get("source") == "search"
+            and context.get("manager") == "AdminOnlyProject"
+        ]
+        self.assertEqual(len(matching), 1)
+        context = matching[0]
+        self.assertEqual(context["candidate_count"], 1)
+        self.assertEqual(context["authorized_count"], 1)
+        self.assertEqual(context["denied_count"], 0)
+        self.assertTrue(context["requires_instance_check"])
+        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+
 
 class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
     @classmethod
@@ -413,6 +443,36 @@ class TestGraphQLSearchBasedOnReadHardening(GeneralManagerTransactionTestCase):
         payload = response.json()["data"]["search"]
         self.assertEqual(payload["total"], 0)
         self.assertEqual(payload["results"], [])
+
+    def test_admin_search_logs_authorized_based_on_read_summary(self):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        query = """
+        query {
+            search(index: "global", query: "Hidden") {
+                total
+            }
+        }
+        """
+
+        with patch("general_manager.api.graphql_search.logger") as logger_mock:
+            response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        matching = [
+            context
+            for context in contexts
+            if context.get("source") == "search"
+            and context.get("manager") == "DelegatedDocument"
+        ]
+        self.assertEqual(len(matching), 1)
+        context = matching[0]
+        self.assertEqual(context["candidate_count"], 1)
+        self.assertEqual(context["authorized_count"], 1)
+        self.assertEqual(context["denied_count"], 0)
+        self.assertTrue(context["requires_instance_check"])
+        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
 
 
 class TestGraphQLSearchPermissionIntegration(GeneralManagerTransactionTestCase):

@@ -311,6 +311,7 @@ class _ConfiguredManagerPermission(BasePermission):
         action: permission_type,
         attribute: str,
     ) -> bool:
+        self._get_base_permissions(action)
         if self._is_superuser():
             self.__overall_results[action] = True
             return True

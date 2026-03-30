@@ -470,7 +470,7 @@ class MutationDecoratorTests(TestCase):
         class AllowEmptyPermission(MutationPermission):
             __mutate__: ClassVar[List[str]] = []
 
-        AllowEmptyPermission.check({"value": 1}, AnonymousUser())
+        self.assertIsNone(AllowEmptyPermission.check({"value": 1}, AnonymousUser()))
 
     def test_mutation_permission_ignores_non_list_public_attributes(self):
         """Only list[str] class attributes should be treated as field permissions."""

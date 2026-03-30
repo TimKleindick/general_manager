@@ -101,7 +101,7 @@ When `__based_on__` is set, delegated permissions always remain an outer gate in
 
 The read path also plugs into the project's existing observability pattern:
 
-- GraphQL list and search paths emit one aggregate structured log event per manager/query path through `get_logger(..., context=...)`.
+- GraphQL list and search paths emit one aggregate structured log event per manager/query path, with the structured payload attached at the log call site (for example `logger.info(..., context=...)`).
 - The log context records candidate rows, authorized rows, denied rows, whether a final instance gate was required, and the reason labels that triggered it.
 - These events complement the existing GraphQL metrics pipeline; the permission hardening does not introduce a separate telemetry subsystem or a new public metrics API.
 

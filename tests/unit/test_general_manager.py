@@ -1,5 +1,8 @@
 from django.test import TestCase
-from general_manager.bootstrap import check_permission_class
+from general_manager.bootstrap import (
+    InvalidPermissionClassError,
+    check_permission_class,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import InvalidManagerStateError
 from general_manager.permission.manager_based_permission import (
@@ -148,6 +151,23 @@ class GeneralManagerTestCase(TestCase):
 
         check_permission_class(PermissionlessManager)  # type: ignore[arg-type]
         self.assertIs(PermissionlessManager.Permission, AdditiveManagerPermission)
+
+    def test_check_permission_class_keeps_valid_permission(self):
+        class ExplicitPermissionManager:
+            Permission = AdditiveManagerPermission
+
+        check_permission_class(ExplicitPermissionManager)  # type: ignore[arg-type]
+        self.assertIs(
+            ExplicitPermissionManager.Permission,
+            AdditiveManagerPermission,
+        )
+
+    def test_check_permission_class_rejects_invalid_permission_type(self):
+        class InvalidPermissionManager:
+            Permission = "invalid"
+
+        with self.assertRaises(InvalidPermissionClassError):
+            check_permission_class(InvalidPermissionManager)  # type: ignore[arg-type]
 
     def test_str_and_repr(self):
         # Test string representation
