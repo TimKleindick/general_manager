@@ -276,13 +276,14 @@ class Measurement:
         splitted = stripped_value.split(maxsplit=1)
         if len(splitted) == 1:
             # If only one part, assume it's a dimensionless value
+            magnitude = splitted[0]
             try:
-                return cls(Decimal(splitted[0]), "dimensionless")
+                return cls(Decimal(magnitude), "dimensionless")
             except InvalidOperation as error:
                 raise InvalidDimensionlessValueError() from error
-        value, unit = splitted
+        magnitude, unit = splitted
         try:
-            return cls(value, unit.strip())
+            return cls(magnitude, unit.strip())
         except (pint.errors.PintError, ValueError) as error:
             raise InvalidMeasurementStringError() from error
 
