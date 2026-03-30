@@ -98,7 +98,31 @@ class BasePermission(ABC):
         """Return whether the current user may see that the instance exists."""
         if self._is_superuser():
             return True
-        return bool(self.check_permission("read", "id"))
+        permission_plan = self.get_read_permission_plan()
+        if not permission_plan.requires_instance_check:
+            return True
+
+        candidate_attributes: tuple[str, ...] = ()
+        instance_attributes = getattr(self.instance, "_attributes", None)
+        if isinstance(instance_attributes, Mapping):
+            candidate_attributes = tuple(
+                key for key in instance_attributes.keys() if not key.startswith("_")
+            )
+        elif isinstance(self.instance, PermissionDataManager):
+            candidate_attributes = tuple(
+                key
+                for key in self.instance.permission_data.keys()
+                if isinstance(key, str) and not key.startswith("_")
+            )
+
+        for attribute in candidate_attributes:
+            if self.check_permission("read", attribute):
+                return True
+
+        raise NotImplementedError(
+            "can_read_instance() requires an explicit implementation when no "
+            "concrete readable attribute can be inferred from the permission context."
+        )
 
     def _is_superuser(self) -> bool:
         """Return True when the current request user bypasses permission checks."""

@@ -138,23 +138,24 @@ Permission tests should exercise both granted and denied paths directly through 
 ```python
 import pytest
 
-from general_manager.permission.base_permission import (
-    BasePermission,
-    PermissionCheckError,
-)
+from general_manager.permission.base_permission import PermissionCheckError
 
 
-def test_finance_user_can_update_budget(finance_user):
+def test_finance_user_can_update_budget(project_instance, finance_user):
     payload = {"budget": 10_000}
-    BasePermission.check_create_permission(payload, Project, request_user=finance_user)
+    Project.Permission.check_update_permission(
+        payload,
+        project_instance,
+        request_user=finance_user,
+    )
 
 
-def test_non_finance_user_cannot_update_budget(project_member):
+def test_non_finance_user_cannot_update_budget(project_instance, project_member):
     payload = {"budget": 10_000}
     with pytest.raises(PermissionCheckError):
-        BasePermission.check_create_permission(
+        Project.Permission.check_update_permission(
             payload,
-            Project,
+            project_instance,
             request_user=project_member,
         )
 ```

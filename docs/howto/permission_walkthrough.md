@@ -59,6 +59,11 @@ from general_manager.permission.permission_checks import register_permission
 
 @register_permission(
     "belongsToCustomer",
+    permission_filter=lambda user, config: {
+        "filter": {f"{config[0]}__owner_id": user.id}
+    }
+    if config
+    else None,
 )
 def can_access_customer(instance, user, config):
     customer_field = config[0]

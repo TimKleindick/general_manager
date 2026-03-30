@@ -175,6 +175,7 @@ class MutationPermission:
         permissions: list[str],
     ) -> bool:
         """Return True when any permission expression evaluates to True."""
+        # Empty permissions list means no restrictions, so the field is allowed.
         if not permissions:
             return True
         for permission in permissions:
