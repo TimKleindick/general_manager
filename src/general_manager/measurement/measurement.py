@@ -266,20 +266,25 @@ class Measurement:
 
         Raises:
             InvalidDimensionlessValueError: If a single-token input cannot be parsed as a number.
-            InvalidMeasurementStringError: If the string does not contain exactly one or two space-separated tokens.
+            InvalidMeasurementStringError: If the string does not contain a valid numeric magnitude followed by a parseable unit expression.
             InvalidMeasurementInitializationError: If constructing the Measurement from the parsed parts fails.
         """
-        splitted = value.split(" ")
+        stripped_value = value.strip()
+        if not stripped_value:
+            raise InvalidMeasurementStringError()
+
+        splitted = stripped_value.split(maxsplit=1)
         if len(splitted) == 1:
             # If only one part, assume it's a dimensionless value
             try:
                 return cls(Decimal(splitted[0]), "dimensionless")
             except InvalidOperation as error:
                 raise InvalidDimensionlessValueError() from error
-        if len(splitted) != 2:
-            raise InvalidMeasurementStringError()
         value, unit = splitted
-        return cls(value, unit)
+        try:
+            return cls(value, unit.strip())
+        except (pint.errors.PintError, ValueError) as error:
+            raise InvalidMeasurementStringError() from error
 
     @staticmethod
     def format_decimal(value: Decimal) -> Decimal:

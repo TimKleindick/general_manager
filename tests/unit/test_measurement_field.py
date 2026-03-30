@@ -28,6 +28,7 @@ class MeasurementFieldTests(TestCase):
         class TestModel(models.Model):
             length = MeasurementField(base_unit="meter", null=True, blank=True)
             price = MeasurementField(base_unit="USD", null=True, blank=True)
+            density = MeasurementField(base_unit="g/cm^3", null=True, blank=True)
 
             class Meta:
                 app_label = "my_app"
@@ -94,6 +95,54 @@ class MeasurementFieldTests(TestCase):
         self.instance.full_clean()
         self.assertEqual(self.instance.length.quantity.magnitude, Decimal("5"))  # type: ignore
         self.assertEqual(self.instance.length.quantity.units, ureg("meter"))  # type: ignore
+
+    def test_measurement_field_accepts_compound_unit_string(self):
+        self.instance.density = "1 g / cm^3"
+        self.instance.full_clean()
+
+        self.assertEqual(self.instance.density_value, Decimal("1"))  # type: ignore
+        self.assertEqual(self.instance.density.unit, "gram / centimeter ** 3")  # type: ignore
+
+    def test_measurement_field_converts_compatible_compound_units(self):
+        self.instance.density = Measurement(1000, "kg/m^3")
+        self.instance.full_clean()
+
+        self.assertEqual(self.instance.density_value, Decimal("1"))  # type: ignore
+        self.assertEqual(self.instance.density_unit, "kilogram / meter ** 3")  # type: ignore
+        self.assertEqual(self.instance.density.magnitude, Decimal("1000"))  # type: ignore
+        self.assertEqual(self.instance.density.unit, "kilogram / meter ** 3")  # type: ignore
+
+    @isolate_apps("tests")
+    def test_compound_unit_round_trip(self):
+        class CompoundUnitModel(models.Model):
+            density = MeasurementField(base_unit="kg/m^3", null=True, blank=True)
+
+            class Meta:
+                app_label = "tests"
+
+        instance = CompoundUnitModel()
+        instance.density = "1 g / cm^3"
+        instance.full_clean()
+
+        self.assertEqual(instance.density_value, Decimal("1000"))  # type: ignore
+        self.assertEqual(instance.density_unit, "gram / centimeter ** 3")  # type: ignore
+        self.assertEqual(instance.density.unit, "gram / centimeter ** 3")  # type: ignore
+
+    @isolate_apps("tests")
+    def test_compound_unit_measurement_assignment_round_trip(self):
+        class CompoundUnitModel(models.Model):
+            density = MeasurementField(base_unit="kg/m^3", null=True, blank=True)
+
+            class Meta:
+                app_label = "tests"
+
+        instance = CompoundUnitModel()
+        instance.density = Measurement(1, "g/cm^3")
+        instance.full_clean()
+
+        self.assertEqual(instance.density_value, Decimal("1000"))  # type: ignore
+        self.assertEqual(instance.density_unit, "gram / centimeter ** 3")  # type: ignore
+        self.assertEqual(instance.density.unit, "gram / centimeter ** 3")  # type: ignore
 
     def test_edge_case_zero_value(self):
         self.instance.length = Measurement(0, "meter")

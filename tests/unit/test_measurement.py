@@ -583,6 +583,26 @@ class MeasurementTestCase(TestCase):
         self.assertEqual(m3.magnitude, Decimal("-5.5"))
         self.assertEqual(m3.unit, "kilogram")
 
+        # Compound units with spaced expressions
+        m4 = Measurement.from_string("1 g / cm^3")
+        self.assertEqual(m4.magnitude, Decimal("1"))
+        self.assertEqual(m4.unit, "gram / centimeter ** 3")
+
+        # Leading/trailing whitespace should be ignored
+        m5 = Measurement.from_string("  2 kg/m^3  ")
+        self.assertEqual(m5.magnitude, Decimal("2"))
+        self.assertEqual(m5.unit, "kilogram / meter ** 3")
+
+    def test_measurement_from_string_accepts_compound_units(self):
+        """Compound unit strings should parse whether or not the unit expression contains spaces."""
+        compact = Measurement.from_string("1 g/cm^3")
+        spaced = Measurement.from_string("1 g / cm^3")
+
+        self.assertEqual(compact.magnitude, Decimal("1"))
+        self.assertEqual(compact.unit, "gram / centimeter ** 3")
+        self.assertEqual(spaced.magnitude, Decimal("1"))
+        self.assertEqual(spaced.unit, "gram / centimeter ** 3")
+
     def test_measurement_decimal_precision(self):
         """Test that Measurement maintains Decimal precision."""
         m = Measurement(Decimal("0.00000001"), "meter")

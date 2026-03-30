@@ -5,7 +5,7 @@ from __future__ import annotations
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models.expressions import Col
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import pint
 from general_manager.measurement.measurement import Measurement, ureg, currency_units
 from django.db.backends.base.base import BaseDatabaseWrapper
@@ -72,7 +72,7 @@ class MeasurementField(models.Field):
                 blank=blank,
             )
             self.unit_field = models.CharField(
-                max_length=30,
+                max_length=100,
                 editable=editable,
                 null=True,
                 blank=blank,
@@ -88,7 +88,7 @@ class MeasurementField(models.Field):
                 blank=blank,
             )
             self.unit_field = models.CharField(
-                max_length=30,
+                max_length=100,
                 editable=editable,
                 null=False,
                 blank=blank,
@@ -102,6 +102,16 @@ class MeasurementField(models.Field):
             "unique": unique,
         }
         super().__init__(*args, **options)
+
+    def _normalize_base_magnitude(self, magnitude: Decimal | float | int) -> Decimal:
+        """Round converted magnitudes to the backing DecimalField precision."""
+        decimal_magnitude = Decimal(str(magnitude))
+        decimal_places = cast(models.DecimalField, self.value_field).decimal_places
+        quantizer = Decimal("1").scaleb(-decimal_places)
+        try:
+            return decimal_magnitude.quantize(quantizer)
+        except InvalidOperation:
+            return decimal_magnitude
 
     def contribute_to_class(
         self,
@@ -396,12 +406,15 @@ class MeasurementField(models.Field):
         unit = getattr(instance, self.unit_attr)
         if val is None or unit is None:
             return None
-        qty_base = Decimal(val) * ureg(self.base_unit)
+        qty_base = ureg.Quantity(Decimal(str(val)), self.base_unit)
         try:
             qty_orig = qty_base.to(unit)
         except pint.errors.DimensionalityError:
             qty_orig = qty_base
-        return Measurement(qty_orig.magnitude, str(qty_orig.units))
+        magnitude = Measurement.format_decimal(
+            self._normalize_base_magnitude(qty_orig.magnitude)
+        )
+        return Measurement(magnitude, str(qty_orig.units))
 
     def __set__(
         self,
@@ -457,7 +470,7 @@ class MeasurementField(models.Field):
                 {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
             ) from e
 
-        setattr(instance, self.value_attr, Decimal(str(base_mag)))
+        setattr(instance, self.value_attr, self._normalize_base_magnitude(base_mag))
         setattr(instance, self.unit_attr, str(value.quantity.units))
 
     def validate(
