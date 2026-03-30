@@ -23,7 +23,10 @@ from general_manager.logging import get_logger
 from general_manager.measurement.measurement import Measurement
 
 if TYPE_CHECKING:
-    from general_manager.permission.base_permission import BasePermission
+    from general_manager.permission.base_permission import (
+        BasePermission,
+        ReadPermissionPlan,
+    )
     from graphene import ResolveInfo as GraphQLResolveInfo
     from general_manager.manager.general_manager import GeneralManager
 
@@ -240,7 +243,7 @@ def handle_graph_ql_error(error: Exception) -> GraphQLError:
 def get_read_permission_filter(
     generalManagerClass: Type[GeneralManager],
     info: GraphQLResolveInfo,
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+) -> ReadPermissionPlan:
     """
     Produce a list of permission-derived filter and exclude mappings.
 
@@ -249,18 +252,27 @@ def get_read_permission_filter(
         info: GraphQL resolver info whose context provides the current user.
 
     Returns:
-        A list of ``(filter, exclude)`` tuples from the manager's Permission class.
+        A read-permission plan consisting of queryset/search prefilters plus a
+        flag indicating whether per-instance authorization must still run.
     """
-    filters = []
+    from general_manager.permission.base_permission import ReadPermissionPlan
+
     PermissionClass: type[BasePermission] | None = getattr(
         generalManagerClass, "Permission", None
     )
     if PermissionClass:
-        permission_filters = PermissionClass(
-            generalManagerClass, info.context.user
-        ).get_permission_filter()
-        for permission_filter in permission_filters:
-            filter_dict = permission_filter.get("filter", {})
-            exclude_dict = permission_filter.get("exclude", {})
-            filters.append((filter_dict, exclude_dict))
-    return filters
+        permission = PermissionClass(generalManagerClass, info.context.user)
+        plan_method = getattr(permission, "get_read_permission_plan", None)
+        if callable(plan_method):
+            plan = plan_method()
+            if isinstance(getattr(plan, "filters", None), list) and isinstance(
+                getattr(plan, "requires_instance_check", None),
+                bool,
+            ):
+                return plan
+        return ReadPermissionPlan(
+            filters=permission.get_permission_filter(),
+            requires_instance_check=True,
+            instance_check_reasons=("no_prefilter_backend",),
+        )
+    return ReadPermissionPlan(filters=[], requires_instance_check=False)

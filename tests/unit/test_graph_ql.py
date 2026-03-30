@@ -22,6 +22,7 @@ from general_manager.manager.input import Input
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.orm_interface import OrmInterfaceBase  # noqa: F401
+from general_manager.permission.base_permission import ReadPermissionPlan
 from graphql import (
     DirectiveLocation,
     GraphQLError,
@@ -124,7 +125,16 @@ class GraphQLTests(TestCase):
         mock_instance.abc_list = mock_queryset
 
         resolver = GraphQL._create_resolver("abc_list", GeneralManager)
-        with patch("json.loads", side_effect=json.loads):
+        with (
+            patch("json.loads", side_effect=json.loads),
+            patch(
+                "general_manager.api.graphql_resolvers.get_read_permission_filter",
+                return_value=ReadPermissionPlan(
+                    filters=[],
+                    requires_instance_check=False,
+                ),
+            ),
+        ):
             resolver(
                 mock_instance,
                 self.info,
@@ -171,7 +181,16 @@ class GraphQLTests(TestCase):
         mock_qs = MagicMock()
         mock_instance.abc_list = mock_qs
         resolver = GraphQL._create_resolver("abc_list", GeneralManager)
-        with patch("json.loads", side_effect=ValueError):
+        with (
+            patch("json.loads", side_effect=ValueError),
+            patch(
+                "general_manager.api.graphql_resolvers.get_read_permission_filter",
+                return_value=ReadPermissionPlan(
+                    filters=[],
+                    requires_instance_check=False,
+                ),
+            ),
+        ):
             result = resolver(mock_instance, self.info, filter="bad", exclude="bad")
             self.assertEqual(result["items"], mock_qs)
 
@@ -400,7 +419,7 @@ class GraphQLDirectiveRegistrationTests(TestCase):
 class TestGetReadPermissionFilter(TestCase):
     def test_get_read_permission_filter(self):
         """
-        Verify that get_read_permission_filter extracts and returns filter and exclude tuples from a manager's permission class.
+        Verify that get_read_permission_filter returns a read-permission plan from a manager's permission class.
         """
 
         class DummyManager:
@@ -416,8 +435,12 @@ class TestGetReadPermissionFilter(TestCase):
         info = MagicMock()
         info.context.user = AnonymousUser()
         result = get_read_permission_filter(DummyManager, info)
-        expected = [({"num_field__exact": 42}, {})]
-        self.assertEqual(result, expected)
+        self.assertEqual(
+            result.filters,
+            [{"filter": {"num_field__exact": 42}, "exclude": {}}],
+        )
+        self.assertTrue(result.requires_instance_check)
+        self.assertEqual(result.instance_check_reasons, ("no_prefilter_backend",))
 
 
 class TestGrapQlMutation(TestCase):

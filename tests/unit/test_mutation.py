@@ -2,7 +2,7 @@ from typing import Optional, List, ClassVar
 
 import graphene
 from django.test import TestCase
-from django.contrib.auth.models import User
+from django.contrib.auth.models import AnonymousUser, User
 
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.api.graphql import GraphQL
@@ -463,6 +463,30 @@ class MutationDecoratorTests(TestCase):
         result = mutation.mutate(None, Info, value=5)
         self.assertTrue(result.success)
         self.assertEqual(result.int, 10)
+
+    def test_mutation_permission_empty_lists_allow(self):
+        """Empty mutation permissions should behave like allow-all."""
+
+        class AllowEmptyPermission(MutationPermission):
+            __mutate__: ClassVar[List[str]] = []
+
+        AllowEmptyPermission.check({"value": 1}, AnonymousUser())
+
+    def test_mutation_permission_ignores_non_list_public_attributes(self):
+        """Only list[str] class attributes should be treated as field permissions."""
+
+        class MixedPermission(MutationPermission):
+            __mutate__: ClassVar[List[str]] = []
+            field: ClassVar[List[str]] = ["public"]
+            helper_constant: ClassVar[str] = "not-a-permission-list"
+
+        permission = MixedPermission({"field": "value"}, User())
+
+        self.assertIn("field", permission._MutationPermission__attribute_permissions)
+        self.assertNotIn(
+            "helper_constant",
+            permission._MutationPermission__attribute_permissions,
+        )
 
     def test_mutation_with_tuple_unpacking_duplicate_names_raises(self):
         """Enforce that duplicate output field names trigger an error."""

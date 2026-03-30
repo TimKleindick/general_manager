@@ -60,9 +60,11 @@ class MutationPermission:
     ) -> dict[str, list[str]]:
         """Collect attribute-specific permission expressions declared on the class."""
         attribute_permissions = {}
-        for attribute in self.__class__.__dict__:
-            if not attribute.startswith("__"):
-                attribute_permissions[attribute] = getattr(self.__class__, attribute)
+        for attribute, value in self.__class__.__dict__.items():
+            if attribute.startswith("__"):
+                continue
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                attribute_permissions[attribute] = list(value)
         return attribute_permissions
 
     def describe_permissions(self, attribute: str) -> tuple[str, ...]:
@@ -173,6 +175,8 @@ class MutationPermission:
         permissions: list[str],
     ) -> bool:
         """Return True when any permission expression evaluates to True."""
+        if not permissions:
+            return True
         for permission in permissions:
             if validate_permission_string(permission, self.data, self.request_user):
                 return True

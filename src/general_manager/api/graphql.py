@@ -14,6 +14,7 @@ from typing import (
     ClassVar,
     Generator,
     Iterable,
+    Literal,
     TYPE_CHECKING,
     Type,
     TypeVar,
@@ -470,7 +471,7 @@ class GraphQL:
     @staticmethod
     def _merge_permission_filters(
         filters: dict[str, Any] | None,
-        permission_filters: list[tuple[dict[str, Any], dict[str, Any]]],
+        permission_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]],
     ) -> list[dict[str, Any]] | dict[str, Any] | None:
         """Merge permission filters. See ``graphql_search.merge_permission_filters``."""
         return _merge_permission_filters_fn(filters, permission_filters)

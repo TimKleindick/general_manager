@@ -97,7 +97,13 @@ When `__based_on__` is set, delegated permissions always remain an outer gate in
 
 ## Permission filters
 
-`AdditiveManagerPermission.get_permission_filter()` and `OverrideManagerPermission.get_permission_filter()` convert read expressions into Django queryset filters. Buckets apply these filters automatically so unauthorised records do not show up in listings.
+`AdditiveManagerPermission.get_permission_filter()` and `OverrideManagerPermission.get_permission_filter()` convert read expressions into Django queryset filters. Buckets use those filters as a prefilter, then run a final per-instance read check before a row contributes to list membership or counts. This keeps list and search authorization fail-closed even when a read rule cannot be represented as a queryset constraint.
+
+The read path also plugs into the project's existing observability pattern:
+
+- GraphQL list and search paths emit one aggregate structured log event per manager/query path through `get_logger(..., context=...)`.
+- The log context records candidate rows, authorized rows, denied rows, whether a final instance gate was required, and the reason labels that triggered it.
+- These events complement the existing GraphQL metrics pipeline; the permission hardening does not introduce a separate telemetry subsystem or a new public metrics API.
 
 ## Custom permission functions
 

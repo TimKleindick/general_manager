@@ -11,7 +11,16 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Callable, Generator, TYPE_CHECKING, Type, cast, get_args
+from typing import (
+    Any,
+    Callable,
+    Generator,
+    Literal,
+    TYPE_CHECKING,
+    Type,
+    cast,
+    get_args,
+)
 
 import graphene  # type: ignore[import]
 from graphql import GraphQLError
@@ -31,6 +40,11 @@ from general_manager.api.graphql_errors import (
     MeasurementScalar,
     map_field_to_graphene_base_type,
     get_read_permission_filter,
+)
+from general_manager.api.graphql_resolvers import (
+    can_read_instance,
+    get_backend_shape,
+    resolve_instance_check_reasons,
 )
 
 if TYPE_CHECKING:
@@ -95,7 +109,7 @@ def parse_search_filters(
 
 def merge_permission_filters(
     filters: dict[str, Any] | None,
-    permission_filters: list[tuple[dict[str, Any], dict[str, Any]]],
+    permission_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]],
 ) -> list[dict[str, Any]] | dict[str, Any] | None:
     """
     Combine a base filter with multiple permission-derived filter sets.
@@ -103,8 +117,8 @@ def merge_permission_filters(
     Parameters:
         filters: Base filter to apply to each permission set; treated as empty
             if ``None``.
-        permission_filters: Sequence of ``(filter, exclude)`` permission pairs;
-            only the filter part is merged here.
+        permission_filters: Sequence of filter/exclude mappings; only the
+            filter part is merged here.
 
     Returns:
         If *permission_filters* is empty, returns *filters* or ``None``.
@@ -114,9 +128,9 @@ def merge_permission_filters(
     if not permission_filters:
         return filters or None
     groups: list[dict[str, Any]] = []
-    for perm_filter, _perm_exclude in permission_filters:
+    for permission_filter in permission_filters:
         combined = dict(filters or {})
-        combined.update(perm_filter)
+        combined.update(permission_filter.get("filter", {}))
         groups.append(combined)
     return groups or None
 
@@ -150,6 +164,8 @@ def matches_filters(
 def passes_permission_filters(
     instance: GeneralManager,
     info: GraphQLResolveInfo,
+    *,
+    permission_plan: Any | None = None,
 ) -> bool:
     """
     Return ``True`` if the current user may read *instance*.
@@ -162,15 +178,21 @@ def passes_permission_filters(
         instance: The manager instance to evaluate.
         info: GraphQL resolver info containing the request context / user.
     """
-    permission_filters = get_read_permission_filter(instance.__class__, info)
+    if permission_plan is None:
+        permission_plan = get_read_permission_filter(instance.__class__, info)
+    permission_filters = permission_plan.filters
     if not permission_filters:
-        return True
+        return can_read_instance(instance, info)
 
-    for perm_filter, perm_exclude in permission_filters:
+    for permission_filter in permission_filters:
+        perm_filter = permission_filter.get("filter", {})
+        perm_exclude = permission_filter.get("exclude", {})
         if matches_filters(instance, perm_filter) and not matches_filters(
             instance, perm_exclude, empty_is_match=False
         ):
-            return True
+            if not permission_plan.requires_instance_check:
+                return True
+            return can_read_instance(instance, info)
     return False
 
 
@@ -472,13 +494,19 @@ def register_search_query(
 
         for manager_class in manager_classes:
             type_label = manager_class.__name__
-            perm_filters = get_read_permission_filter(manager_class, info)
+            permission_plan = get_read_permission_filter(manager_class, info)
+            backend_shape = get_backend_shape(manager_class)
+            instance_check_reasons = resolve_instance_check_reasons(
+                permission_plan,
+                backend_shape=backend_shape,
+            )
             filter_groups = merge_permission_filters(
                 parsed_filters,
-                perm_filters,
+                permission_plan.filters,
             )
             authorized_hits: list[tuple[float | None, Any, GeneralManager]] = []
             total_hits_for_manager = 0
+            candidate_hits_for_manager = 0
             appended_hits_for_manager = 0
             offset_cursor = 0
             while True:
@@ -514,7 +542,12 @@ def register_search_query(
                             exc_info=exc,
                         )
                         continue
-                    if not passes_permission_filters(instance, info):
+                    candidate_hits_for_manager += 1
+                    if not passes_permission_filters(
+                        instance,
+                        info,
+                        permission_plan=permission_plan,
+                    ):
                         continue
                     total_hits_for_manager += 1
                     # Apply a single global cap across all managers so that
@@ -528,6 +561,23 @@ def register_search_query(
                     break
             total += total_hits_for_manager
             hits.extend(authorized_hits)
+            if permission_plan.requires_instance_check:
+                logger.info(
+                    "graphql read authorization summary",
+                    context={
+                        "source": "search",
+                        "manager": manager_class.__name__,
+                        "backend_shape": backend_shape,
+                        "candidate_count": candidate_hits_for_manager,
+                        "authorized_count": total_hits_for_manager,
+                        "denied_count": max(
+                            candidate_hits_for_manager - total_hits_for_manager,
+                            0,
+                        ),
+                        "requires_instance_check": True,
+                        "instance_check_reasons": list(instance_check_reasons),
+                    },
+                )
 
         if sort_by:
 

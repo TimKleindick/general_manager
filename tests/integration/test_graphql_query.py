@@ -1,10 +1,16 @@
 # type: ignore
+from typing import ClassVar
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.db.models import CharField, DateField, ForeignKey, CASCADE
 from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
 from general_manager.measurement.measurement_field import MeasurementField
+from general_manager.permission.manager_based_permission import (
+    AdditiveManagerPermission,
+)
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
 )
@@ -272,6 +278,143 @@ class TestGraphQLIncludeInactive(GeneralManagerTransactionTestCase):
         include_names = {item["name"] for item in include_data["items"]}
         self.assertEqual(include_names, {"Active Family", "Inactive Family"})
         self.assertEqual(include_data["pageInfo"]["totalCount"], 2)
+
+
+class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class InternalRecord(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        cls.general_manager_classes = [InternalRecord]
+        cls.internal_record = InternalRecord
+
+    def setUp(self):
+        super().setUp()
+        password = get_random_string(12)
+        self.user = get_user_model().objects.create_user(
+            username="read-hardening-user", password=password
+        )
+        self.client.login(username="read-hardening-user", password=password)
+        self.internal_record.Factory.create_batch(2)
+
+    def test_non_admin_list_query_hides_rows_and_total_count(self):
+        query = """
+        query {
+            internalrecordList {
+                items {
+                    id
+                    name
+                }
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["internalrecordList"]
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(payload["pageInfo"]["totalCount"], 0)
+
+    def test_non_admin_list_query_logs_aggregate_read_summary(self):
+        query = """
+        query {
+            internalrecordList {
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+
+        with patch("general_manager.api.graphql_resolvers.logger") as logger_mock:
+            response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        logger_mock.info.assert_called()
+        contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
+        matching = [
+            context
+            for context in contexts
+            if context.get("source") == "list"
+            and context.get("manager") == "InternalRecord"
+        ]
+        self.assertEqual(len(matching), 1)
+        context = matching[0]
+        self.assertEqual(context["candidate_count"], 2)
+        self.assertEqual(context["authorized_count"], 0)
+        self.assertEqual(context["denied_count"], 2)
+        self.assertTrue(context["requires_instance_check"])
+        self.assertIn("unfilterable_read_rule", context["instance_check_reasons"])
+
+
+class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class RestrictedProject(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["isAdmin"]
+
+        class DelegatedDocument(GeneralManager):
+            class Interface(DatabaseInterface):
+                title = CharField(max_length=100)
+                project = ForeignKey(
+                    "general_manager.RestrictedProject",
+                    on_delete=CASCADE,
+                )
+
+            class Permission(AdditiveManagerPermission):
+                __based_on__: ClassVar[str] = "project"
+                __read__: ClassVar[list[str]] = ["public"]
+
+        cls.general_manager_classes = [RestrictedProject, DelegatedDocument]
+        cls.restricted_project = RestrictedProject
+        cls.delegated_document = DelegatedDocument
+
+    def setUp(self):
+        super().setUp()
+        password = get_random_string(12)
+        self.user = get_user_model().objects.create_user(
+            username="based-on-read-hardening-user",
+            password=password,
+        )
+        self.client.login(username="based-on-read-hardening-user", password=password)
+        project = self.restricted_project.Factory.create(name="Hidden Project")
+        self.delegated_document.Factory.create(
+            title="Hidden Spec",
+            project=project,
+        )
+
+    def test_non_admin_list_query_hides_based_on_denied_rows_and_total_count(self):
+        query = """
+        query {
+            delegateddocumentList {
+                items {
+                    id
+                    title
+                }
+                pageInfo {
+                    totalCount
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["delegateddocumentList"]
+        self.assertEqual(payload["items"], [])
+        self.assertEqual(payload["pageInfo"]["totalCount"], 0)
 
 
 class TestGraphQLIncludeInactiveValidation(GeneralManagerTransactionTestCase):

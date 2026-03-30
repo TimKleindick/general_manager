@@ -64,7 +64,10 @@ class SimpleBucket(Bucket):
                 SimpleBucket: A bucket containing one manager instance per provided ID.
         """
         ids = kwargs.get("id__in", [])
-        return SimpleBucket(self._manager_class, [self._manager_class() for _ in ids])
+        return SimpleBucket(
+            self._manager_class,
+            [self._manager_class(id=value) for value in ids],
+        )
 
     def exclude(self, **kwargs):
         """
@@ -98,6 +101,10 @@ class SimpleBucket(Bucket):
                 SimpleBucket: A bucket with all current items.
         """
         return SimpleBucket(self._manager_class, self._data)
+
+    def none(self):
+        """Return an empty bucket of the same manager type."""
+        return SimpleBucket(self._manager_class, [])
 
     def get(self, **kwargs):
         """

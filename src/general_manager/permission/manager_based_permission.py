@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Optional
 
-from general_manager.permission.base_permission import BasePermission, UserLike
+from general_manager.permission.base_permission import (
+    BasePermission,
+    ReadPermissionPlan,
+    ReadPermissionReason,
+    UserLike,
+)
 
 if TYPE_CHECKING:
     from general_manager.permission.permission_data_manager import (
@@ -100,6 +105,8 @@ class _ConfiguredManagerPermission(BasePermission):
     _create_permissions: list[str]
     _update_permissions: list[str]
     _delete_permissions: list[str]
+    _read_instance_result: bool | None
+    _is_class_context: bool
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -135,7 +142,13 @@ class _ConfiguredManagerPermission(BasePermission):
         instance: PermissionDataManager | GeneralManager,
         request_user: UserLike,
     ) -> None:
+        from general_manager.manager.general_manager import GeneralManager
+
         super().__init__(instance, request_user)
+        self._is_class_context = isinstance(instance, type) and issubclass(
+            instance,
+            GeneralManager,
+        )
         if self.__class__ in (
             _ConfiguredManagerPermission,
             AdditiveManagerPermission,
@@ -165,6 +178,7 @@ class _ConfiguredManagerPermission(BasePermission):
             "update": None,
             "delete": None,
         }
+        self._read_instance_result = None
 
     def __get_based_on_permission(self) -> Optional[BasePermission]:
         from general_manager.manager.general_manager import GeneralManager
@@ -175,6 +189,8 @@ class _ConfiguredManagerPermission(BasePermission):
 
         basis_object = getattr(self.instance, __based_on__, notExistent)
         if basis_object is notExistent:
+            if self._is_class_context:
+                return None
             raise InvalidBasedOnConfigurationError(__based_on__)
         if basis_object is None:
             default_permissions = _get_default_permissions()
@@ -205,6 +221,21 @@ class _ConfiguredManagerPermission(BasePermission):
             instance=getattr(self.instance, __based_on__),
             request_user=self.request_user,
         )
+
+    @staticmethod
+    def _merge_filter_group_parts(
+        delegated_part: dict[str, Any],
+        local_part: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Merge representable filters; conflicting keys fall back to instance checks."""
+        merged = dict(delegated_part)
+        had_conflict = False
+        for key, value in local_part.items():
+            if key in merged and merged[key] != value:
+                had_conflict = True
+                continue
+            merged[key] = value
+        return merged, had_conflict
 
     def _set_effective_permissions(
         self,
@@ -294,7 +325,11 @@ class _ConfiguredManagerPermission(BasePermission):
             self._get_attribute_permission_expressions(action, attribute)
         )
 
-        if not has_attribute_permissions:
+        can_use_action_cache = (
+            not has_attribute_permissions and self.__based_on_permission is None
+        )
+
+        if can_use_action_cache:
             last_result = self.__overall_results.get(action)
             if last_result is not None:
                 return last_result
@@ -306,7 +341,8 @@ class _ConfiguredManagerPermission(BasePermission):
             attribute_permissions=attribute_permissions,
             has_attribute_permissions=has_attribute_permissions,
         )
-        self.__overall_results[action] = permission
+        if can_use_action_cache:
+            self.__overall_results[action] = permission
         return permission
 
     def __check_specific_permission(
@@ -326,33 +362,134 @@ class _ConfiguredManagerPermission(BasePermission):
     def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
-        if self._is_superuser():
-            return [{"filter": {}, "exclude": {}}]
-        __based_on__ = self.__based_on__
-        filters: list[dict[Literal["filter", "exclude"], dict[str, str]]] = []
+        return self.get_read_permission_plan().filters
 
+    def can_read_instance(self) -> bool:
+        """Return whether the current user may see that this manager exists."""
+        if self._is_superuser():
+            self._read_instance_result = True
+            return True
+        if self._read_instance_result is not None:
+            return self._read_instance_result
+        if self.__based_on_permission is not None and not (
+            self.__based_on_permission.can_read_instance()
+        ):
+            self._read_instance_result = False
+            return False
+        result = self._check_permission_list(self._read_permissions)
+        self._read_instance_result = result
+        return result
+
+    def get_read_permission_plan(self) -> ReadPermissionPlan:
+        """Return read prefilters plus whether row-level checks must still run."""
+        if self._is_superuser():
+            return ReadPermissionPlan(
+                filters=[{"filter": {}, "exclude": {}}],
+                requires_instance_check=False,
+            )
+        __based_on__ = self.__based_on__
+        requires_instance_check = False
+        instance_check_reasons: set[ReadPermissionReason] = set()
+        delegated_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]] = [
+            {"filter": {}, "exclude": {}}
+        ]
         if self.__based_on_permission is not None:
-            base_permissions = self.__based_on_permission.get_permission_filter()
-            for base_permission in base_permissions:
-                filter = base_permission.get("filter", {})
-                exclude = base_permission.get("exclude", {})
-                filters.append(
+            delegated_plan_method = getattr(
+                self.__based_on_permission,
+                "get_read_permission_plan",
+                None,
+            )
+            delegated_plan: ReadPermissionPlan | None = None
+            if callable(delegated_plan_method):
+                plan_candidate = delegated_plan_method()
+                if isinstance(plan_candidate, ReadPermissionPlan):
+                    delegated_plan = plan_candidate
+                elif isinstance(getattr(plan_candidate, "filters", None), list) and (
+                    isinstance(
+                        getattr(plan_candidate, "requires_instance_check", None),
+                        bool,
+                    )
+                ):
+                    raw_reasons = getattr(plan_candidate, "instance_check_reasons", ())
+                    delegated_plan = ReadPermissionPlan(
+                        filters=list(plan_candidate.filters),
+                        requires_instance_check=plan_candidate.requires_instance_check,
+                        instance_check_reasons=tuple(raw_reasons)
+                        if isinstance(raw_reasons, (list, tuple))
+                        else (),
+                    )
+            if delegated_plan is None:
+                delegated_plan = ReadPermissionPlan(
+                    filters=self.__based_on_permission.get_permission_filter(),
+                    requires_instance_check=True,
+                    instance_check_reasons=("no_prefilter_backend",),
+                )
+            requires_instance_check = (
+                requires_instance_check or delegated_plan.requires_instance_check
+            )
+            instance_check_reasons.update(delegated_plan.instance_check_reasons)
+            delegated_filters = []
+            for delegated_filter_group in delegated_plan.filters:
+                filter_dict = delegated_filter_group.get("filter", {})
+                exclude_dict = delegated_filter_group.get("exclude", {})
+                delegated_filters.append(
                     {
                         "filter": {
                             f"{__based_on__}__{key}": value
-                            for key, value in filter.items()
+                            for key, value in filter_dict.items()
                         },
                         "exclude": {
                             f"{__based_on__}__{key}": value
-                            for key, value in exclude.items()
+                            for key, value in exclude_dict.items()
                         },
                     }
                 )
+        elif self.__based_on__ is not None and self._is_class_context:
+            requires_instance_check = True
+            instance_check_reasons.add("based_on_class_context")
 
+        local_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]] = []
         for permission in self._read_permissions:
-            filters.append(self._get_permission_filter(permission))
+            permission_filter, is_filterable = self._get_permission_filter_info(
+                permission
+            )
+            if is_filterable:
+                local_filters.append(permission_filter)
+            else:
+                requires_instance_check = True
+                instance_check_reasons.add("unfilterable_read_rule")
 
-        return filters
+        if not local_filters:
+            local_filters = [{"filter": {}, "exclude": {}}]
+
+        combined_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]] = []
+        for delegated_filter_group in delegated_filters:
+            for local_filter_group in local_filters:
+                combined_filter, filter_conflict = self._merge_filter_group_parts(
+                    dict(delegated_filter_group.get("filter", {})),
+                    dict(local_filter_group.get("filter", {})),
+                )
+                combined_exclude, exclude_conflict = self._merge_filter_group_parts(
+                    dict(delegated_filter_group.get("exclude", {})),
+                    dict(local_filter_group.get("exclude", {})),
+                )
+                requires_instance_check = (
+                    requires_instance_check or filter_conflict or exclude_conflict
+                )
+                if filter_conflict or exclude_conflict:
+                    instance_check_reasons.add("filter_key_conflict")
+                combined_filters.append(
+                    {
+                        "filter": combined_filter,
+                        "exclude": combined_exclude,
+                    }
+                )
+
+        return ReadPermissionPlan(
+            filters=combined_filters or [{"filter": {}, "exclude": {}}],
+            requires_instance_check=requires_instance_check,
+            instance_check_reasons=tuple(sorted(instance_check_reasons)),
+        )
 
     def describe_permissions(
         self,

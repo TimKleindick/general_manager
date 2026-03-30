@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
@@ -27,6 +29,21 @@ if TYPE_CHECKING:
 logger = get_logger("permission.base")
 
 UserLike: TypeAlias = AbstractBaseUser | AnonymousUser
+ReadPermissionReason: TypeAlias = Literal[
+    "unfilterable_read_rule",
+    "based_on_class_context",
+    "filter_key_conflict",
+    "no_prefilter_backend",
+]
+
+
+@dataclass(slots=True)
+class ReadPermissionPlan:
+    """Represent queryset prefilters plus whether an instance gate is still required."""
+
+    filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]]
+    requires_instance_check: bool = True
+    instance_check_reasons: tuple[ReadPermissionReason, ...] = ()
 
 
 class PermissionCheckError(PermissionError):
@@ -76,6 +93,12 @@ class BasePermission(ABC):
     ) -> tuple[str, ...]:
         """Return permission expressions associated with an action/attribute pair."""
         return ()
+
+    def can_read_instance(self) -> bool:
+        """Return whether the current user may see that the instance exists."""
+        if self._is_superuser():
+            return True
+        return bool(self.check_permission("read", "id"))
 
     def _is_superuser(self) -> bool:
         """Return True when the current request user bypasses permission checks."""
@@ -241,9 +264,10 @@ class BasePermission(ABC):
         permission_data = PermissionDataManager(manager_instance)
         Permission = cls(permission_data, request_user)
         manager_name = manager_instance.__class__.__name__
+        permission_attributes = cls._iter_permission_attributes(manager_instance)
         if Permission._is_superuser():
             if audit_logging_enabled():
-                for key in manager_instance.__dict__.keys():
+                for key in permission_attributes:
                     emit_permission_audit_event(
                         PermissionAuditEvent(
                             action="delete",
@@ -259,7 +283,7 @@ class BasePermission(ABC):
 
         errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
-        for key in manager_instance.__dict__.keys():
+        for key in permission_attributes:
             is_allowed = Permission.check_permission("delete", key)
             if audit_logging_enabled():
                 emit_permission_audit_event(
@@ -335,6 +359,26 @@ class BasePermission(ABC):
         """Return the filter/exclude constraints associated with this permission."""
         raise NotImplementedError
 
+    def get_read_permission_plan(self) -> ReadPermissionPlan:
+        """Return read-query prefilters plus whether instance checks must still run."""
+        return ReadPermissionPlan(
+            filters=self.get_permission_filter(),
+            requires_instance_check=True,
+            instance_check_reasons=("no_prefilter_backend",),
+        )
+
+    @staticmethod
+    def _iter_permission_attributes(
+        manager_instance: GeneralManager,
+    ) -> tuple[str, ...]:
+        """Return stable public/domain attributes for permission and audit iteration."""
+        attributes = getattr(manager_instance, "_attributes", None)
+        if isinstance(attributes, Mapping):
+            return tuple(attributes.keys())
+        return tuple(
+            key for key in manager_instance.__dict__.keys() if not key.startswith("_")
+        )
+
     def _get_permission_filter(
         self, permission: str
     ) -> dict[Literal["filter", "exclude"], dict[str, str]]:
@@ -361,6 +405,27 @@ class BasePermission(ABC):
         if permission_filter is None:
             return {"filter": {}, "exclude": {}}
         return permission_filter
+
+    def _get_permission_filter_info(
+        self, permission: str
+    ) -> tuple[dict[Literal["filter", "exclude"], dict[str, Any]], bool]:
+        """
+        Resolve filter/exclude constraints and whether the permission is query-filterable.
+
+        Returns the filter mapping and a boolean indicating whether the permission
+        can be represented safely as a queryset/search prefilter.
+        """
+        if self._is_superuser():
+            return {"filter": {}, "exclude": {}}, True
+        permission_function, *config = permission.split(":")
+        if permission_function not in permission_functions:
+            raise PermissionNotFoundError(permission)
+        permission_filter = permission_functions[permission_function][
+            "permission_filter"
+        ](self.request_user, config)
+        if permission_filter is None:
+            return {"filter": {}, "exclude": {}}, False
+        return permission_filter, True
 
     def validate_permission_string(
         self,
