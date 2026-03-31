@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import Mock, patch
+from uuid import UUID
 
 from django.apps import apps
+from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
 
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _FieldDescriptorBuilder,
+    TRANSLATION,
     _general_manager_many_accessor,
     build_field_descriptors,
 )
+from general_manager.measurement.measurement import Measurement
+from general_manager.measurement.measurement_field import MeasurementField
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:
@@ -102,3 +109,47 @@ def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> 
     assert relation_field_names == {"fk_a", "fk_b"}
     assert resolve_calls.count("fk_a") == 1
     assert resolve_calls.count("fk_b") == 1
+
+
+def test_translation_covers_supported_django_field_types() -> None:
+    expected_translations = {
+        models.BigAutoField: int,
+        models.AutoField: int,
+        models.SmallAutoField: int,
+        models.CharField: str,
+        models.CommaSeparatedIntegerField: str,
+        models.TextField: str,
+        models.SlugField: str,
+        models.BooleanField: bool,
+        models.NullBooleanField: bool,
+        models.IntegerField: int,
+        models.BigIntegerField: int,
+        models.SmallIntegerField: int,
+        models.PositiveIntegerField: int,
+        models.PositiveSmallIntegerField: int,
+        models.PositiveBigIntegerField: int,
+        models.OrderWrt: int,
+        models.FloatField: float,
+        models.DateField: date,
+        models.DateTimeField: datetime,
+        models.DurationField: timedelta,
+        MeasurementField: Measurement,
+        models.DecimalField: Decimal,
+        models.EmailField: str,
+        models.FilePathField: str,
+        models.FileField: str,
+        models.ImageField: str,
+        models.GenericIPAddressField: str,
+        models.IPAddressField: str,
+        models.URLField: str,
+        models.TimeField: time,
+        models.BinaryField: bytes,
+        models.UUIDField: UUID,
+        models.JSONField: object,
+        SearchQueryField: str,
+        SearchVectorField: str,
+        models.CompositePrimaryKey: tuple,
+        models.GeneratedField: object,
+    }
+
+    assert expected_translations.items() <= TRANSLATION.items()

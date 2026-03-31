@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
+from uuid import UUID
 
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
 
 from general_manager.interface.base_interface import AttributeTypedDict
@@ -35,20 +37,41 @@ class FieldDescriptor:
 TRANSLATION: dict[type[models.Field], type] = {
     models.fields.BigAutoField: int,
     models.AutoField: int,
+    models.SmallAutoField: int,
     models.CharField: str,
+    models.CommaSeparatedIntegerField: str,
     models.TextField: str,
+    models.SlugField: str,
     models.BooleanField: bool,
+    models.NullBooleanField: bool,
     models.IntegerField: int,
+    models.BigIntegerField: int,
+    models.SmallIntegerField: int,
+    models.PositiveIntegerField: int,
+    models.PositiveSmallIntegerField: int,
+    models.PositiveBigIntegerField: int,
+    models.OrderWrt: int,
     models.FloatField: float,
     models.DateField: date,
     models.DateTimeField: datetime,
+    models.DurationField: timedelta,
     MeasurementField: Measurement,
     models.DecimalField: Decimal,
     models.EmailField: str,
+    models.FilePathField: str,
     models.FileField: str,
     models.ImageField: str,
+    models.GenericIPAddressField: str,
+    models.IPAddressField: str,
     models.URLField: str,
     models.TimeField: time,
+    models.BinaryField: bytes,
+    models.UUIDField: UUID,
+    models.JSONField: object,
+    SearchQueryField: str,
+    SearchVectorField: str,
+    models.CompositePrimaryKey: tuple,
+    models.GeneratedField: object,
 }
 
 
