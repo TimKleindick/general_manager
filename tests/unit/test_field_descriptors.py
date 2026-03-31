@@ -163,4 +163,4 @@ def test_translation_covers_supported_django_field_types() -> None:
         GeneratedField: object,
     }
 
-    assert expected_translations.items() <= TRANSLATION.items()
+    assert TRANSLATION == expected_translations
