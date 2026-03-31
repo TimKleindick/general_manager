@@ -6,13 +6,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
-from uuid import UUID
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
 from django.db.models.fields.composite import CompositePrimaryKey
-from django.db.models.fields.generated import GeneratedField
 from django.db.models.fields.proxy import OrderWrt
 
 from general_manager.interface.base_interface import AttributeTypedDict
@@ -78,12 +76,9 @@ TRANSLATION: dict[type[models.Field], type] = {
     models.URLField: str,
     models.TimeField: time,
     models.BinaryField: bytes,
-    models.UUIDField: UUID,
-    models.JSONField: object,
     SearchQueryField: str,
     SearchVectorField: str,
     CompositePrimaryKey: tuple,
-    GeneratedField: object,
 }
 
 
@@ -151,7 +146,7 @@ class _FieldDescriptorBuilder:
             field = cast(models.Field, getattr(self.model, field_name))
             self._register(
                 attribute_name=field_name,
-                raw_type=field,
+                raw_type=type(field),
                 is_required=not field.null,
                 is_editable=field.editable,
                 default=field.default,
@@ -170,7 +165,7 @@ class _FieldDescriptorBuilder:
                 continue
             self._register(
                 attribute_name=field.name,
-                raw_type=field,
+                raw_type=type(field),
                 is_required=not field.null and field.default is models.NOT_PROVIDED,
                 is_editable=field.editable,
                 default=field.default,
@@ -332,7 +327,7 @@ class _FieldDescriptorBuilder:
         self,
         *,
         attribute_name: str,
-        raw_type: type | models.Field,
+        raw_type: type,
         is_required: bool,
         is_editable: bool,
         default: Any,
@@ -344,7 +339,7 @@ class _FieldDescriptorBuilder:
 
         Parameters:
             attribute_name (str): Unique attribute name to register on the interface.
-            raw_type (type | models.Field): Underlying model field type or field instance; translated via TRANSLATION when present to determine the descriptor `type`.
+            raw_type (type): Underlying model field type; translated via TRANSLATION when present to determine the descriptor `type`.
             is_required (bool): Whether the attribute is required.
             is_editable (bool): Whether the attribute is editable.
             default (Any): Default value to record in the descriptor metadata.
@@ -357,7 +352,7 @@ class _FieldDescriptorBuilder:
         if attribute_name in self._descriptors:
             raise DuplicateFieldNameError()
         metadata: AttributeTypedDict = {
-            "type": _translate_descriptor_type(raw_type),
+            "type": TRANSLATION.get(raw_type, raw_type),
             "is_required": is_required,
             "is_editable": is_editable,
             "default": default,
@@ -408,22 +403,6 @@ def _collect_custom_fields(
             ignored_helpers.add(f"{attr_name}_value")
             ignored_helpers.add(f"{attr_name}_unit")
     return field_names, ignored_helpers
-
-
-def _translate_descriptor_type(raw_type: type | models.Field) -> type:
-    """
-    Translate a Django field class or instance into the exposed descriptor type.
-
-    Generated fields inherit the translated type of their configured output
-    field so computed columns expose the same public type as their source. When
-    only the GeneratedField class is available, TRANSLATION keeps a generic
-    fallback entry because no output_field instance can be inspected.
-    """
-    if isinstance(raw_type, GeneratedField):
-        return _translate_descriptor_type(raw_type.output_field)
-
-    raw_type_cls = type(raw_type) if isinstance(raw_type, models.Field) else raw_type
-    return TRANSLATION.get(raw_type_cls, raw_type_cls)
 
 
 def _iter_model_fields(model: type[models.Model]) -> Iterable[models.Field]:

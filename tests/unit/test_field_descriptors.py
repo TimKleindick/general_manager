@@ -4,13 +4,11 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import Mock, patch
-from uuid import UUID
 
 from django.apps import apps
 from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
 from django.db.models.fields.composite import CompositePrimaryKey
-from django.db.models.fields.generated import GeneratedField
 from django.db.models.fields.proxy import OrderWrt
 
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
@@ -156,12 +154,9 @@ def test_translation_covers_supported_django_field_types() -> None:
         models.URLField: str,
         models.TimeField: time,
         models.BinaryField: bytes,
-        models.UUIDField: UUID,
-        models.JSONField: object,
         SearchQueryField: str,
         SearchVectorField: str,
         CompositePrimaryKey: tuple,
-        GeneratedField: object,
     }
 
     assert TRANSLATION == expected_translations
