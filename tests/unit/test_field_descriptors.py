@@ -22,14 +22,13 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurement_field import MeasurementField
 
-CommaSeparatedIntegerField = cast(
-    type[models.Field],
-    getattr(models, "CommaSeparatedIntegerField"),
-)
-NullBooleanField = cast(
-    type[models.Field],
-    getattr(models, "NullBooleanField"),
-)
+
+def _models_field(name: str) -> type[models.Field]:
+    return cast(type[models.Field], getattr(models, name))
+
+
+CommaSeparatedIntegerField = _models_field("CommaSeparatedIntegerField")
+NullBooleanField = _models_field("NullBooleanField")
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:

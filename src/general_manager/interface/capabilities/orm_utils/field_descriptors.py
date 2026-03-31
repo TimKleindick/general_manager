@@ -27,14 +27,13 @@ if TYPE_CHECKING:
 
 DescriptorAccessor = Callable[["OrmInterfaceBase"], Any]
 
-CommaSeparatedIntegerField = cast(
-    type[models.Field],
-    getattr(models, "CommaSeparatedIntegerField"),
-)
-NullBooleanField = cast(
-    type[models.Field],
-    getattr(models, "NullBooleanField"),
-)
+
+def _models_field(name: str) -> type[models.Field]:
+    return cast(type[models.Field], getattr(models, name))
+
+
+CommaSeparatedIntegerField = _models_field("CommaSeparatedIntegerField")
+NullBooleanField = _models_field("NullBooleanField")
 
 
 @dataclass(frozen=True)
