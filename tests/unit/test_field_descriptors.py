@@ -24,6 +24,7 @@ from general_manager.measurement.measurement_field import MeasurementField
 
 
 def _models_field(name: str) -> type[models.Field]:
+    """Resolve deprecated Django field aliases without tripping mypy exports."""
     return cast(type[models.Field], getattr(models, name))
 
 

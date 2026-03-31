@@ -29,6 +29,7 @@ DescriptorAccessor = Callable[["OrmInterfaceBase"], Any]
 
 
 def _models_field(name: str) -> type[models.Field]:
+    """Resolve deprecated Django field aliases without tripping mypy exports."""
     return cast(type[models.Field], getattr(models, name))
 
 
@@ -414,7 +415,9 @@ def _translate_descriptor_type(raw_type: type | models.Field) -> type:
     Translate a Django field class or instance into the exposed descriptor type.
 
     Generated fields inherit the translated type of their configured output
-    field so computed columns expose the same public type as their source.
+    field so computed columns expose the same public type as their source. When
+    only the GeneratedField class is available, TRANSLATION keeps a generic
+    fallback entry because no output_field instance can be inspected.
     """
     if isinstance(raw_type, GeneratedField):
         return _translate_descriptor_type(raw_type.output_field)
