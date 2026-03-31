@@ -9,6 +9,10 @@ from uuid import UUID
 from django.apps import apps
 from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
+from django.db.models.fields import CommaSeparatedIntegerField, NullBooleanField
+from django.db.models.fields.composite import CompositePrimaryKey
+from django.db.models.fields.generated import GeneratedField
+from django.db.models.fields.proxy import OrderWrt
 
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _FieldDescriptorBuilder,
@@ -117,18 +121,18 @@ def test_translation_covers_supported_django_field_types() -> None:
         models.AutoField: int,
         models.SmallAutoField: int,
         models.CharField: str,
-        models.CommaSeparatedIntegerField: str,
+        CommaSeparatedIntegerField: str,
         models.TextField: str,
         models.SlugField: str,
         models.BooleanField: bool,
-        models.NullBooleanField: bool,
+        NullBooleanField: bool,
         models.IntegerField: int,
         models.BigIntegerField: int,
         models.SmallIntegerField: int,
         models.PositiveIntegerField: int,
         models.PositiveSmallIntegerField: int,
         models.PositiveBigIntegerField: int,
-        models.OrderWrt: int,
+        OrderWrt: int,
         models.FloatField: float,
         models.DateField: date,
         models.DateTimeField: datetime,
@@ -148,8 +152,8 @@ def test_translation_covers_supported_django_field_types() -> None:
         models.JSONField: object,
         SearchQueryField: str,
         SearchVectorField: str,
-        models.CompositePrimaryKey: tuple,
-        models.GeneratedField: object,
+        CompositePrimaryKey: tuple,
+        GeneratedField: object,
     }
 
     assert expected_translations.items() <= TRANSLATION.items()

@@ -11,6 +11,10 @@ from uuid import UUID
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
+from django.db.models.fields import CommaSeparatedIntegerField, NullBooleanField
+from django.db.models.fields.composite import CompositePrimaryKey
+from django.db.models.fields.generated import GeneratedField
+from django.db.models.fields.proxy import OrderWrt
 
 from general_manager.interface.base_interface import AttributeTypedDict
 from general_manager.interface.utils.errors import DuplicateFieldNameError
@@ -39,18 +43,18 @@ TRANSLATION: dict[type[models.Field], type] = {
     models.AutoField: int,
     models.SmallAutoField: int,
     models.CharField: str,
-    models.CommaSeparatedIntegerField: str,
+    CommaSeparatedIntegerField: str,
     models.TextField: str,
     models.SlugField: str,
     models.BooleanField: bool,
-    models.NullBooleanField: bool,
+    NullBooleanField: bool,
     models.IntegerField: int,
     models.BigIntegerField: int,
     models.SmallIntegerField: int,
     models.PositiveIntegerField: int,
     models.PositiveSmallIntegerField: int,
     models.PositiveBigIntegerField: int,
-    models.OrderWrt: int,
+    OrderWrt: int,
     models.FloatField: float,
     models.DateField: date,
     models.DateTimeField: datetime,
@@ -70,8 +74,8 @@ TRANSLATION: dict[type[models.Field], type] = {
     models.JSONField: object,
     SearchQueryField: str,
     SearchVectorField: str,
-    models.CompositePrimaryKey: tuple,
-    models.GeneratedField: object,
+    CompositePrimaryKey: tuple,
+    GeneratedField: object,
 }
 
 
