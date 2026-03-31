@@ -11,7 +11,6 @@ from uuid import UUID
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
-from django.db.models.fields import CommaSeparatedIntegerField, NullBooleanField
 from django.db.models.fields.composite import CompositePrimaryKey
 from django.db.models.fields.generated import GeneratedField
 from django.db.models.fields.proxy import OrderWrt
@@ -27,6 +26,15 @@ if TYPE_CHECKING:
     )
 
 DescriptorAccessor = Callable[["OrmInterfaceBase"], Any]
+
+CommaSeparatedIntegerField = cast(
+    type[models.Field],
+    getattr(models, "CommaSeparatedIntegerField"),
+)
+NullBooleanField = cast(
+    type[models.Field],
+    getattr(models, "NullBooleanField"),
+)
 
 
 @dataclass(frozen=True)

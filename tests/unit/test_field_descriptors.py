@@ -9,7 +9,6 @@ from uuid import UUID
 from django.apps import apps
 from django.contrib.postgres.search import SearchQueryField, SearchVectorField
 from django.db import models
-from django.db.models.fields import CommaSeparatedIntegerField, NullBooleanField
 from django.db.models.fields.composite import CompositePrimaryKey
 from django.db.models.fields.generated import GeneratedField
 from django.db.models.fields.proxy import OrderWrt
@@ -22,6 +21,15 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
 )
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurement_field import MeasurementField
+
+CommaSeparatedIntegerField = cast(
+    type[models.Field],
+    getattr(models, "CommaSeparatedIntegerField"),
+)
+NullBooleanField = cast(
+    type[models.Field],
+    getattr(models, "NullBooleanField"),
+)
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:
