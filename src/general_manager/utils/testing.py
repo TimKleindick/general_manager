@@ -366,6 +366,7 @@ class GeneralManagerTransactionTestCase(
         """
         super().setUp()
         caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
+        cast(LoggingCache, caches["default"]).clear()
         self.__reset_cache_counter()
         self._run_registered_startup_hooks()
 

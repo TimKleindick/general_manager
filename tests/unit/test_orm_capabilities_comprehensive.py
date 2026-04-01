@@ -678,6 +678,7 @@ class TestOrmQueryCapability:
                         filtered_qs,
                         mock_parent,
                         {"name": "test", "value": 42},
+                        {},
                         search_date=None,
                     )
                     assert result is mock_bucket.return_value
@@ -718,6 +719,7 @@ class TestOrmQueryCapability:
                     mock_bucket.assert_called_once_with(
                         excluded_qs,
                         interface_cls._parent_class,
+                        {},
                         {"status": "inactive"},
                         search_date=None,
                     )
@@ -764,6 +766,7 @@ class TestOrmQueryCapability:
                     mock_bucket.assert_called_once_with(
                         queryset,
                         interface_cls._parent_class,
+                        {},
                         {},
                         search_date=None,
                     )
@@ -835,6 +838,7 @@ class TestOrmQueryCapability:
                                 filtered_qs,
                                 interface_cls._parent_class,
                                 {"name": "Historian"},
+                                {},
                                 search_date=search_date,
                             )
                             assert result is mock_bucket.return_value

@@ -1,5 +1,8 @@
+import copy
 from datetime import date, datetime, timedelta
+from unittest.mock import patch
 from django.utils import timezone
+from general_manager.cache.dependency_index import get_full_index
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.manager import GeneralManager, Input
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
@@ -50,6 +53,13 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
             class Permission(ManagerBasedPermission):
                 __create__: ClassVar[list[str]] = ["public"]
+
+            @graph_ql_property(filterable=True, sortable=True)
+            def negative_number(self) -> int:
+                """
+                Return a sortable/filterable python-only projection of ``number``.
+                """
+                return -(self.number or 0)
 
         class TestCommercials(GeneralManager):
             project: TestProjectForCommercials
@@ -216,6 +226,240 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     start_date__lte=self.project.start_date.isoformat()
                 )
                 return bucket.count()
+
+            @graph_ql_property
+            def narrowed_all_bucket_count(self) -> int:
+                """
+                Count projects via an ``all().filter().exclude()`` chain.
+                """
+                return (
+                    TestProjectForCommercials.all()
+                    .filter(name=self.project.name)
+                    .exclude(number=self.project.number)
+                    .count()
+                )
+
+            @graph_ql_property
+            def empty_all_bucket_count(self) -> int:
+                """
+                Count projects for a query that initially matches no rows.
+                """
+                return (
+                    TestProjectForCommercials.all()
+                    .filter(name="No Matching Projects")
+                    .count()
+                )
+
+            @graph_ql_property
+            def unique_name_bucket_length(self) -> int:
+                """
+                Return the length of a narrowed bucket without iterating it.
+                """
+                return len(
+                    TestProjectForCommercials.all().filter(name="Another Project")
+                )
+
+            @graph_ql_property
+            def unique_name_bucket_first_name(self) -> str | None:
+                """
+                Return the first name from a narrowed bucket without iterating it.
+                """
+                match = (
+                    TestProjectForCommercials.all()
+                    .filter(name="Another Project")
+                    .first()
+                )
+                return None if match is None else match.name
+
+            @graph_ql_property
+            def unique_name_bucket_get_name(self) -> str:
+                """
+                Return the unique match from a narrowed bucket via ``get()``.
+                """
+                return (
+                    TestProjectForCommercials.all()
+                    .filter(name="Another Project")
+                    .get()
+                    .name
+                )
+
+            @graph_ql_property
+            def unique_name_bucket_index_name(self) -> str:
+                """
+                Return the first narrowed bucket entry via scalar indexing.
+                """
+                return (
+                    TestProjectForCommercials.all()
+                    .filter(name="Another Project")[0]
+                    .name
+                )
+
+            @graph_ql_property
+            def unique_name_bucket_contains_self_project(self) -> bool:
+                """
+                Check membership against a narrowed bucket without iterating it.
+                """
+                return self.project in TestProjectForCommercials.all().filter(
+                    name="Another Project"
+                )
+
+            @graph_ql_property
+            def grouped_project_name_count(self) -> int:
+                """
+                Count project groups built from ``all().group_by()``.
+                """
+                return TestProjectForCommercials.all().group_by("name").count()
+
+            @graph_ql_property
+            def available_commercial_count(self) -> int:
+                """
+                Count calculation-bucket combinations for all commercials.
+                """
+                return self.__class__.all().count()
+
+            @graph_ql_property
+            def deeply_chained_bucket_count(self) -> int:
+                """
+                Count projects through a deeper ``all().filter().exclude().filter()`` chain.
+                """
+                bucket = TestProjectForCommercials.all()
+                bucket = bucket.filter(name=self.project.name)
+                bucket = bucket.exclude(number=self.project.number)
+                bucket = bucket.filter(start_date=self.project.start_date.isoformat())
+                return bucket.count()
+
+            @graph_ql_property
+            def empty_chain_bucket_count(self) -> int:
+                """
+                Count projects in a chained query that initially resolves to zero rows.
+                """
+                return (
+                    TestProjectForCommercials.all()
+                    .filter(name="Impossible Project")
+                    .exclude(number=self.project.number)
+                    .count()
+                )
+
+            @graph_ql_property
+            def chained_first_project_name(self) -> str | None:
+                """
+                Return the first project name from a chained all/filter/exclude query.
+                """
+                first_match = (
+                    TestProjectForCommercials.all()
+                    .filter(name__contains="Project")
+                    .exclude(number=self.project.number)
+                    .first()
+                )
+                if first_match is None:
+                    return None
+                return first_match.name
+
+            @graph_ql_property
+            def grouped_filtered_project_count(self) -> int:
+                """
+                Count grouped project names after narrowing via all/filter chaining.
+                """
+                return (
+                    TestProjectForCommercials.all()
+                    .filter(name__contains="Project")
+                    .group_by("name")
+                    .count()
+                )
+
+            @graph_ql_property
+            def mixed_terminal_bucket_summary(
+                self,
+            ) -> tuple[int, str | None, str | None, bool]:
+                """
+                Exercise several terminal operations on the same narrowed bucket.
+                """
+                bucket = TestProjectForCommercials.all().filter(name="Another Project")
+                count = bucket.count()
+                first = bucket.first()
+                if first is None:
+                    return (count, None, None, False)
+                return (count, first.name, bucket[0].name, first in bucket)
+
+            @graph_ql_property
+            def sliced_sorted_bucket_first_number(self) -> int | None:
+                """
+                Evaluate a sliced narrowed bucket after sorting.
+                """
+                bucket = (
+                    TestProjectForCommercials.all()
+                    .filter(name__contains="Project")
+                    .sort("number")[1:3]
+                )
+                first = bucket.first()
+                return None if first is None else first.number
+
+            @graph_ql_property
+            def sorted_project_bucket_summary(self) -> tuple[int, int | None]:
+                """
+                Evaluate count and first() on a sorted narrowed bucket.
+                """
+                bucket = (
+                    TestProjectForCommercials.all()
+                    .filter(name__contains="Project")
+                    .sort("number")
+                )
+                first = bucket.first()
+                return bucket.count(), None if first is None else first.number
+
+            @graph_ql_property
+            def python_filtered_negative_number_count(self) -> int:
+                """
+                Count rows through a python-only filterable property.
+                """
+                return (
+                    TestProjectForCommercials.all().filter(negative_number=-2).count()
+                )
+
+            @graph_ql_property
+            def historical_original_name_count(self) -> int:
+                """
+                Count historical rows using ``search_date`` and the original project name.
+                """
+                history = self.project._interface._instance.history.order_by(
+                    "history_date"
+                )
+                snapshot = history.first().history_date + timedelta(microseconds=1)
+                return TestProjectForCommercials.filter(
+                    search_date=snapshot,
+                    name="Test Project",
+                ).count()
+
+            @graph_ql_property
+            def grouped_project_terminal_summary(self) -> tuple[str | None, str, bool]:
+                """
+                Exercise non-count terminal operations on a grouped bucket.
+                """
+                grouped = TestProjectForCommercials.all().group_by("name")
+                first = grouped.first()
+                fetched = grouped.get(name=self.project.name)
+                return (
+                    None if first is None else first.name,
+                    fetched.name,
+                    self.project in grouped,
+                )
+
+            @graph_ql_property
+            def calculation_bucket_terminal_summary(
+                self,
+            ) -> tuple[str | None, str, int, bool]:
+                """
+                Exercise non-count terminal operations on a calculation bucket.
+                """
+                bucket = self.__class__.all()
+                first = bucket.first()
+                fetched = bucket.get(project=self.project)
+                return (
+                    None if first is None else first.project.name,
+                    fetched.project.name,
+                    len(bucket),
+                    self in bucket,
+                )
 
         cls.TestProject = TestProjectForCommercials
         cls.TestCommercials = TestCommercials
@@ -621,3 +865,623 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assert_cache_miss()
         self.assertEqual(refreshed_commercials1.staged_bucket_count, 1)
         self.assert_cache_hit()
+
+    def test_all_filter_exclude_count_tracks_narrowed_dependency(self):
+        """
+        Ensure ``all().filter().exclude().count()`` invalidates when a new matching row appears.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Test Project",
+            number=4,
+            budget=Measurement(900, "EUR"),
+            actual_costs=Measurement(100, "EUR"),
+            start_date=date(2024, 1, 7),
+            completion_at=timezone.make_aware(datetime(2024, 1, 18, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_hit()
+
+    def test_all_then_filter_does_not_overfit_to_intermediate_all_bucket(self):
+        """
+        Ensure chaining from ``all()`` does not create an over-broad dependency on every row.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Completely Different",
+            number=4,
+            budget=Measurement(900, "EUR"),
+            actual_costs=Measurement(100, "EUR"),
+            start_date=date(2024, 1, 7),
+            completion_at=timezone.make_aware(datetime(2024, 1, 18, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Test Project",
+            number=5,
+            budget=Measurement(950, "EUR"),
+            actual_costs=Measurement(110, "EUR"),
+            start_date=date(2024, 1, 8),
+            completion_at=timezone.make_aware(datetime(2024, 1, 19, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_hit()
+
+    def test_empty_bucket_count_still_invalidates_after_matching_create(self):
+        """
+        Ensure an initially empty narrowed bucket records dependencies and invalidates on create.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.empty_all_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.empty_all_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="No Matching Projects",
+            number=4,
+            budget=Measurement(800, "EUR"),
+            actual_costs=Measurement(50, "EUR"),
+            start_date=date(2024, 1, 8),
+            completion_at=timezone.make_aware(datetime(2024, 1, 17, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.empty_all_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.empty_all_bucket_count, 1)
+        self.assert_cache_hit()
+
+    def test_terminal_operations_track_without_iteration(self):
+        """
+        Ensure non-iterator terminal bucket operations invalidate when a narrowed match changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+        commercials2 = self.TestCommercials(project=self.project2)
+
+        self.assertEqual(commercials1.unique_name_bucket_length, 1)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.unique_name_bucket_first_name, "Another Project")
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.unique_name_bucket_get_name, "Another Project")
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.unique_name_bucket_index_name, "Another Project")
+        self.assert_cache_miss()
+        self.assertTrue(commercials2.unique_name_bucket_contains_self_project)
+        self.assert_cache_miss()
+
+        self.assertEqual(commercials1.unique_name_bucket_length, 1)
+        self.assert_cache_hit()
+        self.assertEqual(commercials1.unique_name_bucket_first_name, "Another Project")
+        self.assert_cache_hit()
+        self.assertEqual(commercials1.unique_name_bucket_get_name, "Another Project")
+        self.assert_cache_hit()
+        self.assertEqual(commercials1.unique_name_bucket_index_name, "Another Project")
+        self.assert_cache_hit()
+        self.assertTrue(commercials2.unique_name_bucket_contains_self_project)
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(
+            name="Renamed Project", ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        refreshed_commercials2 = self.TestCommercials(project=self.project2)
+        self.assertEqual(refreshed_commercials1.unique_name_bucket_length, 0)
+        self.assert_cache_miss()
+        self.assertIsNone(refreshed_commercials1.unique_name_bucket_first_name)
+        self.assert_cache_miss()
+        self.assertFalse(
+            refreshed_commercials2.unique_name_bucket_contains_self_project
+        )
+        self.assert_cache_miss()
+
+    def test_mixed_terminal_operations_on_shared_bucket_invalidate_once(self):
+        """
+        Ensure repeated terminal use of the same narrowed bucket records only the final dependency.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(
+            commercials1.mixed_terminal_bucket_summary,
+            (1, "Another Project", "Another Project", True),
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            commercials1.mixed_terminal_bucket_summary,
+            (1, "Another Project", "Another Project", True),
+        )
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(
+            name="Renamed Project", ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(
+            refreshed_commercials1.mixed_terminal_bucket_summary,
+            (0, None, None, False),
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            refreshed_commercials1.mixed_terminal_bucket_summary,
+            (0, None, None, False),
+        )
+        self.assert_cache_hit()
+
+    def test_slice_semantics_invalidate_for_sliced_bucket(self):
+        """
+        Ensure slicing a narrowed bucket still records the sliced query dependency.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.sliced_sorted_bucket_first_number, 2)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.sliced_sorted_bucket_first_number, 2)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Project Zero",
+            number=0,
+            budget=Measurement(650, "EUR"),
+            actual_costs=Measurement(80, "EUR"),
+            start_date=date(2024, 1, 4),
+            completion_at=timezone.make_aware(datetime(2024, 1, 14, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.sliced_sorted_bucket_first_number, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.sliced_sorted_bucket_first_number, 1)
+        self.assert_cache_hit()
+
+    def test_sorted_narrowed_bucket_does_not_widen_to_all_dependency(self):
+        """
+        Ensure sorted narrowed buckets invalidate only when the narrowed result changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.sorted_project_bucket_summary, (3, 1))
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.sorted_project_bucket_summary, (3, 1))
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Different Name",
+            number=0,
+            budget=Measurement(500, "EUR"),
+            actual_costs=Measurement(40, "EUR"),
+            start_date=date(2024, 1, 2),
+            completion_at=timezone.make_aware(datetime(2024, 1, 11, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.sorted_project_bucket_summary, (3, 1))
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Project Zero",
+            number=0,
+            budget=Measurement(650, "EUR"),
+            actual_costs=Measurement(80, "EUR"),
+            start_date=date(2024, 1, 4),
+            completion_at=timezone.make_aware(datetime(2024, 1, 14, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.sorted_project_bucket_summary, (4, 0))
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.sorted_project_bucket_summary, (4, 0))
+        self.assert_cache_hit()
+
+    def test_python_only_filter_dependencies_invalidate_correctly(self):
+        """
+        Ensure python-only filterable properties participate in deferred tracking.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.python_filtered_negative_number_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.python_filtered_negative_number_count, 1)
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(number=4, ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(
+            refreshed_commercials1.python_filtered_negative_number_count, 0
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            refreshed_commercials1.python_filtered_negative_number_count, 0
+        )
+        self.assert_cache_hit()
+
+    def test_search_date_bucket_dependencies_invalidate_after_current_update(self):
+        """
+        Ensure historical ``search_date`` queries still invalidate and recompute correctly.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+        future_now = timezone.now() + timedelta(seconds=10)
+
+        with patch("django.utils.timezone.now", return_value=future_now):
+            self.assertEqual(commercials1.historical_original_name_count, 1)
+            self.assert_cache_miss()
+            self.assertEqual(commercials1.historical_original_name_count, 1)
+            self.assert_cache_hit()
+
+        self.project1 = self.project1.update(
+            name="Renamed Project", ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        future_now = timezone.now() + timedelta(seconds=10)
+        with patch("django.utils.timezone.now", return_value=future_now):
+            self.assertEqual(refreshed_commercials1.historical_original_name_count, 1)
+            self.assert_cache_miss()
+            self.assertEqual(refreshed_commercials1.historical_original_name_count, 1)
+            self.assert_cache_hit()
+
+    def test_group_bucket_count_uses_deferred_dependency_tracking(self):
+        """
+        Ensure grouped buckets built from ``all()`` invalidate when the grouping set changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.grouped_project_name_count, 3)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.grouped_project_name_count, 3)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Fourth Project",
+            number=4,
+            budget=Measurement(600, "EUR"),
+            actual_costs=Measurement(90, "EUR"),
+            start_date=date(2024, 1, 9),
+            completion_at=timezone.make_aware(datetime(2024, 1, 16, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.grouped_project_name_count, 4)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.grouped_project_name_count, 4)
+        self.assert_cache_hit()
+
+    def test_group_bucket_terminal_operations_invalidate_correctly(self):
+        """
+        Ensure grouped bucket terminal operations beyond count() stay correctly invalidated.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(
+            commercials1.grouped_project_terminal_summary,
+            ("Another Project", "Test Project", True),
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            commercials1.grouped_project_terminal_summary,
+            ("Another Project", "Test Project", True),
+        )
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(name="Zed Project", ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(
+            refreshed_commercials1.grouped_project_terminal_summary,
+            ("Test Project", "Test Project", True),
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            refreshed_commercials1.grouped_project_terminal_summary,
+            ("Test Project", "Test Project", True),
+        )
+        self.assert_cache_hit()
+
+    def test_calculation_bucket_count_uses_deferred_dependency_tracking(self):
+        """
+        Ensure calculation buckets invalidate when their input-domain bucket gains a new row.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.available_commercial_count, 3)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.available_commercial_count, 3)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Fifth Project",
+            number=5,
+            budget=Measurement(700, "EUR"),
+            actual_costs=Measurement(120, "EUR"),
+            start_date=date(2024, 1, 10),
+            completion_at=timezone.make_aware(datetime(2024, 1, 19, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.available_commercial_count, 4)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.available_commercial_count, 4)
+        self.assert_cache_hit()
+
+    def test_calculation_bucket_terminal_operations_invalidate_correctly(self):
+        """
+        Ensure calculation bucket terminal operations beyond count() stay correctly invalidated.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(
+            commercials1.calculation_bucket_terminal_summary,
+            ("Test Project", "Test Project", 3, True),
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            commercials1.calculation_bucket_terminal_summary,
+            ("Test Project", "Test Project", 3, True),
+        )
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Sixth Project",
+            number=6,
+            budget=Measurement(710, "EUR"),
+            actual_costs=Measurement(130, "EUR"),
+            start_date=date(2024, 1, 11),
+            completion_at=timezone.make_aware(datetime(2024, 1, 21, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(
+            refreshed_commercials1.calculation_bucket_terminal_summary,
+            ("Test Project", "Test Project", 4, True),
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            refreshed_commercials1.calculation_bucket_terminal_summary,
+            ("Test Project", "Test Project", 4, True),
+        )
+        self.assert_cache_hit()
+
+    def test_deep_filter_exclude_chain_invalidates_correctly(self):
+        """
+        Ensure a deeper ``all().filter().exclude().filter()`` chain invalidates only when membership changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.deeply_chained_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.deeply_chained_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Different Name",
+            number=4,
+            budget=Measurement(600, "EUR"),
+            actual_costs=Measurement(90, "EUR"),
+            start_date=self.project1.start_date,
+            completion_at=timezone.make_aware(datetime(2024, 1, 16, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 0)
+        self.assert_cache_hit()
+
+        matching_project = self.TestProject.create(
+            name="Test Project",
+            number=4,
+            budget=Measurement(700, "EUR"),
+            actual_costs=Measurement(95, "EUR"),
+            start_date=self.project1.start_date,
+            completion_at=timezone.make_aware(datetime(2024, 1, 17, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 1)
+        self.assert_cache_hit()
+
+        matching_project = matching_project.update(
+            start_date=date(2024, 1, 9), ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 0)
+        self.assert_cache_hit()
+
+        matching_project = matching_project.update(
+            start_date=self.project1.start_date, ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 1)
+        self.assert_cache_hit()
+
+        matching_project = matching_project.update(
+            name="Renamed Project", ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.deeply_chained_bucket_count, 0)
+        self.assert_cache_miss()
+
+    def test_chained_all_filter_exclude_count_invalidation(self):
+        """
+        Ensure chained all/filter/exclude queries invalidate cached count() results.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(
+            name="Test Project", ignore_permission=True
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_hit()
+
+    def test_delete_invalidates_narrowed_all_filter_cache(self):
+        """
+        Ensure deleting the only matching row invalidates a narrowed ``all().filter()`` cache.
+        """
+        matching_project = self.TestProject.create(
+            name="Test Project",
+            number=4,
+            budget=Measurement(900, "EUR"),
+            actual_costs=Measurement(100, "EUR"),
+            start_date=date(2024, 1, 7),
+            completion_at=timezone.make_aware(datetime(2024, 1, 18, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 1)
+        self.assert_cache_hit()
+
+        matching_project.delete(ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.narrowed_all_bucket_count, 0)
+        self.assert_cache_hit()
+
+    def test_empty_chained_bucket_count_invalidates_on_create(self):
+        """
+        Ensure zero-result chained count() queries still register dependencies.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.empty_chain_bucket_count, 0)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.empty_chain_bucket_count, 0)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Impossible Project",
+            number=4,
+            budget=Measurement(900, "EUR"),
+            actual_costs=Measurement(100, "EUR"),
+            start_date=date(2024, 1, 8),
+            completion_at=timezone.make_aware(datetime(2024, 1, 18, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.empty_chain_bucket_count, 1)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.empty_chain_bucket_count, 1)
+        self.assert_cache_hit()
+
+    def test_chained_first_operation_invalidates_without_iteration(self):
+        """
+        Ensure first() participates in deferred dependency tracking for chained buckets.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.chained_first_project_name, "Another Project")
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.chained_first_project_name, "Another Project")
+        self.assert_cache_hit()
+
+        self.project2 = self.project2.update(name="Renamed", ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(
+            refreshed_commercials1.chained_first_project_name, "Third Project"
+        )
+        self.assert_cache_miss()
+        self.assertEqual(
+            refreshed_commercials1.chained_first_project_name, "Third Project"
+        )
+        self.assert_cache_hit()
+
+    def test_grouped_filtered_bucket_count_invalidates_on_create(self):
+        """
+        Ensure grouped calculations built from chained buckets invalidate on matching creates.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.grouped_filtered_project_count, 3)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.grouped_filtered_project_count, 3)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Project Phoenix",
+            number=4,
+            budget=Measurement(1800, "EUR"),
+            actual_costs=Measurement(200, "EUR"),
+            start_date=date(2024, 1, 8),
+            completion_at=timezone.make_aware(datetime(2024, 1, 18, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.grouped_filtered_project_count, 4)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.grouped_filtered_project_count, 4)
+        self.assert_cache_hit()
+
+    def test_repeated_terminal_use_does_not_over_record_dependency_index(self):
+        """
+        Ensure repeated evaluation of the same narrowed bucket does not widen or duplicate dependencies.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(
+            commercials1.mixed_terminal_bucket_summary,
+            (1, "Another Project", "Another Project", True),
+        )
+        self.assert_cache_miss()
+
+        index_before = copy.deepcopy(get_full_index())
+
+        self.assertEqual(
+            commercials1.mixed_terminal_bucket_summary,
+            (1, "Another Project", "Another Project", True),
+        )
+        self.assert_cache_hit()
+
+        index_after = copy.deepcopy(get_full_index())
+        self.assertEqual(index_before, index_after)
+        self.assertNotIn("TestProjectForCommercials", index_after["all"])
+
+        filter_section = index_after["filter"]["TestProjectForCommercials"]["name"]
+        self.assertEqual(len(filter_section), 1)
+        self.assertEqual(len(next(iter(filter_section.values()))), 1)

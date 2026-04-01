@@ -24,7 +24,7 @@ type lookup = str  # e.g. "field__gt", "field__in", "field__contains", "field"
 type cache_keys = set[str]  # e.g. "cache_key_1", "cache_key_2"
 type identifier = str  # e.g. "{'id': 1}"", "{'project': Project(**{'id': 1})}", ...
 type dependency_index = dict[
-    Literal["filter", "exclude", "request_query"],
+    Literal["filter", "exclude", "request_query", "all"],
     dict[
         general_manager_name,
         dict[attribute, dict[lookup, cache_keys]] | dict[identifier, cache_keys],
@@ -34,7 +34,9 @@ type lookup_dependency_map = dict[lookup, cache_keys]
 type manager_dependency_section = dict[attribute, lookup_dependency_map]
 type request_query_manager_section = dict[identifier, cache_keys]
 
-type filter_type = Literal["filter", "exclude", "identification", "request_query"]
+type filter_type = Literal[
+    "filter", "exclude", "identification", "request_query", "all"
+]
 type Dependency = Tuple[general_manager_name, filter_type, str]
 
 logger = get_logger("cache.dependency_index")
@@ -64,6 +66,8 @@ LOCK_TIMEOUT = 5  # Lock TTL in seconds
 UNDEFINED = object()  # Sentinel for undefined values
 ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
 REQUEST_QUERY_ACTION: Literal["request_query"] = "request_query"
+ALL_RECORDS_LOOKUP = "__all__"
+ALL_RECORDS_VALUE = "__all__"
 
 
 # -----------------------------------------------------------------------------
@@ -130,15 +134,31 @@ def get_full_index() -> dependency_index:
     Fetch the dependency index from cache, initialising it on first access.
 
     Returns:
-        dependency_index: Mapping of tracked `filter`, `exclude`, and
+        dependency_index: Mapping of tracked `filter`, `exclude`, `all`, and
         `request_query` dependencies keyed by manager name.
     """
     cached_index = cache.get(INDEX_KEY, None)
     if cached_index is None:
-        idx: dependency_index = {"filter": {}, "exclude": {}, "request_query": {}}
+        idx: dependency_index = {
+            "filter": {},
+            "exclude": {},
+            "request_query": {},
+            "all": {},
+        }
         cache.set(INDEX_KEY, idx, None)
         return idx
-    return cast(dependency_index, cached_index)
+    idx = cast(dependency_index, cached_index)
+    changed = False
+    for key in cast(
+        tuple[Literal["filter", "exclude", "request_query", "all"], ...],
+        ("filter", "exclude", "request_query", "all"),
+    ):
+        if key not in idx:
+            idx[key] = {}
+            changed = True
+    if changed:
+        cache.set(INDEX_KEY, idx, None)
+    return idx
 
 
 def set_full_index(idx: dependency_index) -> None:
@@ -223,6 +243,10 @@ def record_dependencies(
                     idx[action_key],
                 )
                 section = action_section.setdefault(model_name, {})
+                if not params:
+                    lookup_map = section.setdefault(ALL_RECORDS_LOOKUP, {})
+                    lookup_map.setdefault(ALL_RECORDS_VALUE, set()).add(cache_key)
+                    continue
                 if len(params) > 1:
                     cache_dependencies = section.setdefault(
                         "__cache_dependencies__", {}
@@ -242,6 +266,13 @@ def record_dependencies(
                 )
                 request_section = request_index.setdefault(model_name, {})
                 request_section.setdefault(identifier, set()).add(cache_key)
+
+            elif action == "all":
+                all_index = cast(
+                    dict[str, set[str]],
+                    idx.setdefault("all", {}),
+                )
+                all_index.setdefault(model_name, set()).add(cache_key)
 
             else:
                 # Treat identification lookups as a simple filter on `id`
@@ -278,6 +309,12 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     acquire_lock_with_retry("remove_cache_key_from_index")
     try:
         idx = get_full_index()
+        all_section = cast(dict[str, set[str]], idx.get("all", {}))
+        for mname, key_set in list(all_section.items()):
+            if cache_key in key_set:
+                key_set.remove(cache_key)
+                if not key_set:
+                    del all_section[mname]
         for action in ACTIONS:
             action_section = cast(
                 dict[general_manager_name, manager_dependency_section],
@@ -340,6 +377,12 @@ def _remove_cache_keys_from_index_locked(
     cache_keys: tuple[str, ...],
 ) -> None:
     """Remove cache keys from all dependency-index sections while the lock is held."""
+    all_section = cast(dict[str, set[str]], idx.get("all", {}))
+    for mname, key_set in list(all_section.items()):
+        for cache_key in cache_keys:
+            key_set.discard(cache_key)
+        if not key_set:
+            del all_section[mname]
     for action in ACTIONS:
         action_section = cast(
             dict[general_manager_name, manager_dependency_section],
@@ -504,6 +547,20 @@ def generic_cache_invalidation(
             },
         )
     idx = get_full_index()
+    all_cache_keys = tuple(
+        cast(dict[str, set[str]], idx.get("all", {})).get(manager_name, set())
+    )
+    for cache_key in all_cache_keys:
+        logger.info(
+            "invalidating cache key",
+            context={
+                "manager": manager_name,
+                "key": cache_key,
+                "action": "all",
+            },
+        )
+        invalidate_cache_key(cache_key)
+        remove_cache_key_from_index(cache_key)
 
     def _json_loads_val_key(val_key: Any) -> Any:
         if isinstance(val_key, str):
@@ -793,6 +850,21 @@ def generic_cache_invalidation(
             continue
         for lookup, lookup_map in model_section.items():
             if lookup.startswith("__"):
+                if lookup == ALL_RECORDS_LOOKUP:
+                    for cache_keys in cast(lookup_dependency_map, lookup_map).values():
+                        for ck in list(cache_keys):
+                            logger.info(
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": ALL_RECORDS_VALUE,
+                                },
+                            )
+                            invalidate_cache_key(ck)
+                            remove_cache_key_from_index(ck)
                 continue
             lookup_map = cast(lookup_dependency_map, lookup_map)
             # 1) get operator and attribute path
