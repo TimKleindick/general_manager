@@ -178,6 +178,22 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertIn(self.test_human1, humans)
         self.assertIn(self.test_human2, humans)
 
+    def test_history_property_returns_queryset_scoped_to_manager_id(self):
+        self.test_human1.update(name="Alice Updated", ignore_permission=True)
+        self.test_human2.update(name="Bob Updated", ignore_permission=True)
+
+        history_ids = list(
+            self.test_human1.history.order_by("history_date").values_list(
+                "id", flat=True
+            )
+        )
+
+        self.assertGreaterEqual(len(history_ids), 2)
+        self.assertEqual(
+            set(history_ids),
+            {self.test_human1.identification["id"]},
+        )
+
         self.assertIn(self.test_family, self.test_human1.families_list)
 
     def test_create_with_validation(self):

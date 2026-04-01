@@ -65,7 +65,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         """
 
     def _latest_history_user(self, manager):
-        history = manager._interface._instance.history.order_by("-history_date").first()
+        history = manager.history.order_by("-history_date").first()
         return history.history_user
 
     def test_create_project(self):
@@ -241,7 +241,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         """
 
     def _latest_history_user(self, manager):
-        history = manager._interface._instance.history.order_by("-history_date").first()
+        history = manager.history.order_by("-history_date").first()
         return history.history_user
 
     def test_create_project_without_login(self):
@@ -367,7 +367,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             """
 
     def _latest_history_user(self, manager):
-        history = manager._interface._instance.history.order_by("-history_date").first()
+        history = manager.history.order_by("-history_date").first()
         return history.history_user
 
     def test_update_project(self):

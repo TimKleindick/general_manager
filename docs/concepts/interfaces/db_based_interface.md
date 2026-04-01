@@ -40,9 +40,18 @@ material.update(
 )
 
 assert material.description == "Updated description"
+latest_entry = material.history.order_by("-history_date").first()
 ```
 
-To inspect historical state across many rows, pass `search_date=...` to `filter()` or `exclude()` so the query resolves to the snapshot at that point in time.
+History-capable managers expose `manager.history` as the audit trail for that object's ID. The returned queryset lets you inspect or filter raw history entries directly:
+
+```python
+material.history.all()
+material.history.filter(history_change_reason__icontains="import")
+material.history.order_by("-history_date").first()
+```
+
+Use `search_date=...` when you want the manager itself, or a bucket of managers, to resolve as a point-in-time snapshot instead of returning raw history rows. For example, pass `search_date=...` to `filter()` or `exclude()` so the query resolves to historical manager state across many rows.
 
 ### Soft deletes
 

@@ -3,13 +3,14 @@ from general_manager.bootstrap import (
     InvalidPermissionClassError,
     check_permission_class,
 )
+from general_manager.interface.capabilities.orm import HistoryNotSupportedError
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import InvalidManagerStateError
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
     ManagerBasedPermission,
 )
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from general_manager.cache.signals import post_data_change, pre_data_change
 from django.contrib.auth import get_user_model
 from django.utils.crypto import get_random_string
@@ -218,6 +219,40 @@ class GeneralManagerTestCase(TestCase):
         """
         manager = self.manager()
         self.assertEqual(manager.identification, {"id": "dummy_id"})
+
+    def test_history_property_raises_when_capability_missing(self):
+        manager = self.manager()
+
+        with patch.object(
+            DummyInterface,
+            "get_capability_handler",
+            return_value=None,
+            create=True,
+        ):
+            with self.assertRaises(HistoryNotSupportedError):
+                _ = manager.history
+
+    def test_history_property_delegates_to_history_capability(self):
+        manager = self.manager()
+        expected_history = object()
+        history_capability = Mock()
+        history_capability.get_history_queryset_for_manager.return_value = (
+            expected_history
+        )
+
+        with patch.object(
+            DummyInterface,
+            "get_capability_handler",
+            return_value=history_capability,
+            create=True,
+        ):
+            history = manager.history
+
+        history_capability.get_history_queryset_for_manager.assert_called_once_with(
+            DummyInterface,
+            manager,
+        )
+        self.assertIs(history, expected_history)
 
     def test_iter(self):
         # Test the __iter__ method
