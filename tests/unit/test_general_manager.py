@@ -266,6 +266,7 @@ class GeneralManagerTestCase(TestCase):
         self.assertIn("name", attributes)
         self.assertIn("version", attributes)
         self.assertIn("active", attributes)
+        self.assertNotIn("history", attributes)
         self.assertEqual(attributes["name"], "Test Manager")
         self.assertEqual(attributes["version"], "1.0")
         self.assertTrue(attributes["active"])

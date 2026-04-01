@@ -179,6 +179,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 continue
             yield key, value
         for name, value in self.__class__.__dict__.items():
+            if name == "history":
+                continue
             if isinstance(value, (GraphQLProperty, property)):
                 yield name, getattr(self, name)
 
