@@ -128,6 +128,23 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """Return the identification dictionary used to fetch the managed object."""
         return self.__id
 
+    @property
+    def history(self) -> Any:
+        """Return the history queryset scoped to this manager instance."""
+        from general_manager.interface.capabilities.orm import HistoryNotSupportedError
+
+        history_handler = self.Interface.get_capability_handler("history")
+        if history_handler is None:
+            raise HistoryNotSupportedError(self.Interface.__name__)
+        get_history_queryset = getattr(
+            history_handler,
+            "get_history_queryset_for_manager",
+            None,
+        )
+        if not callable(get_history_queryset):
+            raise HistoryNotSupportedError(self.Interface.__name__)
+        return get_history_queryset(self.Interface, self)
+
     def _reload_interface_state(self) -> None:
         """Rebuild the backing interface so field access reflects the latest persisted state."""
         self._interface = self.Interface(**self.__id)

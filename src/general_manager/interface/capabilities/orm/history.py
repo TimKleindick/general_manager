@@ -129,6 +129,33 @@ class OrmHistoryCapability(BaseCapability):
         )
         return historical
 
+    def get_history_queryset_for_manager(
+        self,
+        interface_cls: type["OrmInterfaceBase"],
+        manager: Any,
+    ) -> models.QuerySet:
+        """
+        Return the history queryset scoped to the manager instance's primary key.
+
+        Parameters:
+            interface_cls (type["OrmInterfaceBase"]): ORM interface whose underlying model provides the history manager.
+            manager (Any): Manager-like object exposing identification or pk data for the target row.
+
+        Returns:
+            models.QuerySet: History queryset limited to records for the target object.
+
+        Raises:
+            HistoryNotSupportedError: If the interface does not expose a history manager or the manager cannot be scoped to a primary key.
+        """
+        if not hasattr(interface_cls._model, "history"):
+            raise HistoryNotSupportedError(interface_cls.__name__)
+        pk_filter = self._get_model_pk_filter(interface_cls, manager)
+        if pk_filter is None:
+            raise HistoryNotSupportedError(interface_cls.__name__)
+        history_manager = interface_cls._model.history  # type: ignore[attr-defined]
+        history_manager = self._apply_database_alias(interface_cls, history_manager)
+        return cast(models.QuerySet, history_manager.filter(**pk_filter))
+
     def get_historical_queryset(
         self,
         interface_cls: type["OrmInterfaceBase"],

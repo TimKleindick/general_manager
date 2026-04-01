@@ -101,7 +101,7 @@ GENERAL_MANAGER = {
 
 ## Upgrade Note
 
-Database-backed and existing-model managers now refresh in place after `update()` and return the same manager instance. After `delete()`, that manager instance is invalidated for subsequent field reads, even when the underlying row was soft-deleted via an `is_active` flag. See the [Existing Model Interfaces guide](docs/concepts/interfaces/existing_model_interface.md) and [Database Interfaces guide](docs/concepts/interfaces/db_based_interface.md) for the current lifecycle contract and factory/history implications.
+Database-backed and existing-model managers now refresh in place after `update()` and return the same manager instance. History-capable managers also expose `manager.history` as the audit trail queryset scoped to that object's ID, while `search_date=...` still resolves a point-in-time snapshot of manager state. After `delete()`, that manager instance is invalidated for subsequent field reads, even when the underlying row was soft-deleted via an `is_active` flag. See the [Existing Model Interfaces guide](docs/concepts/interfaces/existing_model_interface.md) and [Database Interfaces guide](docs/concepts/interfaces/db_based_interface.md) for the current lifecycle contract and factory/history implications.
 
 ## Use Cases
 
