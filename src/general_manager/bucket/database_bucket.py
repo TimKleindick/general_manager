@@ -8,6 +8,8 @@ from django.core.exceptions import FieldError
 from django.db import models
 
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
 
@@ -174,6 +176,39 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return self._manager_class(pk)
         return self._manager_class(pk, search_date=self._search_date)
 
+    @staticmethod
+    def _normalize_dependency_mapping(
+        definitions: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            key: values[0]
+            if isinstance(values, (list, tuple)) and len(values) == 1
+            else values
+            for key, values in definitions.items()
+        }
+
+    def _track_effective_dependencies(self) -> None:
+        """Record the bucket's effective filter/exclude state when it is evaluated."""
+        manager_name = self._manager_class.__name__
+        if self.filters:
+            DependencyTracker.track(
+                manager_name,
+                "filter",
+                serialize_dependency_identifier(
+                    self._normalize_dependency_mapping(self.filters)
+                ),
+            )
+        elif not self.excludes:
+            DependencyTracker.track(manager_name, "all", "")
+        if self.excludes:
+            DependencyTracker.track(
+                manager_name,
+                "exclude",
+                serialize_dependency_identifier(
+                    self._normalize_dependency_mapping(self.excludes)
+                ),
+            )
+
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
         Iterate over manager instances corresponding to the queryset rows.
@@ -181,6 +216,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Yields:
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
+        self._track_effective_dependencies()
         for item in self._data:
             yield self._build_manager(item.pk)
 
@@ -414,6 +450,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | None: First manager instance if available.
         """
+        self._track_effective_dependencies()
         first_element = self._data.first()
         if first_element is None:
             return None
@@ -426,6 +463,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             GeneralManagerType | None: Last manager instance if available.
         """
+        self._track_effective_dependencies()
         first_element = self._data.last()
         if first_element is None:
             return None
@@ -438,6 +476,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             int: Number of queryset rows.
         """
+        self._track_effective_dependencies()
         return self._data.count()
 
     def all(self) -> DatabaseBucket[GeneralManagerType]:
@@ -450,6 +489,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         return self.__class__(
             self._data.all(),
             self._manager_class,
+            self.filters,
+            self.excludes,
             search_date=self._search_date,
         )
 
@@ -467,6 +508,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             models.ObjectDoesNotExist: Propagated from the underlying queryset when no row matches.
             models.MultipleObjectsReturned: Propagated when multiple rows satisfy the lookup.
         """
+        self._track_effective_dependencies()
         element = self._data.get(**kwargs)
         return self._build_manager(element.pk)
 
@@ -486,8 +528,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return self.__class__(
                 self._data[item],
                 self._manager_class,
+                self.filters,
+                self.excludes,
                 search_date=self._search_date,
             )
+        self._track_effective_dependencies()
         return self._build_manager(self._data[item].pk)
 
     def __len__(self) -> int:
@@ -497,6 +542,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             int: Size of the queryset.
         """
+        self._track_effective_dependencies()
         return self._data.count()
 
     def __str__(self) -> str:
@@ -529,6 +575,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         from general_manager.manager.general_manager import GeneralManager
 
+        self._track_effective_dependencies()
         if isinstance(item, GeneralManager):
             return item.identification.get("id", None) in self._data.values_list(
                 "pk", flat=True
@@ -610,7 +657,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             except (FieldError, TypeError, ValueError) as error:
                 raise QuerysetOrderingError(error) from error
 
-        return self.__class__(qs, self._manager_class, search_date=self._search_date)
+        return self.__class__(
+            qs,
+            self._manager_class,
+            self.filters,
+            self.excludes,
+            search_date=self._search_date,
+        )
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:
         """

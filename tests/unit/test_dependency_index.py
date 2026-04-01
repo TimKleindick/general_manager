@@ -77,23 +77,30 @@ class TestFullIndex(TestCase):
     def test_get_full_index_without_setting_first(self):
         idx = get_full_index()
         self.assertIsInstance(idx, dict)
-        self.assertSetEqual(set(idx.keys()), {"filter", "exclude", "request_query"})
+        self.assertSetEqual(
+            set(idx.keys()), {"filter", "exclude", "request_query", "all"}
+        )
         self.assertIsInstance(idx["filter"], dict)
         self.assertIsInstance(idx["exclude"], dict)
         self.assertIsInstance(idx["request_query"], dict)
+        self.assertIsInstance(idx["all"], dict)
 
     def test_set_full_index(self):
         idx = get_full_index()
         self.assertIsInstance(idx, dict)
-        self.assertSetEqual(set(idx.keys()), {"filter", "exclude", "request_query"})
+        self.assertSetEqual(
+            set(idx.keys()), {"filter", "exclude", "request_query", "all"}
+        )
         self.assertIsInstance(idx["filter"], dict)
         self.assertIsInstance(idx["exclude"], dict)
         self.assertIsInstance(idx["request_query"], dict)
+        self.assertIsInstance(idx["all"], dict)
 
         new_idx: dependency_index = {
             "filter": {"project": {"name": {"value1": {"1", "2", "3"}}}},
             "exclude": {},
             "request_query": {},
+            "all": {},
         }
         set_full_index(new_idx)
         idx = get_full_index()
@@ -128,6 +135,7 @@ class TestRecordDependencies(TestCase):
                 },
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -164,6 +172,7 @@ class TestRecordDependencies(TestCase):
                 },
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -195,6 +204,7 @@ class TestRecordDependencies(TestCase):
                 },
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -210,6 +220,7 @@ class TestRecordDependencies(TestCase):
                 "filter": {},
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -272,6 +283,15 @@ class TestRecordDependencies(TestCase):
             {"request-cache"},
         )
 
+    def test_record_all_dependencies(self):
+        record_dependencies(
+            "all-cache",
+            [("RemoteProject", "all", "")],
+        )
+
+        idx = get_full_index()
+        self.assertEqual(idx["all"]["RemoteProject"], {"all-cache"})
+
     def test_parse_dependency_identifier_returns_none_for_non_json(self):
         self.assertIsNone(parse_dependency_identifier("{bad"))
         self.assertIsNone(parse_dependency_identifier(repr({"day": date(2024, 7, 24)})))
@@ -307,6 +327,7 @@ class TestRecordDependencies(TestCase):
                 },
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -346,6 +367,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                 "filter": {},
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -377,6 +399,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                 },
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -403,6 +426,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                 },
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -415,6 +439,7 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                 "filter": {},
                 "exclude": {},
                 "request_query": {},
+                "all": {},
             },
         )
 
@@ -427,7 +452,10 @@ class TestRemoveCacheKeyFromIndex(TestCase):
         )
         remove_cache_key_from_index("combo")
         idx = get_full_index()
-        self.assertEqual(idx, {"filter": {}, "exclude": {}, "request_query": {}})
+        self.assertEqual(
+            idx,
+            {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
+        )
 
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):
@@ -441,6 +469,8 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                 },
             },
             "exclude": {},
+            "request_query": {},
+            "all": {},
         }
 
         set_full_index(idx)
@@ -457,6 +487,8 @@ class TestRemoveCacheKeyFromIndex(TestCase):
             {
                 "filter": {},
                 "exclude": {},
+                "request_query": {},
+                "all": {},
             },
         )
 
@@ -473,6 +505,8 @@ class TestRemoveCacheKeyFromIndex(TestCase):
                 },
             },
             "exclude": {},
+            "request_query": {},
+            "all": {},
         }
 
         set_full_index(idx)
@@ -551,6 +585,7 @@ class TestInvalidateRequestQueryDependencies(TestCase):
                         "query-c": {"other-manager"},
                     },
                 },
+                "all": {},
             },
         )
 

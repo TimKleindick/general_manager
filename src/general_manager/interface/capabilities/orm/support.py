@@ -538,7 +538,8 @@ class OrmQueryCapability(BaseCapability):
         return DatabaseBucket(
             cast(models.QuerySet[models.Model], queryset),
             interface_cls._parent_class,
-            dict(normalized_kwargs),
+            {} if exclude else dict(normalized_kwargs),
+            dict(normalized_kwargs) if exclude else {},
             search_date=search_date,
         )
 
