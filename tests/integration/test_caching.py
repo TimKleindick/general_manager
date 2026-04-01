@@ -91,6 +91,13 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 return (self.project.actual_costs / self.project.budget).to("percent")
 
             @graph_ql_property
+            def project_name(self) -> str:
+                """
+                Return the associated project name for deterministic calculation sorting.
+                """
+                return self.project.name
+
+            @graph_ql_property
             def is_over_budget(self) -> bool:
                 """
                 Return True if the project's actual costs exceed its budget, otherwise False.
@@ -349,6 +356,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     TestProjectForCommercials.all()
                     .filter(name__contains="Project")
                     .exclude(number=self.project.number)
+                    .sort("name")
                     .first()
                 )
                 if first_match is None:
@@ -435,7 +443,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 Exercise non-count terminal operations on a grouped bucket.
                 """
-                grouped = TestProjectForCommercials.all().group_by("name")
+                grouped = TestProjectForCommercials.all().group_by("name").sort("name")
                 first = grouped.first()
                 fetched = grouped.get(name=self.project.name)
                 return (
@@ -451,7 +459,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 Exercise non-count terminal operations on a calculation bucket.
                 """
-                bucket = self.__class__.all()
+                bucket = self.__class__.all().sort("project_name")
                 first = bucket.first()
                 fetched = bucket.get(project=self.project)
                 return (
@@ -1099,6 +1107,25 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertEqual(refreshed_commercials1.sorted_project_bucket_summary, (4, 0))
         self.assert_cache_hit()
 
+    def test_sorted_narrowed_bucket_invalidates_when_sort_key_changes(self):
+        """
+        Ensure sorted narrowed buckets invalidate when a matching row changes only its sort key.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.sorted_project_bucket_summary, (3, 1))
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.sorted_project_bucket_summary, (3, 1))
+        self.assert_cache_hit()
+
+        self.project3 = self.project3.update(number=0, ignore_permission=True)
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.sorted_project_bucket_summary, (3, 0))
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.sorted_project_bucket_summary, (3, 0))
+        self.assert_cache_hit()
+
     def test_python_only_filter_dependencies_invalidate_correctly(self):
         """
         Ensure python-only filterable properties participate in deferred tracking.
@@ -1140,7 +1167,6 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         )
 
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
-        future_now = timezone.now() + timedelta(seconds=10)
         with patch("django.utils.timezone.now", return_value=future_now):
             self.assertEqual(refreshed_commercials1.historical_original_name_count, 1)
             self.assert_cache_miss()
@@ -1238,12 +1264,12 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
 
         self.assertEqual(
             commercials1.calculation_bucket_terminal_summary,
-            ("Test Project", "Test Project", 3, True),
+            ("Another Project", "Test Project", 3, True),
         )
         self.assert_cache_miss()
         self.assertEqual(
             commercials1.calculation_bucket_terminal_summary,
-            ("Test Project", "Test Project", 3, True),
+            ("Another Project", "Test Project", 3, True),
         )
         self.assert_cache_hit()
 
@@ -1259,12 +1285,12 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         refreshed_commercials1 = self.TestCommercials(project=self.project1)
         self.assertEqual(
             refreshed_commercials1.calculation_bucket_terminal_summary,
-            ("Test Project", "Test Project", 4, True),
+            ("Another Project", "Test Project", 4, True),
         )
         self.assert_cache_miss()
         self.assertEqual(
             refreshed_commercials1.calculation_bucket_terminal_summary,
-            ("Test Project", "Test Project", 4, True),
+            ("Another Project", "Test Project", 4, True),
         )
         self.assert_cache_hit()
 
