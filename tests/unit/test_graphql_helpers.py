@@ -7,6 +7,7 @@ from django.test import SimpleTestCase
 from graphql.language.ast import StringValueNode
 
 from general_manager.api.graphql import (
+    BigIntScalar,
     GraphQL,
     InvalidGeneralManagerClassError,
     InvalidMeasurementValueError,
@@ -141,6 +142,17 @@ class GraphQLHelperTests(SimpleTestCase):
         node = StringValueNode(value="10 m")
         assert MeasurementScalar.parse_literal(node) is not None
         assert MeasurementScalar.parse_literal(object()) is None
+
+    def test_bigint_scalar_round_trip(self) -> None:
+        value = 9223372036854775807
+        assert BigIntScalar.serialize(value) == str(value)
+        assert BigIntScalar.parse_value(str(value)) == value
+        assert BigIntScalar.parse_value(value) == value
+
+    def test_bigint_scalar_parse_literal(self) -> None:
+        string_node = StringValueNode(value="9223372036854775807")
+        assert BigIntScalar.parse_literal(string_node) == 9223372036854775807
+        assert BigIntScalar.parse_literal(object()) is None
 
     def test_permission_filter_helper(self) -> None:
         info = _Info()

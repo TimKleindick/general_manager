@@ -11,6 +11,7 @@ from typing import ClassVar
 
 from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
+    BigIntScalar,
     MeasurementType,
     GraphQL,
     get_read_permission_filter,
@@ -99,6 +100,12 @@ class GraphQLTests(TestCase):
         )
         field = GraphQL._map_field_to_graphene_read(Measurement, "measurement")
         self.assertIsInstance(field, graphene.Field)
+
+    def test_map_bigint_field_to_graphene(self):
+        field = GraphQL._map_field_to_graphene_read(
+            int, "large_value", {"graphql_scalar": "bigint"}
+        )
+        self.assertIsInstance(field, BigIntScalar)
 
     def test_create_resolver_normal_case(self):
         mock_instance = MagicMock()
@@ -642,6 +649,14 @@ class TestGrapQlMutation(TestCase):
                         "default": None,
                         "is_editable": False,
                     },
+                    "field3": {
+                        "type": int,
+                        "graphql_scalar": "bigint",
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
                     "created_at": {
                         "type": datetime,
                         "is_required": False,
@@ -661,10 +676,42 @@ class TestGrapQlMutation(TestCase):
         fields = GraphQL.create_write_fields(DummyInterface)
         self.assertIn("field1", fields)
         self.assertIn("field2", fields)
+        self.assertIn("field3", fields)
         self.assertIsInstance(fields["field1"], graphene.String)
         self.assertIsInstance(fields["field2"], graphene.Int)
+        self.assertIsInstance(fields["field3"], BigIntScalar)
         self.assertNotIn("created_at", fields)
         self.assertNotIn("derived_field", fields)
+
+    def test_create_filter_options_uses_bigint_scalar(self):
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "large_value": {
+                        "type": int,
+                        "graphql_scalar": "bigint",
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    }
+                }
+
+            @staticmethod
+            def get_graph_ql_properties():
+                return {}
+
+        class DummyManagerWithBigInt:
+            __name__ = "DummyManagerWithBigInt"
+            Interface = DummyInterface
+
+        GraphQL.graphql_filter_type_registry.clear()
+        filter_type = GraphQL._create_filter_options(DummyManagerWithBigInt)
+
+        self.assertIsNotNone(filter_type)
+        self.assertIsInstance(filter_type.large_value, BigIntScalar)
+        self.assertIsInstance(filter_type.large_value__gt, BigIntScalar)
 
     def test_create_write_fields_with_manager(self):
         """

@@ -150,6 +150,26 @@ class MeasurementScalar(graphene.Scalar):
         return None
 
 
+class BigIntScalar(graphene.Scalar):
+    """GraphQL scalar for integers outside the built-in GraphQL Int range."""
+
+    @staticmethod
+    def serialize(value: int) -> str:
+        return str(int(value))
+
+    @staticmethod
+    def parse_value(value: str | int) -> int:
+        return int(value)
+
+    @staticmethod
+    def parse_literal(node: Any) -> int | None:
+        if isinstance(node, ast.IntValueNode):
+            return int(node.value)
+        if isinstance(node, ast.StringValueNode):
+            return int(node.value)
+        return None
+
+
 class PageInfo(graphene.ObjectType):
     total_count = graphene.Int(required=True)
     page_size = graphene.Int(required=False)
@@ -162,7 +182,10 @@ class PageInfo(graphene.ObjectType):
 # ---------------------------------------------------------------------------
 
 
-def map_field_to_graphene_base_type(field_type: type) -> Type[Any]:
+def map_field_to_graphene_base_type(
+    field_type: type,
+    graphql_scalar: str | None = None,
+) -> Type[Any]:
     """
     Map a Python interface type to the corresponding Graphene scalar or custom scalar.
 
@@ -178,6 +201,8 @@ def map_field_to_graphene_base_type(field_type: type) -> Type[Any]:
     from typing import get_origin
 
     base_type = get_origin(field_type) or field_type
+    if graphql_scalar == "bigint":
+        return BigIntScalar
     if not isinstance(base_type, type):
         return graphene.String
     if issubclass(base_type, dict):

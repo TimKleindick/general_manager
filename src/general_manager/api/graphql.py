@@ -15,6 +15,7 @@ from typing import (
     Generator,
     Iterable,
     Literal,
+    Mapping,
     TYPE_CHECKING,
     Type,
     TypeVar,
@@ -45,6 +46,7 @@ from graphql import GraphQLError
 # Note: several names are imported purely for re-export to preserve the public
 # API of this module (code outside this package imports them from here).
 from general_manager.api.graphql_errors import (
+    BigIntScalar,  # noqa: F401  # re-exported
     SubscriptionEvent,
     InvalidMeasurementValueError,  # noqa: F401  # re-exported
     UnsupportedGraphQLFieldTypeError,  # noqa: F401  # re-exported
@@ -316,7 +318,11 @@ class GraphQL:
         # Map Attribute Types to Graphene Fields
         for field_name, field_info in interface_cls.get_attribute_types().items():
             field_type = field_info["type"]
-            fields[field_name] = cls._map_field_to_graphene_read(field_type, field_name)
+            fields[field_name] = cls._map_field_to_graphene_read(
+                field_type,
+                field_name,
+                field_info,
+            )
             resolver_name = f"resolve_{field_name}"
             fields[resolver_name] = cls._create_resolver(field_name, field_type)
 
@@ -520,7 +526,11 @@ class GraphQL:
         )
 
     @staticmethod
-    def _map_field_to_graphene_read(field_type: type, field_name: str) -> Any:
+    def _map_field_to_graphene_read(
+        field_type: type,
+        field_name: str,
+        field_info: Mapping[str, Any] | None = None,
+    ) -> Any:
         """
         Map a field type and name to the appropriate Graphene field for reads.
 
@@ -560,12 +570,19 @@ class GraphQL:
                 lambda: GraphQL.graphql_type_registry[field_type.__name__]
             )
         else:
-            return GraphQL._map_field_to_graphene_base_type(field_type)()
+            return GraphQL._map_field_to_graphene_base_type(
+                field_type,
+                field_info,
+            )()
 
     @staticmethod
-    def _map_field_to_graphene_base_type(field_type: type) -> Type[Any]:
+    def _map_field_to_graphene_base_type(
+        field_type: type,
+        field_info: Mapping[str, Any] | None = None,
+    ) -> Type[Any]:
         """Thin wrapper - see :func:`general_manager.api.graphql_errors.map_field_to_graphene_base_type`."""
-        return _map_field_to_graphene_base_type_fn(field_type)
+        graphql_scalar = field_info.get("graphql_scalar") if field_info else None
+        return _map_field_to_graphene_base_type_fn(field_type, graphql_scalar)
 
     @staticmethod
     def _parse_input(input_val: dict[str, Any] | str | None) -> dict[str, Any]:

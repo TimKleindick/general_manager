@@ -7,6 +7,7 @@ from typing import (
     Type,
     TYPE_CHECKING,
     Any,
+    NotRequired,
     TypeVar,
     Iterable,
     ClassVar,
@@ -70,6 +71,7 @@ class AttributeTypedDict(TypedDict):
     """Describe metadata captured for each interface attribute."""
 
     type: type
+    graphql_scalar: NotRequired[str]
     default: Any
     is_required: bool
     is_editable: bool

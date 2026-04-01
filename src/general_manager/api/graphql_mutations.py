@@ -70,7 +70,10 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
             else:
                 fld = graphene.ID(required=req, default_value=default)
         else:
-            base_cls = map_field_to_graphene_base_type(typ)
+            base_cls = map_field_to_graphene_base_type(
+                typ,
+                info.get("graphql_scalar"),
+            )
             fld = base_cls(required=req, default_value=default)
 
         cast(Any, fld).editable = info["is_editable"]

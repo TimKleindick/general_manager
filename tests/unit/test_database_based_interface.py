@@ -1,11 +1,12 @@
 # type: ignore
 
 from typing import ClassVar
+from uuid import UUID
 
 from django.test import TransactionTestCase
 from django.db import connection
 from django.contrib.auth.models import User
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, time, timedelta, UTC
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from django.db import models
@@ -31,6 +32,9 @@ from general_manager.manager.input import Input
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
     PayloadNormalizer,
+)
+from general_manager.interface.capabilities.orm_utils.field_descriptors import (
+    build_field_descriptors,
 )
 from general_manager.interface.capabilities.orm import (
     OrmHistoryCapability,
@@ -1901,3 +1905,66 @@ def test_payload_normalizer_normalize_many_values_single_item():
     result = normalizer.normalize_many_values(kwargs)
 
     assert result["field"] == [42]
+
+
+def test_build_field_descriptors_translates_graphql_compatible_field_types():
+    """Descriptor metadata maps GraphQL-compatible Django fields to usable Python types."""
+
+    class TranslationCoverageModel(models.Model):
+        id = models.SmallAutoField(primary_key=True)
+        positive_int = models.PositiveIntegerField()
+        positive_small_int = models.PositiveSmallIntegerField()
+        positive_big_int = models.PositiveBigIntegerField()
+        small_int = models.SmallIntegerField()
+        big_int = models.BigIntegerField()
+        slug = models.SlugField()
+        file_path = models.FilePathField(path="/var")
+        ip_address = models.GenericIPAddressField()
+        timestamp = models.TimeField()
+        duration = models.DurationField()
+        uuid_value = models.UUIDField()
+        blob = models.BinaryField()
+
+        class Meta:
+            app_label = "test"
+
+    class TranslationCoverageInterface(OrmInterfaceBase):
+        _model = TranslationCoverageModel
+        configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
+
+    descriptors = build_field_descriptors(TranslationCoverageInterface)
+
+    assert descriptors["id"].metadata["type"] is int
+    assert descriptors["positive_int"].metadata["type"] is int
+    assert descriptors["positive_small_int"].metadata["type"] is int
+    assert descriptors["positive_big_int"].metadata["type"] is int
+    assert descriptors["small_int"].metadata["type"] is int
+    assert descriptors["big_int"].metadata["type"] is int
+    assert descriptors["positive_big_int"].metadata["graphql_scalar"] == "bigint"
+    assert descriptors["big_int"].metadata["graphql_scalar"] == "bigint"
+    assert descriptors["slug"].metadata["type"] is str
+    assert descriptors["file_path"].metadata["type"] is str
+    assert descriptors["ip_address"].metadata["type"] is str
+    assert descriptors["timestamp"].metadata["type"] is time
+    assert descriptors["duration"].metadata["type"] is timedelta
+    assert descriptors["uuid_value"].metadata["type"] is UUID
+    assert descriptors["blob"].metadata["type"] is bytes
+
+
+def test_build_field_descriptors_does_not_mark_auto_pk_as_bigint_graphql_scalar():
+    """Auto-increment primary keys keep the legacy GraphQL Int contract."""
+
+    class AutoPkModel(models.Model):
+        id = models.BigAutoField(primary_key=True)
+
+        class Meta:
+            app_label = "test"
+
+    class AutoPkInterface(OrmInterfaceBase):
+        _model = AutoPkModel
+        configured_capabilities: ClassVar[tuple] = (ORM_PERSISTENCE_CAPABILITIES,)
+
+    descriptors = build_field_descriptors(AutoPkInterface)
+
+    assert descriptors["id"].metadata["type"] is int
+    assert "graphql_scalar" not in descriptors["id"].metadata
