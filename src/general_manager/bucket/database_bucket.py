@@ -151,6 +151,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         exclude_definitions: dict[str, list[Any]] | None = None,
         *,
         search_date: datetime | date | None = None,
+        sort_keys: tuple[str, ...] | None = None,
+        sort_reverse: bool = False,
     ) -> None:
         """
         Instantiate a database-backed bucket with optional filter state.
@@ -170,6 +172,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self.filters = {**(filter_definitions or {})}
         self.excludes = {**(exclude_definitions or {})}
         self._search_date = search_date
+        self._sort_keys = sort_keys
+        self._sort_reverse = sort_reverse
 
     def _build_manager(self, pk: Any) -> GeneralManagerType:
         if self._search_date is None:
@@ -190,13 +194,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
         manager_name = self._manager_class.__name__
+        normalized_filters = self._normalize_dependency_mapping(self.filters)
+        normalized_excludes = self._normalize_dependency_mapping(self.excludes)
         if self.filters:
             DependencyTracker.track(
                 manager_name,
                 "filter",
-                serialize_dependency_identifier(
-                    self._normalize_dependency_mapping(self.filters)
-                ),
+                serialize_dependency_identifier(normalized_filters),
             )
         elif not self.excludes:
             DependencyTracker.track(manager_name, "all", "")
@@ -204,10 +208,20 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             DependencyTracker.track(
                 manager_name,
                 "exclude",
-                serialize_dependency_identifier(
-                    self._normalize_dependency_mapping(self.excludes)
-                ),
+                serialize_dependency_identifier(normalized_excludes),
             )
+        if self._sort_keys:
+            for sort_key in self._sort_keys:
+                payload = {
+                    "filters": normalized_filters,
+                    "excludes": normalized_excludes,
+                    "reverse": self._sort_reverse,
+                }
+                DependencyTracker.track(
+                    manager_name,
+                    "filter",
+                    serialize_dependency_identifier({f"__sort__{sort_key}": payload}),
+                )
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         """
@@ -259,6 +273,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self._manager_class,
             {},
             search_date=self._search_date,
+            sort_keys=self._sort_keys,
+            sort_reverse=self._sort_reverse,
         )
 
     def __merge_filter_definitions(
@@ -396,6 +412,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             merged_filter,
             self.excludes,
             search_date=search_date,
+            sort_keys=self._sort_keys,
+            sort_reverse=self._sort_reverse,
         )
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
@@ -441,6 +459,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             merged_exclude,
             search_date=search_date,
+            sort_keys=self._sort_keys,
+            sort_reverse=self._sort_reverse,
         )
 
     def first(self) -> GeneralManagerType | None:
@@ -492,6 +512,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             self.excludes,
             search_date=self._search_date,
+            sort_keys=self._sort_keys,
+            sort_reverse=self._sort_reverse,
         )
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
@@ -531,6 +553,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 self.filters,
                 self.excludes,
                 search_date=self._search_date,
+                sort_keys=self._sort_keys,
+                sort_reverse=self._sort_reverse,
             )
         self._track_effective_dependencies()
         return self._build_manager(self._data[item].pk)
@@ -663,6 +687,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self.filters,
             self.excludes,
             search_date=self._search_date,
+            sort_keys=key,
+            sort_reverse=reverse,
         )
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:

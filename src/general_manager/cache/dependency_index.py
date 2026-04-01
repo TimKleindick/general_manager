@@ -323,7 +323,7 @@ def remove_cache_key_from_index(cache_key: str) -> None:
             for mname, model_section in list(action_section.items()):
                 cache_dependencies = model_section.get("__cache_dependencies__", {})
                 for lookup, lookup_map in list(model_section.items()):
-                    if lookup.startswith("__"):
+                    if lookup == "__cache_dependencies__":
                         continue
                     lookup_map = cast(lookup_dependency_map, lookup_map)
                     for val_key, key_set in list(lookup_map.items()):
@@ -391,7 +391,7 @@ def _remove_cache_keys_from_index_locked(
         for mname, model_section in list(action_section.items()):
             cache_dependencies = model_section.get("__cache_dependencies__", {})
             for lookup, lookup_map in list(model_section.items()):
-                if lookup.startswith("__"):
+                if lookup == "__cache_dependencies__":
                     continue
                 lookup_map = cast(lookup_dependency_map, lookup_map)
                 for val_key, key_set in list(lookup_map.items()):
@@ -496,11 +496,15 @@ def capture_old_values(
     for action in ACTIONS:
         model_section = idx[action].get(manager_name)
         if isinstance(model_section, dict):
-            lookups |= {
-                lookup
-                for lookup in model_section.keys()
-                if isinstance(lookup, str) and not lookup.startswith("__")
-            }
+            for lookup in model_section.keys():
+                if not isinstance(lookup, str):
+                    continue
+                if lookup.startswith("__sort__"):
+                    lookups.add(lookup.removeprefix("__sort__"))
+                    continue
+                if lookup.startswith("__"):
+                    continue
+                lookups.add(lookup)
         elif isinstance(model_section, list):
             lookups |= set(model_section)
     if lookups and instance.identification:
@@ -840,6 +844,74 @@ def generic_cache_invalidation(
                     return True
         return False
 
+    def bucket_membership_matches(
+        params: dict[str, Any],
+        *,
+        use_old_values: bool,
+    ) -> bool:
+        """
+        Check whether the changed row belongs to a bucket described by filters/excludes.
+        """
+        filters = params.get("filters", {})
+        excludes = params.get("excludes", {})
+        if not isinstance(filters, dict) or not isinstance(excludes, dict):
+            return False
+
+        def value_for_lookup(attr_path: list[str]) -> Any:
+            if use_old_values:
+                return old_relevant_values.get("__".join(attr_path))
+            return current_value_for_path(attr_path)
+
+        for lookup, expected in filters.items():
+            parts = lookup.split("__")
+            if parts[-1] in (
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "contains",
+                "startswith",
+                "endswith",
+                "regex",
+            ):
+                op = parts[-1]
+                attr_path = parts[:-1]
+            else:
+                op = "eq"
+                attr_path = parts
+            expected_key = json.dumps(
+                _normalize_dependency_identifier(expected), sort_keys=True
+            )
+            if not matches(op, value_for_lookup(attr_path), expected_key):
+                return False
+
+        for lookup, expected in excludes.items():
+            parts = lookup.split("__")
+            if parts[-1] in (
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "contains",
+                "startswith",
+                "endswith",
+                "regex",
+            ):
+                op = parts[-1]
+                attr_path = parts[:-1]
+            else:
+                op = "eq"
+                attr_path = parts
+            expected_key = json.dumps(
+                _normalize_dependency_identifier(expected), sort_keys=True
+            )
+            if matches(op, value_for_lookup(attr_path), expected_key):
+                return False
+
+        return True
+
     for action in ACTIONS:
         action_section = cast(
             dict[general_manager_name, manager_dependency_section],
@@ -861,6 +933,42 @@ def generic_cache_invalidation(
                                     "lookup": lookup,
                                     "action": action,
                                     "value": ALL_RECORDS_VALUE,
+                                },
+                            )
+                            invalidate_cache_key(ck)
+                            remove_cache_key_from_index(ck)
+                elif lookup.startswith("__sort__"):
+                    sort_lookup = lookup.removeprefix("__sort__")
+                    attr_path = sort_lookup.split("__")
+                    old_sort_value = old_relevant_values.get(sort_lookup)
+                    new_sort_value = current_value_for_path(attr_path)
+                    if old_sort_value == new_sort_value:
+                        continue
+                    for val_key, cache_keys in list(
+                        cast(lookup_dependency_map, lookup_map).items()
+                    ):
+                        payload = _json_loads_val_key(val_key)
+                        if not isinstance(payload, dict):
+                            continue
+                        old_in_bucket = bucket_membership_matches(
+                            payload,
+                            use_old_values=True,
+                        )
+                        new_in_bucket = bucket_membership_matches(
+                            payload,
+                            use_old_values=False,
+                        )
+                        if not (old_in_bucket or new_in_bucket):
+                            continue
+                        for ck in list(cache_keys):
+                            logger.info(
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": val_key,
                                 },
                             )
                             invalidate_cache_key(ck)

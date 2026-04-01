@@ -61,7 +61,9 @@ is tracked as one composite dependency. By contrast:
 Project.filter(name="Test").filter(status="active")
 ```
 
-creates two successive dependency entries, because the lookups were applied in separate calls.
+produces the same effective dependency entry for ORM-backed buckets. Chained `filter()` calls are merged into the bucket's final `self.filters` state before the bucket is evaluated, so the dependency index sees the combined payload from the final narrowed bucket rather than one entry per intermediate unevaluated bucket.
+
+The same rule applies to chained `exclude()` calls through `self.excludes`: the dependency entry reflects the evaluated bucket state, not every intermediate builder step.
 
 ## Request-backed buckets
 
