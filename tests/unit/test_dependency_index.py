@@ -7,6 +7,7 @@ from general_manager.cache.dependency_index import (
     record_dependencies,
     remove_cache_key_from_index,
     invalidate_cache_key,
+    invalidate_and_remove_cache_keys,
     invalidate_request_query_dependencies,
     capture_old_values,
     generic_cache_invalidation,
@@ -105,6 +106,21 @@ class TestFullIndex(TestCase):
         set_full_index(new_idx)
         idx = get_full_index()
         self.assertEqual(idx, new_idx)
+
+    def test_get_full_index_backfills_missing_sections(self):
+        cache.set("dependency_index", {"filter": {"project": {}}}, None)
+
+        idx = get_full_index()
+
+        self.assertEqual(
+            idx,
+            {
+                "filter": {"project": {}},
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            },
+        )
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -292,6 +308,30 @@ class TestRecordDependencies(TestCase):
         idx = get_full_index()
         self.assertEqual(idx["all"]["RemoteProject"], {"all-cache"})
 
+    def test_record_dependencies_with_empty_filter_params_tracks_all_lookup(self):
+        record_dependencies(
+            "empty-filter",
+            [("project", "filter", json.dumps({}))],
+        )
+
+        idx = get_full_index()
+        self.assertEqual(
+            idx["filter"]["project"]["__all__"]["__all__"],
+            {"empty-filter"},
+        )
+
+    def test_record_dependencies_with_empty_exclude_params_tracks_all_lookup(self):
+        record_dependencies(
+            "empty-exclude",
+            [("project", "exclude", json.dumps({}))],
+        )
+
+        idx = get_full_index()
+        self.assertEqual(
+            idx["exclude"]["project"]["__all__"]["__all__"],
+            {"empty-exclude"},
+        )
+
     def test_parse_dependency_identifier_returns_none_for_non_json(self):
         self.assertIsNone(parse_dependency_identifier("{bad"))
         self.assertIsNone(parse_dependency_identifier(repr({"day": date(2024, 7, 24)})))
@@ -457,6 +497,26 @@ class TestRemoveCacheKeyFromIndex(TestCase):
             {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
         )
 
+    def test_remove_cache_key_from_index_clears_all_and_request_query_sections(self):
+        record_dependencies(
+            "mixed-key",
+            [
+                ("RemoteProject", "all", ""),
+                (
+                    "RemoteProject",
+                    "request_query",
+                    serialize_dependency_identifier({"operation": "search"}),
+                ),
+            ],
+        )
+
+        remove_cache_key_from_index("mixed-key")
+
+        self.assertEqual(
+            get_full_index(),
+            {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
+        )
+
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):
         idx: dependency_index = {
@@ -586,6 +646,70 @@ class TestInvalidateRequestQueryDependencies(TestCase):
                     },
                 },
                 "all": {},
+            },
+        )
+
+    def test_returns_empty_tuple_when_manager_has_no_request_query_keys(self):
+        set_full_index(
+            {
+                "filter": {},
+                "exclude": {},
+                "request_query": {"OtherProject": {"query-c": {"other-manager"}}},
+                "all": {},
+            }
+        )
+
+        invalidated = invalidate_request_query_dependencies("RemoteProject")
+
+        self.assertEqual(invalidated, ())
+        self.assertEqual(
+            get_full_index(),
+            {
+                "filter": {},
+                "exclude": {},
+                "request_query": {"OtherProject": {"query-c": {"other-manager"}}},
+                "all": {},
+            },
+        )
+
+
+@override_settings(CACHES=TEST_CACHES)
+class TestInvalidateAndRemoveCacheKeys(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_noop_when_given_no_keys(self):
+        invalidate_and_remove_cache_keys([])
+        self.assertEqual(
+            get_full_index(),
+            {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
+        )
+
+    def test_invalidates_and_removes_keys_across_all_sections(self):
+        cache.set("cache-a", "A", None)
+        cache.set("cache-b", "B", None)
+        cache.set("cache-c", "C", None)
+        set_full_index(
+            {
+                "filter": {"project": {"name": {'"test"': {"cache-a", "cache-b"}}}},
+                "exclude": {"project": {"status": {'"archived"': {"cache-b"}}}},
+                "request_query": {"project": {"query": {"cache-b", "cache-c"}}},
+                "all": {"project": {"cache-a", "cache-c"}},
+            }
+        )
+
+        invalidate_and_remove_cache_keys(["cache-a", "cache-b", "cache-a"])
+
+        self.assertIsNone(cache.get("cache-a"))
+        self.assertIsNone(cache.get("cache-b"))
+        self.assertEqual(cache.get("cache-c"), "C")
+        self.assertEqual(
+            get_full_index(),
+            {
+                "filter": {},
+                "exclude": {},
+                "request_query": {"project": {"query": {"cache-c"}}},
+                "all": {"project": {"cache-c"}},
             },
         )
 
@@ -743,6 +867,42 @@ class MissingAttrManager:
 
 
 class GenericCacheInvalidationTests(TestCase):
+    @patch("general_manager.cache.dependency_index.get_full_index")
+    @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
+    @patch("general_manager.cache.dependency_index.invalidate_cache_key")
+    @patch(
+        "general_manager.cache.dependency_index.invalidate_request_query_dependencies"
+    )
+    def test_all_lookup_invalidates_registered_cache_keys(
+        self,
+        mock_invalidate_request_queries,
+        mock_invalidate,
+        mock_remove,
+        mock_get_index,
+    ):
+        mock_invalidate_request_queries.return_value = ()
+        mock_get_index.return_value = {
+            "filter": {"DummyManager2": {"__all__": {"__all__": {"ALL-1", "ALL-2"}}}},
+            "exclude": {},
+            "all": {"DummyManager2": {"ROOT-1"}},
+        }
+        inst = DummyManager2(status="active", count=1)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values={},
+        )
+
+        self.assertCountEqual(
+            mock_invalidate.call_args_list,
+            [call("ROOT-1"), call("ALL-1"), call("ALL-2")],
+        )
+        self.assertCountEqual(
+            mock_remove.call_args_list,
+            [call("ROOT-1"), call("ALL-1"), call("ALL-2")],
+        )
+
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
