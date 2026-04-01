@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 from django.test import SimpleTestCase
-from graphql.language.ast import StringValueNode
+from graphql.language.ast import IntValueNode, StringValueNode
 
 from general_manager.api.graphql import (
     BigIntScalar,
@@ -149,9 +149,18 @@ class GraphQLHelperTests(SimpleTestCase):
         assert BigIntScalar.parse_value(str(value)) == value
         assert BigIntScalar.parse_value(value) == value
 
+    def test_bigint_scalar_rejects_bools(self) -> None:
+        with pytest.raises(TypeError, match="BigIntScalar cannot accept boolean"):
+            BigIntScalar.serialize(True)
+
+        with pytest.raises(TypeError, match="BigIntScalar cannot accept boolean"):
+            BigIntScalar.parse_value(False)
+
     def test_bigint_scalar_parse_literal(self) -> None:
         string_node = StringValueNode(value="9223372036854775807")
+        int_node = IntValueNode(value="9223372036854775807")
         assert BigIntScalar.parse_literal(string_node) == 9223372036854775807
+        assert BigIntScalar.parse_literal(int_node) == 9223372036854775807
         assert BigIntScalar.parse_literal(object()) is None
 
     def test_permission_filter_helper(self) -> None:

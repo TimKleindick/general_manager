@@ -297,6 +297,13 @@ def get_filter_options(
         map_field_to_graphene_read: Callable that maps a Python type + field
             name to the appropriate Graphene read type (passed to avoid a
             circular import from ``graphql.py``).
+        attr_info: Optional additional attribute metadata passed through to
+            ``map_field_to_graphene_read`` and other filter-type decisions.
+            When present this should be the metadata mapping returned from
+            ``Interface.get_attribute_types()`` for ``attribute_name`` and may
+            include keys such as ``graphql_scalar`` that alter the generated
+            Graphene type. When ``None``, the default field mapping behavior is
+            used.
 
     Yields:
         ``(filter_field_name, graphene_input_type_or_None)`` tuples.
