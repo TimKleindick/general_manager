@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.36.3 (2026-04-01)
+
+### Bug Fixes
+
+- Add graphql bigint scalar support
+  ([`33a77ed`](https://github.com/TimKleindick/general_manager/commit/33a77edf75d6599a8f0ac2ad67bfee10633c43fe))
+
+- Harden bigint scalar handling
+  ([`0ef433c`](https://github.com/TimKleindick/general_manager/commit/0ef433c69254b9c3e2f93043a8ab72cfeba7dacf))
+
+### Documentation
+
+- Record graphql bigint lessons
+  ([`628cf95`](https://github.com/TimKleindick/general_manager/commit/628cf95e46c2f21d552d0928f84b1e1c795bcc2a))
+
+
 ## v0.36.2 (2026-03-30)
 
 ### Bug Fixes
