@@ -16,6 +16,7 @@ from typing import (
     Callable,
     Generator,
     Literal,
+    Mapping,
     TYPE_CHECKING,
     Type,
     cast,
@@ -279,7 +280,8 @@ def create_search_result_type(
 def get_filter_options(
     attribute_type: type,
     attribute_name: str,
-    map_field_to_graphene_read: Callable[[type, str], Any],
+    map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
+    attr_info: Mapping[str, Any] | None = None,
 ) -> Generator[
     tuple[str, type[graphene.ObjectType] | MeasurementScalar | graphene.List | None],
     None,
@@ -318,30 +320,37 @@ def get_filter_options(
     else:
         yield (
             attribute_name,
-            map_field_to_graphene_read(attribute_type, attribute_name),
+            map_field_to_graphene_read(attribute_type, attribute_name, attr_info),
         )
         if issubclass(attribute_type, (int, float, Decimal, date, datetime)):
             for option in number_options:
                 yield (
                     f"{attribute_name}__{option}",
-                    map_field_to_graphene_read(attribute_type, attribute_name),
+                    map_field_to_graphene_read(
+                        attribute_type, attribute_name, attr_info
+                    ),
                 )
         elif issubclass(attribute_type, str):
-            base_type = map_field_to_graphene_base_type(attribute_type)
+            base_type = map_field_to_graphene_base_type(
+                attribute_type,
+                attr_info.get("graphql_scalar") if attr_info else None,
+            )
             for option in string_options:
                 if option == "in":
                     yield f"{attribute_name}__in", graphene.List(base_type)
                 else:
                     yield (
                         f"{attribute_name}__{option}",
-                        map_field_to_graphene_read(attribute_type, attribute_name),
+                        map_field_to_graphene_read(
+                            attribute_type, attribute_name, attr_info
+                        ),
                     )
 
 
 def create_filter_options(
     field_type: Type[GeneralManager],
     graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]],
-    map_field_to_graphene_read: Callable[[type, str], Any],
+    map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
 ) -> type[graphene.InputObjectType] | None:
     """
     Create (or retrieve from cache) a Graphene InputObjectType exposing all
@@ -371,7 +380,7 @@ def create_filter_options(
             **{
                 k: v
                 for k, v in get_filter_options(
-                    attr_type, attr_name, map_field_to_graphene_read
+                    attr_type, attr_name, map_field_to_graphene_read, attr_info
                 )
                 if v is not None
             },

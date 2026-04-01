@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
+from uuid import UUID
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.db import models
@@ -49,7 +50,29 @@ TRANSLATION: dict[type[models.Field], type] = {
     models.ImageField: str,
     models.URLField: str,
     models.TimeField: time,
+    models.DurationField: timedelta,
+    models.UUIDField: UUID,
+    models.GenericIPAddressField: str,
+    models.FilePathField: str,
+    models.BinaryField: bytes,
 }
+
+
+def _translate_field_type(raw_type: type) -> type:
+    """Resolve a Django field class to the exposed Python metadata type."""
+    for field_type, translated_type in TRANSLATION.items():
+        if issubclass(raw_type, field_type):
+            return translated_type
+    return raw_type
+
+
+def _graphql_scalar_hint(raw_type: type) -> str | None:
+    """Return an optional GraphQL scalar hint for field families needing special handling."""
+    if issubclass(raw_type, models.AutoField):
+        return None
+    if issubclass(raw_type, models.BigIntegerField):
+        return "bigint"
+    return None
 
 
 def build_field_descriptors(
@@ -322,12 +345,15 @@ class _FieldDescriptorBuilder:
         if attribute_name in self._descriptors:
             raise DuplicateFieldNameError()
         metadata: AttributeTypedDict = {
-            "type": TRANSLATION.get(raw_type, raw_type),
+            "type": _translate_field_type(raw_type),
             "is_required": is_required,
             "is_editable": is_editable,
             "default": default,
             "is_derived": is_derived,
         }
+        graphql_scalar = _graphql_scalar_hint(raw_type)
+        if graphql_scalar is not None:
+            metadata["graphql_scalar"] = graphql_scalar
         self._descriptors[attribute_name] = FieldDescriptor(
             name=attribute_name,
             metadata=metadata,
