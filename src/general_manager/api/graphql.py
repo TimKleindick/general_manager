@@ -537,6 +537,11 @@ class GraphQL:
         Parameters:
             field_type (type): Python type declared on the interface.
             field_name (str): Attribute name being exposed.
+            field_info (Mapping[str, Any] | None): Optional attribute metadata
+                from ``Interface.get_attribute_types()`` used to influence the
+                GraphQL mapping, for example by selecting a custom scalar via
+                keys such as ``graphql_scalar``. When omitted, the default
+                scalar inference for ``field_type`` is used.
 
         Returns:
             Any: Graphene field or type configured for the attribute.

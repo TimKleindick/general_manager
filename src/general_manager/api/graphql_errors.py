@@ -94,6 +94,13 @@ class MissingManagerIdentifierError(ValueError):
         super().__init__("id is required.")
 
 
+class InvalidBigIntScalarValueError(TypeError):
+    """Raised when BigIntScalar receives a value it should not coerce."""
+
+    def __init__(self) -> None:
+        super().__init__("BigIntScalar cannot accept boolean values.")
+
+
 # ---------------------------------------------------------------------------
 # Error-category tuples
 # ---------------------------------------------------------------------------
@@ -155,10 +162,14 @@ class BigIntScalar(graphene.Scalar):
 
     @staticmethod
     def serialize(value: int) -> str:
+        if isinstance(value, bool):
+            raise InvalidBigIntScalarValueError()
         return str(int(value))
 
     @staticmethod
     def parse_value(value: str | int) -> int:
+        if isinstance(value, bool):
+            raise InvalidBigIntScalarValueError()
         return int(value)
 
     @staticmethod
