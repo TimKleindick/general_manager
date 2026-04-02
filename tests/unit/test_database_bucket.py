@@ -307,6 +307,20 @@ class DatabaseBucketTestCase(TestCase):
         self.assertIn("username", no_bob.excludes)
         self.assertListEqual(no_bob.excludes["username"], ["bob"])
 
+    def test_filter_and_exclude_definitions_do_not_share_nested_lists(self):
+        """
+        Cloned buckets should not share nested filter/exclude definition lists.
+        """
+        filtered = self.bucket.filter(username="alice")
+        sibling_filtered = filtered.all()
+        filtered.filters["username"].append("carol")
+        self.assertListEqual(sibling_filtered.filters["username"], ["alice"])
+
+        excluded = self.bucket.exclude(username="bob")
+        sibling_excluded = excluded.all()
+        excluded.excludes["username"].append("carol")
+        self.assertListEqual(sibling_excluded.excludes["username"], ["bob"])
+
     def test_or_union_with_bucket(self):
         # split buckets
         """

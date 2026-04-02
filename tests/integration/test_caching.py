@@ -258,6 +258,13 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 )
 
             @graph_ql_property
+            def exclude_only_project_count(self) -> int:
+                """
+                Count projects through an exclude-only bucket.
+                """
+                return TestProjectForCommercials.all().exclude(number=999).count()
+
+            @graph_ql_property
             def unique_name_bucket_length(self) -> int:
                 """
                 Return the length of a narrowed bucket without iterating it.
@@ -963,6 +970,32 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         self.assertEqual(refreshed_commercials1.empty_all_bucket_count, 1)
         self.assert_cache_miss()
         self.assertEqual(refreshed_commercials1.empty_all_bucket_count, 1)
+        self.assert_cache_hit()
+
+    def test_exclude_only_bucket_invalidates_on_included_create(self):
+        """
+        Ensure exclude-only buckets still invalidate on whole-set membership changes.
+        """
+        commercials1 = self.TestCommercials(project=self.project1)
+
+        self.assertEqual(commercials1.exclude_only_project_count, 3)
+        self.assert_cache_miss()
+        self.assertEqual(commercials1.exclude_only_project_count, 3)
+        self.assert_cache_hit()
+
+        self.TestProject.create(
+            name="Included Project",
+            number=4,
+            budget=Measurement(800, "EUR"),
+            actual_costs=Measurement(50, "EUR"),
+            start_date=date(2024, 1, 8),
+            completion_at=timezone.make_aware(datetime(2024, 1, 17, 12, 0)),
+        )
+
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertEqual(refreshed_commercials1.exclude_only_project_count, 4)
+        self.assert_cache_miss()
+        self.assertEqual(refreshed_commercials1.exclude_only_project_count, 4)
         self.assert_cache_hit()
 
     def test_terminal_operations_track_without_iteration(self):
