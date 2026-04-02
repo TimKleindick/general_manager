@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.37.0 (2026-04-02)
+
+### Bug Fixes
+
+- Exclude manager history from iteration
+  ([`ad9e9fa`](https://github.com/TimKleindick/general_manager/commit/ad9e9fab02efdb5ef03829ab7c37db3e49347bf2))
+
+### Features
+
+- Add public manager history api
+  ([`e632bcb`](https://github.com/TimKleindick/general_manager/commit/e632bcb4397012687a6137147661ad0e525f7e23))
+
+
 ## v0.36.3 (2026-04-01)
 
 ### Bug Fixes
