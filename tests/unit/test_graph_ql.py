@@ -7,7 +7,7 @@ import graphene
 from django.test import TestCase, override_settings
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
@@ -107,11 +107,31 @@ class GraphQLTests(TestCase):
         )
         self.assertIsInstance(field, BigIntScalar)
 
+    def test_map_field_to_graphene_handles_generic_alias_type(self):
+        field = GraphQL._map_field_to_graphene_read(list[str], "labels")
+        self.assertIsInstance(field, graphene.String)
+
+    def test_map_field_to_graphene_handles_any_type(self):
+        field = GraphQL._map_field_to_graphene_read(Any, "metadata")
+        self.assertIsInstance(field, graphene.String)
+
     def test_create_resolver_normal_case(self):
         mock_instance = MagicMock()
         mock_instance.some_field = "expected_value"
         resolver = GraphQL._create_resolver("some_field", str)
         self.assertEqual(resolver(mock_instance, self.info), "expected_value")
+
+    def test_create_resolver_handles_generic_alias_type(self):
+        mock_instance = MagicMock()
+        mock_instance.labels = ["a", "b"]
+        resolver = GraphQL._create_resolver("labels", list[str])
+        self.assertEqual(resolver(mock_instance, self.info), ["a", "b"])
+
+    def test_create_resolver_handles_any_type(self):
+        mock_instance = MagicMock()
+        mock_instance.metadata = {"a": 1}
+        resolver = GraphQL._create_resolver("metadata", Any)
+        self.assertEqual(resolver(mock_instance, self.info), {"a": 1})
 
     def test_create_resolver_measurement_case(self):
         mock_instance = MagicMock()
@@ -712,6 +732,62 @@ class TestGrapQlMutation(TestCase):
         self.assertIsNotNone(filter_type)
         self.assertIsInstance(filter_type.large_value, BigIntScalar)
         self.assertIsInstance(filter_type.large_value__gt, BigIntScalar)
+
+    def test_create_filter_options_handles_generic_alias_type(self):
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "labels": {
+                        "type": list[str],
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    }
+                }
+
+            @staticmethod
+            def get_graph_ql_properties():
+                return {}
+
+        class DummyManagerWithGenericAlias:
+            __name__ = "DummyManagerWithGenericAlias"
+            Interface = DummyInterface
+
+        GraphQL.graphql_filter_type_registry.clear()
+        filter_type = GraphQL._create_filter_options(DummyManagerWithGenericAlias)
+
+        self.assertIsNotNone(filter_type)
+        self.assertIsInstance(filter_type.labels, graphene.String)
+
+    def test_create_filter_options_handles_any_type(self):
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "metadata": {
+                        "type": Any,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    }
+                }
+
+            @staticmethod
+            def get_graph_ql_properties():
+                return {}
+
+        class DummyManagerWithAny:
+            __name__ = "DummyManagerWithAny"
+            Interface = DummyInterface
+
+        GraphQL.graphql_filter_type_registry.clear()
+        filter_type = GraphQL._create_filter_options(DummyManagerWithAny)
+
+        self.assertIsNotNone(filter_type)
+        self.assertIsInstance(filter_type.metadata, graphene.String)
 
     def test_create_write_fields_with_manager(self):
         """
