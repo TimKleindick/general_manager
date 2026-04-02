@@ -30,6 +30,41 @@ if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
 
 
+def _is_subclass(candidate: object, parent: type | tuple[type, ...]) -> bool:
+    """Return True when candidate is a class and a subclass of parent."""
+    return isinstance(candidate, type) and issubclass(candidate, parent)
+
+
+def _normalize_mutation_kwargs_for_manager(
+    general_manager_class: type[GeneralManager],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize GraphQL relation aliases to the ORM mutation contract."""
+    interface_cls = getattr(general_manager_class, "Interface", None)
+    if interface_cls is None:
+        return dict(kwargs)
+
+    attribute_types = interface_cls.get_attribute_types()
+    normalized = dict(kwargs)
+
+    for key in list(kwargs.keys()):
+        if key.endswith("_list") and not key.endswith("_id_list"):
+            base_key = key.removesuffix("_list")
+            if base_key in attribute_types or key in attribute_types:
+                normalized.setdefault(f"{base_key}_id_list", normalized[key])
+                normalized.pop(key, None)
+                continue
+
+        if key.startswith("_") and not key.endswith("_id"):
+            type_info = attribute_types.get(key)
+            relation_type = type_info["type"] if type_info is not None else None
+            if _is_subclass(relation_type, GeneralManager):
+                normalized.setdefault(f"{key}_id", normalized[key])
+                normalized.pop(key, None)
+
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Write-field helpers
 # ---------------------------------------------------------------------------
@@ -64,7 +99,7 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
         default = info["default"]
 
         fld: Any
-        if issubclass(typ, GeneralManager):
+        if _is_subclass(typ, GeneralManager):
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
             else:
@@ -125,6 +160,7 @@ def generate_create_mutation_class(
                 for field_name, value in kwargs.items()
                 if value is not NOT_PROVIDED
             }
+            kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             instance = generalManagerClass.create(
                 **kwargs, creator_id=info.context.user.id
             )
@@ -184,6 +220,7 @@ def generate_update_mutation_class(
         if manager_id is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
         try:
+            kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             instance = generalManagerClass(id=manager_id).update(
                 creator_id=info.context.user.id, **kwargs
             )
