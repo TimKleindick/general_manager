@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.37.2 (2026-04-02)
+
+### Bug Fixes
+
+- Narrow reverse filter alias conflicts
+  ([`6c77f20`](https://github.com/TimKleindick/general_manager/commit/6c77f20000a7a86a839a310560b8d74779dd0c1e))
+
+- Preserve list-suffixed filter fields
+  ([`01eaa1a`](https://github.com/TimKleindick/general_manager/commit/01eaa1afb7281c8cb1cf2eb9b46bf9e38ed80ade))
+
+### Testing
+
+- Expand support alias coverage
+  ([`7d77615`](https://github.com/TimKleindick/general_manager/commit/7d776150b45cabb758b2dac445aa952c673ad6e1))
+
+
 ## v0.37.1 (2026-04-02)
 
 ### Bug Fixes
