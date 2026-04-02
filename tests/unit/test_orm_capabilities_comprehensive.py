@@ -721,25 +721,57 @@ class TestOrmQueryCapability:
 
         assert aliases["change_request_feasibility"] == "changerequestfeasibility"
 
-    def test_build_reverse_filter_alias_map_raises_on_ambiguous_alias(
+    def test_resolve_filter_segment_raises_only_for_requested_ambiguous_alias(
         self,
     ) -> None:
-        class AmbiguousChangeRequest(models.Model):
+        class LookupModel(models.Model):
             class Meta:
                 app_label = "general_manager"
 
-        class ReviewAssignments(models.Model):
+        model_key = LookupModel._meta.model_name
+        if model_key not in apps.all_models["general_manager"]:
+            apps.register_model("general_manager", LookupModel)
+        apps.clear_cache()
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support._build_reverse_filter_alias_metadata",
+            return_value=(
+                {},
+                {
+                    "review_assignments": (
+                        "reviewassignments",
+                        "review_assignments",
+                    )
+                },
+            ),
+        ):
+            with pytest.raises(
+                AmbiguousReverseFilterAliasError,
+                match="review_assignments",
+            ):
+                _resolve_filter_segment(LookupModel, "review_assignments")
+
+    def test_resolve_filter_segment_ignores_unrelated_ambiguous_aliases(
+        self,
+    ) -> None:
+        class AmbiguousLookupChangeRequest(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class AmbiguousLookupReviewAssignments(models.Model):
             change_request = models.ForeignKey(
-                AmbiguousChangeRequest,
+                AmbiguousLookupChangeRequest,
                 on_delete=models.CASCADE,
             )
 
             class Meta:
                 app_label = "general_manager"
 
-        class AmbiguousManualReview(models.Model):
+        AmbiguousLookupReviewAssignments.__name__ = "ReviewAssignments"
+
+        class AmbiguousLookupManualReview(models.Model):
             change_request = models.ForeignKey(
-                AmbiguousChangeRequest,
+                AmbiguousLookupChangeRequest,
                 on_delete=models.CASCADE,
                 related_name="review_assignments",
             )
@@ -748,20 +780,48 @@ class TestOrmQueryCapability:
                 app_label = "general_manager"
 
         for model in (
-            AmbiguousChangeRequest,
-            ReviewAssignments,
-            AmbiguousManualReview,
+            AmbiguousLookupChangeRequest,
+            AmbiguousLookupReviewAssignments,
+            AmbiguousLookupManualReview,
         ):
             model_key = model._meta.model_name
             if model_key not in apps.all_models["general_manager"]:
                 apps.register_model("general_manager", model)
         apps.clear_cache()
 
-        with pytest.raises(
-            AmbiguousReverseFilterAliasError,
-            match="review_assignments",
-        ):
-            _build_reverse_filter_alias_map(AmbiguousChangeRequest)
+        assert _resolve_filter_segment(AmbiguousLookupChangeRequest, "missing") == (
+            "missing",
+            None,
+        )
+
+    def test_build_reverse_filter_alias_map_prefers_related_query_name_over_related_name(
+        self,
+    ) -> None:
+        class ReviewQueue(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class ReviewQueueEntry(models.Model):
+            review_queue = models.ForeignKey(
+                ReviewQueue,
+                on_delete=models.CASCADE,
+                related_name="queue_items",
+                related_query_name="queue_entry_filters",
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (ReviewQueue, ReviewQueueEntry):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        aliases = _build_reverse_filter_alias_map(ReviewQueue)
+
+        assert aliases["queue_entry_filters"] == "queue_entry_filters"
+        assert "queue_items" not in aliases
 
     def test_filter_translates_snake_case_reverse_relation_root(self) -> None:
         capability = OrmQueryCapability()
