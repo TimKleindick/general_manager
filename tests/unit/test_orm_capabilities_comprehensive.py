@@ -7,6 +7,8 @@ from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from django.apps import apps
+from django.db import models
 from django.utils import timezone
 
 from general_manager.interface.capabilities.orm import (
@@ -19,6 +21,11 @@ from general_manager.interface.capabilities.orm import (
     OrmReadCapability,
     OrmValidationCapability,
     SoftDeleteCapability,
+)
+from general_manager.interface.capabilities.orm.support import (
+    AmbiguousReverseFilterAliasError,
+    _build_reverse_filter_alias_map,
+    _translate_reverse_filter_key,
 )
 
 
@@ -639,6 +646,226 @@ class TestOrmHistoryCapability:
 
 class TestOrmQueryCapability:
     """Tests for ORM query capability."""
+
+    def test_build_reverse_filter_alias_map_adds_snake_case_alias_for_default_reverse_relation(
+        self,
+    ) -> None:
+        class ChangeRequest(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class ChangeRequestFeasibility(models.Model):
+            change_request = models.ForeignKey(
+                ChangeRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (ChangeRequest, ChangeRequestFeasibility):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        aliases = _build_reverse_filter_alias_map(ChangeRequest)
+
+        assert aliases["change_request_feasibility"] == "changerequestfeasibility"
+
+    def test_build_reverse_filter_alias_map_raises_on_ambiguous_alias(
+        self,
+    ) -> None:
+        class AmbiguousChangeRequest(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class ReviewAssignments(models.Model):
+            change_request = models.ForeignKey(
+                AmbiguousChangeRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        class AmbiguousManualReview(models.Model):
+            change_request = models.ForeignKey(
+                AmbiguousChangeRequest,
+                on_delete=models.CASCADE,
+                related_name="review_assignments",
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (
+            AmbiguousChangeRequest,
+            ReviewAssignments,
+            AmbiguousManualReview,
+        ):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        with pytest.raises(
+            AmbiguousReverseFilterAliasError,
+            match="review_assignments",
+        ):
+            _build_reverse_filter_alias_map(AmbiguousChangeRequest)
+
+    def test_filter_translates_snake_case_reverse_relation_root(self) -> None:
+        capability = OrmQueryCapability()
+
+        class AliasTargetRequest(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class AliasTargetRequestFeasibility(models.Model):
+            change_request = models.ForeignKey(
+                AliasTargetRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (AliasTargetRequest, AliasTargetRequestFeasibility):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        mock_parent = Mock()
+        interface_cls = Mock()
+        interface_cls._parent_class = mock_parent
+        interface_cls.normalize_search_date = None
+        interface_cls._model = AliasTargetRequest
+
+        support = Mock()
+        queryset = Mock()
+        filtered_qs = Mock()
+        queryset.filter.return_value = filtered_qs
+        support.get_queryset.return_value = queryset
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.side_effect = lambda kwargs: dict(kwargs)
+        support.get_payload_normalizer.return_value = normalizer
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=support,
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.support.DatabaseBucket"
+            ) as mock_bucket:
+                mock_bucket.return_value = Mock()
+
+                with patch(
+                    "general_manager.interface.capabilities.orm.with_observability",
+                    side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                ):
+                    capability.filter(
+                        interface_cls,
+                        alias_target_request_feasibility__id=42,
+                    )
+
+                    queryset.filter.assert_called_once_with(
+                        aliastargetrequestfeasibility__id=42
+                    )
+
+    def test_filter_translates_nested_snake_case_reverse_relation_roots(self) -> None:
+        capability = OrmQueryCapability()
+
+        class NestedAliasTargetRequest(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class NestedAliasTargetRequestFeasibility(models.Model):
+            change_request = models.ForeignKey(
+                NestedAliasTargetRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        class NestedAliasTargetRequestTeam(models.Model):
+            change_request_feasibility = models.ForeignKey(
+                NestedAliasTargetRequestFeasibility,
+                on_delete=models.CASCADE,
+            )
+            size = models.IntegerField(default=0)
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (
+            NestedAliasTargetRequest,
+            NestedAliasTargetRequestFeasibility,
+            NestedAliasTargetRequestTeam,
+        ):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        mock_parent = Mock()
+        interface_cls = Mock()
+        interface_cls._parent_class = mock_parent
+        interface_cls.normalize_search_date = None
+        interface_cls._model = NestedAliasTargetRequest
+
+        support = Mock()
+        queryset = Mock()
+        filtered_qs = Mock()
+        queryset.filter.return_value = filtered_qs
+        support.get_queryset.return_value = queryset
+        normalizer = Mock()
+        normalizer.normalize_filter_kwargs.side_effect = lambda kwargs: dict(kwargs)
+        support.get_payload_normalizer.return_value = normalizer
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability",
+            return_value=support,
+        ):
+            with patch(
+                "general_manager.interface.capabilities.orm.support.DatabaseBucket"
+            ) as mock_bucket:
+                mock_bucket.return_value = Mock()
+
+                with patch(
+                    "general_manager.interface.capabilities.orm.with_observability",
+                    side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                ):
+                    capability.filter(
+                        interface_cls,
+                        nested_alias_target_request_feasibility__nested_alias_target_request_team__size__gte=5,
+                    )
+
+                    queryset.filter.assert_called_once_with(
+                        nestedaliastargetrequestfeasibility__nestedaliastargetrequestteam__size__gte=5
+                    )
+
+    def test_translate_reverse_filter_key_preserves_real_list_suffixed_fields(
+        self,
+    ) -> None:
+        class ListSuffixFieldTarget(models.Model):
+            status = models.IntegerField(default=0)
+            status_list = models.IntegerField(default=0)
+
+            class Meta:
+                app_label = "general_manager"
+
+        model_key = ListSuffixFieldTarget._meta.model_name
+        if model_key not in apps.all_models["general_manager"]:
+            apps.register_model("general_manager", ListSuffixFieldTarget)
+        apps.clear_cache()
+
+        assert (
+            _translate_reverse_filter_key(ListSuffixFieldTarget, "status_list")
+            == "status_list"
+        )
 
     def test_filter_returns_database_bucket(self):
         """Test that filter returns a DatabaseBucket with filter applied."""
