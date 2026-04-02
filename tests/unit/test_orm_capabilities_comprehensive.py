@@ -25,6 +25,8 @@ from general_manager.interface.capabilities.orm import (
 from general_manager.interface.capabilities.orm.support import (
     AmbiguousReverseFilterAliasError,
     _build_reverse_filter_alias_map,
+    _resolve_filter_segment,
+    _translate_reverse_filter_aliases,
     _translate_reverse_filter_key,
 )
 
@@ -647,6 +649,52 @@ class TestOrmHistoryCapability:
 class TestOrmQueryCapability:
     """Tests for ORM query capability."""
 
+    def test_build_reverse_filter_alias_map_returns_empty_without_meta_get_fields(
+        self,
+    ) -> None:
+        class NoFieldsModel:
+            _meta = object()
+
+        assert _build_reverse_filter_alias_map(NoFieldsModel) == {}
+
+    def test_build_reverse_filter_alias_map_returns_empty_when_get_fields_raises_type_error(
+        self,
+    ) -> None:
+        class BrokenMeta:
+            def get_fields(self) -> tuple[object, ...]:
+                raise TypeError
+
+        class BrokenModel:
+            _meta = BrokenMeta()
+
+        assert _build_reverse_filter_alias_map(BrokenModel) == {}
+
+    def test_build_reverse_filter_alias_map_skips_alias_matching_forward_field_name(
+        self,
+    ) -> None:
+        class ChangeRequest(models.Model):
+            review_assignments = models.IntegerField(default=0)
+
+            class Meta:
+                app_label = "general_manager"
+
+        class ReviewAssignments(models.Model):
+            change_request = models.ForeignKey(
+                ChangeRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (ChangeRequest, ReviewAssignments):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        assert _build_reverse_filter_alias_map(ChangeRequest) == {}
+
     def test_build_reverse_filter_alias_map_adds_snake_case_alias_for_default_reverse_relation(
         self,
     ) -> None:
@@ -846,6 +894,117 @@ class TestOrmQueryCapability:
                     queryset.filter.assert_called_once_with(
                         nestedaliastargetrequestfeasibility__nestedaliastargetrequestteam__size__gte=5
                     )
+
+    def test_translate_reverse_filter_aliases_rewrites_each_key_independently(
+        self,
+    ) -> None:
+        class PayloadAliasTargetRequest(models.Model):
+            title = models.CharField(max_length=50, default="")
+
+            class Meta:
+                app_label = "general_manager"
+
+        class PayloadAliasTargetRequestFeasibility(models.Model):
+            change_request = models.ForeignKey(
+                PayloadAliasTargetRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (
+            PayloadAliasTargetRequest,
+            PayloadAliasTargetRequestFeasibility,
+        ):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        payload = _translate_reverse_filter_aliases(
+            PayloadAliasTargetRequest,
+            {
+                "payload_alias_target_request_feasibility__id": 42,
+                "title": "keep me",
+            },
+        )
+
+        assert payload == {
+            "payloadaliastargetrequestfeasibility__id": 42,
+            "title": "keep me",
+        }
+
+    def test_translate_reverse_filter_key_preserves_remaining_parts_after_unresolved_segment(
+        self,
+    ) -> None:
+        class UnresolvedAliasTargetRequest(models.Model):
+            class Meta:
+                app_label = "general_manager"
+
+        class UnresolvedAliasTargetRequestFeasibility(models.Model):
+            change_request = models.ForeignKey(
+                UnresolvedAliasTargetRequest,
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        for model in (
+            UnresolvedAliasTargetRequest,
+            UnresolvedAliasTargetRequestFeasibility,
+        ):
+            model_key = model._meta.model_name
+            if model_key not in apps.all_models["general_manager"]:
+                apps.register_model("general_manager", model)
+        apps.clear_cache()
+
+        translated = _translate_reverse_filter_key(
+            UnresolvedAliasTargetRequest,
+            "unresolved_alias_target_request_feasibility__missing__gte",
+        )
+
+        assert translated == "unresolvedaliastargetrequestfeasibility__missing__gte"
+
+    def test_translate_reverse_filter_key_preserves_remaining_parts_after_relation_without_related_model(
+        self,
+    ) -> None:
+        relation = SimpleNamespace(is_relation=True, related_model=None)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support._resolve_filter_segment",
+            side_effect=[
+                ("translated_root", relation),
+                ("final_lookup", None),
+            ],
+        ):
+            translated = _translate_reverse_filter_key(
+                models.Model,
+                "root__final_lookup",
+            )
+
+        assert translated == "translated_root__final_lookup"
+
+    def test_resolve_filter_segment_returns_none_without_meta_get_field(self) -> None:
+        class NoFieldModel:
+            _meta = object()
+
+        assert _resolve_filter_segment(NoFieldModel, "status") == ("status", None)
+
+    def test_resolve_filter_segment_returns_none_for_unknown_segment(self) -> None:
+        class PlainModel(models.Model):
+            status = models.IntegerField(default=0)
+
+            class Meta:
+                app_label = "general_manager"
+
+        model_key = PlainModel._meta.model_name
+        if model_key not in apps.all_models["general_manager"]:
+            apps.register_model("general_manager", PlainModel)
+        apps.clear_cache()
+
+        assert _resolve_filter_segment(PlainModel, "missing") == ("missing", None)
 
     def test_translate_reverse_filter_key_preserves_real_list_suffixed_fields(
         self,
