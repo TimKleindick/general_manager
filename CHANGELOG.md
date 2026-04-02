@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.37.1 (2026-04-02)
+
+### Bug Fixes
+
+- Defer bucket dependency tracking
+  ([`7f872de`](https://github.com/TimKleindick/general_manager/commit/7f872dedc4126d3d736c5a0c056a7e2f51a57d0c))
+
+- Invalidate exclude-only buckets
+  ([`2984f13`](https://github.com/TimKleindick/general_manager/commit/2984f1383c854b742e1c897433c4815d2069b1a4))
+
+- Track sorted bucket invalidation
+  ([`f11c2ac`](https://github.com/TimKleindick/general_manager/commit/f11c2acdf55fcdb91a576342ad2528fe0a3a5075))
+
+### Documentation
+
+- Update caching behavior guide
+  ([`a07a236`](https://github.com/TimKleindick/general_manager/commit/a07a2364259456581a7e3ee5812513ec857e2fe0))
+
+### Testing
+
+- Expand dependency index coverage
+  ([`8306bdd`](https://github.com/TimKleindick/general_manager/commit/8306bdd92962d676961d7267eaa4798d7fa652b8))
+
+
 ## v0.37.0 (2026-04-02)
 
 ### Bug Fixes
