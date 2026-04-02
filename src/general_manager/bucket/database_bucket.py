@@ -169,8 +169,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         self._data = data
         self._manager_class = manager_class
-        self.filters = {**(filter_definitions or {})}
-        self.excludes = {**(exclude_definitions or {})}
+        self.filters = self._copy_filter_definitions(filter_definitions)
+        self.excludes = self._copy_filter_definitions(exclude_definitions)
         self._search_date = search_date
         self._sort_keys = sort_keys
         self._sort_reverse = sort_reverse
@@ -179,6 +179,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if self._search_date is None:
             return self._manager_class(pk)
         return self._manager_class(pk, search_date=self._search_date)
+
+    @staticmethod
+    def _copy_filter_definitions(
+        definitions: dict[str, Any] | None,
+    ) -> dict[str, list[Any]]:
+        """
+        Return a copy of filter/exclude definitions without sharing nested lists.
+        """
+        copied: dict[str, list[Any]] = {}
+        for key, values in (definitions or {}).items():
+            if isinstance(values, list):
+                copied[key] = list(values)
+            elif isinstance(values, tuple):
+                copied[key] = list(values)
+            else:
+                copied[key] = [values]
+        return copied
 
     @staticmethod
     def _normalize_dependency_mapping(
@@ -202,7 +219,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 "filter",
                 serialize_dependency_identifier(normalized_filters),
             )
-        elif not self.excludes:
+        else:
             DependencyTracker.track(manager_name, "all", "")
         if self.excludes:
             DependencyTracker.track(
@@ -290,9 +307,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             dict[str, list[Any]]: Combined mapping of lookups to value lists.
         """
-        kwarg_filter: dict[str, list[Any]] = {}
-        for key, value in basis.items():
-            kwarg_filter[key] = value
+        kwarg_filter = self._copy_filter_definitions(basis)
         for key, value in kwargs.items():
             if key not in kwarg_filter:
                 kwarg_filter[key] = []
