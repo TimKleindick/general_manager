@@ -380,20 +380,21 @@ def _to_snake_case(name: str) -> str:
 
 
 @lru_cache(maxsize=None)
-def _build_reverse_filter_alias_map(
+def _build_reverse_filter_alias_metadata(
     model: type[models.Model],
-) -> dict[str, str]:
-    """Build a cached map of snake_case reverse filter roots to Django lookup roots."""
+) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
+    """Build cached alias and ambiguity metadata for reverse filter roots."""
     meta = getattr(model, "_meta", None)
     get_fields = getattr(meta, "get_fields", None)
     if not callable(get_fields):
-        return {}
+        return {}, {}
     try:
         all_fields = tuple(get_fields())
     except TypeError:
-        return {}
+        return {}, {}
 
     alias_map: dict[str, str] = {}
+    ambiguous_aliases: dict[str, tuple[str, str]] = {}
     # Only include forward field names (not reverse relations) to avoid masking
     # ambiguity when an explicit related_name coincidentally matches an alias.
     model_field_names = {
@@ -411,28 +412,41 @@ def _build_reverse_filter_alias_map(
             continue
 
         target_root = reverse_relation.name
-        remote_field = getattr(
-            getattr(reverse_relation, "field", None), "remote_field", None
-        )
-        related_name = (
-            getattr(remote_field, "related_name", None)
-            if remote_field is not None
-            else None
-        )
+        relation_field = getattr(reverse_relation, "field", None)
+        explicit_query_root = getattr(relation_field, "_related_query_name", None)
+        explicit_accessor = getattr(relation_field, "_related_name", None)
         alias = (
-            related_name
-            if isinstance(related_name, str) and related_name and related_name != "+"
+            target_root
+            if (
+                isinstance(target_root, str)
+                and target_root
+                and target_root != "+"
+                and (explicit_query_root is not None or explicit_accessor is not None)
+            )
             else _to_snake_case(related_model.__name__)
         )
 
         if alias in model_field_names:
             continue
 
+        if alias in ambiguous_aliases:
+            continue
+
         existing = alias_map.get(alias)
         if existing is not None and existing != target_root:
-            raise AmbiguousReverseFilterAliasError(alias, (existing, target_root))
+            ambiguous_aliases[alias] = (existing, target_root)
+            alias_map.pop(alias, None)
+            continue
         alias_map[alias] = target_root
 
+    return alias_map, ambiguous_aliases
+
+
+def _build_reverse_filter_alias_map(
+    model: type[models.Model],
+) -> dict[str, str]:
+    """Build a cached map of snake_case reverse filter roots to Django lookup roots."""
+    alias_map, _ = _build_reverse_filter_alias_metadata(model)
     return alias_map
 
 
@@ -489,10 +503,14 @@ def _resolve_filter_segment(
     if not callable(get_field):
         return segment, None
 
+    alias_map, ambiguous_aliases = _build_reverse_filter_alias_metadata(model)
+    targets = ambiguous_aliases.get(segment)
+    if targets is not None:
+        raise AmbiguousReverseFilterAliasError(segment, targets)
+
     try:
         field = cast(models.Field | models.ForeignObjectRel, get_field(segment))
     except FieldDoesNotExist:
-        alias_map = _build_reverse_filter_alias_map(model)
         actual_name = alias_map.get(segment)
         if actual_name is None:
             return segment, None
