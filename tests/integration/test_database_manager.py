@@ -71,10 +71,51 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 class Meta:
                     use_soft_delete = True
 
+        class ChangeRequest(GeneralManager):
+            title: str
+            changerequestfeasibility_list: Bucket[ChangeRequestFeasibility]
+            change_request_reviews_list: Bucket[ChangeRequestReview]
+
+            class Interface(DatabaseInterface):
+                title = models.CharField(max_length=100)
+
+        class ChangeRequestFeasibility(GeneralManager):
+            score: int
+            change_request: ChangeRequest
+
+            class Interface(DatabaseInterface):
+                score = models.IntegerField(default=0)
+                change_request = models.ForeignKey(
+                    "general_manager.ChangeRequest",
+                    on_delete=models.CASCADE,
+                )
+
+        class ChangeRequestReview(GeneralManager):
+            summary: str
+            change_request: ChangeRequest
+
+            class Interface(DatabaseInterface):
+                summary = models.CharField(max_length=100)
+                change_request = models.ForeignKey(
+                    "general_manager.ChangeRequest",
+                    on_delete=models.CASCADE,
+                    related_name="change_request_reviews",
+                )
+
         cls.TestCountry = TestCountry
         cls.TestHuman = TestHuman
         cls.TestFamily = TestFamily
-        cls.general_manager_classes = [TestCountry, TestHuman, TestFamily]
+        cls.ChangeRequest = ChangeRequest
+        cls.ChangeRequestFeasibility = ChangeRequestFeasibility
+        cls.ChangeRequestReview = ChangeRequestReview
+        cls.general_manager_classes = [
+            TestCountry,
+            TestHuman,
+            TestFamily,
+            ChangeRequest,
+            ChangeRequestFeasibility,
+            ChangeRequestReview,
+        ]
 
     def setUp(self):
         """
@@ -105,6 +146,29 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ignore_permission=True,
         )
 
+        self.change_request = self.ChangeRequest.create(
+            creator_id=None,
+            title="Assess impact",
+            ignore_permission=True,
+        )
+        self.change_request_feasibility = self.ChangeRequestFeasibility.create(
+            creator_id=None,
+            score=5,
+            change_request=self.change_request,
+            ignore_permission=True,
+        )
+        self.change_request_review = self.ChangeRequestReview.create(
+            creator_id=None,
+            summary="Initial review",
+            change_request=self.change_request,
+            ignore_permission=True,
+        )
+        self.other_change_request = self.ChangeRequest.create(
+            creator_id=None,
+            title="Unrelated request",
+            ignore_permission=True,
+        )
+
     def tearDown(self):
         """
         Cleans up the test database by deleting all instances of TestCountry, TestHuman, and TestFamily.
@@ -114,6 +178,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.TestCountry.Interface._model._meta.model.objects.all().delete()
         self.TestHuman.Interface._model._meta.model.objects.all().delete()
         self.TestFamily.Interface._model._meta.model.objects.all().delete()
+        self.ChangeRequest.Interface._model._meta.model.objects.all().delete()
+        self.ChangeRequestFeasibility.Interface._model._meta.model.objects.all().delete()
+        self.ChangeRequestReview.Interface._model._meta.model.objects.all().delete()
         super().tearDown()
 
     def test_iter(self):
@@ -242,6 +309,38 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         us_country = self.TestCountry.filter(code="US")
         self.assertEqual(len(us_country), 1)
         self.assertEqual(us_country[0].name, "United States")
+
+    def test_filter_supports_snake_case_reverse_relation_aliases(self):
+        snake_case_matches = self.ChangeRequest.filter(
+            change_request_feasibility__id=self.change_request_feasibility.id
+        )
+        legacy_matches = self.ChangeRequest.filter(
+            changerequestfeasibility__id=self.change_request_feasibility.id
+        )
+        explicit_related_name_matches = self.ChangeRequest.filter(
+            change_request_reviews__id=self.change_request_review.id
+        )
+
+        self.assertEqual(len(snake_case_matches), 1)
+        self.assertEqual(snake_case_matches[0].id, self.change_request.id)
+        self.assertEqual(len(legacy_matches), 1)
+        self.assertEqual(legacy_matches[0].id, self.change_request.id)
+        self.assertEqual(len(explicit_related_name_matches), 1)
+        self.assertEqual(explicit_related_name_matches[0].id, self.change_request.id)
+
+    def test_exclude_supports_snake_case_reverse_relation_aliases(self):
+        remaining = self.ChangeRequest.exclude(
+            change_request_feasibility__id=self.change_request_feasibility.id
+        )
+
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].id, self.other_change_request.id)
+
+    def test_filter_rejects_bucket_style_reverse_relation_roots(self):
+        with self.assertRaises(FieldError):
+            self.ChangeRequest.filter(
+                change_request_feasibility_list__id=self.change_request_feasibility.id
+            )
 
     def test_filter_with_search_date_returns_historical_state(self):
         base_time = timezone.now() - timedelta(days=10)
@@ -732,3 +831,151 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             pk=factory_instance.identification["id"]
         )
         self.assertIsNotNone(stored)
+
+
+class ReverseRelationFilterAliasIntegrationTest(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        class ChangeRequest(GeneralManager):
+            title: str
+
+            class Interface(DatabaseInterface):
+                title = models.CharField(max_length=100)
+
+        class ChangeRequestFeasibility(GeneralManager):
+            summary: str
+            change_request: ChangeRequest
+            change_request_team_list: Bucket[ChangeRequestTeam]
+
+            class Interface(DatabaseInterface):
+                summary = models.CharField(max_length=100)
+                change_request = models.ForeignKey(
+                    "general_manager.ChangeRequest",
+                    on_delete=models.CASCADE,
+                )
+
+        class ChangeRequestTeam(GeneralManager):
+            name: str
+            size: int
+            change_request_feasibility: ChangeRequestFeasibility
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=100)
+                size = models.IntegerField(default=0)
+                change_request_feasibility = models.ForeignKey(
+                    "general_manager.ChangeRequestFeasibility",
+                    on_delete=models.CASCADE,
+                )
+
+        class ReviewQueue(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=100)
+
+        class ReviewQueueEntry(GeneralManager):
+            summary: str
+            review_queue: ReviewQueue
+
+            class Interface(DatabaseInterface):
+                summary = models.CharField(max_length=100)
+                review_queue = models.ForeignKey(
+                    "general_manager.ReviewQueue",
+                    on_delete=models.CASCADE,
+                    related_name="review_queue_entries",
+                )
+
+        cls.ChangeRequest = ChangeRequest
+        cls.ChangeRequestFeasibility = ChangeRequestFeasibility
+        cls.ChangeRequestTeam = ChangeRequestTeam
+        cls.ReviewQueue = ReviewQueue
+        cls.ReviewQueueEntry = ReviewQueueEntry
+        cls.general_manager_classes = [
+            ChangeRequest,
+            ChangeRequestFeasibility,
+            ChangeRequestTeam,
+            ReviewQueue,
+            ReviewQueueEntry,
+        ]
+
+    def setUp(self):
+        super().setUp()
+        self.change_request = self.ChangeRequest.create(
+            title="Primary request",
+            ignore_permission=True,
+        )
+        self.other_change_request = self.ChangeRequest.create(
+            title="Secondary request",
+            ignore_permission=True,
+        )
+        self.feasibility = self.ChangeRequestFeasibility.create(
+            summary="Feasible",
+            change_request=self.change_request,
+            ignore_permission=True,
+        )
+        self.other_feasibility = self.ChangeRequestFeasibility.create(
+            summary="Also feasible",
+            change_request=self.other_change_request,
+            ignore_permission=True,
+        )
+        self.team = self.ChangeRequestTeam.create(
+            name="Core team",
+            size=6,
+            change_request_feasibility=self.feasibility,
+            ignore_permission=True,
+        )
+        self.small_team = self.ChangeRequestTeam.create(
+            name="Support team",
+            size=2,
+            change_request_feasibility=self.other_feasibility,
+            ignore_permission=True,
+        )
+        self.review_queue = self.ReviewQueue.create(
+            name="Primary queue",
+            ignore_permission=True,
+        )
+        self.review_queue_entry = self.ReviewQueueEntry.create(
+            summary="Entry",
+            review_queue=self.review_queue,
+            ignore_permission=True,
+        )
+
+    def test_filter_accepts_snake_case_reverse_relation_alias(self):
+        aliased = self.ChangeRequest.filter(
+            change_request_feasibility__id=self.feasibility.id
+        )
+        legacy = self.ChangeRequest.filter(
+            changerequestfeasibility__id=self.feasibility.id
+        )
+
+        self.assertEqual([item.id for item in aliased], [self.change_request.id])
+        self.assertEqual([item.id for item in aliased], [item.id for item in legacy])
+
+    def test_exclude_accepts_snake_case_reverse_relation_alias(self):
+        remaining = self.ChangeRequest.exclude(
+            change_request_feasibility__id=self.feasibility.id
+        )
+
+        self.assertEqual(
+            [item.id for item in remaining], [self.other_change_request.id]
+        )
+
+    def test_filter_accepts_nested_snake_case_reverse_relation_aliases(self):
+        bucket = self.ChangeRequest.filter(
+            change_request_feasibility__change_request_team__size__gte=5
+        )
+
+        self.assertEqual([item.id for item in bucket], [self.change_request.id])
+
+    def test_filter_rejects_list_suffix_reverse_relation_alias(self):
+        with self.assertRaises(FieldError):
+            self.ChangeRequest.filter(
+                change_request_feasibility_list__id=self.feasibility.id
+            )
+
+    def test_filter_preserves_explicit_related_name_root(self):
+        queue_bucket = self.ReviewQueue.filter(
+            review_queue_entries__id=self.review_queue_entry.id
+        )
+
+        self.assertEqual([item.id for item in queue_bucket], [self.review_queue.id])

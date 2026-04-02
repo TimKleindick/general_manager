@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from typing import Any, TYPE_CHECKING, Callable, ClassVar, Type, cast
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import Subquery
 from django.utils import timezone
@@ -17,6 +20,7 @@ from general_manager.interface.capabilities.orm_utils.django_manager_utils impor
 )
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     FieldDescriptor,
+    _iter_reverse_relations,
     build_field_descriptors,
 )
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
@@ -357,6 +361,147 @@ class SearchDateInputError(TypeError):
         super().__init__("search_date must be a datetime or date instance.")
 
 
+class AmbiguousReverseFilterAliasError(ValueError):
+    """Raised when a snake_case reverse filter alias resolves to multiple relations."""
+
+    def __init__(self, alias: str, targets: tuple[str, str]) -> None:
+        left, right = targets
+        super().__init__(
+            "Ambiguous reverse filter alias "
+            f"'{alias}' resolves to both '{left}' and '{right}'."
+        )
+
+
+def _to_snake_case(name: str) -> str:
+    """Convert a CamelCase class name into snake_case."""
+    snake = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    snake = re.sub("([a-z0-9])([A-Z])", r"\1_\2", snake)
+    return snake.lower()
+
+
+@lru_cache(maxsize=None)
+def _build_reverse_filter_alias_map(
+    model: type[models.Model],
+) -> dict[str, str]:
+    """Build a cached map of snake_case reverse filter roots to Django lookup roots."""
+    meta = getattr(model, "_meta", None)
+    get_fields = getattr(meta, "get_fields", None)
+    if not callable(get_fields):
+        return {}
+    try:
+        all_fields = tuple(get_fields())
+    except TypeError:
+        return {}
+
+    alias_map: dict[str, str] = {}
+    # Only include forward field names (not reverse relations) to avoid masking
+    # ambiguity when an explicit related_name coincidentally matches an alias.
+    model_field_names = {
+        field.name
+        for field in all_fields
+        if not (
+            getattr(field, "is_relation", False)
+            and getattr(field, "one_to_many", False)
+        )
+    }
+
+    for reverse_relation in _iter_reverse_relations(model):
+        related_model = getattr(reverse_relation, "related_model", None)
+        if related_model is None:
+            continue
+
+        target_root = reverse_relation.name
+        remote_field = getattr(
+            getattr(reverse_relation, "field", None), "remote_field", None
+        )
+        related_name = (
+            getattr(remote_field, "related_name", None)
+            if remote_field is not None
+            else None
+        )
+        alias = (
+            related_name
+            if isinstance(related_name, str) and related_name and related_name != "+"
+            else _to_snake_case(related_model.__name__)
+        )
+
+        if alias in model_field_names:
+            continue
+
+        existing = alias_map.get(alias)
+        if existing is not None and existing != target_root:
+            raise AmbiguousReverseFilterAliasError(alias, (existing, target_root))
+        alias_map[alias] = target_root
+
+    return alias_map
+
+
+def _translate_reverse_filter_aliases(
+    model: type[models.Model],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Rewrite snake_case reverse-relation filter segments to Django's native lookup roots."""
+    translated: dict[str, Any] = {}
+
+    for key, value in kwargs.items():
+        translated[_translate_reverse_filter_key(model, key)] = value
+
+    return translated
+
+
+def _translate_reverse_filter_key(model: type[models.Model], key: str) -> str:
+    """Rewrite only relation-path segments that are known reverse aliases."""
+    parts = key.split("__")
+    translated_parts: list[str] = []
+    current_model: type[models.Model] | None = model
+
+    for index, part in enumerate(parts):
+        if current_model is None:
+            translated_parts.extend(parts[index:])
+            break
+
+        resolved_name, field = _resolve_filter_segment(current_model, part)
+        if field is None:
+            translated_parts.extend(parts[index:])
+            break
+
+        translated_parts.append(resolved_name)
+        if not getattr(field, "is_relation", False):
+            translated_parts.extend(parts[index + 1 :])
+            break
+
+        current_model = cast(
+            type[models.Model] | None, getattr(field, "related_model", None)
+        )
+    else:
+        return "__".join(translated_parts)
+
+    return "__".join(translated_parts)
+
+
+def _resolve_filter_segment(
+    model: type[models.Model],
+    segment: str,
+) -> tuple[str, models.Field | models.ForeignObjectRel | None]:
+    """Resolve a lookup segment to a real Django field or reverse relation."""
+    meta = getattr(model, "_meta", None)
+    get_field = getattr(meta, "get_field", None)
+    if not callable(get_field):
+        return segment, None
+
+    try:
+        field = cast(models.Field | models.ForeignObjectRel, get_field(segment))
+    except FieldDoesNotExist:
+        alias_map = _build_reverse_filter_alias_map(model)
+        actual_name = alias_map.get(segment)
+        if actual_name is None:
+            return segment, None
+        field = cast(models.Field | models.ForeignObjectRel, get_field(actual_name))
+        return actual_name, field
+    else:
+        return segment, field
+
+
 class OrmQueryCapability(BaseCapability):
     """Expose DatabaseBucket operations via the capability configuration."""
 
@@ -486,7 +631,11 @@ class OrmQueryCapability(BaseCapability):
             self._ensure_search_date_normalized(search_date)
         support = get_support_capability(interface_cls)
         normalizer = support.get_payload_normalizer(interface_cls)
-        normalized_kwargs = normalizer.normalize_filter_kwargs(payload)
+        translated_payload = _translate_reverse_filter_aliases(
+            interface_cls._model,
+            payload,
+        )
+        normalized_kwargs = normalizer.normalize_filter_kwargs(translated_payload)
         return include_inactive, normalized_kwargs, search_date
 
     def _build_bucket(

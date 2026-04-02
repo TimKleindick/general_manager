@@ -53,6 +53,8 @@ material.history.order_by("-history_date").first()
 
 Use `search_date=...` when you want the manager itself, or a bucket of managers, to resolve as a point-in-time snapshot instead of returning raw history rows. For example, pass `search_date=...` to `filter()` or `exclude()` so the query resolves to historical manager state across many rows.
 
+Reverse-relation filters accept snake_case roots for multi-word related models. For example, if `ChangeRequestFeasibility` points at `ChangeRequest`, prefer `ChangeRequest.filter(change_request_feasibility__id=...)`. The legacy Django-native reverse query root (for example `changerequestfeasibility__id`) remains supported for compatibility. This translation applies to relation roots, not bucket-style `_list` attribute names.
+
 ### Soft deletes
 
 New database-backed managers perform hard deletes by default. Add `use_soft_delete = True` to the interface's `Meta` class to keep the historical `is_active` flag and route `delete()` calls through a soft delete. When enabled GeneralManager automatically injects filtered managers (`objects` returns active rows, `all_objects` includes inactive ones), honours explicit `filter(is_active=…)` lookups, and preserves the existing history comments (`"… (deactivated)"`). Pass `include_inactive=True` to `filter()`/`exclude()` when you need the full dataset without touching the model's managers directly.
