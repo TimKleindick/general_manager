@@ -19,6 +19,7 @@ from django.db.models import NOT_PROVIDED
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.utils.type_checks import safe_issubclass
 from general_manager.api.graphql_errors import (
     HANDLED_MANAGER_ERRORS,
     MissingManagerIdentifierError,
@@ -28,11 +29,6 @@ from general_manager.api.graphql_errors import (
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
-
-
-def _is_subclass(candidate: object, parent: type | tuple[type, ...]) -> bool:
-    """Return True when candidate is a class and a subclass of parent."""
-    return isinstance(candidate, type) and issubclass(candidate, parent)
 
 
 def _normalize_mutation_kwargs_for_manager(
@@ -58,7 +54,7 @@ def _normalize_mutation_kwargs_for_manager(
         if key.startswith("_") and not key.endswith("_id"):
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if _is_subclass(relation_type, GeneralManager):
+            if safe_issubclass(relation_type, GeneralManager):
                 normalized.setdefault(f"{key}_id", normalized[key])
                 normalized.pop(key, None)
 
@@ -99,7 +95,7 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
         default = info["default"]
 
         fld: Any
-        if _is_subclass(typ, GeneralManager):
+        if safe_issubclass(typ, GeneralManager):
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
             else:

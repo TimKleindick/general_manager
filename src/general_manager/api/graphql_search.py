@@ -31,6 +31,7 @@ from django.utils import timezone
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
+from general_manager.utils.type_checks import safe_issubclass
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.registry import (
     get_search_config,
@@ -318,28 +319,30 @@ def get_filter_options(
         "endswith",
     ]
 
-    if issubclass(attribute_type, GeneralManager):
+    normalized_type = attribute_type if isinstance(attribute_type, type) else str
+
+    if safe_issubclass(normalized_type, GeneralManager):
         yield attribute_name, None
-    elif issubclass(attribute_type, Measurement):
+    elif safe_issubclass(normalized_type, Measurement):
         yield attribute_name, MeasurementScalar()
         for option in number_options:
             yield f"{attribute_name}__{option}", MeasurementScalar()
     else:
         yield (
             attribute_name,
-            map_field_to_graphene_read(attribute_type, attribute_name, attr_info),
+            map_field_to_graphene_read(normalized_type, attribute_name, attr_info),
         )
-        if issubclass(attribute_type, (int, float, Decimal, date, datetime)):
+        if safe_issubclass(normalized_type, (int, float, Decimal, date, datetime)):
             for option in number_options:
                 yield (
                     f"{attribute_name}__{option}",
                     map_field_to_graphene_read(
-                        attribute_type, attribute_name, attr_info
+                        normalized_type, attribute_name, attr_info
                     ),
                 )
-        elif issubclass(attribute_type, str):
+        elif safe_issubclass(normalized_type, str):
             base_type = map_field_to_graphene_base_type(
-                attribute_type,
+                normalized_type,
                 attr_info.get("graphql_scalar") if attr_info else None,
             )
             for option in string_options:
@@ -349,7 +352,7 @@ def get_filter_options(
                     yield (
                         f"{attribute_name}__{option}",
                         map_field_to_graphene_read(
-                            attribute_type, attribute_name, attr_info
+                            normalized_type, attribute_name, attr_info
                         ),
                     )
 
