@@ -23,6 +23,11 @@ class PayloadNormalizer:
         self._attributes = set(vars(model).keys())
         self._field_names = {field.name for field in model._meta.get_fields()}
         self._many_to_many_fields = {field.name for field in model._meta.many_to_many}
+        self._relation_fields = {
+            field.name
+            for field in model._meta.get_fields()
+            if isinstance(field, (models.ForeignKey, models.OneToOneField))
+        }
 
     # region filter/exclude helpers
     def normalize_filter_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -51,8 +56,11 @@ class PayloadNormalizer:
             UnknownFieldError: If any key's base name is not an attribute of the model instance and not a model field name.
         """
         for key in kwargs:
-            base_key = key.split("_id_list")[0]
-            if base_key not in self._attributes and base_key not in self._field_names:
+            candidate_key = self._key_for_validation(key)
+            if (
+                candidate_key not in self._attributes
+                and candidate_key not in self._field_names
+            ):
                 raise UnknownFieldError(key, self.model.__name__)
 
     def split_many_to_many(
@@ -72,9 +80,9 @@ class PayloadNormalizer:
         """
         many_kwargs: dict[str, Any] = {}
         for key, _value in list(kwargs.items()):
-            base_key = key.split("_id_list")[0]
+            base_key = self._m2m_alias_base_key(key)
             if base_key in self._many_to_many_fields:
-                many_kwargs[key] = kwargs.pop(key)
+                many_kwargs[f"{base_key}_id_list"] = kwargs.pop(key)
         return kwargs, many_kwargs
 
     def normalize_simple_values(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +107,13 @@ class PayloadNormalizer:
                 normalized_value = manager_value
             elif manager_value is not None:
                 normalized_value = manager_value
+            elif (
+                key in self._relation_fields
+                and not key.endswith("_id")
+                and not isinstance(value, models.Model)
+                and value is not None
+            ):
+                normalized_key = f"{key}_id"
             normalized[normalized_key] = normalized_value
         return normalized
 
@@ -132,6 +147,15 @@ class PayloadNormalizer:
         return normalized
 
     # endregion
+
+    def _key_for_validation(self, key: str) -> str:
+        """Resolve relation list aliases only when they target real M2M fields."""
+        base_key = self._m2m_alias_base_key(key)
+        return base_key if base_key in self._many_to_many_fields else key
+
+    def _m2m_alias_base_key(self, key: str) -> str:
+        """Return the base key for M2M alias forms, or the original key."""
+        return _base_field_name(key)
 
     @staticmethod
     def _unwrap_manager(value: Any) -> Any:
@@ -200,3 +224,16 @@ def _general_manager_base() -> type | None:
     except ImportError:  # pragma: no cover - defensive
         return None
     return GeneralManager
+
+
+def _base_field_name(key: str) -> str:
+    """
+    Normalize payload key suffixes used for relation list fields.
+
+    Accepts both canonical (`*_id_list`) and GraphQL-facing (`*_list`) spellings.
+    """
+    if key.endswith("_id_list"):
+        return key[: -len("_id_list")]
+    if key.endswith("_list"):
+        return key[: -len("_list")]
+    return key

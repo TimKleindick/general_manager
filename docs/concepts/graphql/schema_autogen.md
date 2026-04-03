@@ -21,6 +21,32 @@ Create, update, and delete mutations are added automatically when the interface 
 
 Custom mutations use the `@graph_ql_mutation` decorator from `general_manager.api.mutation`. The decorator analyses the function signature to generate GraphQL input arguments and return types.
 
+### Relation input contract
+
+Automatic GraphQL mutations accept relation inputs in the GraphQL-facing forms below and normalize them to the ORM mutation contract before persistence:
+
+- Single-valued relations: `<field>` or `<field>Id`
+- Many-valued relations: `<field>List` or `<field>IdList`
+
+Internally, GeneralManager treats the canonical mutation payload as:
+
+- Single-valued relations: `<field>_id`
+- Many-valued relations: `<field>_id_list`
+
+These public names assume Graphene's default `auto_camelcase=True`. If your schema disables auto-camelcase, the Python-side argument names remain available as `<field>`, `<field>_id`, `<field>_list`, and `<field>_id_list`.
+
+This keeps GraphQL mutations compatible with Graphene field naming while preserving a predictable backend contract for ORM-backed interfaces.
+
+### Schema-generation expectations
+
+Schema generation should remain resilient when interface metadata includes edge-case field types:
+
+- Measurement fields continue to map to `MeasurementScalar` / `MeasurementType`
+- Large integer ORM fields may opt into `BigIntScalar` through `graphql_scalar="bigint"`
+- Non-relational field types that do not map cleanly to a specific GraphQL scalar fall back to string-like handling instead of aborting schema construction
+
+The intended behavior is that startup and schema registration remain reviewable and predictable even when a manager exposes less common field metadata.
+
 ## Buckets and pagination
 
 For bucket-returning fields, the schema registers list fields and page types. `PageInfo` exposes `total_count`, `current_page`, `total_pages`, and optional `page_size` so clients can implement cursor-less pagination quickly.

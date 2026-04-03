@@ -19,6 +19,7 @@ from django.db.models import NOT_PROVIDED
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.utils.type_checks import safe_issubclass
 from general_manager.api.graphql_errors import (
     HANDLED_MANAGER_ERRORS,
     MissingManagerIdentifierError,
@@ -28,6 +29,36 @@ from general_manager.api.graphql_errors import (
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
+
+
+def _normalize_mutation_kwargs_for_manager(
+    general_manager_class: type[GeneralManager],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize GraphQL relation aliases to the ORM mutation contract."""
+    interface_cls = getattr(general_manager_class, "Interface", None)
+    if interface_cls is None:
+        return dict(kwargs)
+
+    attribute_types = interface_cls.get_attribute_types()
+    normalized = dict(kwargs)
+
+    for key in list(kwargs.keys()):
+        if key.endswith("_list") and not key.endswith("_id_list"):
+            base_key = key.removesuffix("_list")
+            if base_key in attribute_types:
+                normalized.setdefault(f"{base_key}_id_list", normalized[key])
+                normalized.pop(key, None)
+                continue
+
+        if key.startswith("_") and not key.endswith("_id"):
+            type_info = attribute_types.get(key)
+            relation_type = type_info["type"] if type_info is not None else None
+            if safe_issubclass(relation_type, GeneralManager):
+                normalized.setdefault(f"{key}_id", normalized[key])
+                normalized.pop(key, None)
+
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +95,7 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
         default = info["default"]
 
         fld: Any
-        if issubclass(typ, GeneralManager):
+        if safe_issubclass(typ, GeneralManager):
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
             else:
@@ -125,6 +156,7 @@ def generate_create_mutation_class(
                 for field_name, value in kwargs.items()
                 if value is not NOT_PROVIDED
             }
+            kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             instance = generalManagerClass.create(
                 **kwargs, creator_id=info.context.user.id
             )
@@ -184,6 +216,12 @@ def generate_update_mutation_class(
         if manager_id is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
         try:
+            kwargs = {
+                field_name: value
+                for field_name, value in kwargs.items()
+                if value is not NOT_PROVIDED
+            }
+            kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             instance = generalManagerClass(id=manager_id).update(
                 creator_id=info.context.user.id, **kwargs
             )

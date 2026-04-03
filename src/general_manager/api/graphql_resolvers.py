@@ -20,6 +20,7 @@ from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.graphql_errors import get_read_permission_filter
+from general_manager.utils.type_checks import safe_issubclass
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
@@ -505,10 +506,10 @@ def create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
     :class:`~general_manager.measurement.Measurement` fields, and
     :func:`create_normal_resolver` for everything else.
     """
-    if field_name.endswith("_list") and issubclass(field_type, GeneralManager):
+    if field_name.endswith("_list") and safe_issubclass(field_type, GeneralManager):
         return create_list_resolver(
             lambda self, _include_inactive: getattr(self, field_name), field_type
         )
-    if issubclass(field_type, Measurement):
+    if safe_issubclass(field_type, Measurement):
         return create_measurement_resolver(field_name)
     return create_normal_resolver(field_name)

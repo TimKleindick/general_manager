@@ -1907,6 +1907,108 @@ def test_payload_normalizer_normalize_many_values_single_item():
     assert result["field"] == [42]
 
 
+def test_payload_normalizer_accepts_list_alias_suffix() -> None:
+    class AliasRelatedModelA(models.Model):
+        class Meta:
+            app_label = "test_payload_alias_a"
+
+    class AliasModelA(models.Model):
+        tags = models.ManyToManyField(AliasRelatedModelA)
+
+        class Meta:
+            app_label = "test_payload_alias_a"
+
+    normalizer = PayloadNormalizer(AliasModelA)
+
+    normalizer.validate_keys({"tags_list": [1, 2]})
+
+
+def test_payload_normalizer_rejects_list_suffix_for_plain_field_name() -> None:
+    class WatchListModelA(models.Model):
+        watch_list = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "test_payload_watchlist_a"
+
+    normalizer = PayloadNormalizer(WatchListModelA)
+
+    with pytest.raises(UnknownFieldError):
+        normalizer.validate_keys({"watch_id_list": [1, 2]})
+
+
+def test_payload_normalizer_split_many_to_many_normalizes_list_alias_key() -> None:
+    class AliasRelatedModelB(models.Model):
+        class Meta:
+            app_label = "test_payload_alias_b"
+
+    class AliasModelB(models.Model):
+        tags = models.ManyToManyField(AliasRelatedModelB)
+        name = models.CharField(max_length=32, default="")
+
+        class Meta:
+            app_label = "test_payload_alias_b"
+
+    normalizer = PayloadNormalizer(AliasModelB)
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many(
+        {"name": "asset", "tags_list": [1, 2]}
+    )
+
+    assert "name" in simple_kwargs
+    assert "tags_list" not in simple_kwargs
+    assert many_kwargs["tags_id_list"] == [1, 2]
+
+
+def test_payload_normalizer_split_many_to_many_keeps_plain_list_field() -> None:
+    class WatchListModelB(models.Model):
+        watch_list = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "test_payload_watchlist_b"
+
+    normalizer = PayloadNormalizer(WatchListModelB)
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many({"watch_list": "daily"})
+
+    assert simple_kwargs == {"watch_list": "daily"}
+    assert many_kwargs == {}
+
+
+def test_payload_normalizer_normalize_simple_values_converts_fk_plain_id() -> None:
+    class PlantModel(models.Model):
+        class Meta:
+            app_label = "test"
+
+    class DerivativeModel(models.Model):
+        _plant = models.ForeignKey(PlantModel, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(DerivativeModel)
+
+    normalized = normalizer.normalize_simple_values({"_plant": 7})
+
+    assert "_plant_id" in normalized
+    assert normalized["_plant_id"] == 7
+
+
+def test_payload_normalizer_normalize_simple_values_keeps_non_relation_scalar_keys() -> (
+    None
+):
+    class PlainModel(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(PlainModel)
+
+    normalized = normalizer.normalize_simple_values({"name": "asset"})
+
+    assert normalized == {"name": "asset"}
+
+
 def test_build_field_descriptors_translates_graphql_compatible_field_types():
     """Descriptor metadata maps GraphQL-compatible Django fields to usable Python types."""
 
