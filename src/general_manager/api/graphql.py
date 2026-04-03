@@ -39,6 +39,7 @@ from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
+from general_manager.utils.type_checks import safe_issubclass
 
 from graphql import GraphQLError
 
@@ -404,7 +405,7 @@ class GraphQL:
             field_info,
         ) in generalManagerClass.Interface.get_attribute_types().items():
             field_type = field_info["type"]
-            if issubclass(field_type, GeneralManager):
+            if safe_issubclass(field_type, GeneralManager):
                 continue
             else:
                 sort_options.append(field_name)
@@ -546,9 +547,9 @@ class GraphQL:
         Returns:
             Any: Graphene field or type configured for the attribute.
         """
-        if issubclass(field_type, Measurement):
+        if safe_issubclass(field_type, Measurement):
             return graphene.Field(MeasurementType, target_unit=graphene.String())
-        elif issubclass(field_type, GeneralManager):
+        elif safe_issubclass(field_type, GeneralManager):
             if field_name.endswith("_list"):
                 attributes: dict[str, Any] = {
                     "reverse": graphene.Boolean(),
@@ -714,7 +715,7 @@ class GraphQL:
             input_field_name,
             input_field,
         ) in generalManagerClass.Interface.input_fields.items():
-            if issubclass(input_field.type, GeneralManager):
+            if safe_issubclass(input_field.type, GeneralManager):
                 key = f"{input_field_name}_id"
                 identification_fields[key] = graphene.Argument(
                     graphene.ID, required=input_field.required
