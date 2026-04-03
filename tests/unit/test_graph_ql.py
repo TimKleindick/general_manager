@@ -17,6 +17,9 @@ from general_manager.api.graphql import (
     GraphQL,
     get_read_permission_filter,
 )
+from general_manager.api.graphql_mutations import (
+    _normalize_mutation_kwargs_for_manager,
+)
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
@@ -107,6 +110,29 @@ class GraphQLTests(TestCase):
             int, "large_value", {"graphql_scalar": "bigint"}
         )
         self.assertIsInstance(field, BigIntScalar)
+
+    def test_normalize_mutation_kwargs_does_not_rewrite_plain_list_field(self):
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "watch_list": {
+                        "type": str,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    }
+                }
+
+        class DummyManager:
+            Interface = DummyInterface
+
+        normalized = _normalize_mutation_kwargs_for_manager(
+            DummyManager, {"watch_list": "daily"}
+        )
+
+        self.assertEqual(normalized, {"watch_list": "daily"})
 
     def test_map_field_to_graphene_handles_generic_alias_type(self):
         field = GraphQL._map_field_to_graphene_read(list[str], "labels")

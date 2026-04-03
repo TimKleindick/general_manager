@@ -46,7 +46,7 @@ def _normalize_mutation_kwargs_for_manager(
     for key in list(kwargs.keys()):
         if key.endswith("_list") and not key.endswith("_id_list"):
             base_key = key.removesuffix("_list")
-            if base_key in attribute_types or key in attribute_types:
+            if base_key in attribute_types:
                 normalized.setdefault(f"{base_key}_id_list", normalized[key])
                 normalized.pop(key, None)
                 continue
