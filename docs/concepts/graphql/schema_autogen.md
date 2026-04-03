@@ -25,13 +25,15 @@ Custom mutations use the `@graph_ql_mutation` decorator from `general_manager.ap
 
 Automatic GraphQL mutations accept relation inputs in the GraphQL-facing forms below and normalize them to the ORM mutation contract before persistence:
 
-- Single-valued relations: `<field>` or `<field>_id`
-- Many-valued relations: `<field>_list` or `<field>_id_list`
+- Single-valued relations: `<field>` or `<field>Id`
+- Many-valued relations: `<field>List` or `<field>IdList`
 
 Internally, GeneralManager treats the canonical mutation payload as:
 
 - Single-valued relations: `<field>_id`
 - Many-valued relations: `<field>_id_list`
+
+These public names assume Graphene's default `auto_camelcase=True`. If your schema disables auto-camelcase, the Python-side argument names remain available as `<field>`, `<field>_id`, `<field>_list`, and `<field>_id_list`.
 
 This keeps GraphQL mutations compatible with Graphene field naming while preserving a predictable backend contract for ORM-backed interfaces.
 

@@ -1923,6 +1923,19 @@ def test_payload_normalizer_accepts_list_alias_suffix() -> None:
     normalizer.validate_keys({"tags_list": [1, 2]})
 
 
+def test_payload_normalizer_rejects_list_suffix_for_plain_field_name() -> None:
+    class WatchListModel(models.Model):
+        watch_list = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(WatchListModel)
+
+    with pytest.raises(UnknownFieldError):
+        normalizer.validate_keys({"watch_id_list": [1, 2]})
+
+
 def test_payload_normalizer_split_many_to_many_normalizes_list_alias_key() -> None:
     class AliasRelatedModel(models.Model):
         class Meta:
@@ -1944,6 +1957,21 @@ def test_payload_normalizer_split_many_to_many_normalizes_list_alias_key() -> No
     assert "name" in simple_kwargs
     assert "tags_list" not in simple_kwargs
     assert many_kwargs["tags_id_list"] == [1, 2]
+
+
+def test_payload_normalizer_split_many_to_many_keeps_plain_list_field() -> None:
+    class WatchListModel(models.Model):
+        watch_list = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "test"
+
+    normalizer = PayloadNormalizer(WatchListModel)
+
+    simple_kwargs, many_kwargs = normalizer.split_many_to_many({"watch_list": "daily"})
+
+    assert simple_kwargs == {"watch_list": "daily"}
+    assert many_kwargs == {}
 
 
 def test_payload_normalizer_normalize_simple_values_converts_fk_plain_id() -> None:
