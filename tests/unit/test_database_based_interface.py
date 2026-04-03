@@ -1908,47 +1908,47 @@ def test_payload_normalizer_normalize_many_values_single_item():
 
 
 def test_payload_normalizer_accepts_list_alias_suffix() -> None:
-    class AliasRelatedModel(models.Model):
+    class AliasRelatedModelA(models.Model):
         class Meta:
-            app_label = "test"
+            app_label = "test_payload_alias_a"
 
-    class AliasModel(models.Model):
-        tags = models.ManyToManyField(AliasRelatedModel)
+    class AliasModelA(models.Model):
+        tags = models.ManyToManyField(AliasRelatedModelA)
 
         class Meta:
-            app_label = "test"
+            app_label = "test_payload_alias_a"
 
-    normalizer = PayloadNormalizer(AliasModel)
+    normalizer = PayloadNormalizer(AliasModelA)
 
     normalizer.validate_keys({"tags_list": [1, 2]})
 
 
 def test_payload_normalizer_rejects_list_suffix_for_plain_field_name() -> None:
-    class WatchListModel(models.Model):
+    class WatchListModelA(models.Model):
         watch_list = models.CharField(max_length=32)
 
         class Meta:
-            app_label = "test"
+            app_label = "test_payload_watchlist_a"
 
-    normalizer = PayloadNormalizer(WatchListModel)
+    normalizer = PayloadNormalizer(WatchListModelA)
 
     with pytest.raises(UnknownFieldError):
         normalizer.validate_keys({"watch_id_list": [1, 2]})
 
 
 def test_payload_normalizer_split_many_to_many_normalizes_list_alias_key() -> None:
-    class AliasRelatedModel(models.Model):
+    class AliasRelatedModelB(models.Model):
         class Meta:
-            app_label = "test"
+            app_label = "test_payload_alias_b"
 
-    class AliasModel(models.Model):
-        tags = models.ManyToManyField(AliasRelatedModel)
+    class AliasModelB(models.Model):
+        tags = models.ManyToManyField(AliasRelatedModelB)
         name = models.CharField(max_length=32, default="")
 
         class Meta:
-            app_label = "test"
+            app_label = "test_payload_alias_b"
 
-    normalizer = PayloadNormalizer(AliasModel)
+    normalizer = PayloadNormalizer(AliasModelB)
 
     simple_kwargs, many_kwargs = normalizer.split_many_to_many(
         {"name": "asset", "tags_list": [1, 2]}
@@ -1960,13 +1960,13 @@ def test_payload_normalizer_split_many_to_many_normalizes_list_alias_key() -> No
 
 
 def test_payload_normalizer_split_many_to_many_keeps_plain_list_field() -> None:
-    class WatchListModel(models.Model):
+    class WatchListModelB(models.Model):
         watch_list = models.CharField(max_length=32)
 
         class Meta:
-            app_label = "test"
+            app_label = "test_payload_watchlist_b"
 
-    normalizer = PayloadNormalizer(WatchListModel)
+    normalizer = PayloadNormalizer(WatchListModelB)
 
     simple_kwargs, many_kwargs = normalizer.split_many_to_many({"watch_list": "daily"})
 
