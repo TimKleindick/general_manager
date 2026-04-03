@@ -216,6 +216,11 @@ def generate_update_mutation_class(
         if manager_id is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
         try:
+            kwargs = {
+                field_name: value
+                for field_name, value in kwargs.items()
+                if value is not NOT_PROVIDED
+            }
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             instance = generalManagerClass(id=manager_id).update(
                 creator_id=info.context.user.id, **kwargs

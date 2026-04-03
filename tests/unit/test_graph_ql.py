@@ -5,6 +5,7 @@ from decimal import Decimal
 from datetime import date, datetime
 import graphene
 from django.test import TestCase, override_settings
+from django.db.models import NOT_PROVIDED
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
 from typing import Any, ClassVar
@@ -956,6 +957,47 @@ class TestGrapQlMutation(TestCase):
         info = None
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
+
+    def test_generate_update_mutation_class_filters_not_provided(self):
+        class DummyManager:
+            def __init__(self, *_, **_kwargs):
+                pass
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "field1": {
+                            "type": str,
+                            "is_required": False,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        }
+                    }
+
+            @classmethod
+            def update(cls, *_args, **_kwargs):
+                return DummyManager()
+
+        default_return_values = {
+            "success": graphene.Boolean(),
+            "instance": graphene.Field(DummyManager),
+        }
+        mutation_class = GraphQL.generate_update_mutation_class(
+            DummyManager, default_return_values
+        )
+        info = MagicMock()
+        info.context.user = AnonymousUser()
+
+        with patch.object(
+            DummyManager, "update", return_value=DummyManager()
+        ) as update_mock:
+            mutation_class.mutate(None, info, id="1", field1=NOT_PROVIDED)
+
+        update_mock.assert_called_once_with(creator_id=info.context.user.id)
 
     def test_generate_delete_mutation_class(self):
         """

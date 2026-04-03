@@ -56,8 +56,11 @@ class PayloadNormalizer:
             UnknownFieldError: If any key's base name is not an attribute of the model instance and not a model field name.
         """
         for key in kwargs:
-            base_key = _base_field_name(key)
-            if base_key not in self._attributes and base_key not in self._field_names:
+            candidate_key = self._key_for_validation(key)
+            if (
+                candidate_key not in self._attributes
+                and candidate_key not in self._field_names
+            ):
                 raise UnknownFieldError(key, self.model.__name__)
 
     def split_many_to_many(
@@ -77,7 +80,7 @@ class PayloadNormalizer:
         """
         many_kwargs: dict[str, Any] = {}
         for key, _value in list(kwargs.items()):
-            base_key = _base_field_name(key)
+            base_key = self._m2m_alias_base_key(key)
             if base_key in self._many_to_many_fields:
                 many_kwargs[f"{base_key}_id_list"] = kwargs.pop(key)
         return kwargs, many_kwargs
@@ -144,6 +147,15 @@ class PayloadNormalizer:
         return normalized
 
     # endregion
+
+    def _key_for_validation(self, key: str) -> str:
+        """Resolve relation list aliases only when they target real M2M fields."""
+        base_key = self._m2m_alias_base_key(key)
+        return base_key if base_key in self._many_to_many_fields else key
+
+    def _m2m_alias_base_key(self, key: str) -> str:
+        """Return the base key for M2M alias forms, or the original key."""
+        return _base_field_name(key)
 
     @staticmethod
     def _unwrap_manager(value: Any) -> Any:
