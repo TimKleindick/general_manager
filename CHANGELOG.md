@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.37.3 (2026-04-05)
+
+### Bug Fixes
+
+- Avoid rewriting plain list fields
+  ([`032dcdf`](https://github.com/TimKleindick/general_manager/commit/032dcdf33e4daff9b73ea6457883ff49058d98e3))
+
+- Harden graphql relation mutation handling
+  ([`1d02b03`](https://github.com/TimKleindick/general_manager/commit/1d02b0306009a9a8e55348efc5a066714f40a8f0))
+
+- Tighten graphql relation alias handling
+  ([`bdd209a`](https://github.com/TimKleindick/general_manager/commit/bdd209a35ad1f6ffc04db09ae0b0ee9e3959b291))
+
+### Refactoring
+
+- Share safe subclass guard
+  ([`009ed33`](https://github.com/TimKleindick/general_manager/commit/009ed33f6ea22e8ed8bceb43740965c31c644d3f))
+
+
 ## v0.37.2 (2026-04-02)
 
 ### Bug Fixes
