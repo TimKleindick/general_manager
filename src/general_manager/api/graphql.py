@@ -168,6 +168,10 @@ class GraphQL:
         cls._search_union = None
         cls._search_result_type = None
         cls._schema = None
+        with suppress(Exception):
+            from general_manager.chat.schema_index import clear_schema_index_cache
+
+            clear_schema_index_cache()
 
     @classmethod
     def get_registry_snapshot(cls) -> GraphQLRegistry:

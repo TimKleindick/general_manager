@@ -35,6 +35,7 @@ from general_manager.bootstrap import (
 from general_manager.logging import get_logger
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.audit import configure_audit_logger_from_settings
+from general_manager.chat import initialize_chat
 from general_manager.search.backend_registry import (
     configure_search_backend_from_settings,
 )
@@ -196,6 +197,7 @@ class GeneralmanagerConfig(AppConfig):
 
         if get_setting("AUTOCREATE_GRAPHQL", False):
             handle_graph_ql(GeneralManagerMeta.pending_graphql_interfaces)
+        initialize_chat()
 
     # ------------------------------------------------------------------
     # Static-method wrappers kept for backward compatibility with tests

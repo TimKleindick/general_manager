@@ -68,6 +68,12 @@ Repository = "https://github.com/TimKleindick/general_manager"
 Issues = "https://github.com/TimKleindick/general_manager/issues"
 Changelog = "https://github.com/TimKleindick/general_manager/releases"
 
+[project.optional-dependencies]
+chat-ollama = ["ollama>=0.6.0"]
+chat-openai = ["openai>=1.0.0"]
+chat-anthropic = ["anthropic>=0.34.0"]
+chat-google = ["google-genai>=1.0.0"]
+
 [tool.setuptools]
 include-package-data = true
 
