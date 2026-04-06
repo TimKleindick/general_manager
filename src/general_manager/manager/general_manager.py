@@ -33,6 +33,7 @@ logger = get_logger("manager.general")
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
+    chat_exposed: bool = True
     Permission: Type[BasePermission]
     _attributes: dict[str, Any]
     Interface: Type["InterfaceBase"]
