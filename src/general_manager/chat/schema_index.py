@@ -1,0 +1,138 @@
+"""Schema indexing helpers for chat."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Any, cast
+
+from general_manager.api.graphql import GraphQL
+from general_manager.utils.path_mapping import PathMap
+
+
+def _unwrap_graphene_type(field_type: Any) -> Any:
+    current = field_type
+    while hasattr(current, "of_type"):
+        current = current.of_type
+    return current
+
+
+def _is_exposed_manager(manager_class: type[Any]) -> bool:
+    return bool(getattr(manager_class, "chat_exposed", True))
+
+
+def _get_exposed_manager_names() -> set[str]:
+    return {
+        name
+        for name, manager_class in GraphQL.manager_registry.items()
+        if _is_exposed_manager(manager_class)
+    }
+
+
+def _schema_index_cache_key() -> tuple[int, int, int]:
+    return (
+        id(GraphQL.manager_registry),
+        id(GraphQL.graphql_type_registry),
+        id(GraphQL.graphql_filter_type_registry),
+    )
+
+
+def clear_schema_index_cache() -> None:
+    """Clear the cached schema index."""
+    _build_schema_index_cached.cache_clear()
+
+
+@lru_cache(maxsize=8)
+def _build_schema_index_cached(
+    _cache_key: tuple[int, int, int],
+) -> dict[str, dict[str, Any]]:
+    """Build a compact index of chat-exposed managers from the GraphQL registry."""
+    del _cache_key
+    index: dict[str, dict[str, Any]] = {}
+    exposed_names = _get_exposed_manager_names()
+    for manager_name in sorted(exposed_names):
+        graphene_type = GraphQL.graphql_type_registry.get(manager_name)
+        if graphene_type is None:
+            continue
+        graphene_meta = cast(Any, graphene_type)._meta
+        description = getattr(graphene_type, "__doc__", None) or ""
+        description = " ".join(description.strip().split())
+        fields: list[str] = []
+        relations: list[dict[str, str]] = []
+        for field_name, field in sorted(
+            cast(dict[str, Any], graphene_meta.fields).items()
+        ):
+            unwrapped = _unwrap_graphene_type(field.type)
+            target_name = next(
+                (
+                    candidate_name
+                    for candidate_name, candidate_type in GraphQL.graphql_type_registry.items()
+                    if candidate_type is unwrapped and candidate_name in exposed_names
+                ),
+                None,
+            )
+            if target_name is not None:
+                relations.append({"name": field_name, "target": target_name})
+            else:
+                fields.append(field_name)
+        filter_type = GraphQL.graphql_filter_type_registry.get(manager_name)
+        filters = (
+            sorted(cast(dict[str, Any], cast(Any, filter_type)._meta.fields).keys())
+            if filter_type is not None
+            else []
+        )
+        index[manager_name] = {
+            "manager": manager_name,
+            "description": description,
+            "fields": fields,
+            "relations": relations,
+            "filters": filters,
+        }
+    return index
+
+
+def build_schema_index() -> dict[str, dict[str, Any]]:
+    """Build or reuse the compact index of chat-exposed managers."""
+    return _build_schema_index_cached(_schema_index_cache_key())
+
+
+def search_manager_summaries(query: str) -> list[dict[str, Any]]:
+    """Search the schema index by manager name, description, and field names."""
+    index = build_schema_index()
+    query_terms = [term for term in query.lower().split() if term]
+    scored: list[tuple[int, str, dict[str, Any]]] = []
+    for manager_name, summary in index.items():
+        haystack = " ".join(
+            [
+                manager_name.lower(),
+                summary["description"].lower(),
+                " ".join(summary["fields"]).lower(),
+                " ".join(relation["name"] for relation in summary["relations"]).lower(),
+                " ".join(summary["filters"]).lower(),
+            ]
+        )
+        score = sum(term in haystack for term in query_terms)
+        if score:
+            scored.append((score, manager_name, summary))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [summary for _, _, summary in scored]
+
+
+def get_manager_schema_summary(manager_name: str) -> dict[str, Any] | None:
+    """Return the indexed schema summary for one exposed manager."""
+    return build_schema_index().get(manager_name)
+
+
+def find_exposed_path(from_manager: str, to_manager: str) -> list[str] | None:
+    """Return a PathMap traversal between exposed managers only."""
+    exposed_names = _get_exposed_manager_names()
+    if from_manager not in exposed_names or to_manager not in exposed_names:
+        return None
+    tracer = PathMap.mapping.get((from_manager, to_manager))
+    if tracer is None:
+        tracer = PathMap(from_manager).to(to_manager)
+    if tracer is None:
+        return None
+    path = getattr(tracer, "path", None)
+    if not path:
+        return None
+    return list(path)
