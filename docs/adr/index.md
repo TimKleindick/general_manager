@@ -8,3 +8,4 @@ This directory collects the Architecture Decision Records (ADRs) that document k
 - [ADR 0004: Capability-Driven Startup Hooks](0004-startup-hooks.md)
 - [ADR 0005: External search backends with unified search configuration](0005-search-backend.md)
 - [ADR 0006: Workflow engine architecture with pluggable backends](0006-workflow-engine-architecture.md)
+- [ADR 0007: Automatic LLM chat endpoint with pluggable providers](0007-llm-chat-endpoint.md)
