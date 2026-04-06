@@ -152,6 +152,8 @@ class OllamaProviderTests(unittest.TestCase):
         asyncio.run(run())
 
     def test_check_configuration_requires_ollama_package(self) -> None:
-        with patch("general_manager.chat.providers.find_spec", return_value=None):
+        with patch(
+            "general_manager.chat.providers.ollama.find_spec", return_value=None
+        ):
             with self.assertRaisesRegex(ImportError, "ollama package is not installed"):
                 OllamaProvider.check_configuration()

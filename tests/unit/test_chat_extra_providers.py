@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import import_module
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -143,6 +144,20 @@ class _GeminiClient:
 
 
 class AdditionalProviderTests(unittest.TestCase):
+    def test_provider_modules_export_same_public_classes(self) -> None:
+        ollama_module = import_module("general_manager.chat.providers.ollama")
+        openai_module = import_module("general_manager.chat.providers.openai")
+        anthropic_module = import_module("general_manager.chat.providers.anthropic")
+        google_module = import_module("general_manager.chat.providers.google")
+
+        from general_manager.chat import providers
+
+        assert providers.OllamaProvider is ollama_module.OllamaProvider
+        assert providers.OpenAIProvider is openai_module.OpenAIProvider
+        assert providers.AnthropicProvider is anthropic_module.AnthropicProvider
+        assert providers.GeminiProvider is google_module.GeminiProvider
+        assert providers.GoogleProvider is google_module.GoogleProvider
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {
