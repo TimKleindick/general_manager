@@ -55,6 +55,7 @@ class TrustedOrmRow(Protocol):
 
 
 class GeneralManager(metaclass=GeneralManagerMeta):
+    chat_exposed: bool = True
     Permission: Type[BasePermission]
     _attributes: dict[str, object]
     Interface: Type["InterfaceBase"]
