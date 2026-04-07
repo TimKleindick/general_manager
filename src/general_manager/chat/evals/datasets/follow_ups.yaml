@@ -1,0 +1,48 @@
+# Multi-turn conversations with context references.
+
+- name: refine_query
+  description: "Initial broad query followed by a narrowing follow-up"
+  conversation:
+    - user: "Show me all parts"
+    - user: "Now just show me the ones that use Steel"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: PartManager
+      - name: query
+        args_contain:
+          manager: PartManager
+    results_contain: ["Bolt"]
+    answer_contains: ["Bolt"]
+
+- name: explore_then_query
+  description: "Schema exploration turn followed by a data query turn"
+  conversation:
+    - user: "Tell me about the MaterialManager schema"
+    - user: "Great, now list all materials with density above 7"
+  expectations:
+    tool_calls:
+      - name: get_manager_schema
+        args_contain:
+          manager: MaterialManager
+      - name: query
+        args_contain:
+          manager: MaterialManager
+    results_contain: ["Steel"]
+    answer_contains: ["Steel"]
+
+- name: pronoun_reference
+  description: "Follow-up uses a pronoun referring to a previous result"
+  conversation:
+    - user: "Find the Cobalt material"
+    - user: "What parts use it?"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: MaterialManager
+      - name: query
+        args_contain:
+          manager: PartManager
+    answer_contains: ["Gear"]

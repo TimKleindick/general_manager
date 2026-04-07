@@ -18,7 +18,7 @@ from general_manager.chat.schema_index import (
     search_manager_summaries,
 )
 from general_manager.chat.settings import get_chat_settings
-from general_manager.chat.system_prompt import TOOL_DESCRIPTIONS
+from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_INPUT_SCHEMAS
 
 
 class ChatToolContext(Protocol):
@@ -92,7 +92,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
     if get_chat_settings().get("tool_strategy") == "direct":
         return _get_direct_tool_definitions()
     return [
-        {"name": name, "description": description, "input_schema": {}}
+        {
+            "name": name,
+            "description": description,
+            "input_schema": dict(TOOL_INPUT_SCHEMAS[name]),
+        }
         for name, description in TOOL_DESCRIPTIONS.items()
     ]
 
@@ -186,9 +190,23 @@ def find_path(from_manager: str, to_manager: str) -> list[str] | None:
     return find_exposed_path(from_manager, to_manager)
 
 
-def _camelize(name: str) -> str:
+def _camelize_segment(name: str) -> str:
     parts = name.split("_")
+    if len(parts) > 1 and all(not part or part[:1].isupper() for part in parts[1:]):
+        return name
     return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
+def _camelize(name: str) -> str:
+    if "__" not in name:
+        return _camelize_segment(name)
+    segments = name.split("__")
+    head = _camelize_segment(segments[0])
+    tail = []
+    for segment in segments[1:]:
+        converted = _camelize_segment(segment)
+        tail.append(f"_{converted[:1].upper() + converted[1:]}")
+    return head + "".join(tail)
 
 
 def _graphql_literal(value: Any) -> str:
@@ -228,7 +246,7 @@ def _build_selection(fields: Sequence[Any]) -> str:
 
 
 def _list_query_field_name(manager: str) -> str:
-    return manager[:1].lower() + manager[1:] + "List"
+    return f"{manager.lower()}List"
 
 
 def _ensure_exposed_manager(manager: str) -> None:
