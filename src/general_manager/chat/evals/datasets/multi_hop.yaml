@@ -1,0 +1,54 @@
+# Cross-manager relationship queries requiring path traversal.
+
+- name: parts_with_material
+  description: "One hop: Part -> Material via relation"
+  conversation:
+    - user: "What parts use Steel as their material?"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: PartManager
+    results_contain: ["Bolt"]
+    results_exclude: ["Bearing"]
+    answer_contains: ["Bolt"]
+
+- name: find_path_material_to_project
+  description: "Use find_path to discover Material -> Part -> BOM -> Project"
+  conversation:
+    - user: "How are materials related to projects?"
+  expectations:
+    tool_calls:
+      - name: find_path
+    answer_contains: ["material", "part"]
+
+- name: cobalt_projects
+  description: "Multi-hop: material -> part -> BOM -> project"
+  conversation:
+    - user: "What projects contain parts with cobalt?"
+  expectations:
+    tool_calls:
+      - name: query
+    results_contain: ["Apollo"]
+    results_exclude: ["Mercury"]
+    answer_contains: ["Apollo"]
+
+- name: project_parts_list
+  description: "Traverse project -> BOM -> parts"
+  conversation:
+    - user: "What parts are used in the Apollo project?"
+  expectations:
+    tool_calls:
+      - name: query
+    results_contain: ["Gear"]
+    answer_contains: ["Gear"]
+
+- name: discover_then_traverse
+  description: "Full discovery flow: search, find_path, then query across managers"
+  conversation:
+    - user: "I need to find which projects use aluminum parts. Help me explore the data model first."
+  expectations:
+    tool_calls:
+      - name: search_managers
+      - name: find_path
+    answer_contains: ["Project", "Material"]

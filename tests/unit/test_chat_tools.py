@@ -15,6 +15,7 @@ from general_manager.chat.schema_index import (
     get_manager_schema_summary,
     search_manager_summaries,
 )
+from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import (
     execute_chat_tool,
     find_path,
@@ -169,6 +170,9 @@ class ChatSchemaIndexTests(SimpleTestCase):
     def test_find_exposed_path_rejects_hidden_destinations(self) -> None:
         assert find_exposed_path("PartManager", "SecretManager") is None
 
+    def test_find_exposed_path_discovers_reverse_multi_hop_paths(self) -> None:
+        assert find_exposed_path("MaterialManager", "PartManager") == ["material"]
+
     def test_tool_wrappers_delegate_to_schema_index(self) -> None:
         assert search_managers("inventory")[0]["manager"] == "PartManager"
         assert get_manager_schema("MaterialManager") == {
@@ -225,3 +229,36 @@ class ChatSchemaIndexTests(SimpleTestCase):
             offset=0,
             context=None,
         )
+
+    def test_default_tool_strategy_exposes_structured_input_schemas(self) -> None:
+        tools = {tool["name"]: tool for tool in get_tool_definitions()}
+
+        assert tools["search_managers"]["input_schema"]["required"] == ["query"]
+        assert tools["get_manager_schema"]["input_schema"]["required"] == ["manager"]
+        assert tools["find_path"]["input_schema"]["required"] == [
+            "from_manager",
+            "to_manager",
+        ]
+        assert tools["query"]["input_schema"]["required"] == ["manager", "fields"]
+        assert tools["mutate"]["input_schema"]["required"] == ["mutation", "input"]
+
+    def test_system_prompt_includes_tool_usage_examples(self) -> None:
+        prompt = build_system_prompt()
+
+        assert "Tool calling rules" in prompt
+        assert "Rule 1 DISCOVERY" in prompt
+        assert "MUST call search_managers" in prompt
+        assert "Rule 2 EXPLORATION" in prompt
+        assert "find_path" in prompt
+        assert "Rule 3 COMPLETE ALL TOOL CALLS BEFORE ANSWERING" in prompt
+        assert "[tool:query]" in prompt
+        assert "Rule 4 TRUST RESULTS" in prompt
+        assert '"filters": {"material__name": "Steel"}' in prompt
+        assert '"filters": {"parts__material__name": "Cobalt"}' in prompt
+        assert "Example tool call for search_managers:" in prompt
+        assert '"query": "parts"' in prompt
+        assert "Example tool call for query:" in prompt
+        assert '"manager": "PartManager"' in prompt
+        assert '"fields": ["name", {"material": ["name"]}]' in prompt
+        assert "Example tool call for mutate:" in prompt
+        assert '"confirmed": true' in prompt
