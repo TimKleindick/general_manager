@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from collections import deque
 from typing import Any, cast
 
 from general_manager.api.graphql import GraphQL
@@ -130,9 +131,54 @@ def find_exposed_path(from_manager: str, to_manager: str) -> list[str] | None:
     tracer = PathMap.mapping.get((from_manager, to_manager))
     if tracer is None:
         tracer = PathMap(from_manager).to(to_manager)
-    if tracer is None:
-        return None
-    path = getattr(tracer, "path", None)
-    if not path:
-        return None
-    return list(path)
+    if tracer is not None:
+        path = getattr(tracer, "path", None)
+        if path:
+            return list(path)
+    return _find_relational_path(from_manager, to_manager)
+
+
+def _find_relational_path(from_manager: str, to_manager: str) -> list[str] | None:
+    """Find a manager path from exposed schema relations, including reverse hops."""
+    if from_manager == to_manager:
+        return []
+    index = build_schema_index()
+    queue: deque[tuple[str, list[str]]] = deque([(from_manager, [])])
+    visited = {from_manager}
+
+    while queue:
+        current, path = queue.popleft()
+        summary = index.get(current)
+        if summary is None:
+            continue
+
+        for relation in summary["relations"]:
+            target = relation["target"]
+            if target in visited:
+                continue
+            next_path = [*path, relation["name"]]
+            if target == to_manager:
+                return next_path
+            visited.add(target)
+            queue.append((target, next_path))
+
+        for candidate_name, candidate_summary in index.items():
+            if candidate_name in visited:
+                continue
+            reverse_relation = next(
+                (
+                    relation["name"]
+                    for relation in candidate_summary["relations"]
+                    if relation["target"] == current
+                ),
+                None,
+            )
+            if reverse_relation is None:
+                continue
+            next_path = [*path, reverse_relation]
+            if candidate_name == to_manager:
+                return next_path
+            visited.add(candidate_name)
+            queue.append((candidate_name, next_path))
+
+    return None

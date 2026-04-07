@@ -1,0 +1,32 @@
+# Edge cases: empty results, unknown managers, permission denied, ambiguous queries.
+
+- name: empty_results
+  description: "Query that returns no matching records"
+  conversation:
+    - user: "Find materials named Unobtainium"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: MaterialManager
+    results_contain: []
+    results_exclude: ["Steel", "Aluminum", "Cobalt"]
+    answer_excludes: ["Steel", "Aluminum", "Cobalt"]
+
+- name: unknown_manager
+  description: "User asks about a manager that does not exist"
+  conversation:
+    - user: "Show me data from the VehicleManager"
+  expectations:
+    tool_calls:
+      - name: search_managers
+    answer_excludes: ["VehicleManager"]
+
+- name: ambiguous_query
+  description: "Vague question that requires discovery before answering"
+  conversation:
+    - user: "What data do you have access to?"
+  expectations:
+    tool_calls:
+      - name: search_managers
+    answer_contains: ["Material", "Part"]

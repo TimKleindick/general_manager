@@ -38,6 +38,7 @@ class ChatBootstrapTests(SimpleTestCase):
             patch("general_manager.apps._autoload_app_managers_modules"),
             patch.object(config, "initialize_general_manager_classes"),
             patch("general_manager.apps.handle_remote_api"),
+            patch("general_manager.apps.handle_graph_ql"),
             patch("general_manager.apps.configure_audit_logger_from_settings"),
             patch("general_manager.apps.configure_search_backend_from_settings"),
             patch("general_manager.apps.configure_workflow_engine_from_settings"),

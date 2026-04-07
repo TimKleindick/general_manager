@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 from general_manager.chat.schema_index import build_schema_index
 from general_manager.chat.settings import get_chat_settings
+from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_USAGE_EXAMPLES
 from general_manager.utils.path_mapping import PathMap
-
-
-TOOL_DESCRIPTIONS: dict[str, str] = {
-    "search_managers": "Search exposed managers by text.",
-    "get_manager_schema": "Inspect one manager's fields, relations, and filters.",
-    "find_path": "Find a relationship traversal path between exposed managers.",
-    "query": "Execute a structured read query via GraphQL.",
-    "mutate": "Execute an allow-listed mutation via GraphQL.",
-}
 
 
 def build_system_prompt() -> str:
@@ -38,6 +32,48 @@ def build_system_prompt() -> str:
     lines.extend(
         f"- {tool_name}: {description}"
         for tool_name, description in TOOL_DESCRIPTIONS.items()
+    )
+    lines.append("Tool calling rules (follow strictly in order):")
+    lines.append(
+        "Rule 1 DISCOVERY: Unless the user says an exact manager name like"
+        " PartManager, you MUST call search_managers before calling query."
+        " Domain words like parts, materials, inventory, or catalog are NOT"
+        " exact manager names."
+    )
+    lines.append(
+        "Rule 2 EXPLORATION: When the user asks to explore, discover, or"
+        " understand the data model, call search_managers first, then call"
+        " find_path to map relationships between the relevant managers."
+    )
+    lines.append(
+        "Rule 3 COMPLETE ALL TOOL CALLS BEFORE ANSWERING: Call every tool"
+        " you need before writing any answer text. Do not interleave text"
+        " and tool calls. Never write a placeholder like [tool:query] in"
+        " your answer."
+    )
+    lines.append(
+        "Rule 4 TRUST RESULTS: When a query returns data successfully, use"
+        " that data to answer. Do not retry the same question with"
+        " different syntax."
+    )
+    lines.append(
+        "Rule 5 FILTERS: Always use the flat filter keys listed in the"
+        " schema, such as material__name or parts__material__name. Never"
+        ' invent nested filter objects like {"material": {"name": "X"}}.'
+    )
+    lines.append(
+        "Rule 6 NESTED FIELDS: Relation selections must be arrays:"
+        ' {"parts": ["name"]}, {"material": ["name", "density"]}.'
+    )
+    lines.append(
+        "Rule 7 SYNTAX: Pass a JSON object with the exact required keys."
+        " Use exact manager names and relation names."
+        " For query.fields, use strings for scalar fields and single-key"
+        " objects for nested relation selections."
+    )
+    lines.extend(
+        f"- Example tool call for {tool_name}: {json.dumps(example, sort_keys=True)}"
+        for tool_name, example in TOOL_USAGE_EXAMPLES
     )
     lines.append("Exposed managers:")
     lines.extend(

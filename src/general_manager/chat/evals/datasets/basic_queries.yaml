@@ -1,0 +1,65 @@
+# Basic single-manager queries with simple filters and field selection.
+
+- name: list_all_materials
+  description: "List all materials without filters"
+  conversation:
+    - user: "Show me all materials"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: MaterialManager
+    answer_contains: ["Steel", "Aluminum", "Cobalt"]
+
+- name: filter_material_by_name
+  description: "Filter materials by exact name"
+  conversation:
+    - user: "Find the material named Steel"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: MaterialManager
+    results_contain: ["Steel"]
+    results_exclude: ["Aluminum", "Cobalt"]
+    answer_contains: ["Steel"]
+
+- name: search_then_query_parts
+  description: "Discovery flow: search managers then query parts"
+  conversation:
+    - user: "What parts do we have in inventory?"
+  expectations:
+    tool_calls:
+      - name: search_managers
+      - name: query
+        args_contain:
+          manager: PartManager
+    results_contain: ["Bolt", "Gear", "Bearing"]
+    answer_contains: ["Bolt", "Gear", "Bearing"]
+
+- name: get_schema_before_query
+  description: "Inspect manager schema before querying"
+  conversation:
+    - user: "What fields does the MaterialManager have? Then list materials."
+  expectations:
+    tool_calls:
+      - name: get_manager_schema
+        args_contain:
+          manager: MaterialManager
+      - name: query
+        args_contain:
+          manager: MaterialManager
+    answer_contains: ["name", "density"]
+
+- name: filter_high_density
+  description: "Query with numeric filter"
+  conversation:
+    - user: "Which materials have density greater than 5?"
+  expectations:
+    tool_calls:
+      - name: query
+        args_contain:
+          manager: MaterialManager
+    results_contain: ["Steel", "Cobalt"]
+    results_exclude: ["Aluminum"]
+    answer_contains: ["Steel", "Cobalt"]
