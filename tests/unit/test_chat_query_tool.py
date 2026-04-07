@@ -60,7 +60,7 @@ class ChatQueryToolTests(SimpleTestCase):
         schema = _RecordingSchema(
             _Result(
                 data={
-                    "partManagerList": {
+                    "partmanagerList": {
                         "items": [
                             {"name": "Bolt", "material": {"name": "Steel"}},
                             {"name": "Screw", "material": {"name": "Steel"}},
@@ -93,8 +93,8 @@ class ChatQueryToolTests(SimpleTestCase):
         }
         assert schema.calls[0]["context"] is context
         query_text = str(schema.calls[0]["query"])
-        assert "partManagerList" in query_text
-        assert 'filter: {nameIcontains: "st", active: true}' in query_text
+        assert "partmanagerList" in query_text
+        assert 'filter: {name_Icontains: "st", active: true}' in query_text
         assert "pageSize: 3" in query_text
         assert "items { name material { name } }" in query_text
         assert "pageInfo { totalCount }" in query_text
@@ -115,6 +115,52 @@ class ChatQueryToolTests(SimpleTestCase):
         with pytest.raises(ValueError, match="bad filter"):
             query(manager="PartManager", filters={}, fields=["name"])
 
+    def test_query_preserves_graphql_filter_keys_that_are_already_shaped(self) -> None:
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt"}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={"density_Gt": 7},
+            fields=["name"],
+        )
+
+        assert result["data"] == [{"name": "Bolt"}]
+        query_text = str(schema.calls[0]["query"])
+        assert "density_Gt: 7" in query_text
+
+    def test_query_translates_relation_lookup_filters_to_graphene_names(self) -> None:
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt"}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={"material__name": "Steel"},
+            fields=["name"],
+        )
+
+        assert result["data"] == [{"name": "Bolt"}]
+        query_text = str(schema.calls[0]["query"])
+        assert 'material_Name: "Steel"' in query_text
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {
@@ -128,7 +174,7 @@ class ChatQueryToolTests(SimpleTestCase):
         schema = _RecordingSchema(
             _Result(
                 data={
-                    "partManagerList": {
+                    "partmanagerList": {
                         "items": [
                             {"name": "Bolt"},
                             {"name": "Screw"},
@@ -170,7 +216,7 @@ class ChatQueryToolTests(SimpleTestCase):
         schema = _RecordingSchema(
             _Result(
                 data={
-                    "partManagerList": {
+                    "partmanagerList": {
                         "items": [{"name": "Bolt"}],
                         "pageInfo": {"totalCount": 1},
                     }
