@@ -43,10 +43,6 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p /var/log/outer-rim/nginx
-touch /var/log/outer-rim/nginx/nginx_access.log /var/log/outer-rim/nginx/nginx_error.log
-tail -n 0 -F /var/log/outer-rim/nginx/nginx_access.log /var/log/outer-rim/nginx/nginx_error.log &
-
 mkdir -p /var/cache/nginx/client_temp
 chmod 1777 /var/cache/nginx /var/cache/nginx/client_temp
 

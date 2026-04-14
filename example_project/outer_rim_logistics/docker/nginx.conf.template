@@ -20,8 +20,8 @@ http {
         "" close;
     }
 
-    access_log /var/log/outer-rim/nginx/nginx_access.log;
-    error_log /var/log/outer-rim/nginx/nginx_error.log warn;
+    access_log /dev/stdout;
+    error_log /dev/stderr warn;
 
     upstream orl_app {
         zone orl_app 64k;

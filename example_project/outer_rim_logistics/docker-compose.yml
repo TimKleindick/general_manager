@@ -104,6 +104,8 @@ services:
     depends_on:
       cert-init:
         condition: service_completed_successfully
+      nginx-init:
+        condition: service_completed_successfully
       web:
         condition: service_healthy
     cap_add:
@@ -582,7 +584,7 @@ services:
       MEILISEARCH_URL: "http://meilisearch:7700"
       MEILISEARCH_API_KEY_FILE: "/run/secrets/meilisearch_api_key"
       GM_SEARCH_AUTO_REINDEX: "false"
-      GM_SEARCH_ASYNC: "true"
+      GM_SEARCH_ASYNC: "false"
       STATIC_ROOT: "/static"
       LOG_DIR: "/var/log/outer-rim/app"
       ORL_SEED_ON_START: "${ORL_SEED_ON_START:-true}"
@@ -630,6 +632,13 @@ services:
     restart: "no"
     networks:
       - backend
+
+  nginx-init:
+    image: alpine:3.19
+    command: ["sh", "-c", "mkdir -p /var/log/outer-rim/nginx && chmod -R 777 /var/log/outer-rim/nginx"]
+    volumes:
+      - ./logs:/var/log/outer-rim
+    restart: "no"
 
   db-init:
     image: postgres:16-alpine
@@ -705,4 +714,3 @@ secrets:
 networks:
   frontend:
   backend:
-    internal: true
