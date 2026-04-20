@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.37.4 (2026-04-20)
+
+### Bug Fixes
+
+- Align reverse relation bucket names
+  ([`6b979cf`](https://github.com/TimKleindick/general_manager/commit/6b979cf0b7f152dfdc8e07707cd4a3a9acd9c502))
+
+
 ## v0.37.3 (2026-04-05)
 
 ### Bug Fixes
