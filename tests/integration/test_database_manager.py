@@ -342,6 +342,12 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 change_request_feasibility_list__id=self.change_request_feasibility.id
             )
 
+    def test_reverse_relation_bucket_uses_snake_case_attribute_name(self):
+        bucket = self.change_request.change_request_feasibility_list
+
+        self.assertEqual(len(bucket), 1)
+        self.assertEqual(bucket[0].id, self.change_request_feasibility.id)
+
     def test_filter_with_search_date_returns_historical_state(self):
         base_time = timezone.now() - timedelta(days=10)
 

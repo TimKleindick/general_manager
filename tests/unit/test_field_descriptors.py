@@ -91,7 +91,7 @@ def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> 
             resolve_many=lambda *_args: None,
         )
 
-    assert "relatedmodel_list" in descriptors
+    assert "related_model_list" in descriptors
     assert "relatedmodel_set_list" in descriptors
 
     relation_field_names = {
