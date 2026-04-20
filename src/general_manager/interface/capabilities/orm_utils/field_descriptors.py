@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+import re
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
 from uuid import UUID
 
@@ -73,6 +74,13 @@ def _graphql_scalar_hint(raw_type: type) -> str | None:
     if issubclass(raw_type, models.BigIntegerField):
         return "bigint"
     return None
+
+
+def _to_snake_case(name: str) -> str:
+    """Convert a CamelCase class name into snake_case."""
+    snake = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    snake = re.sub("([a-z0-9])([A-Z])", r"\1_\2", snake)
+    return snake.lower()
 
 
 def build_field_descriptors(
@@ -214,9 +222,21 @@ class _FieldDescriptorBuilder:
             accessor_name = (
                 reverse_relation.get_accessor_name() or reverse_relation.name
             )
+            explicit_accessor = getattr(reverse_relation.field, "_related_name", None)
+            related_model = getattr(reverse_relation, "related_model", None)
+            if (
+                isinstance(explicit_accessor, str)
+                and explicit_accessor
+                and explicit_accessor != "+"
+            ):
+                base_name = explicit_accessor
+            elif related_model is not None:
+                base_name = _to_snake_case(related_model.__name__)
+            else:
+                base_name = reverse_relation.name
             self._register_collection_field(
                 field=reverse_relation,
-                base_name=reverse_relation.name,
+                base_name=base_name,
                 accessor_name=accessor_name,
                 relation_field_name=getattr(reverse_relation.field, "name", None),
             )
