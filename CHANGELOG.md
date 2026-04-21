@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.37.5 (2026-04-21)
+
+### Bug Fixes
+
+- Enforce empty payload permission checks
+  ([`9c33f2f`](https://github.com/TimKleindick/general_manager/commit/9c33f2ff454755747da2add351c585182e504dce))
+
+
 ## v0.37.4 (2026-04-20)
 
 ### Bug Fixes
