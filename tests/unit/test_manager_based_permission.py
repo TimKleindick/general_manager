@@ -30,6 +30,18 @@ class DummyPermission(BasePermission):
     ) -> bool:
         return True
 
+    def check_operation_permission(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+    ) -> bool:
+        return True
+
+    def describe_operation_permissions(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+    ) -> tuple[str, ...]:
+        return ()
+
     def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
@@ -717,6 +729,62 @@ class ManagerBasedPermissionTests(TestCase):
 
         result = permission.check_permission("update", "non_specific_attr")
         self.assertFalse(result)
+
+    def test_operation_permission_uses_base_rule(self) -> None:
+        """Operation checks should evaluate the CRUD-level rule directly."""
+        permission = CustomManagerBasedPermission(self.mock_instance, self.user)
+
+        self.assertTrue(permission.check_operation_permission("create"))
+        self.assertFalse(permission.check_operation_permission("update"))
+
+    def test_operation_permission_uses_cached_result_without_based_on(self) -> None:
+        """Operation checks without delegation should cache per action."""
+
+        class AdminUpdatePermission(ManagerBasedPermission):
+            __based_on__: ClassVar[Optional[str]] = None
+            __update__: ClassVar[list[str]] = ["isAdmin"]
+
+        permission = AdminUpdatePermission(self.mock_instance, self.admin_user)
+
+        with patch.object(
+            AdminUpdatePermission,
+            "validate_permission_string",
+            return_value=True,
+        ) as mock_validate:
+            self.assertTrue(permission.check_operation_permission("update"))
+            self.assertTrue(permission.check_operation_permission("update"))
+
+        self.assertEqual(mock_validate.call_count, 1)
+
+    def test_operation_permission_with_superuser_bypasses_rules(self) -> None:
+        """Superusers should bypass operation-level rules."""
+        permission = CustomManagerBasedPermission(self.mock_instance, self.superuser)
+
+        self.assertTrue(permission.check_operation_permission("update"))
+
+    def test_operation_permission_with_based_on_denial(self) -> None:
+        """Delegated operation denial should block local operation permission."""
+        based_on_permission = Mock()
+        based_on_permission.check_operation_permission.return_value = False
+        self.mock_check.return_value = based_on_permission
+
+        permission = CustomManagerBasedPermission(self.mock_instance, self.admin_user)
+
+        self.assertFalse(permission.check_operation_permission("update"))
+        based_on_permission.check_operation_permission.assert_called_once_with("update")
+
+    def test_describe_operation_permissions_includes_based_on(self) -> None:
+        """Operation permission descriptions should include delegated rules."""
+        based_on_permission = Mock()
+        based_on_permission.describe_operation_permissions.return_value = ("delegated",)
+        self.mock_check.return_value = based_on_permission
+
+        permission = CustomManagerBasedPermission(self.mock_instance, self.user)
+
+        self.assertEqual(
+            permission.describe_operation_permissions("create"),
+            ("isAuthenticated", "delegated"),
+        )
 
     def test_override_describe_permissions_reports_effective_attribute_rule(
         self,

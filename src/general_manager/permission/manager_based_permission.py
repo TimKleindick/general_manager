@@ -360,6 +360,28 @@ class _ConfiguredManagerPermission(BasePermission):
     def _check_permission_list(self, permissions: list[str]) -> bool:
         return self.__check_specific_permission(permissions)
 
+    def check_operation_permission(self, action: permission_type) -> bool:
+        """Evaluate the CRUD-level permission for an operation without field data."""
+        base_permissions = self._get_base_permissions(action)
+        if self._is_superuser():
+            self.__overall_results[action] = True
+            return True
+        if self.__based_on_permission is not None and not (
+            self.__based_on_permission.check_operation_permission(action)
+        ):
+            return False
+
+        can_use_action_cache = self.__based_on_permission is None
+        if can_use_action_cache:
+            last_result = self.__overall_results.get(action)
+            if last_result is not None:
+                return last_result
+
+        permission = self._check_permission_list(base_permissions)
+        if can_use_action_cache:
+            self.__overall_results[action] = permission
+        return permission
+
     def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
@@ -511,6 +533,17 @@ class _ConfiguredManagerPermission(BasePermission):
         if self.__based_on_permission is not None:
             combined += self.__based_on_permission.describe_permissions(
                 action, attribute
+            )
+        return combined
+
+    def describe_operation_permissions(
+        self,
+        action: permission_type,
+    ) -> tuple[str, ...]:
+        combined = tuple(self._get_base_permissions(action))
+        if self.__based_on_permission is not None:
+            combined += self.__based_on_permission.describe_operation_permissions(
+                action
             )
         return combined
 
