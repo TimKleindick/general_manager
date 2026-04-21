@@ -115,6 +115,12 @@ def test_general_manager_logging_for_create_and_queries() -> None:
         def check_permission(self, action: str, attribute: str) -> bool:  # type: ignore[override]
             return True
 
+        def check_operation_permission(self, action: str) -> bool:  # type: ignore[override]
+            return True
+
+        def describe_operation_permissions(self, action: str) -> tuple[str, ...]:  # type: ignore[override]
+            return ()
+
     original_interface = getattr(GeneralManager, "Interface", None)
     original_permission = getattr(GeneralManager, "Permission", None)
     original_attributes = getattr(GeneralManager, "_attributes", None)
@@ -206,6 +212,12 @@ def test_permission_check_logs_denial() -> None:
     class AlwaysDenyPermission(BasePermission):
         def check_permission(self, action: str, attribute: str) -> bool:  # type: ignore[override]
             return False
+
+        def check_operation_permission(self, action: str) -> bool:  # type: ignore[override]
+            return False
+
+        def describe_operation_permissions(self, action: str) -> tuple[str, ...]:  # type: ignore[override]
+            return ()
 
     user = AnonymousUser()
 

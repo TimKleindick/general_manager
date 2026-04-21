@@ -54,6 +54,12 @@ class AuditDummyPermission(BasePermission):
     ) -> tuple[str, ...]:
         return (f"{action}:{attribute}",)
 
+    def check_operation_permission(self, action: str) -> bool:
+        return True
+
+    def describe_operation_permissions(self, action: str) -> tuple[str, ...]:
+        return (f"{action}:operation",)
+
 
 class AuditMutationPermission(MutationPermission):
     __mutate__: ClassVar[list[str]] = ["public"]
@@ -314,6 +320,84 @@ class PermissionAuditTests(TransactionTestCase):
         self.assertEqual(event.attributes, ("field",))
         self.assertTrue(event.granted)
         self.assertFalse(event.bypassed)
+
+    def test_audit_event_emitted_for_empty_create_payload(self) -> None:
+        """Empty create payloads should log an operation-level audit event."""
+        logger = RecordingAuditLogger()
+        configure_audit_logger(logger)
+
+        class DummyManager:
+            __name__ = "DummyManager"
+
+        AuditDummyPermission.check_create_permission({}, DummyManager, self.user)
+
+        self.assertEqual(len(logger.events), 1)
+        event = logger.events[0]
+        self.assertEqual(event.action, "create")
+        self.assertEqual(event.attributes, ())
+        self.assertEqual(event.permissions, ("create:operation",))
+        self.assertTrue(event.granted)
+        self.assertFalse(event.bypassed)
+
+    def test_audit_event_emitted_for_empty_update_payload(self) -> None:
+        """Empty update payloads should log an operation-level audit event."""
+        logger = RecordingAuditLogger()
+        configure_audit_logger(logger)
+
+        permission_data_manager = PermissionDataManager({}, None)
+        old_instance = type("DummyManager", (), {})()
+        with patch(
+            "general_manager.permission.base_permission.PermissionDataManager.for_update",
+            return_value=permission_data_manager,
+        ):
+            AuditDummyPermission.check_update_permission({}, old_instance, self.user)
+
+        self.assertEqual(len(logger.events), 1)
+        event = logger.events[0]
+        self.assertEqual(event.action, "update")
+        self.assertEqual(event.attributes, ())
+        self.assertEqual(event.permissions, ("update:operation",))
+        self.assertTrue(event.granted)
+        self.assertFalse(event.bypassed)
+
+    def test_superuser_empty_create_payload_bypass_logged(self) -> None:
+        """Superuser empty create payload bypasses should be audited."""
+        logger = RecordingAuditLogger()
+        configure_audit_logger(logger)
+
+        class DummyManager:
+            __name__ = "DummyManager"
+
+        AuditDummyPermission.check_create_permission({}, DummyManager, self.superuser)
+
+        self.assertEqual(len(logger.events), 1)
+        event = logger.events[0]
+        self.assertEqual(event.action, "create")
+        self.assertEqual(event.attributes, ())
+        self.assertTrue(event.bypassed)
+        self.assertTrue(event.granted)
+
+    def test_superuser_empty_update_payload_bypass_logged(self) -> None:
+        """Superuser empty update payload bypasses should be audited."""
+        logger = RecordingAuditLogger()
+        configure_audit_logger(logger)
+
+        permission_data_manager = PermissionDataManager({}, None)
+        old_instance = type("DummyManager", (), {})()
+        with patch(
+            "general_manager.permission.base_permission.PermissionDataManager.for_update",
+            return_value=permission_data_manager,
+        ):
+            AuditDummyPermission.check_update_permission(
+                {}, old_instance, self.superuser
+            )
+
+        self.assertEqual(len(logger.events), 1)
+        event = logger.events[0]
+        self.assertEqual(event.action, "update")
+        self.assertEqual(event.attributes, ())
+        self.assertTrue(event.bypassed)
+        self.assertTrue(event.granted)
 
     def test_audit_event_emitted_for_delete(self) -> None:
         """Test audit event emission for delete operations."""

@@ -92,6 +92,12 @@ class _DummyPermission(BasePermission):
         """
         return None
 
+    def check_operation_permission(self, *args, **kwargs) -> bool:
+        return True
+
+    def describe_operation_permissions(self, *args, **kwargs) -> tuple[str, ...]:
+        return ()
+
     def get_permission_filter(self):
         """
         Provide the permission filter used for read operations.
@@ -175,6 +181,14 @@ class GraphQLHelperTests(SimpleTestCase):
             def check_permission(self, *args, **kwargs) -> bool:
                 return False
 
+            def check_operation_permission(self, *args, **kwargs) -> bool:
+                return False
+
+            def describe_operation_permissions(
+                self, *args, **kwargs
+            ) -> tuple[str, ...]:
+                return ()
+
             def can_read_instance(self) -> bool:
                 return False
 
@@ -202,6 +216,14 @@ class GraphQLHelperTests(SimpleTestCase):
         class AdminOnlyPermission(BasePermission):
             def check_permission(self, *args, **kwargs) -> bool:
                 return False
+
+            def check_operation_permission(self, *args, **kwargs) -> bool:
+                return False
+
+            def describe_operation_permissions(
+                self, *args, **kwargs
+            ) -> tuple[str, ...]:
+                return ()
 
             def can_read_instance(self) -> bool:
                 return False
@@ -263,6 +285,14 @@ class GraphQLHelperTests(SimpleTestCase):
 
             def check_permission(self, *args, **kwargs) -> bool:
                 return True
+
+            def check_operation_permission(self, *args, **kwargs) -> bool:
+                return True
+
+            def describe_operation_permissions(
+                self, *args, **kwargs
+            ) -> tuple[str, ...]:
+                return ()
 
             def can_read_instance(self) -> bool:
                 type(self).check_count += 1

@@ -68,6 +68,37 @@ class DummyPermission(BasePermission):
             return True
         return self.validate_permission_string(configured_permission)
 
+    def check_operation_permission(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+    ) -> bool:
+        permission_map: dict[str, dict[str, str]] = {
+            "create": self.__class__.create_permissions,
+            "read": self.__class__.read_permissions,
+            "update": self.__class__.update_permissions,
+            "delete": self.__class__.delete_permissions,
+        }
+        configured_permission = permission_map.get(action, {}).get("")
+        if configured_permission is None:
+            return True
+        return self.validate_permission_string(configured_permission)
+
+    def describe_operation_permissions(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+    ) -> tuple[str, ...]:
+        permission_map: dict[str, dict[str, str]] = {
+            "create": self.__class__.create_permissions,
+            "read": self.__class__.read_permissions,
+            "update": self.__class__.update_permissions,
+            "delete": self.__class__.delete_permissions,
+        }
+        return tuple(
+            permission
+            for permission in permission_map.get(action, {}).values()
+            if isinstance(permission, str)
+        )
+
     def get_permission_filter(
         self,
     ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
@@ -327,9 +358,8 @@ class BasePermissionTests(TestCase):
         self.assertIn("field2", error_str)
         self.assertIn("field3", error_str)
 
-    def test_permission_with_empty_data(self):
-        """Test permission checks with empty data dictionaries."""
-        # Should not raise any errors
+    def test_permission_with_empty_data_and_no_restrictions(self):
+        """Test empty create and update data pass when no rules deny them."""
         DummyPermission.check_create_permission({}, None, self.dummy_user)
         with patch(
             "general_manager.permission.base_permission.PermissionDataManager.for_update"

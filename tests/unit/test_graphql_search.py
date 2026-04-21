@@ -100,6 +100,12 @@ class ProjectPermission(BasePermission):
         """
         return True
 
+    def check_operation_permission(self, action):
+        return True
+
+    def describe_operation_permissions(self, action):
+        return ()
+
     def get_permission_filter(self):
         """
         Provide permission filters that restrict results to items with status "public".
@@ -345,6 +351,12 @@ class GraphQLSearchTests(SimpleTestCase):
                         `True` if the action is permitted (this permission always grants access), `False` otherwise.
                 """
                 return True
+
+            def check_operation_permission(self, action):
+                return True
+
+            def describe_operation_permissions(self, action):
+                return ()
 
             def get_permission_filter(self):
                 """

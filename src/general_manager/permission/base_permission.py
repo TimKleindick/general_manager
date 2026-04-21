@@ -94,6 +94,20 @@ class BasePermission(ABC):
         """Return permission expressions associated with an action/attribute pair."""
         return ()
 
+    @abstractmethod
+    def describe_operation_permissions(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+    ) -> tuple[str, ...]:
+        """Return permission expressions associated with an action-level check."""
+
+    @abstractmethod
+    def check_operation_permission(
+        self,
+        action: Literal["create", "read", "update", "delete"],
+    ) -> bool:
+        """Return whether an action without attribute payload is allowed."""
+
     def can_read_instance(self) -> bool:
         """Return whether the current user may see that the instance exists."""
         if self._is_superuser():
@@ -136,9 +150,12 @@ class BasePermission(ABC):
         request_user: UserLike | Any,
     ) -> None:
         """
-        Validate that the requesting user is allowed to create each attribute in the provided payload.
+        Validate that the requesting user is allowed to perform the create operation.
 
-        Checks create permission for every key in `data` using the given `manager`. If any attribute is not permitted, raises a PermissionCheckError that includes the evaluated user and a list of denial messages.
+        Checks create permission for every key in `data` using the given `manager`.
+        Empty payloads still evaluate the create-level permission gate once. If any
+        attribute is not permitted, raises a PermissionCheckError that includes the
+        evaluated user and a list of denial messages.
 
         Parameters:
             data (dict[str, Any]): Mapping of attribute names to the values intended for creation.
@@ -154,6 +171,20 @@ class BasePermission(ABC):
         manager_name = manager.__name__ if manager is not None else None
         if Permission._is_superuser():
             if audit_logging_enabled():
+                if not data:
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="create",
+                            attributes=(),
+                            granted=True,
+                            user=request_user,
+                            manager=manager_name,
+                            permissions=Permission.describe_operation_permissions(
+                                "create"
+                            ),
+                            bypassed=True,
+                        )
+                    )
                 for key in data.keys():
                     emit_permission_audit_event(
                         PermissionAuditEvent(
@@ -170,6 +201,29 @@ class BasePermission(ABC):
 
         errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
+        if not data:
+            is_allowed = Permission.check_operation_permission("create")
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="create",
+                        attributes=(),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=manager_name,
+                        permissions=Permission.describe_operation_permissions("create"),
+                    )
+                )
+            if not is_allowed:
+                logger.info(
+                    "permission denied",
+                    context={
+                        "manager": manager_name,
+                        "action": "create",
+                        "user_id": user_identifier,
+                    },
+                )
+                errors.append("Create permission denied")
         for key in data.keys():
             is_allowed = Permission.check_permission("create", key)
             if audit_logging_enabled():
@@ -205,7 +259,11 @@ class BasePermission(ABC):
         request_user: UserLike | Any,
     ) -> None:
         """
-        Validate whether the request_user can update the given fields on an existing manager instance.
+        Validate whether the request_user can perform the update operation.
+
+        Checks update permission for every key in ``data`` against the existing
+        manager instance. Empty payloads still evaluate the update-level
+        permission gate once.
 
         Parameters:
             data (dict[str, Any]): Mapping of attribute names to new values to be applied.
@@ -223,6 +281,20 @@ class BasePermission(ABC):
         manager_name = old_manager_instance.__class__.__name__
         if Permission._is_superuser():
             if audit_logging_enabled():
+                if not data:
+                    emit_permission_audit_event(
+                        PermissionAuditEvent(
+                            action="update",
+                            attributes=(),
+                            granted=True,
+                            user=request_user,
+                            manager=manager_name,
+                            permissions=Permission.describe_operation_permissions(
+                                "update"
+                            ),
+                            bypassed=True,
+                        )
+                    )
                 for key in data.keys():
                     emit_permission_audit_event(
                         PermissionAuditEvent(
@@ -239,6 +311,29 @@ class BasePermission(ABC):
 
         errors: list[str] = []
         user_identifier = getattr(request_user, "id", None)
+        if not data:
+            is_allowed = Permission.check_operation_permission("update")
+            if audit_logging_enabled():
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="update",
+                        attributes=(),
+                        granted=is_allowed,
+                        user=request_user,
+                        manager=manager_name,
+                        permissions=Permission.describe_operation_permissions("update"),
+                    )
+                )
+            if not is_allowed:
+                logger.info(
+                    "permission denied",
+                    context={
+                        "manager": manager_name,
+                        "action": "update",
+                        "user_id": user_identifier,
+                    },
+                )
+                errors.append("Update permission denied")
         for key in data.keys():
             is_allowed = Permission.check_permission("update", key)
             if audit_logging_enabled():

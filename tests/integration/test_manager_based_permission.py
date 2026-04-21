@@ -1,7 +1,7 @@
 from __future__ import annotations
 from django.db import models
 from django.core.exceptions import ValidationError
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
@@ -74,10 +74,42 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 __update__: ClassVar[list[str]] = ["public"]
                 __delete__: ClassVar[list[str]] = ["public"]
 
+        class EmptyPayloadProject1(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50, default="Untitled")
+
+            class Permission(ManagerBasedPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+                __create__: ClassVar[list[str]] = ["isAdmin"]
+                __update__: ClassVar[list[str]] = ["isAdmin"]
+                __delete__: ClassVar[list[str]] = ["public"]
+
+        class InGroupEmptyPayloadProject1(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50, default="Grouped")
+
+            class Permission(ManagerBasedPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+                __create__: ClassVar[list[str]] = ["inGroup:Test"]
+                __update__: ClassVar[list[str]] = ["inGroup:Test"]
+                __delete__: ClassVar[list[str]] = ["public"]
+
         cls.TestCountry = TestCountry1
         cls.TestHuman = TestHuman1
         cls.TestFamily = TestFamily1
-        cls.general_manager_classes = [TestCountry1, TestHuman1, TestFamily1]
+        cls.EmptyPayloadProject = EmptyPayloadProject1
+        cls.InGroupEmptyPayloadProject = InGroupEmptyPayloadProject1
+        cls.general_manager_classes = [
+            TestCountry1,
+            TestHuman1,
+            TestFamily1,
+            EmptyPayloadProject1,
+            InGroupEmptyPayloadProject1,
+        ]
 
     def setUp(self):
         """
@@ -90,6 +122,19 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.user: User = User.objects.create_user(
             username="testuser", password=password, email="testuser@example.com"
         )
+        self.admin_user: User = User.objects.create_user(
+            username="adminuser",
+            password=password,
+            email="adminuser@example.com",
+            is_staff=True,
+        )
+        self.group_user: User = User.objects.create_user(
+            username="groupuser",
+            password=password,
+            email="groupuser@example.com",
+        )
+        self.test_group = Group.objects.create(name="Test")
+        self.group_user.groups.add(self.test_group)
         self.us = self.TestCountry.create(
             creator_id=None,
             code="US",
@@ -194,6 +239,28 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(human_without_country.name, "Eva")
         self.assertIsNone(human_without_country.country)
 
+    def test_create_without_kwargs_checks_create_permission(self):
+        """
+        Creating with no field kwargs should still enforce class-level create permissions.
+        """
+        with self.assertRaises(PermissionError):
+            self.EmptyPayloadProject.create(creator_id=self.user.id)
+
+        project = self.EmptyPayloadProject.create(creator_id=self.admin_user.id)
+
+        self.assertEqual(project.name, "Untitled")
+
+    def test_create_without_kwargs_checks_group_create_permission(self):
+        """
+        Empty create payloads should enforce group-based create permissions.
+        """
+        with self.assertRaises(PermissionError):
+            self.InGroupEmptyPayloadProject.create(creator_id=self.user.id)
+
+        project = self.InGroupEmptyPayloadProject.create(creator_id=self.group_user.id)
+
+        self.assertEqual(project.name, "Grouped")
+
     def test_update_with_permission_validation(self):
         """
         Test updating a human's country association with permission enforcement.
@@ -212,6 +279,38 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             updated_human = updated_human.update(country=None)
         updated_human = updated_human.update(country=None, creator_id=self.user.id)  # type: ignore
         self.assertIsNone(updated_human.country)
+
+    def test_update_without_kwargs_checks_update_permission(self):
+        """
+        Updating with no field kwargs should still enforce class-level update permissions.
+        """
+        project = self.EmptyPayloadProject.create(
+            creator_id=self.admin_user.id,
+            ignore_permission=True,
+        )
+
+        with self.assertRaises(PermissionError):
+            project.update(creator_id=self.user.id)
+
+        updated_project = project.update(creator_id=self.admin_user.id)
+
+        self.assertEqual(updated_project.name, "Untitled")
+
+    def test_update_without_kwargs_checks_group_update_permission(self):
+        """
+        Empty update payloads should enforce group-based update permissions.
+        """
+        project = self.InGroupEmptyPayloadProject.create(
+            creator_id=self.group_user.id,
+            ignore_permission=True,
+        )
+
+        with self.assertRaises(PermissionError):
+            project.update(creator_id=self.user.id)
+
+        updated_project = project.update(creator_id=self.group_user.id)
+
+        self.assertEqual(updated_project.name, "Grouped")
 
     def test_delete_with_permissions(self):
         """
