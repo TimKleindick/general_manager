@@ -175,3 +175,4 @@ cython_debug/
 
 # todos:
 tasks/todo.md
+docs/superpowers/*
