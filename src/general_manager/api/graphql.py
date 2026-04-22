@@ -201,6 +201,7 @@ class GraphQL:
             subscription_payload_registry=dict(cls._subscription_payload_registry),
             graphql_type_registry=dict(cls.graphql_type_registry),
             graphql_filter_type_registry=dict(cls.graphql_filter_type_registry),
+            graphql_capability_type_registry=dict(cls.graphql_capability_type_registry),
             manager_registry=dict(cls.manager_registry),
             search_union=cls._search_union,
             search_result_type=cls._search_result_type,

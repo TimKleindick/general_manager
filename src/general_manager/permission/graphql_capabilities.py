@@ -149,7 +149,13 @@ class CapabilityEvaluationContext:
                         "capability": declaration.name,
                         "manager": missing[0].__class__.__name__,
                         "error": type(exc).__name__,
+                        "message": str(exc),
                     },
+                )
+                self._store_batch_result(
+                    declaration,
+                    missing,
+                    [False for _instance in missing],
                 )
 
     def _store_batch_result(

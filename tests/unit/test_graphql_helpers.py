@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest import mock
 
 import pytest
+import graphene  # type: ignore[import]
 from django.test import SimpleTestCase
 from graphql import parse
 from graphql.language.ast import (
@@ -176,6 +177,24 @@ class GraphQLHelperTests(SimpleTestCase):
         """
         with pytest.raises(InvalidMeasurementValueError):
             MeasurementScalar.serialize("not-a-measurement")  # type: ignore[arg-type]
+
+    def test_registry_snapshot_includes_capability_type_registry(self) -> None:
+        """
+        Verify registry snapshots include generated capability GraphQL types.
+        """
+        capability_type = type("CapabilityType", (graphene.ObjectType,), {})
+        GraphQL.graphql_capability_type_registry = {"Capability": capability_type}
+        try:
+            snapshot = GraphQL.get_registry_snapshot()
+
+            assert snapshot.graphql_capability_type_registry == {
+                "Capability": capability_type
+            }
+            assert snapshot.graphql_capability_type_registry is not (
+                GraphQL.graphql_capability_type_registry
+            )
+        finally:
+            GraphQL.graphql_capability_type_registry = {}
 
     def test_measurement_scalar_parse_literal(self) -> None:
         node = StringValueNode(value="10 m")
@@ -404,6 +423,26 @@ class GraphQLHelperTests(SimpleTestCase):
         )
 
         assert selection_includes_path(info, ("items", "capabilities")) is True
+
+    def test_selection_includes_path_skips_fragment_cycles(self) -> None:
+        """
+        Verify cyclic named fragments do not recurse indefinitely.
+        """
+        info = _selection_info(
+            """
+            query {
+                projectList {
+                    ...ProjectPageFields
+                }
+            }
+
+            fragment ProjectPageFields on ProjectPage {
+                ...ProjectPageFields
+            }
+            """
+        )
+
+        assert selection_includes_path(info, ("items", "capabilities")) is False
 
     def test_selection_includes_path_handles_empty_or_missing_selections(self) -> None:
         """

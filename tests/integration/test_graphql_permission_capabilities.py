@@ -40,6 +40,7 @@ class TestCapabilitiesProvider:
 class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        super().setUpClass()
         cls.rename_calls = 0
         cls.batch_calls = 0
 
@@ -208,12 +209,61 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
         self.assertEqual(type(self).batch_calls, 0)
         self.assertEqual(type(self).rename_calls, 0)
 
+    def test_batch_capability_failure_is_cached_as_deny(self) -> None:
+        original_capabilities = self.Project.Permission.graphql_capabilities
+
+        def can_fail(_project: Any, _user: Any) -> bool:
+            type(self).rename_calls += 1
+            return True
+
+        def can_fail_batch(_projects: list[Any], _user: Any) -> list[bool]:
+            type(self).batch_calls += 1
+            raise RuntimeError
+
+        self.Project.Permission.graphql_capabilities = (
+            object_capability(
+                "canRename",
+                can_fail,
+                batch_evaluator=can_fail_batch,
+            ),
+        )
+        try:
+            query = """
+            query {
+                projectList(sortBy: name) {
+                    items {
+                        name
+                        capabilities {
+                            canRename
+                        }
+                    }
+                }
+            }
+            """
+
+            response = self.query(query)
+
+            self.assertResponseNoErrors(response)
+            items = response.json()["data"]["projectList"]["items"]
+            self.assertEqual(
+                items,
+                [
+                    {"name": "Apollo", "capabilities": {"canRename": False}},
+                    {"name": "Zeus", "capabilities": {"canRename": False}},
+                ],
+            )
+            self.assertEqual(type(self).batch_calls, 1)
+            self.assertEqual(type(self).rename_calls, 0)
+        finally:
+            self.Project.Permission.graphql_capabilities = original_capabilities
+
 
 class TestGraphQLCurrentUserCapabilities(GeneralManagerTransactionTestCase):
     general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
 
     @classmethod
     def setUpClass(cls) -> None:
+        super().setUpClass()
         cls.settings_override = override_settings(
             GENERAL_MANAGER={
                 "GRAPHQL_GLOBAL_CAPABILITIES_PROVIDER": (
@@ -226,8 +276,12 @@ class TestGraphQLCurrentUserCapabilities(GeneralManagerTransactionTestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        super().tearDownClass()
-        cls.settings_override.disable()
+        try:
+            settings_override = getattr(cls, "settings_override", None)
+            if settings_override is not None:
+                settings_override.disable()
+        finally:
+            super().tearDownClass()
 
     def setUp(self) -> None:
         super().setUp()

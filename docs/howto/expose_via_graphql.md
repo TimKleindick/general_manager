@@ -7,6 +7,7 @@ Managers with an `Interface` are registered during GeneralManager startup and re
 Use GraphQL permission capabilities when frontend code needs business-oriented authorization hints, such as whether the current user can rename a project. These fields are advisory only; backend permissions still enforce all reads and writes.
 
 ```python
+from general_manager import GeneralManager
 from general_manager.permission import AdditiveManagerPermission, object_capability
 
 
