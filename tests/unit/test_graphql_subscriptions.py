@@ -18,6 +18,7 @@ import unittest
 from general_manager.api.graphql import GraphQL
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.permission import AdditiveManagerPermission, object_capability
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from tests.utils.simple_manager_interface import BaseTestInterface
 
@@ -56,6 +57,15 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         class Employee(GeneralManager):
             class Interface(DatabaseInterface):
                 name = CharField(max_length=120)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+                graphql_capabilities = (
+                    object_capability(
+                        "canKeepName",
+                        lambda employee, _user: employee.name == "Alice",
+                    ),
+                )
 
         cls.general_manager_classes = [Employee]
         cls.Employee = Employee
@@ -157,6 +167,55 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         update = second_event.data["onEmployeeChange"]
         self.assertEqual(update["action"], "update")
         self.assertEqual(update["item"]["name"], "Bob")
+
+    def test_subscription_capabilities_are_recomputed_for_each_event(self) -> None:
+        employee = self.Employee.create(name="Alice", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription ($id: ID!) {
+                onEmployeeChange(id: $id) {
+                    action
+                    item {
+                        id
+                        name
+                        capabilities {
+                            canKeepName
+                        }
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> tuple[object, object]:
+            generator = await schema.subscribe(
+                subscription,
+                variable_values={"id": employee.id},
+                context_value=context,
+            )
+            try:
+                first = await generator.__anext__()
+                await asyncio.to_thread(
+                    lambda: employee.update(
+                        name="Bob",
+                        creator_id=self.user.id,
+                    )
+                )
+                second = await generator.__anext__()
+            finally:
+                await generator.aclose()
+            return first, second
+
+        first_event, second_event = asyncio.run(run_subscription())
+
+        self.assertIsNone(first_event.errors)
+        self.assertTrue(
+            first_event.data["onEmployeeChange"]["item"]["capabilities"]["canKeepName"]
+        )
+        self.assertIsNone(second_event.errors)
+        self.assertFalse(
+            second_event.data["onEmployeeChange"]["item"]["capabilities"]["canKeepName"]
+        )
 
 
 class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):

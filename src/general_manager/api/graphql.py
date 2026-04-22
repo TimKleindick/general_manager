@@ -43,6 +43,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.permission.graphql_capabilities import (
     GraphQLPermissionCapability,
+    clear_capability_context,
     get_capability_context,
     get_graphql_capabilities,
 )
@@ -1167,6 +1168,7 @@ class GraphQL:
                     When the iterator is closed or exits, the background listener task is cancelled and the subscription's channel group memberships are discarded.
                 """
                 try:
+                    clear_capability_context(info)
                     yield SubscriptionEvent(item=instance, action="snapshot")
                     while True:
                         action = await queue.get()
@@ -1179,6 +1181,7 @@ class GraphQL:
                             )
                         except HANDLED_MANAGER_ERRORS:
                             item = None
+                        clear_capability_context(info)
                         yield SubscriptionEvent(item=item, action=action)
                 finally:
                     listener_task.cancel()

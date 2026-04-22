@@ -217,6 +217,16 @@ def get_capability_context(info: Any) -> CapabilityEvaluationContext:
     return contexts[operation_key]
 
 
+def clear_capability_context(info: Any) -> None:
+    """Discard cached capability values for the current GraphQL operation."""
+    request_context = getattr(info, "context", None)
+    operation_key = id(getattr(info, "operation", None))
+    storage_name = "_general_manager_graphql_capability_contexts"
+    contexts = getattr(request_context, storage_name, None)
+    if isinstance(contexts, dict):
+        contexts.pop(operation_key, None)
+
+
 def _resolve_payload(
     payload: CapabilityPayload | None,
     instance: Any,
