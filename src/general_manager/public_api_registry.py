@@ -216,6 +216,26 @@ PERMISSION_EXPORTS: LazyExportMap = {
         "PermissionAuditEvent",
     ),
     "AuditLogger": ("general_manager.permission.audit", "AuditLogger"),
+    "CapabilityEvaluationContext": (
+        "general_manager.permission.graphql_capabilities",
+        "CapabilityEvaluationContext",
+    ),
+    "GraphQLPermissionCapability": (
+        "general_manager.permission.graphql_capabilities",
+        "GraphQLPermissionCapability",
+    ),
+    "mutation_capability": (
+        "general_manager.permission.graphql_capabilities",
+        "mutation_capability",
+    ),
+    "object_capability": (
+        "general_manager.permission.graphql_capabilities",
+        "object_capability",
+    ),
+    "permission_capability": (
+        "general_manager.permission.graphql_capabilities",
+        "permission_capability",
+    ),
 }
 
 

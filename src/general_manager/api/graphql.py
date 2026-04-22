@@ -28,6 +28,7 @@ from typing import (
 import graphene  # type: ignore[import]
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer
+from django.utils.module_loading import import_string
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
@@ -35,10 +36,16 @@ from general_manager.cache.dependency_index import (
     Dependency,
 )
 from general_manager.cache.signals import post_data_change
+from general_manager.conf import get_setting
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
+from general_manager.permission.graphql_capabilities import (
+    GraphQLPermissionCapability,
+    get_capability_context,
+    get_graphql_capabilities,
+)
 from general_manager.utils.type_checks import safe_issubclass
 
 from graphql import GraphQLError
@@ -127,6 +134,9 @@ class GraphQL:
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_type_registry: ClassVar[dict[str, type]] = {}
     graphql_filter_type_registry: ClassVar[dict[str, type]] = {}
+    graphql_capability_type_registry: ClassVar[
+        dict[str, type[graphene.ObjectType]]
+    ] = {}
     manager_registry: ClassVar[dict[str, type[GeneralManager]]] = {}
     _search_union: ClassVar[type[graphene.Union] | None] = None
     _search_result_type: ClassVar[type[graphene.ObjectType] | None] = None
@@ -164,6 +174,7 @@ class GraphQL:
         cls._subscription_payload_registry = {}
         cls.graphql_type_registry = {}
         cls.graphql_filter_type_registry = {}
+        cls.graphql_capability_type_registry = {}
         cls.manager_registry = {}
         cls._search_union = None
         cls._search_result_type = None
@@ -370,6 +381,23 @@ class GraphQL:
                 attr_name, resolved_type
             )
 
+        capability_declarations = get_graphql_capabilities(generalManagerClass)
+        if capability_declarations:
+            capability_type = cls._get_or_create_capability_type(
+                generalManagerClass,
+                capability_declarations,
+            )
+            fields["capabilities"] = graphene.Field(capability_type, required=True)
+
+            def resolve_capabilities(
+                manager_instance: GeneralManager,
+                info: GraphQLResolveInfo,
+            ) -> dict[str, GeneralManager]:
+                del info
+                return {"instance": manager_instance}
+
+            fields["resolve_capabilities"] = resolve_capabilities
+
         graphene_type = type(graphene_type_name, (graphene.ObjectType,), fields)
         cls.graphql_type_registry[generalManagerClass.__name__] = graphene_type
         cls.manager_registry[generalManagerClass.__name__] = generalManagerClass
@@ -385,6 +413,138 @@ class GraphQL:
                 "fields": exposed_fields,
             },
         )
+
+    @classmethod
+    def _get_or_create_capability_type(
+        cls,
+        generalManagerClass: type[GeneralManager],
+        declarations: tuple[GraphQLPermissionCapability, ...],
+    ) -> type[graphene.ObjectType]:
+        """Build or return the generated GraphQL capabilities type for a manager."""
+        type_name = f"{generalManagerClass.__name__}Capabilities"
+        if type_name in cls.graphql_capability_type_registry:
+            return cls.graphql_capability_type_registry[type_name]
+
+        fields: dict[str, Any] = {}
+        for declaration in declarations:
+            fields[declaration.name] = graphene.Boolean(required=True)
+
+            def resolver(
+                parent: dict[str, GeneralManager],
+                info: GraphQLResolveInfo,
+                *,
+                capability: GraphQLPermissionCapability = declaration,
+            ) -> bool:
+                return get_capability_context(info).evaluate(
+                    capability,
+                    parent["instance"],
+                )
+
+            fields[f"resolve_{declaration.name}"] = resolver
+
+        capability_type = type(type_name, (graphene.ObjectType,), fields)
+        cls.graphql_capability_type_registry[type_name] = capability_type
+        return capability_type
+
+    @classmethod
+    def register_current_user_capabilities(cls) -> None:
+        """Register the optional provider-backed ``me`` GraphQL field."""
+        provider = cls._get_current_user_capability_provider()
+        if provider is None:
+            return
+
+        me_fields: dict[str, Any] = {}
+        configured_fields = getattr(provider, "graphql_fields", {}) or {}
+        for field_name, field_type in configured_fields.items():
+            if isinstance(field_type, graphene.Field):
+                me_fields[field_name] = field_type
+            else:
+                me_fields[field_name] = cls._map_field_to_graphene_base_type(
+                    cast(type, field_type)
+                )()
+
+            def field_resolver(
+                user: Any,
+                info: GraphQLResolveInfo,
+                *,
+                provider_instance: Any = provider,
+                configured_name: str = field_name,
+            ) -> Any:
+                resolver = getattr(
+                    provider_instance,
+                    f"resolve_{configured_name}",
+                    None,
+                )
+                if callable(resolver):
+                    return resolver(user, info)
+                return getattr(user, configured_name)
+
+            me_fields[f"resolve_{field_name}"] = field_resolver
+
+        declarations = tuple(
+            declaration
+            for declaration in (getattr(provider, "graphql_capabilities", ()) or ())
+            if isinstance(declaration, GraphQLPermissionCapability)
+        )
+        if declarations:
+            capability_type = cls._get_or_create_current_user_capability_type(
+                declarations
+            )
+            me_fields["capabilities"] = graphene.Field(capability_type, required=True)
+
+            def resolve_capabilities(
+                user: Any, info: GraphQLResolveInfo
+            ) -> dict[str, Any]:
+                del info
+                return {"instance": user}
+
+            me_fields["resolve_capabilities"] = resolve_capabilities
+
+        me_type = type("Me", (graphene.ObjectType,), me_fields)
+        cls._query_fields["me"] = graphene.Field(me_type)
+
+        def resolve_me(_root: Any, info: GraphQLResolveInfo) -> Any:
+            return getattr(info.context, "user", None)
+
+        cls._query_fields["resolve_me"] = resolve_me
+
+    @classmethod
+    def _get_or_create_current_user_capability_type(
+        cls,
+        declarations: tuple[GraphQLPermissionCapability, ...],
+    ) -> type[graphene.ObjectType]:
+        type_name = "MeCapabilities"
+        if type_name in cls.graphql_capability_type_registry:
+            return cls.graphql_capability_type_registry[type_name]
+
+        fields: dict[str, Any] = {}
+        for declaration in declarations:
+            fields[declaration.name] = graphene.Boolean(required=True)
+
+            def resolver(
+                parent: dict[str, Any],
+                info: GraphQLResolveInfo,
+                *,
+                capability: GraphQLPermissionCapability = declaration,
+            ) -> bool:
+                return get_capability_context(info).evaluate(
+                    capability,
+                    parent["instance"],
+                )
+
+            fields[f"resolve_{declaration.name}"] = resolver
+
+        capability_type = type(type_name, (graphene.ObjectType,), fields)
+        cls.graphql_capability_type_registry[type_name] = capability_type
+        return capability_type
+
+    @staticmethod
+    def _get_current_user_capability_provider() -> Any | None:
+        provider_path = get_setting("GRAPHQL_GLOBAL_CAPABILITIES_PROVIDER")
+        if not provider_path:
+            return None
+        provider_class = import_string(provider_path)
+        return provider_class()
 
     @staticmethod
     def _sort_by_options(

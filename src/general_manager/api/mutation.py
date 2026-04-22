@@ -124,6 +124,7 @@ def graph_ql_mutation(
         Returns:
             Callable[..., Any]: Original function after registration.
         """
+        cast(Any, fn)._general_manager_mutation_permission = permission
         sig = inspect.signature(fn)
         hints = get_type_hints(fn)
 

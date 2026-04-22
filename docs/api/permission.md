@@ -22,6 +22,18 @@
 
 ::: general_manager.permission.permission_checks.permission_functions
 
+## GraphQL permission capabilities
+
+::: general_manager.permission.graphql_capabilities.object_capability
+
+::: general_manager.permission.graphql_capabilities.permission_capability
+
+::: general_manager.permission.graphql_capabilities.mutation_capability
+
+::: general_manager.permission.graphql_capabilities.CapabilityEvaluationContext
+
+::: general_manager.permission.graphql_capabilities.GraphQLPermissionCapability
+
 ## Audit logging
 
 ::: general_manager.permission.audit.AuditLogger

@@ -14,12 +14,17 @@ from dataclasses import dataclass
 from typing import Any, Callable, Generic, TYPE_CHECKING, TypeVar, cast
 
 import graphene  # type: ignore[import]
+from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
 
 from general_manager.logging import get_logger
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.graphql_errors import get_read_permission_filter
+from general_manager.permission.graphql_capabilities import (
+    get_capability_context,
+    get_graphql_capabilities,
+)
 from general_manager.utils.type_checks import safe_issubclass
 
 if TYPE_CHECKING:
@@ -480,6 +485,15 @@ def create_list_resolver(
         total_count = len(qs_grouped)
 
         qs_paginated = apply_pagination(qs_grouped, page, page_size)
+        if not hasattr(qs_paginated, "groups") and selection_includes_path(
+            info, ("items", "capabilities")
+        ):
+            capability_declarations = get_graphql_capabilities(manager_class)
+            if capability_declarations:
+                get_capability_context(info).warm(
+                    capability_declarations,
+                    list(qs_paginated),
+                )
 
         page_info = {
             "total_count": total_count,
@@ -495,6 +509,52 @@ def create_list_resolver(
         }
 
     return resolver
+
+
+def selection_includes_path(
+    info: GraphQLResolveInfo,
+    path: tuple[str, ...],
+) -> bool:
+    """Return whether the current field selection includes the nested path."""
+    field_nodes = getattr(info, "field_nodes", ())
+    return any(
+        _selection_set_includes_path(
+            getattr(field_node, "selection_set", None),
+            path,
+            info,
+        )
+        for field_node in field_nodes
+    )
+
+
+def _selection_set_includes_path(
+    selection_set: Any,
+    path: tuple[str, ...],
+    info: GraphQLResolveInfo,
+) -> bool:
+    if selection_set is None or not path:
+        return False
+    target, *rest = path
+    for selection in selection_set.selections:
+        if isinstance(selection, FieldNode):
+            if selection.name.value != target:
+                continue
+            if not rest:
+                return True
+            if _selection_set_includes_path(selection.selection_set, tuple(rest), info):
+                return True
+        elif isinstance(selection, InlineFragmentNode):
+            if _selection_set_includes_path(selection.selection_set, path, info):
+                return True
+        elif isinstance(selection, FragmentSpreadNode):
+            fragment = info.fragments.get(selection.name.value)
+            if fragment and _selection_set_includes_path(
+                fragment.selection_set,
+                path,
+                info,
+            ):
+                return True
+    return False
 
 
 def create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
