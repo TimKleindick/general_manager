@@ -377,6 +377,7 @@ def handle_graph_ql(
         GraphQL.create_graphql_mutation(general_manager_class)
 
     GraphQL.register_search_query()
+    GraphQL.register_current_user_capabilities()
 
     query_class = type("Query", (graphene.ObjectType,), GraphQL._query_fields)
     GraphQL._query_class = query_class

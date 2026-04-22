@@ -214,6 +214,7 @@ class GMTestCaseMeta(type):
             GraphQL._subscription_payload_registry = {}
             GraphQL._page_type_registry = {}
             GraphQL.manager_registry = {}
+            GraphQL.graphql_capability_type_registry = {}
             GraphQL._schema = None
             GraphQL._search_union = None
             GraphQL._search_result_type = None

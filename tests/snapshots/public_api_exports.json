@@ -1,5 +1,9 @@
 {
   "general_manager": {
+    "AdditiveManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "AdditiveManagerPermission"
+    ],
     "CalculationInterface": [
       "general_manager.interface.interfaces.calculation",
       "CalculationInterface"
@@ -7,10 +11,6 @@
     "DatabaseInterface": [
       "general_manager.interface.interfaces.database",
       "DatabaseInterface"
-    ],
-    "AdditiveManagerPermission": [
-      "general_manager.permission.manager_based_permission",
-      "AdditiveManagerPermission"
     ],
     "ExistingModelInterface": [
       "general_manager.interface.interfaces.existing_model",
@@ -39,6 +39,10 @@
     "ManagerBasedPermission": [
       "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
+    ],
+    "OverrideManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "OverrideManagerPermission"
     ],
     "ReadOnlyInterface": [
       "general_manager.interface.interfaces.read_only",
@@ -103,10 +107,6 @@
     "permission_functions": [
       "general_manager.permission.permission_checks",
       "permission_functions"
-    ],
-    "OverrideManagerPermission": [
-      "general_manager.permission.manager_based_permission",
-      "OverrideManagerPermission"
     ],
     "register_permission": [
       "general_manager.permission.permission_checks",
@@ -492,6 +492,10 @@
       "general_manager.permission.base_permission",
       "BasePermission"
     ],
+    "CapabilityEvaluationContext": [
+      "general_manager.permission.graphql_capabilities",
+      "CapabilityEvaluationContext"
+    ],
     "DatabaseAuditLogger": [
       "general_manager.permission.audit",
       "DatabaseAuditLogger"
@@ -500,6 +504,10 @@
       "general_manager.permission.audit",
       "FileAuditLogger"
     ],
+    "GraphQLPermissionCapability": [
+      "general_manager.permission.graphql_capabilities",
+      "GraphQLPermissionCapability"
+    ],
     "ManagerBasedPermission": [
       "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
@@ -507,6 +515,10 @@
     "MutationPermission": [
       "general_manager.permission.mutation_permission",
       "MutationPermission"
+    ],
+    "OverrideManagerPermission": [
+      "general_manager.permission.manager_based_permission",
+      "OverrideManagerPermission"
     ],
     "PermissionAuditEvent": [
       "general_manager.permission.audit",
@@ -520,13 +532,21 @@
       "general_manager.permission.audit",
       "configure_audit_logger_from_settings"
     ],
+    "mutation_capability": [
+      "general_manager.permission.graphql_capabilities",
+      "mutation_capability"
+    ],
+    "object_capability": [
+      "general_manager.permission.graphql_capabilities",
+      "object_capability"
+    ],
+    "permission_capability": [
+      "general_manager.permission.graphql_capabilities",
+      "permission_capability"
+    ],
     "permission_functions": [
       "general_manager.permission.permission_checks",
       "permission_functions"
-    ],
-    "OverrideManagerPermission": [
-      "general_manager.permission.manager_based_permission",
-      "OverrideManagerPermission"
     ],
     "register_permission": [
       "general_manager.permission.permission_checks",
