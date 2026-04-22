@@ -324,9 +324,9 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertEqual(batch_calls, 1)
         self.assertTrue(context.evaluate(with_batch, instance))
 
-    def test_batch_warm_logs_and_falls_back_after_batch_errors(self) -> None:
+    def test_batch_warm_logs_and_caches_deny_after_batch_errors(self) -> None:
         """
-        Verify batch warmup logs failures and leaves per-object fallback available.
+        Verify batch warmup logs failures and caches deny results.
         """
         calls = 0
 
@@ -356,8 +356,8 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
             context.warm([declaration], [instance])
 
         logger_mock.warning.assert_called_once()
-        self.assertTrue(context.evaluate(declaration, instance))
-        self.assertEqual(calls, 1)
+        self.assertFalse(context.evaluate(declaration, instance))
+        self.assertEqual(calls, 0)
 
     def test_get_graphql_capabilities_filters_invalid_declarations(self) -> None:
         """
