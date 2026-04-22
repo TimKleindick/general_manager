@@ -133,6 +133,12 @@ class _Info:
 
 
 def _selection_info(query: str) -> object:
+    """
+    Build a lightweight GraphQL resolver info object from a query document.
+
+    The returned object provides `field_nodes` and `fragments`, matching the
+    attributes consumed by selection traversal helpers.
+    """
     document = parse(query)
     fragments = {
         definition.name.value: definition
@@ -353,6 +359,9 @@ class GraphQLHelperTests(SimpleTestCase):
         assert CountingPermission.check_count == 2
 
     def test_selection_includes_path_handles_direct_nested_fields(self) -> None:
+        """
+        Verify selection path detection works for directly nested list fields.
+        """
         info = _selection_info(
             """
             query {
@@ -371,6 +380,9 @@ class GraphQLHelperTests(SimpleTestCase):
         assert selection_includes_path(info, ("items", "missing")) is False
 
     def test_selection_includes_path_handles_fragments(self) -> None:
+        """
+        Verify selection path detection follows named and inline fragments.
+        """
         info = _selection_info(
             """
             query {
@@ -394,6 +406,9 @@ class GraphQLHelperTests(SimpleTestCase):
         assert selection_includes_path(info, ("items", "capabilities")) is True
 
     def test_selection_includes_path_handles_empty_or_missing_selections(self) -> None:
+        """
+        Verify selection path detection returns false for empty or absent selections.
+        """
         info = type("SelectionInfo", (), {})()
 
         assert selection_includes_path(info, ("items", "capabilities")) is False

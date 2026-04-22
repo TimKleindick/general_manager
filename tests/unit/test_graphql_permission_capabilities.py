@@ -28,6 +28,7 @@ class DummyManager:
     identification: dict[str, Any]
 
     def __hash__(self) -> int:
+        """Return a stable hash derived from the test identification code."""
         return hash(self.identification["code"])
 
 
@@ -50,14 +51,24 @@ class TestCurrentUserCapabilityProvider:
 
 class GraphQLPermissionCapabilityTests(SimpleTestCase):
     def test_object_capability_is_public_permission_api(self) -> None:
+        """
+        Verify the public permission package re-exports the object capability helper.
+        """
         from general_manager.permission import object_capability as public_helper
 
         self.assertIs(public_helper, object_capability)
 
     def test_object_capability_evaluates_once_per_operation_cache_key(self) -> None:
+        """
+        Verify object capability results are cached per operation identity.
+
+        The evaluator records each invocation so the assertion can prove repeated
+        evaluations for the same declaration and instance reuse the cached result.
+        """
         calls: list[str] = []
 
         def can_rename(instance: DummyManager, user: Any) -> bool:
+            """Record the evaluated manager code and allow the capability."""
             calls.append(instance.identification["code"])
             return True
 
@@ -71,9 +82,16 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertEqual(calls, ["ALPHA"])
 
     def test_object_capability_denies_and_caches_evaluator_errors(self) -> None:
+        """
+        Verify evaluator exceptions deny the capability and are cached.
+
+        The broken evaluator increments a counter before raising so repeated
+        evaluations can prove the deny-on-error result is stored.
+        """
         calls = 0
 
         def broken_evaluator(instance: DummyManager, user: Any) -> bool:
+            """Count the evaluation attempt and simulate a policy backend failure."""
             nonlocal calls
             calls += 1
             raise PolicyBackendUnavailable
@@ -88,12 +106,19 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertEqual(calls, 1)
 
     def test_object_capability_batch_evaluator_warms_cache(self) -> None:
+        """
+        Verify batch evaluators can populate cached object capability results.
+
+        The per-object evaluator returns false, so true results after warmup show
+        that the batch output was used instead of falling back.
+        """
         calls: list[list[str]] = []
 
         def can_rename_batch(
             instances: Sequence[Any],
             user: Any,
         ) -> dict[DummyManager, bool]:
+            """Record the warmed manager codes and allow each provided instance."""
             managers = cast(Sequence[DummyManager], instances)
             calls.append([instance.identification["code"] for instance in managers])
             return {instance: True for instance in managers}
@@ -114,7 +139,13 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertEqual(calls, [["ALPHA", "BETA"]])
 
     def test_permission_capability_allows_manager_without_permission(self) -> None:
+        """
+        Verify permission-backed capabilities allow managers without Permission classes.
+        """
+
         class UnprotectedManager:
+            """Manager stub with no nested Permission class."""
+
             pass
 
         declaration = permission_capability(UnprotectedManager, "create")
@@ -125,16 +156,27 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         )
 
     def test_permission_capability_delegates_create_update_and_delete(self) -> None:
+        """
+        Verify CRUD permission capabilities call the matching permission entrypoint.
+
+        The test manager records create, update, and delete calls to prove payload
+        resolution and action dispatch are wired through the real helper.
+        """
         calls: list[tuple[str, dict[str, Any]]] = []
 
         class ProtectedManager:
+            """Manager stub with a recording Permission class."""
+
             class Permission:
+                """Permission stub that records CRUD checks for assertions."""
+
                 @staticmethod
                 def check_create_permission(
                     payload: dict[str, Any],
                     target: type[Any],
                     user: Any,
                 ) -> None:
+                    """Record create permission payloads."""
                     del target, user
                     calls.append(("create", payload))
 
@@ -144,11 +186,13 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
                     instance: Any,
                     user: Any,
                 ) -> None:
+                    """Record update permission payloads."""
                     del instance, user
                     calls.append(("update", payload))
 
                 @staticmethod
                 def check_delete_permission(instance: Any, user: Any) -> None:
+                    """Record delete permission checks."""
                     del instance, user
                     calls.append(("delete", {}))
 
@@ -180,10 +224,19 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         )
 
     def test_permission_capability_denies_permission_errors(self) -> None:
+        """
+        Verify permission-backed capabilities return false when permissions fail.
+        """
+
         class ProtectedManager:
+            """Manager stub with a denying Permission class."""
+
             class Permission:
+                """Permission stub that denies delete checks."""
+
                 @staticmethod
                 def check_delete_permission(instance: Any, user: Any) -> None:
+                    """Raise a permission denial for delete operations."""
                     del instance, user
                     raise DeniedPermission
 
@@ -194,7 +247,12 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         )
 
     def test_mutation_capability_allows_unguarded_mutation(self) -> None:
+        """
+        Verify mutation-backed capabilities allow mutations with no permission class.
+        """
+
         def archive_project() -> None:
+            """Mutation stub used to carry GraphQL mutation metadata."""
             return None
 
         archive_project._general_manager_mutation_permission = None  # type: ignore[attr-defined]
@@ -206,13 +264,21 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         )
 
     def test_mutation_capability_denies_permission_errors(self) -> None:
+        """
+        Verify mutation-backed capabilities return false on permission errors.
+        """
+
         class ArchivePermission:
+            """Mutation permission stub that always denies."""
+
             @staticmethod
             def check(payload: dict[str, Any], user: Any) -> None:
+                """Raise a permission denial for the provided payload."""
                 del payload, user
                 raise DeniedPermission
 
         def archive_project() -> None:
+            """Mutation stub used to carry GraphQL mutation metadata."""
             return None
 
         archive_project._general_manager_mutation_permission = ArchivePermission  # type: ignore[attr-defined]
@@ -226,12 +292,16 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         )
 
     def test_batch_warm_skips_empty_uncacheable_and_cached_inputs(self) -> None:
+        """
+        Verify warmup skips empty inputs, unbatchable declarations, and cached rows.
+        """
         batch_calls = 0
 
         def can_rename_batch(
             instances: Sequence[Any],
             user: Any,
         ) -> list[bool]:
+            """Count batch evaluations and return an allow result."""
             nonlocal batch_calls
             del instances, user
             batch_calls += 1
@@ -255,13 +325,18 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertTrue(context.evaluate(with_batch, instance))
 
     def test_batch_warm_logs_and_falls_back_after_batch_errors(self) -> None:
+        """
+        Verify batch warmup logs failures and leaves per-object fallback available.
+        """
         calls = 0
 
         def broken_batch(instances: Sequence[Any], user: Any) -> list[bool]:
+            """Simulate a failing batch policy backend."""
             del instances, user
             raise PolicyBackendUnavailable
 
         def evaluator(instance: DummyManager, user: Any) -> bool:
+            """Count fallback object evaluations and allow the capability."""
             nonlocal calls
             del instance, user
             calls += 1
@@ -285,15 +360,25 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertEqual(calls, 1)
 
     def test_get_graphql_capabilities_filters_invalid_declarations(self) -> None:
+        """
+        Verify capability discovery returns only valid GraphQL capability declarations.
+        """
         valid = object_capability("canRename", lambda _instance, _user: True)
 
         class Project:
+            """Manager stub with mixed valid and invalid capability declarations."""
+
             class Permission:
+                """Permission stub exposing GraphQL capability declarations."""
+
                 graphql_capabilities = (valid, object())
 
         self.assertEqual(get_graphql_capabilities(Project), (valid,))
 
     def test_get_and_clear_capability_context_share_operation_storage(self) -> None:
+        """
+        Verify operation contexts are reused until explicitly cleared.
+        """
         info = SimpleNamespace(
             context=SimpleNamespace(user=AnonymousUser()),
             operation=object(),
@@ -310,10 +395,17 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
     def test_get_capability_context_returns_uncached_context_when_storage_fails(
         self,
     ) -> None:
+        """
+        Verify context creation falls back when request context storage is immutable.
+        """
+
         class FrozenContext:
+            """Context stub that rejects dynamic attribute storage."""
+
             user = AnonymousUser()
 
             def __setattr__(self, name: str, value: Any) -> None:
+                """Reject attempts to store operation-scoped cache state."""
                 del name, value
                 raise RuntimeError("frozen")
 
@@ -327,11 +419,17 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertIsNot(first, second)
 
     def test_clear_capability_context_ignores_missing_storage(self) -> None:
+        """
+        Verify clearing capability context is a no-op when storage is absent.
+        """
         info = SimpleNamespace(context=SimpleNamespace(), operation=object())
 
         clear_capability_context(info)
 
     def test_anonymous_context_default_user_identity(self) -> None:
+        """
+        Verify an omitted user defaults to an anonymous capability user.
+        """
         context = CapabilityEvaluationContext()
         declaration = GraphQLPermissionCapability(
             "canView",
@@ -341,7 +439,13 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertTrue(context.evaluate(declaration, DummyManager({"code": "ALPHA"})))
 
     def test_graphql_capability_type_is_cached_and_resolves_declaration(self) -> None:
+        """
+        Verify generated object capability GraphQL types are cached and resolvable.
+        """
+
         class Project(GeneralManager):
+            """Manager stub used for generated object capability type naming."""
+
             pass
 
         declaration = object_capability("canView", lambda _instance, _user: True)
@@ -364,6 +468,9 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
     def test_current_user_capability_type_is_cached_and_resolves_declaration(
         self,
     ) -> None:
+        """
+        Verify generated current-user capability types are cached and resolvable.
+        """
         user = AnonymousUser()
         declaration = object_capability(
             "canViewProfile",
@@ -385,6 +492,9 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={})
     def test_current_user_capability_provider_is_optional(self) -> None:
+        """
+        Verify current-user capability provider lookup returns none when unset.
+        """
         self.assertIsNone(GraphQL._get_current_user_capability_provider())
 
     @override_settings(
@@ -396,6 +506,9 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         }
     )
     def test_register_current_user_capabilities_uses_provider_fields(self) -> None:
+        """
+        Verify provider-backed `me` fields resolve through generated query fields.
+        """
         user = SimpleNamespace(email="apollo@example.com")
         GraphQL.reset_registry()
 
