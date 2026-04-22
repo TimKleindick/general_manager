@@ -4,7 +4,13 @@ from unittest import mock
 
 import pytest
 from django.test import SimpleTestCase
-from graphql.language.ast import IntValueNode, StringValueNode
+from graphql import parse
+from graphql.language.ast import (
+    FragmentDefinitionNode,
+    IntValueNode,
+    OperationDefinitionNode,
+    StringValueNode,
+)
 
 from general_manager.api.graphql import (
     BigIntScalar,
@@ -26,7 +32,10 @@ from general_manager.permission.base_permission import (
     BasePermission,
     ReadPermissionPlan,
 )
-from general_manager.api.graphql_resolvers import resolve_instance_check_reasons
+from general_manager.api.graphql_resolvers import (
+    resolve_instance_check_reasons,
+    selection_includes_path,
+)
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
 
@@ -121,6 +130,24 @@ class _Info:
         Sets self.context to a lightweight object with a single attribute `user` initialized to a generic object instance.
         """
         self.context = type("Context", (), {"user": object()})()
+
+
+def _selection_info(query: str) -> object:
+    document = parse(query)
+    fragments = {
+        definition.name.value: definition
+        for definition in document.definitions
+        if isinstance(definition, FragmentDefinitionNode)
+    }
+    field_nodes = [
+        selection
+        for definition in document.definitions
+        if isinstance(definition, OperationDefinitionNode)
+        for selection in definition.selection_set.selections
+    ]
+    return type(
+        "SelectionInfo", (), {"field_nodes": field_nodes, "fragments": fragments}
+    )()
 
 
 class GraphQLHelperTests(SimpleTestCase):
@@ -324,6 +351,55 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert result["pageInfo"]["total_count"] == 2
         assert CountingPermission.check_count == 2
+
+    def test_selection_includes_path_handles_direct_nested_fields(self) -> None:
+        info = _selection_info(
+            """
+            query {
+                projectList {
+                    items {
+                        capabilities {
+                            canRename
+                        }
+                    }
+                }
+            }
+            """
+        )
+
+        assert selection_includes_path(info, ("items", "capabilities")) is True
+        assert selection_includes_path(info, ("items", "missing")) is False
+
+    def test_selection_includes_path_handles_fragments(self) -> None:
+        info = _selection_info(
+            """
+            query {
+                projectList {
+                    ...ProjectPageFields
+                }
+            }
+
+            fragment ProjectPageFields on ProjectPage {
+                items {
+                    ... on ProjectType {
+                        capabilities {
+                            canRename
+                        }
+                    }
+                }
+            }
+            """
+        )
+
+        assert selection_includes_path(info, ("items", "capabilities")) is True
+
+    def test_selection_includes_path_handles_empty_or_missing_selections(self) -> None:
+        info = type("SelectionInfo", (), {})()
+
+        assert selection_includes_path(info, ("items", "capabilities")) is False
+        assert selection_includes_path(
+            _selection_info("query { projectList }"), ()
+        ) is (False)
 
     def test_graphql_error_types(self) -> None:
         """
