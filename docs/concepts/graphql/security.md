@@ -58,12 +58,16 @@ GENERAL_MANAGER = {
 class GraphQLCapabilities:
     graphql_fields = {"username": str}
     graphql_capabilities = (
-        object_capability("canOpenAdmin", lambda _user, request_user: request_user.is_staff),
+        object_capability("canOpenAdmin", lambda instance, user: user.is_staff),
     )
 
     def resolve_username(self, user, info):
         return user.username
 ```
+
+For `object_capability`, the evaluator is called as `(instance, user)`, where
+`instance` is the provider or managed object and `user` is the requesting or
+resolved user.
 
 When no provider is configured, the schema does not expose `me`.
 

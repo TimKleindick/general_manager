@@ -203,21 +203,7 @@ class GMTestCaseMeta(type):
 
             Resets GraphQL registries and schema/type state; optionally installs a fallback AppConfig lookup if configured; creates any missing database tables for models referenced by the test's GeneralManager interfaces (including their history models and models related via HistoricalChanges) and records created table names on cls._gm_created_tables; initializes GeneralManager classes and their GraphQL registrations (including installing the startup hook runner and registering system checks); clears the default GraphQL URL pattern; executes any user-defined setUpClass for the test class; and finally invokes the base GraphQLTransactionTestCase.setUpClass.
             """
-            GraphQL._query_class = None
-            GraphQL._mutation_class = None
-            GraphQL._subscription_class = None
-            GraphQL._mutations = {}
-            GraphQL._query_fields = {}
-            GraphQL._subscription_fields = {}
-            GraphQL.graphql_type_registry = {}
-            GraphQL.graphql_filter_type_registry = {}
-            GraphQL._subscription_payload_registry = {}
-            GraphQL._page_type_registry = {}
-            GraphQL.manager_registry = {}
-            GraphQL.graphql_capability_type_registry = {}
-            GraphQL._schema = None
-            GraphQL._search_union = None
-            GraphQL._search_result_type = None
+            GraphQL.reset_registry()
 
             if fallback_app is not None:
                 handler = create_fallback_get_app(fallback_app)

@@ -59,6 +59,9 @@ class GraphQLRegistry:
     )
     graphql_type_registry: dict[str, type] = field(default_factory=dict)
     graphql_filter_type_registry: dict[str, type] = field(default_factory=dict)
+    graphql_capability_type_registry: dict[str, type[graphene.ObjectType]] = field(
+        default_factory=dict
+    )
     manager_registry: dict[str, type[GeneralManager]] = field(default_factory=dict)
 
     # Search

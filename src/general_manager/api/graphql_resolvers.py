@@ -484,15 +484,17 @@ def create_list_resolver(
 
         total_count = len(qs_grouped)
 
-        qs_paginated = apply_pagination(qs_grouped, page, page_size)
-        if not hasattr(qs_paginated, "groups") and selection_includes_path(
+        qs_paginated: Any = apply_pagination(qs_grouped, page, page_size)
+        if not hasattr(qs_paginated, "groups"):
+            qs_paginated = list(qs_paginated)
+        if isinstance(qs_paginated, list) and selection_includes_path(
             info, ("items", "capabilities")
         ):
             capability_declarations = get_graphql_capabilities(manager_class)
             if capability_declarations:
                 get_capability_context(info).warm(
                     capability_declarations,
-                    list(qs_paginated),
+                    qs_paginated,
                 )
 
         page_info = {
@@ -522,6 +524,7 @@ def selection_includes_path(
             getattr(field_node, "selection_set", None),
             path,
             info,
+            frozenset(),
         )
         for field_node in field_nodes
     )
@@ -531,6 +534,7 @@ def _selection_set_includes_path(
     selection_set: Any,
     path: tuple[str, ...],
     info: GraphQLResolveInfo,
+    visited: frozenset[str],
 ) -> bool:
     if selection_set is None or not path:
         return False
@@ -541,17 +545,31 @@ def _selection_set_includes_path(
                 continue
             if not rest:
                 return True
-            if _selection_set_includes_path(selection.selection_set, tuple(rest), info):
+            if _selection_set_includes_path(
+                selection.selection_set,
+                tuple(rest),
+                info,
+                visited,
+            ):
                 return True
         elif isinstance(selection, InlineFragmentNode):
-            if _selection_set_includes_path(selection.selection_set, path, info):
+            if _selection_set_includes_path(
+                selection.selection_set,
+                path,
+                info,
+                visited,
+            ):
                 return True
         elif isinstance(selection, FragmentSpreadNode):
-            fragment = info.fragments.get(selection.name.value)
+            fragment_name = selection.name.value
+            if fragment_name in visited:
+                continue
+            fragment = info.fragments.get(fragment_name)
             if fragment and _selection_set_includes_path(
                 fragment.selection_set,
                 path,
                 info,
+                visited | frozenset((fragment_name,)),
             ):
                 return True
     return False
