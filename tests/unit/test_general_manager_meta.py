@@ -494,6 +494,11 @@ class GeneralManagerMetaTests(SimpleTestCase):
                 user = GMInput(int, possible_values=[1, 2, 3])
 
         self.assertNotIn("user", vars(LateImportedCalculation))
+        self.assertIs(LateImportedCalculation.user, int)
+        self.assertNotIn(
+            LateImportedCalculation,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
         manager = LateImportedCalculation(user="1")
 
         self.assertEqual(manager.user, 1)
@@ -588,6 +593,49 @@ class GeneralManagerMetaTests(SimpleTestCase):
 
         self.assertEqual(manager.display_name, "falcon")
         self.assertIs(LateImportedPlainManager.display_name, str)
+
+    def test_late_imported_manager_declared_field_overrides_inherited_attribute(self):
+        class LateImportedCalculation(GeneralManager):
+            create: int
+
+            class Interface(CalculationInterface):
+                create = GMInput(int, possible_values=[1, 2, 3])
+
+        self.assertNotIn("create", vars(LateImportedCalculation))
+
+        self.assertIs(LateImportedCalculation.create, int)
+        self.assertEqual(LateImportedCalculation(create=2).create, 2)
+
+    def test_late_imported_manager_without_read_attributes_raises_attribute_error(self):
+        class LateImportedInterface(DummyInterface):
+            input_fields: ClassVar[dict[str, GMInput]] = {"slug": GMInput(str)}
+
+            @classmethod
+            def get_attributes(cls) -> dict[str, object]:
+                raise NotImplementedError
+
+            @classmethod
+            def handle_interface(cls):
+                def pre_creation(name, attrs, interface):
+                    attrs["Interface"] = interface
+                    return attrs, interface, None
+
+                def post_creation(new_cls, interface_cls, model):
+                    return None
+
+                return pre_creation, post_creation
+
+        class LateImportedPlainManager(GeneralManager):
+            missing: str
+
+            class Interface(LateImportedInterface):
+                pass
+
+        manager = LateImportedPlainManager(slug="falcon")
+
+        missing_attribute = "missing"
+        with self.assertRaises(AttributeError):
+            getattr(manager, missing_attribute)
 
     def test_invalid_interface_raises_type_error(self):
         """

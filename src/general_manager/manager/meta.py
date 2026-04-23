@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Type, TypeVar, cast
 
 from general_manager.interface.base_interface import InterfaceBase
@@ -86,7 +87,24 @@ class GeneralManagerMeta(type):
     read_only_classes: ClassVar[list[Type[GeneralManager]]] = []
     pending_graphql_interfaces: ClassVar[list[Type[GeneralManager]]] = []
     pending_attribute_initialization: ClassVar[list[Type[GeneralManager]]] = []
+    _attribute_initialization_lock: ClassVar[Any] = threading.Lock()
     Interface: type[InterfaceBase]
+
+    def __getattribute__(cls, attribute_name: str) -> Any:
+        """
+        Initialize late-imported field descriptors before class attribute lookup.
+
+        ``__getattr__`` is only reached for missing names, so inherited
+        ``GeneralManager`` attributes must pass through here to let declared
+        fields override inherited names the same way bootstrap initialization
+        does.
+        """
+        if not attribute_name.startswith("_"):
+            manager_class = cast(Type["GeneralManager"], cls)
+            GeneralManagerMeta.ensure_attributes_initialized(
+                manager_class, attribute_name
+            )
+        return type.__getattribute__(cls, attribute_name)
 
     def __getattr__(cls, attribute_name: str) -> Any:
         """
@@ -124,25 +142,35 @@ class GeneralManagerMeta(type):
             return False
         if not hasattr(interface, "get_attributes"):
             return False
-        if "_attributes" in vars(manager_class):
-            attributes = manager_class._attributes
+
+        with GeneralManagerMeta._attribute_initialization_lock:
+            if "_attributes" in vars(manager_class):
+                attributes = manager_class._attributes
+                if attribute_name is not None and attribute_name not in attributes:
+                    return False
+                if attribute_name is None or attribute_name not in vars(manager_class):
+                    GeneralManagerMeta.create_at_properties_for_attributes(
+                        attributes.keys(), manager_class
+                    )
+                return True
+
+            try:
+                attributes = interface.get_attributes()
+            except NotImplementedError:
+                return False
             if attribute_name is not None and attribute_name not in attributes:
                 return False
-            if attribute_name is None or attribute_name not in vars(manager_class):
-                GeneralManagerMeta.create_at_properties_for_attributes(
-                    attributes.keys(), manager_class
+            manager_class._attributes = attributes
+            GeneralManagerMeta.create_at_properties_for_attributes(
+                attributes.keys(), manager_class
+            )
+            try:
+                GeneralManagerMeta.pending_attribute_initialization.remove(
+                    manager_class
                 )
+            except ValueError:
+                pass
             return True
-        attributes = interface.get_attributes()
-        if attribute_name is not None and attribute_name not in attributes:
-            return False
-        manager_class._attributes = attributes
-        GeneralManagerMeta.create_at_properties_for_attributes(
-            attributes.keys(), manager_class
-        )
-        if manager_class in GeneralManagerMeta.pending_attribute_initialization:
-            GeneralManagerMeta.pending_attribute_initialization.remove(manager_class)
-        return True
 
     @staticmethod
     def ensure_manager_is_valid(
