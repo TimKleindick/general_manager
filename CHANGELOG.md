@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.38.1 (2026-04-23)
+
+### Bug Fixes
+
+- Harden lazy manager attribute initialization
+  ([`8275e14`](https://github.com/TimKleindick/general_manager/commit/8275e14fb5635d4e3c1cfc83f0df22a0ba199854))
+
+- Lazily initialize late manager attributes
+  ([`75a5dd8`](https://github.com/TimKleindick/general_manager/commit/75a5dd88406bdb90a12f82fba376263315ac68f5))
+
+
 ## v0.38.0 (2026-04-23)
 
 ### Bug Fixes
