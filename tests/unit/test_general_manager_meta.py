@@ -7,6 +7,8 @@ from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
 )
+from general_manager.bootstrap import initialize_general_manager_classes
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input as GMInput
 
 
@@ -476,6 +478,116 @@ class GeneralManagerMetaTests(SimpleTestCase):
             hasattr(MyManager, "post_mark") and MyManager.post_mark is True,  # type: ignore
             msg="MyManager.post_mark should be True set by the DummyInterface post_creation hook.",
         )
+
+    def test_late_imported_manager_initializes_declared_field_on_access(self):
+        """
+        Managers imported after app startup should still expose declared fields.
+
+        This mirrors shell/test scratch modules: the class is registered by the
+        metaclass, but the startup bootstrap has not installed descriptors yet.
+        """
+
+        class LateImportedCalculation(GeneralManager):
+            user: int
+
+            class Interface(CalculationInterface):
+                user = GMInput(int, possible_values=[1, 2, 3])
+
+        self.assertNotIn("user", vars(LateImportedCalculation))
+        manager = LateImportedCalculation(user="1")
+
+        self.assertEqual(manager.user, 1)
+        self.assertIs(LateImportedCalculation.user, int)
+        self.assertNotIn(
+            LateImportedCalculation,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+    def test_late_imported_manager_still_raises_for_unknown_attribute(self):
+        class LateImportedCalculation(GeneralManager):
+            user: int
+
+            class Interface(CalculationInterface):
+                user = GMInput(int, possible_values=[1, 2, 3])
+
+        manager = LateImportedCalculation(user=1)
+
+        missing_attribute = "organization"
+        with self.assertRaises(AttributeError):
+            getattr(manager, missing_attribute)
+
+    def test_lazy_initialized_manager_does_not_block_bootstrap_initialization(self):
+        class LazyCalculation(GeneralManager):
+            user: int
+
+            class Interface(CalculationInterface):
+                user = GMInput(int, possible_values=[1, 2, 3])
+
+        class PendingCalculation(GeneralManager):
+            project: int
+
+            class Interface(CalculationInterface):
+                project = GMInput(int, possible_values=[10, 20])
+
+        lazy_manager = LazyCalculation(user=1)
+
+        self.assertEqual(lazy_manager.user, 1)
+        self.assertNotIn(
+            LazyCalculation,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+        self.assertIn(
+            PendingCalculation,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
+        initialize_general_manager_classes(
+            GeneralManagerMeta.pending_attribute_initialization,
+            GeneralManagerMeta.all_classes,
+        )
+
+        self.assertIs(LazyCalculation.user, int)
+        self.assertIs(PendingCalculation.project, int)
+        self.assertEqual(PendingCalculation(project=10).project, 10)
+
+    def test_late_imported_manager_initializes_non_calculation_field_on_access(self):
+        class LateImportedInterface(DummyInterface):
+            input_fields: ClassVar[dict[str, GMInput]] = {"slug": GMInput(str)}
+
+            @classmethod
+            def get_attributes(cls) -> dict[str, object]:
+                return {
+                    "display_name": lambda interface: interface.identification["slug"]
+                }
+
+            @classmethod
+            def get_field_type(cls, field_name: str) -> type:
+                if field_name == "display_name":
+                    return str
+                return super().get_field_type(field_name)
+
+            @classmethod
+            def handle_interface(cls):
+                def pre_creation(name, attrs, interface):
+                    attrs["Interface"] = interface
+                    return attrs, interface, None
+
+                def post_creation(new_cls, interface_cls, model):
+                    return None
+
+                return pre_creation, post_creation
+
+        class LateImportedPlainManager(GeneralManager):
+            display_name: str
+
+            class Interface(LateImportedInterface):
+                pass
+
+        self.assertNotIn("display_name", vars(LateImportedPlainManager))
+        manager = LateImportedPlainManager(slug="falcon")
+
+        self.assertEqual(manager.display_name, "falcon")
+        self.assertIs(LateImportedPlainManager.display_name, str)
 
     def test_invalid_interface_raises_type_error(self):
         """

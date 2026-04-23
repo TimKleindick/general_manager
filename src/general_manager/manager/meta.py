@@ -88,6 +88,62 @@ class GeneralManagerMeta(type):
     pending_attribute_initialization: ClassVar[list[Type[GeneralManager]]] = []
     Interface: type[InterfaceBase]
 
+    def __getattr__(cls, attribute_name: str) -> Any:
+        """
+        Lazily install field descriptors for manager classes imported after startup.
+
+        Django app initialization wires descriptors for managers known at startup.
+        Managers defined later, for example in an interactive shell or a test scratch
+        module, still register with this metaclass but have not had descriptors
+        attached yet. If the missing class attribute is a declared manager field,
+        initialize the class and retry the lookup.
+        """
+        manager_class = cast(Type["GeneralManager"], cls)
+        if GeneralManagerMeta.ensure_attributes_initialized(
+            manager_class, attribute_name
+        ):
+            return getattr(cls, attribute_name)
+        raise AttributeError(attribute_name)
+
+    @staticmethod
+    def ensure_attributes_initialized(
+        manager_class: Type["GeneralManager"],
+        attribute_name: str | None = None,
+    ) -> bool:
+        """
+        Ensure descriptor-backed fields are installed for ``manager_class``.
+
+        Returns ``True`` when the class exposes ``attribute_name`` after
+        initialization, or when no specific attribute was requested and
+        descriptors were installed. Returns ``False`` for unknown attributes or
+        classes that do not expose interface-backed fields.
+        """
+        try:
+            interface = type.__getattribute__(manager_class, "Interface")
+        except AttributeError:
+            return False
+        if not hasattr(interface, "get_attributes"):
+            return False
+        if "_attributes" in vars(manager_class):
+            attributes = manager_class._attributes
+            if attribute_name is not None and attribute_name not in attributes:
+                return False
+            if attribute_name is None or attribute_name not in vars(manager_class):
+                GeneralManagerMeta.create_at_properties_for_attributes(
+                    attributes.keys(), manager_class
+                )
+            return True
+        attributes = interface.get_attributes()
+        if attribute_name is not None and attribute_name not in attributes:
+            return False
+        manager_class._attributes = attributes
+        GeneralManagerMeta.create_at_properties_for_attributes(
+            attributes.keys(), manager_class
+        )
+        if manager_class in GeneralManagerMeta.pending_attribute_initialization:
+            GeneralManagerMeta.pending_attribute_initialization.remove(manager_class)
+        return True
+
     @staticmethod
     def ensure_manager_is_valid(
         instance: "GeneralManager",
