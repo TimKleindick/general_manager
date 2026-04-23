@@ -255,7 +255,6 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
             """Mutation stub used to carry GraphQL mutation metadata."""
             return None
 
-        archive_project._general_manager_mutation_permission = None  # type: ignore[attr-defined]
         declaration = mutation_capability(cast(type[Any], archive_project))
 
         self.assertEqual(declaration.name, "archiveProject")
@@ -323,6 +322,45 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
 
         self.assertEqual(batch_calls, 1)
         self.assertTrue(context.evaluate(with_batch, instance))
+
+    def test_batch_warm_mismatched_result_length_caches_deny(self) -> None:
+        """
+        Verify mismatched batch result lengths fail closed for all missing rows.
+        """
+        calls = 0
+
+        def short_batch(instances: Sequence[Any], user: Any) -> list[bool]:
+            """Return too few batch results for the provided instances."""
+            del instances, user
+            return [True]
+
+        def evaluator(instance: DummyManager, user: Any) -> bool:
+            """Count fallback object evaluations and allow the capability."""
+            nonlocal calls
+            del instance, user
+            calls += 1
+            return True
+
+        declaration = object_capability(
+            "canRename",
+            evaluator,
+            batch_evaluator=short_batch,
+        )
+        instances = [
+            DummyManager({"code": "ALPHA"}),
+            DummyManager({"code": "BETA"}),
+        ]
+        context = CapabilityEvaluationContext(user=AnonymousUser())
+
+        with mock.patch(
+            "general_manager.permission.graphql_capabilities.logger"
+        ) as logger_mock:
+            context.warm([declaration], instances)
+
+        logger_mock.warning.assert_called_once()
+        self.assertFalse(context.evaluate(declaration, instances[0]))
+        self.assertFalse(context.evaluate(declaration, instances[1]))
+        self.assertEqual(calls, 0)
 
     def test_batch_warm_logs_and_caches_deny_after_batch_errors(self) -> None:
         """
@@ -450,20 +488,26 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
 
         declaration = object_capability("canView", lambda _instance, _user: True)
         GraphQL.reset_registry()
+        try:
+            capability_type = GraphQL._get_or_create_capability_type(
+                Project,
+                (declaration,),
+            )
+            cached_type = GraphQL._get_or_create_capability_type(
+                Project, (declaration,)
+            )
+            resolver = capability_type.resolve_canView
+            info = SimpleNamespace(
+                context=SimpleNamespace(user=AnonymousUser()),
+                operation=object(),
+            )
 
-        capability_type = GraphQL._get_or_create_capability_type(
-            Project,
-            (declaration,),
-        )
-        cached_type = GraphQL._get_or_create_capability_type(Project, (declaration,))
-        resolver = capability_type.resolve_canView
-        info = SimpleNamespace(
-            context=SimpleNamespace(user=AnonymousUser()),
-            operation=object(),
-        )
-
-        self.assertIs(capability_type, cached_type)
-        self.assertTrue(resolver({"instance": DummyManager({"code": "ALPHA"})}, info))
+            self.assertIs(capability_type, cached_type)
+            self.assertTrue(
+                resolver({"instance": DummyManager({"code": "ALPHA"})}, info)
+            )
+        finally:
+            GraphQL.reset_registry()
 
     def test_current_user_capability_type_is_cached_and_resolves_declaration(
         self,
@@ -477,18 +521,22 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
             lambda current_user, request_user: current_user is request_user,
         )
         GraphQL.reset_registry()
+        try:
+            capability_type = GraphQL._get_or_create_current_user_capability_type(
+                (declaration,)
+            )
+            cached_type = GraphQL._get_or_create_current_user_capability_type(
+                (declaration,)
+            )
+            resolver = capability_type.resolve_canViewProfile
+            info = SimpleNamespace(
+                context=SimpleNamespace(user=user), operation=object()
+            )
 
-        capability_type = GraphQL._get_or_create_current_user_capability_type(
-            (declaration,)
-        )
-        cached_type = GraphQL._get_or_create_current_user_capability_type(
-            (declaration,)
-        )
-        resolver = capability_type.resolve_canViewProfile
-        info = SimpleNamespace(context=SimpleNamespace(user=user), operation=object())
-
-        self.assertIs(capability_type, cached_type)
-        self.assertTrue(resolver({"instance": user}, info))
+            self.assertIs(capability_type, cached_type)
+            self.assertTrue(resolver({"instance": user}, info))
+        finally:
+            GraphQL.reset_registry()
 
     @override_settings(GENERAL_MANAGER={})
     def test_current_user_capability_provider_is_optional(self) -> None:
@@ -511,17 +559,20 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         """
         user = SimpleNamespace(email="apollo@example.com")
         GraphQL.reset_registry()
+        try:
+            GraphQL.register_current_user_capabilities()
+            me_resolver = GraphQL._query_fields["resolve_me"]
+            me_field_resolver = GraphQL._query_fields["me"].type.resolve_email
 
-        GraphQL.register_current_user_capabilities()
-        me_resolver = GraphQL._query_fields["resolve_me"]
-        me_field_resolver = GraphQL._query_fields["me"].type.resolve_email
-
-        self.assertIs(
-            me_resolver(None, SimpleNamespace(context=SimpleNamespace(user=user))), user
-        )
-        self.assertEqual(
-            me_field_resolver(
-                user, SimpleNamespace(context=SimpleNamespace(user=user))
-            ),
-            "apollo@example.com",
-        )
+            self.assertIs(
+                me_resolver(None, SimpleNamespace(context=SimpleNamespace(user=user))),
+                user,
+            )
+            self.assertEqual(
+                me_field_resolver(
+                    user, SimpleNamespace(context=SimpleNamespace(user=user))
+                ),
+                "apollo@example.com",
+            )
+        finally:
+            GraphQL.reset_registry()

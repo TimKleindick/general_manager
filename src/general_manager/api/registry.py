@@ -2,7 +2,7 @@
 GraphQLRegistry — a typed container for all mutable state managed by the
 ``GraphQL`` class.
 
-Extracting the 13 ``ClassVar`` registries into a single dataclass makes the
+Extracting the ``ClassVar`` registries into a single dataclass makes the
 state explicit, documentable, and resettable:
 
     from general_manager.api.graphql import GraphQL

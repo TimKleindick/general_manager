@@ -81,7 +81,9 @@ def mutation_capability(
     capability_name = name or _lower_camel(getattr(mutation, "__name__", "mutation"))
 
     def evaluator(instance: Any, user: Any) -> bool:
-        permission = getattr(mutation, "_general_manager_mutation_permission", mutation)
+        permission = getattr(mutation, "_general_manager_mutation_permission", None)
+        if permission is None and hasattr(mutation, "check"):
+            permission = mutation
         if permission is None:
             return True
         resolved_payload = _resolve_payload(payload, instance, user)
@@ -176,7 +178,7 @@ class CapabilityEvaluationContext:
                     self._cache[key] = normalized[identity]
             return
 
-        for instance, value in zip(instances, batch_result, strict=False):
+        for instance, value in zip(instances, batch_result, strict=True):
             self._cache[self._cache_key(declaration, instance)] = bool(value)
 
     def _cache_key(
