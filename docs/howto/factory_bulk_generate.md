@@ -134,6 +134,33 @@ def project_factory() -> Callable[..., Project]:
 
 Use the fixture in tests to create data on demand.
 
+## Seed a manager landscape from the command line
+
+Use `seed_manager_landscape` when you want a local or demo database to contain a minimum number of rows for one or more managers that already expose factories.
+
+The command is explicit by default. Select managers with `--manager`, or pass `--all` to target every manager discovered by GeneralManager that has `Factory.create_batch`.
+
+```bash
+python manage.py seed_manager_landscape \
+  --manager Project \
+  --manager InventoryItem \
+  --count 10 \
+  --target InventoryItem=50 \
+  --batch-size 25
+```
+
+Targets are minimum totals. If `Project` already has 12 rows, `--count 10` creates no additional projects. If `InventoryItem` has 20 rows, `--target InventoryItem=50` creates 30 more.
+
+Use `--dry-run` to inspect ordering and missing dependencies without writing data:
+
+```bash
+python manage.py seed_manager_landscape --manager Project --count 10 --dry-run
+```
+
+The command orders selected managers so required database relations are seeded first when both sides are selected. It does not automatically add unselected dependencies; select those managers explicitly when your factories require existing related data.
+
+By default, seeding stops at the first failure and reports the manager and batch size. Use `--continue-on-error` to continue with later managers and receive a summary at the end.
+
 ## Step 5: Tear down
 
 Use database transactions or pytest's `django_db(reset_sequences=True)` marker to keep the test environment clean after bulk creation.
