@@ -2,6 +2,49 @@
 
 <!-- version list -->
 
+## v0.38.0 (2026-04-23)
+
+### Bug Fixes
+
+- Address graphql capability review feedback
+  ([`bbd946d`](https://github.com/TimKleindick/general_manager/commit/bbd946d21f8d0c4c4be7cb57792f9bea929faa9a))
+
+- Deny missing capability batch results
+  ([`6faddea`](https://github.com/TimKleindick/general_manager/commit/6faddeac2a638b3fbee5da02530c5d1754fbbdf0))
+
+- Harden graphql capability registry tests
+  ([`b263559`](https://github.com/TimKleindick/general_manager/commit/b263559a44085f3bdd17ac9dbddb70d3f2b16507))
+
+- Refresh subscription capability cache
+  ([`19d3ee6`](https://github.com/TimKleindick/general_manager/commit/19d3ee61cdd5421bb4cf4375412a34402660d63f))
+
+### Continuous Integration
+
+- Pin codecov cli version
+  ([`d2e96ac`](https://github.com/TimKleindick/general_manager/commit/d2e96ac9def13648b85dce0e66139baa44ef7326))
+
+### Documentation
+
+- Add ADR 0007 for GraphQL capability exposure in frontend authorization
+  ([`a8bc152`](https://github.com/TimKleindick/general_manager/commit/a8bc152703e4f01f1f97bacc1173c55248a16c69))
+
+### Features
+
+- Expose graphql permission capabilities
+  ([`62cf4d9`](https://github.com/TimKleindick/general_manager/commit/62cf4d9aed4e566ab0d489c6537a523a077bcac0))
+
+### Testing
+
+- Cover graphql capability helpers
+  ([`c72415f`](https://github.com/TimKleindick/general_manager/commit/c72415f6a40de67cc3a81bd27679f96d757962e3))
+
+- Document graphql capability coverage
+  ([`bbf5aca`](https://github.com/TimKleindick/general_manager/commit/bbf5acaa9aa309b4340dd2799ca092ebb6412cc4))
+
+- Update capability batch failure expectation
+  ([`a795798`](https://github.com/TimKleindick/general_manager/commit/a795798d68ea2a64d17de008508264972bf8d1a4))
+
+
 ## v0.37.5 (2026-04-21)
 
 ### Bug Fixes
