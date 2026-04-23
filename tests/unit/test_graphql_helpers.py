@@ -183,6 +183,7 @@ class GraphQLHelperTests(SimpleTestCase):
         Verify registry snapshots include generated capability GraphQL types.
         """
         capability_type = type("CapabilityType", (graphene.ObjectType,), {})
+        original_registry = GraphQL.graphql_capability_type_registry
         GraphQL.graphql_capability_type_registry = {"Capability": capability_type}
         try:
             snapshot = GraphQL.get_registry_snapshot()
@@ -194,7 +195,7 @@ class GraphQLHelperTests(SimpleTestCase):
                 GraphQL.graphql_capability_type_registry
             )
         finally:
-            GraphQL.graphql_capability_type_registry = {}
+            GraphQL.graphql_capability_type_registry = original_registry
 
     def test_measurement_scalar_parse_literal(self) -> None:
         node = StringValueNode(value="10 m")
