@@ -53,4 +53,5 @@ jobs:
         with:
           files: coverage.xml
           flags: unittests
+          version: v11.2.7
           fail_ci_if_error: true
