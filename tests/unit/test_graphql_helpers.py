@@ -452,9 +452,10 @@ class GraphQLHelperTests(SimpleTestCase):
         info = type("SelectionInfo", (), {})()
 
         assert selection_includes_path(info, ("items", "capabilities")) is False
-        assert selection_includes_path(
-            _selection_info("query { projectList }"), ()
-        ) is (False)
+        assert (
+            selection_includes_path(_selection_info("query { projectList }"), ())
+            is False
+        )
 
     def test_graphql_error_types(self) -> None:
         """
