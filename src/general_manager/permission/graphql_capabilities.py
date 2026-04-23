@@ -172,10 +172,10 @@ class CapabilityEvaluationContext:
                 for instance, value in batch_result.items()
             }
             for instance in instances:
-                key = self._cache_key(declaration, instance)
                 identity = _instance_identity(instance)
-                if identity in normalized:
-                    self._cache[key] = normalized[identity]
+                self._cache[self._cache_key(declaration, instance)] = bool(
+                    normalized.get(identity, False)
+                )
             return
 
         for instance, value in zip(instances, batch_result, strict=True):

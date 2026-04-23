@@ -138,6 +138,43 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         self.assertTrue(context.evaluate(declaration, second))
         self.assertEqual(calls, [["ALPHA", "BETA"]])
 
+    def test_object_capability_batch_mapping_missing_entries_deny(self) -> None:
+        """
+        Verify missing mapping entries are cached as deny results after warmup.
+        """
+        calls = 0
+
+        def can_rename_batch(
+            instances: Sequence[Any],
+            user: Any,
+        ) -> dict[DummyManager, bool]:
+            """Allow only the first provided instance in the batch result."""
+            del user
+            managers = cast(Sequence[DummyManager], instances)
+            return {managers[0]: True}
+
+        def can_rename(instance: DummyManager, user: Any) -> bool:
+            """Count fallback evaluations and allow the capability."""
+            nonlocal calls
+            del instance, user
+            calls += 1
+            return True
+
+        declaration = object_capability(
+            "canRename",
+            can_rename,
+            batch_evaluator=can_rename_batch,
+        )
+        first = DummyManager({"code": "ALPHA"})
+        second = DummyManager({"code": "BETA"})
+        context = CapabilityEvaluationContext(user=AnonymousUser())
+
+        context.warm([declaration], [first, second])
+
+        self.assertTrue(context.evaluate(declaration, first))
+        self.assertFalse(context.evaluate(declaration, second))
+        self.assertEqual(calls, 0)
+
     def test_permission_capability_allows_manager_without_permission(self) -> None:
         """
         Verify permission-backed capabilities allow managers without Permission classes.
