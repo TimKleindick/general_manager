@@ -77,6 +77,21 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         """Return a detailed representation of the manager instance."""
         return f"{self.__class__.__name__}(**{self.__id})"
 
+    def __getattr__(self, attribute_name: str) -> Any:
+        """
+        Lazily install descriptors for declared fields on late-imported managers.
+
+        Manager classes imported after Django app startup are registered but have
+        not yet had descriptor properties attached. Falling back here lets
+        interactive and test-only managers behave like startup-loaded managers
+        while preserving normal ``AttributeError`` behavior for unknown names.
+        """
+        if GeneralManagerMeta.ensure_attributes_initialized(
+            self.__class__, attribute_name
+        ):
+            return object.__getattribute__(self, attribute_name)
+        raise AttributeError(attribute_name)
+
     def __reduce__(self) -> str | tuple[Any, ...]:
         """
         Provide pickling support for the manager instance.
