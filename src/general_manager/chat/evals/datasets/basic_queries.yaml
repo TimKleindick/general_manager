@@ -63,3 +63,35 @@
     results_contain: ["Steel", "Cobalt"]
     results_exclude: ["Aluminum"]
     answer_contains: ["Steel", "Cobalt"]
+
+- name: schema_before_relation_filter
+  description: "Inspect schema before using relation filters from a domain query"
+  conversation:
+    - user: "Which parts use a material named Steel?"
+  expectations:
+    tool_calls:
+      - name: search_managers
+      - name: get_manager_schema
+        args_contain:
+          manager: PartManager
+      - name: query
+        args_contain:
+          manager: PartManager
+    results_contain: ["Bolt"]
+    results_exclude: ["Bearing", "Gear"]
+    answer_contains: ["Bolt", "Steel"]
+
+- name: exact_manager_needs_schema_for_fields
+  description: "Exact manager names can skip search but should inspect schema before field-specific query"
+  conversation:
+    - user: "In PartManager, show each part with its material name."
+  expectations:
+    tool_calls:
+      - name: get_manager_schema
+        args_contain:
+          manager: PartManager
+      - name: query
+        args_contain:
+          manager: PartManager
+    results_contain: ["Bolt", "Steel", "Bearing", "Aluminum", "Gear", "Cobalt"]
+    answer_contains: ["Bolt", "Steel"]

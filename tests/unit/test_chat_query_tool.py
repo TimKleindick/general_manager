@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import graphene
 import pytest
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
@@ -160,6 +161,71 @@ class ChatQueryToolTests(SimpleTestCase):
         assert result["data"] == [{"name": "Bolt"}]
         query_text = str(schema.calls[0]["query"])
         assert 'material_Name: "Steel"' in query_text
+
+    def test_query_normalizes_single_underscore_lookup_when_schema_filter_exists(
+        self,
+    ) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            density__gt = graphene.Float()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt"}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={"density_gt": 5},
+            fields=["name"],
+        )
+
+        assert result["data"] == [{"name": "Bolt"}]
+        query_text = str(schema.calls[0]["query"])
+        assert "density_Gt: 5" in query_text
+        assert "densityGt: 5" not in query_text
+
+    def test_query_expands_wildcard_field_selection_to_indexed_scalar_fields(
+        self,
+    ) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+            density = graphene.Float()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt", "density": 5.0}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={},
+            fields=["*"],
+        )
+
+        assert result["data"] == [{"name": "Bolt", "density": 5.0}]
+        query_text = str(schema.calls[0]["query"])
+        assert "items { density name }" in query_text
+        assert "*" not in query_text
 
     @override_settings(
         GENERAL_MANAGER={

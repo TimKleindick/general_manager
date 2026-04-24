@@ -483,12 +483,14 @@ class _ScriptedProvider:
     def __init__(self, scripts: list[list]) -> None:
         self._scripts = list(scripts)
         self._call_index = 0
+        self.calls: list[dict[str, object]] = []
 
     async def complete(
         self,
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> AsyncIterator:
+        self.calls.append({"messages": messages, "tools": tools})
         idx = min(self._call_index, len(self._scripts) - 1)
         self._call_index += 1
         for event in self._scripts[idx]:
@@ -649,6 +651,55 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert 'tool_call search_managers: {"query": "parts"}' in transcript
         assert "tool_result search_managers:" in transcript
         assert "assistant: We have Bolt and Gear parts." in transcript
+
+    def test_run_case_resumes_with_tool_result_without_assistant_placeholder(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1", name="search_managers", args={"query": "parts"}
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="We have Bolt and Gear parts."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="tool_history_case",
+            description="Tool history shape test",
+            conversation=[{"user": "What parts do we have?"}],
+            expectations={},
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value=[{"manager": "PartManager", "description": "Parts catalog."}],
+        ):
+            asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "search_managers", "description": "Search"}],
+                )
+            )
+
+        second_call_messages = provider.calls[1]["messages"]
+        assert second_call_messages[-1].role == "tool"
+        assert "PartManager" in second_call_messages[-1].content
+        assert second_call_messages[-2].role == "assistant"
+        assert (
+            second_call_messages[-2].content
+            == "Called tool search_managers. The next message is the tool result; answer from it exactly."
+        )
+        assert all(
+            message.content != "[tool:search_managers]"
+            for message in second_call_messages
+        )
 
     def test_run_case_catches_provider_exception(self) -> None:
         class _FailProvider:

@@ -464,6 +464,15 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 "result": result,
             }
         )
+        messages.append(
+            Message(
+                role="assistant",
+                content=(
+                    f"Called tool {event.name}. The next message is the tool "
+                    "result; answer from it exactly."
+                ),
+            )
+        )
         tool_message = Message(role="tool", content=self._serialize_tool_result(result))
         messages.append(tool_message)
         await self._record_message(
@@ -605,6 +614,15 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             }
         )
         messages = list(pending["messages"])
+        messages.append(
+            Message(
+                role="assistant",
+                content=(
+                    "Called tool mutate. The next message is the tool result; "
+                    "answer from it exactly."
+                ),
+            )
+        )
         messages.append(Message(role="tool", content=tool_content))
         await self._record_message(
             role="tool",
