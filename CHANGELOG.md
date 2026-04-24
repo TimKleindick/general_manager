@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.39.0 (2026-04-24)
+
+### Bug Fixes
+
+- Address manager landscape seeding review
+  ([`1cb0bc5`](https://github.com/TimKleindick/general_manager/commit/1cb0bc5211b749f0a21364eb9245fbb043090d23))
+
+- Harden manager landscape seeding
+  ([`bcb0772`](https://github.com/TimKleindick/general_manager/commit/bcb0772e13264b725d011a0d882e585564c466c3))
+
+- Refine seeding failure handling
+  ([`260f680`](https://github.com/TimKleindick/general_manager/commit/260f68001535874b2f9bcb5bd50165066f354fcb))
+
+### Features
+
+- Add manager landscape seeding
+  ([`42390ed`](https://github.com/TimKleindick/general_manager/commit/42390ed3ee28b7d18b3fae43e2834e5af34d7c6b))
+
+
 ## v0.38.2 (2026-04-24)
 
 ### Bug Fixes
