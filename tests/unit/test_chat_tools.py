@@ -152,6 +152,28 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert [result["manager"] for result in results] == ["MaterialManager"]
         assert results[0]["description"] == "Materials used by parts."
 
+    def test_search_managers_returns_bounded_ranked_results_for_large_registry(
+        self,
+    ) -> None:
+        for index in range(25):
+            manager_name = f"InventoryArchiveManager{index:02d}"
+
+            class ArchiveType(graphene.ObjectType):
+                """Inventory archive records."""
+
+                name = graphene.String()
+
+            ArchiveType.__name__ = f"ArchiveType{index:02d}"
+            GraphQL.graphql_type_registry[manager_name] = ArchiveType
+            GraphQL.manager_registry[manager_name] = self.PartManager
+        clear_schema_index_cache()
+
+        results = search_manager_summaries("inventory manager")
+
+        assert len(results) == 10
+        assert results[0]["manager"] == "PartManager"
+        assert all("SecretManager" != result["manager"] for result in results)
+
     def test_get_manager_schema_summary_returns_fields_relations_and_filters(
         self,
     ) -> None:
@@ -246,13 +268,15 @@ class ChatSchemaIndexTests(SimpleTestCase):
         prompt = build_system_prompt()
 
         assert "Tool calling rules" in prompt
-        assert "Rule 1 DISCOVERY" in prompt
-        assert "MUST call search_managers" in prompt
-        assert "Rule 2 EXPLORATION" in prompt
-        assert "find_path" in prompt
-        assert "Rule 3 COMPLETE ALL TOOL CALLS BEFORE ANSWERING" in prompt
+        assert "Tool decision process" in prompt
+        assert "If the exact manager is unknown, call search_managers first." in prompt
+        assert "get_manager_schema before query" in prompt
+        assert "For cross-manager questions, call find_path" in prompt
+        assert "For data questions, call every needed tool before writing" in prompt
         assert "[tool:query]" in prompt
-        assert "Rule 4 TRUST RESULTS" in prompt
+        assert "When a query returns data successfully, use that result" in prompt
+        assert "Answer rules" in prompt
+        assert "Mutation safety" in prompt
         assert '"filters": {"material__name": "Steel"}' in prompt
         assert '"filters": {"parts__material__name": "Cobalt"}' in prompt
         assert "Example tool call for search_managers:" in prompt

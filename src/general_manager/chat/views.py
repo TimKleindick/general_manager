@@ -219,6 +219,15 @@ async def _run_provider_turn(
                 tool_args=dict(event.args),
                 tool_result=result,
             )
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=(
+                        f"Called tool {event.name}. The next message is the tool "
+                        "result; answer from it exactly."
+                    ),
+                )
+            )
             messages.append(Message(role="tool", content=tool_content))
             next_retries = tool_retries + (0 if event.name == "mutate" else 1)
             if event.name != "mutate" and next_retries >= max_retries:

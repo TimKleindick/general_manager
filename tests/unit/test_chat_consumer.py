@@ -292,6 +292,11 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 second_call_messages = consumer.provider.calls[1]["messages"]
                 assert second_call_messages[-1].role == "tool"
                 assert "PartManager" in second_call_messages[-1].content
+                assert second_call_messages[-2].role == "assistant"
+                assert (
+                    second_call_messages[-2].content
+                    == "Called tool search_managers. The next message is the tool result; answer from it exactly."
+                )
 
         asyncio.run(run())
 

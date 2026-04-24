@@ -193,7 +193,15 @@ async def _run_turn(
             record.tool_results.append(result)
             _stream_line(stream, f"tool_result {tc.name}: {_to_json(result)}")
             serialized = json.dumps(result, default=str)
-            messages.append(Message(role="assistant", content=f"[tool:{tc.name}]"))
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=(
+                        f"Called tool {tc.name}. The next message is the tool "
+                        "result; answer from it exactly."
+                    ),
+                )
+            )
             messages.append(Message(role="tool", content=serialized))
     else:
         record.answer_chunks.append("[max tool iterations reached]")

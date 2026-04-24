@@ -81,6 +81,7 @@ nav:
           - concepts/models_entities.md
           - concepts/caching.md
           - concepts/search.md
+          - concepts/chat_prompting.md
           - concepts/rules_validation.md
       - Measurement & Currency:
           - concepts/measurement/index.md

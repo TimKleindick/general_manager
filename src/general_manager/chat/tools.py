@@ -245,6 +245,17 @@ def _build_selection(fields: Sequence[Any]) -> str:
     return " ".join(selections)
 
 
+def _normalize_fields(manager: str, fields: Sequence[Any]) -> list[Any]:
+    normalized: list[Any] = []
+    summary = get_manager_schema_summary(manager)
+    for field in fields:
+        if field == "*" and summary is not None:
+            normalized.extend(summary.get("fields", []))
+            continue
+        normalized.append(field)
+    return normalized
+
+
 def _list_query_field_name(manager: str) -> str:
     return f"{manager.lower()}List"
 
@@ -258,6 +269,30 @@ def _ensure_exposed_manager(manager: str) -> None:
 def _extract_error_message(error: Any) -> str:
     message = getattr(error, "message", None)
     return str(message if message is not None else error)
+
+
+def _normalize_filter_key(manager: str, key: str) -> str:
+    summary = get_manager_schema_summary(manager)
+    if summary is None:
+        return key
+    filters = set(summary.get("filters", []))
+    if key in filters or "__" in key:
+        return key
+    for suffix in ("icontains", "contains", "gte", "lte", "gt", "lt", "in", "exact"):
+        marker = f"_{suffix}"
+        if not key.endswith(marker):
+            continue
+        candidate = f"{key[: -len(marker)]}__{suffix}"
+        if candidate in filters:
+            return candidate
+    return key
+
+
+def _normalize_filters(manager: str, filters: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        _normalize_filter_key(manager, str(key)): value
+        for key, value in filters.items()
+    }
 
 
 def _get_authenticated_user(context: ChatToolContext | None) -> Any:
@@ -291,11 +326,13 @@ def query(
     list_field_name = _list_query_field_name(manager)
     arguments: list[str] = []
     if filters:
-        arguments.append(f"filter: {_graphql_literal(filters)}")
+        arguments.append(
+            f"filter: {_graphql_literal(_normalize_filters(manager, filters))}"
+        )
     if page_size is not None:
         arguments.append(f"pageSize: {page_size}")
     argument_block = f"({', '.join(arguments)})" if arguments else ""
-    selection = _build_selection(fields)
+    selection = _build_selection(_normalize_fields(manager, fields))
     query_text = (
         "query ChatQuery { "
         f"{list_field_name}{argument_block} "

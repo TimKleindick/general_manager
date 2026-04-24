@@ -11,6 +11,7 @@
           manager: MaterialManager
     results_contain: []
     results_exclude: ["Steel", "Aluminum", "Cobalt"]
+    answer_contains: ["no"]
     answer_excludes: ["Steel", "Aluminum", "Cobalt"]
 
 - name: unknown_manager
@@ -30,3 +31,27 @@
     tool_calls:
       - name: search_managers
     answer_contains: ["Material", "Part"]
+
+- name: read_question_must_not_mutate
+  description: "Read-only phrasing mentioning updates should not trigger mutations"
+  conversation:
+    - user: "Which projects would be affected if cobalt parts were updated?"
+  expectations:
+    tool_calls:
+      - name: search_managers
+      - name: find_path
+      - name: query
+        args_contain:
+          manager: ProjectManager
+    results_contain: ["Apollo"]
+    results_exclude: ["Mercury"]
+    answer_contains: ["Apollo"]
+
+- name: broad_manager_discovery_no_data_query
+  description: "Data model inventory should discover managers without querying records"
+  conversation:
+    - user: "What kinds of managers can I ask about?"
+  expectations:
+    tool_calls:
+      - name: search_managers
+    answer_contains: ["Material", "Part", "Project"]
