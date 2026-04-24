@@ -21,8 +21,11 @@ from general_manager.seeding.manager_landscape import (
 )
 
 
+FAILURE_COMMAND_ERROR = "Seeding completed with failures"
+
+
 def _format_failure_summary(summary: str) -> str:
-    return f"Seeding completed with failures: {summary}"
+    return f"{FAILURE_COMMAND_ERROR}: {summary}"
 
 
 class Command(BaseCommand):
@@ -152,6 +155,6 @@ class Command(BaseCommand):
             )
             message = _format_failure_summary(summary)
             self.stderr.write(message)
-            raise CommandError(message)
+            raise CommandError(FAILURE_COMMAND_ERROR)
 
         self.stdout.write(self.style.SUCCESS("Manager landscape seeding complete."))

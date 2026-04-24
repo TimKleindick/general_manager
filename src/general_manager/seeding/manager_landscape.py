@@ -31,6 +31,10 @@ class InvalidSeedTargetError(ValueError):
     def not_positive(cls, manager_name: str) -> InvalidSeedTargetError:
         return cls(f"Target count for {manager_name!r} must be greater than zero.")
 
+    @classmethod
+    def duplicate(cls, manager_name: str) -> InvalidSeedTargetError:
+        return cls(f"Duplicate target override for {manager_name!r}.")
+
 
 class ManagerSelectionError(ValueError):
     """Raised when manager selection arguments are invalid."""
@@ -155,6 +159,8 @@ def parse_target_overrides(
             raise InvalidSeedTargetError.invalid_integer(name) from exc
         if count < 1:
             raise InvalidSeedTargetError.not_positive(name)
+        if name in parsed:
+            raise InvalidSeedTargetError.duplicate(name)
         parsed[name] = count
     return parsed
 

@@ -37,6 +37,11 @@ def test_parse_target_overrides_rejects_invalid_values(raw: str) -> None:
         parse_target_overrides([raw])
 
 
+def test_parse_target_overrides_rejects_duplicate_names() -> None:
+    with pytest.raises(InvalidSeedTargetError, match="Duplicate target override"):
+        parse_target_overrides(["Project=3", "Project=4"])
+
+
 def test_seed_target_missing_count_uses_default() -> None:
     target = SeedTarget(manager_name="Project", count=5)
 

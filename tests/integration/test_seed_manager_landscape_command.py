@@ -134,7 +134,7 @@ class TestSeedManagerLandscapeCommand(GeneralManagerTransactionTestCase):
         stdout = StringIO()
         stderr = StringIO()
 
-        with pytest.raises(CommandError, match="Seeding completed with failures"):
+        with pytest.raises(CommandError) as exc_info:
             call_command(
                 "seed_manager_landscape",
                 manager=["SeedOwner", "SeedBroken"],
@@ -144,6 +144,7 @@ class TestSeedManagerLandscapeCommand(GeneralManagerTransactionTestCase):
                 stderr=stderr,
             )
 
+        assert str(exc_info.value) == "Seeding completed with failures"
         assert "SeedOwner created=1" in stdout.getvalue()
         assert "Seeding completed with failures:" in stderr.getvalue()
         assert "SeedBroken" in stderr.getvalue()
