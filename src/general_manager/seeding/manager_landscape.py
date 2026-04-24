@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping
 
 from django.db import models, transaction
 
@@ -57,15 +58,42 @@ class ManagerSelectionError(ValueError):
         return cls("--batch-size must be greater than zero.")
 
 
+class SeedableManagerCollisionError(ValueError):
+    """Raised when seedable manager discovery finds ambiguous class names."""
+
+    @classmethod
+    def duplicate_name(
+        cls,
+        name: str,
+        existing: type[Any],
+        new: type[Any],
+    ) -> SeedableManagerCollisionError:
+        existing_name = f"{existing.__module__}.{existing.__name__}"
+        new_name = f"{new.__module__}.{new.__name__}"
+        return cls(
+            "Multiple seedable managers share the class name "
+            f"{name!r}: {existing_name} and {new_name}. Use the "
+            "module-qualified name to disambiguate."
+        )
+
+
 class ManagerSeedFailure(RuntimeError):
     """Raised when seeding a manager fails."""
 
     def __init__(
-        self, manager_name: str, batch_size: int, error: BaseException
+        self,
+        manager_name: str,
+        batch_size: int,
+        error: BaseException,
+        *,
+        created_count: int = 0,
+        remaining_count: int | None = None,
     ) -> None:
         self.manager_name = manager_name
         self.batch_size = batch_size
         self.error = error
+        self.created_count = created_count
+        self.remaining_count = remaining_count
         super().__init__(
             f"Failed seeding {manager_name} with batch size {batch_size}: {error}"
         )
@@ -85,7 +113,7 @@ class SeedPlanRow:
 
     manager_name: str
     target_count: int
-    missing_dependencies: list[str]
+    missing_dependencies: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -94,14 +122,17 @@ class SeedFailure:
 
     manager_name: str
     error: str
+    created_count: int
+    remaining_count: int
+    batch_size: int
 
 
 @dataclass(frozen=True)
 class SeedExecutionResult:
     """Summary of a seeding run."""
 
-    created: dict[str, int]
-    failures: list[SeedFailure]
+    created: Mapping[str, int]
+    failures: tuple[SeedFailure, ...]
 
 
 def parse_target_overrides(
@@ -136,7 +167,15 @@ def discover_seedable_managers(managers: Iterable[type[Any]]) -> dict[str, type[
         factory = getattr(manager, "Factory", None)
         create_batch = getattr(factory, "create_batch", None)
         if callable(create_batch):
-            seedable[manager.__name__] = manager
+            name = manager.__name__
+            existing = seedable.get(name)
+            if existing is not None and existing is not manager:
+                raise SeedableManagerCollisionError.duplicate_name(
+                    name,
+                    existing,
+                    manager,
+                )
+            seedable[name] = manager
     return seedable
 
 
@@ -183,10 +222,21 @@ def order_targets_by_dependencies(
 ) -> list[SeedTarget]:
     """Order seed targets so selected required relation dependencies run first."""
 
+    target_by_manager_name: dict[str, SeedTarget] = {}
+    manager_order_by_name: dict[str, type[Any]] = {}
+    for target in targets:
+        if target.manager_name in target_by_manager_name:
+            continue
+        target_by_manager_name[target.manager_name] = target
+        manager_order_by_name[target.manager_name] = managers_by_name[
+            target.manager_name
+        ]
+
     target_by_manager = {
-        managers_by_name[target.manager_name]: target for target in targets
+        manager: target_by_manager_name[manager_name]
+        for manager_name, manager in manager_order_by_name.items()
     }
-    manager_order = [managers_by_name[target.manager_name] for target in targets]
+    manager_order = list(manager_order_by_name.values())
     selected_managers = set(manager_order)
     ordered_managers = order_interfaces_by_dependency(
         manager_order,
@@ -211,13 +261,13 @@ def build_seed_plan(
         SeedPlanRow(
             manager_name=target.manager_name,
             target_count=target.count,
-            missing_dependencies=[
+            missing_dependencies=tuple(
                 dependency.__name__
                 for dependency in _required_manager_dependencies(
                     managers_by_name[target.manager_name]
                 )
                 if dependency.__name__ not in selected
-            ],
+            ),
         )
         for target in ordered_targets
     ]
@@ -230,7 +280,13 @@ def execute_seed_plan(
     batch_size: int,
     continue_on_error: bool,
 ) -> SeedExecutionResult:
-    """Create missing rows for each seed target."""
+    """Create missing rows for each seed target.
+
+    Each batch runs in its own transaction. With ``continue_on_error=True``,
+    successful earlier batches for a manager remain committed, later managers
+    continue running, and the returned failure includes partial progress for the
+    manager that failed.
+    """
 
     if batch_size < 1:
         raise ManagerSelectionError.invalid_batch_size()
@@ -250,17 +306,32 @@ def execute_seed_plan(
                 with transaction.atomic():
                     manager.Factory.create_batch(size)
             except Exception as exc:
-                failure = ManagerSeedFailure(target.manager_name, size, exc)
+                failure = ManagerSeedFailure(
+                    target.manager_name,
+                    size,
+                    exc,
+                    created_count=created[target.manager_name],
+                    remaining_count=remaining,
+                )
                 if not continue_on_error:
                     raise failure from exc
                 failures.append(
-                    SeedFailure(manager_name=target.manager_name, error=str(exc))
+                    SeedFailure(
+                        manager_name=target.manager_name,
+                        error=str(exc),
+                        created_count=created[target.manager_name],
+                        remaining_count=remaining,
+                        batch_size=size,
+                    )
                 )
                 break
             created[target.manager_name] += size
             remaining -= size
 
-    return SeedExecutionResult(created=created, failures=failures)
+    return SeedExecutionResult(
+        created=MappingProxyType(dict(created)),
+        failures=tuple(failures),
+    )
 
 
 def _required_manager_dependencies(manager: type[Any]) -> set[type[Any]]:

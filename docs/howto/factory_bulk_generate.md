@@ -139,6 +139,10 @@ Use the fixture in tests to create data on demand.
 Use `seed_manager_landscape` when you want a local or demo database to contain a minimum number of rows for one or more managers that already expose factories.
 
 The command is explicit by default. Select managers with `--manager`, or pass `--all` to target every manager discovered by GeneralManager that has `Factory.create_batch`.
+When `--count` is omitted, each selected manager targets 1 row by default,
+including when using `--all`. When `--batch-size` is omitted, batches default to
+100 rows per transaction; this only changes how larger missing counts are split
+into transactions.
 
 ```bash
 python manage.py seed_manager_landscape \
@@ -159,7 +163,7 @@ python manage.py seed_manager_landscape --manager Project --count 10 --dry-run
 
 The command orders selected managers so required database relations are seeded first when both sides are selected. It does not automatically add unselected dependencies; select those managers explicitly when your factories require existing related data.
 
-By default, seeding stops at the first failure and reports the manager and batch size. Use `--continue-on-error` to continue with later managers and receive a summary at the end.
+By default, seeding stops at the first failure and reports the manager and batch size. Use `--continue-on-error` to continue with later managers and receive a summary at the end. Successful batches that already committed remain in place, and the summary includes partial progress for the failed manager.
 
 ## Step 5: Tear down
 
