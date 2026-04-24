@@ -60,6 +60,10 @@ class TestSeedManagerLandscapeCommand(GeneralManagerTransactionTestCase):
         with pytest.raises(CommandError, match="--manager"):
             call_command("seed_manager_landscape")
 
+    def test_command_rejects_all_with_manager_selection(self) -> None:
+        with pytest.raises(CommandError, match="--all and --manager"):
+            call_command("seed_manager_landscape", all=True, manager=["SeedOwner"])
+
     def test_dry_run_prints_ordered_plan_without_creating_rows(self) -> None:
         stdout = StringIO()
 

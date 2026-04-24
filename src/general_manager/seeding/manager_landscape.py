@@ -61,6 +61,10 @@ class ManagerSelectionError(ValueError):
     def invalid_batch_size(cls) -> ManagerSelectionError:
         return cls("--batch-size must be greater than zero.")
 
+    @classmethod
+    def conflicting_selection(cls) -> ManagerSelectionError:
+        return cls("--all and --manager are mutually exclusive.")
+
 
 class SeedableManagerCollisionError(ValueError):
     """Raised when seedable manager discovery finds ambiguous class names."""
@@ -199,6 +203,11 @@ def select_seed_targets(
         raise ManagerSelectionError.invalid_count()
 
     selected_names = list(selected_names or [])
+    unknown_managers = set(overrides) - set(managers_by_name)
+    if unknown_managers:
+        names = ", ".join(sorted(unknown_managers))
+        raise ManagerSelectionError.unknown_manager(names)
+
     if include_all:
         ordered_names = list(managers_by_name)
     else:
@@ -228,6 +237,19 @@ def order_targets_by_dependencies(
 ) -> list[SeedTarget]:
     """Order seed targets so selected required relation dependencies run first."""
 
+    ordered_targets, _dependencies_by_manager = _order_targets_by_dependencies(
+        targets,
+        managers_by_name,
+    )
+    return ordered_targets
+
+
+def _order_targets_by_dependencies(
+    targets: list[SeedTarget],
+    managers_by_name: dict[str, type[Any]],
+) -> tuple[list[SeedTarget], dict[type[Any], set[type[Any]]]]:
+    """Order seed targets and return the dependency map used for ordering."""
+
     target_by_manager_name: dict[str, SeedTarget] = {}
     manager_order_by_name: dict[str, type[Any]] = {}
     for target in targets:
@@ -244,15 +266,24 @@ def order_targets_by_dependencies(
     }
     manager_order = list(manager_order_by_name.values())
     selected_managers = set(manager_order)
+    dependencies_by_manager: dict[type[Any], set[type[Any]]] = {}
+
+    def selected_dependencies(manager: type[Any]) -> set[type[Any]]:
+        if manager not in dependencies_by_manager:
+            dependencies_by_manager[manager] = _required_manager_dependencies(manager)
+        dependencies = dependencies_by_manager[manager]
+        return {
+            dependency for dependency in dependencies if dependency in selected_managers
+        }
+
     ordered_managers = order_interfaces_by_dependency(
         manager_order,
-        lambda manager: {
-            dependency
-            for dependency in _required_manager_dependencies(manager)
-            if dependency in selected_managers
-        },
+        selected_dependencies,
     )
-    return [target_by_manager[manager] for manager in ordered_managers]
+    return (
+        [target_by_manager[manager] for manager in ordered_managers],
+        dependencies_by_manager,
+    )
 
 
 def build_seed_plan(
@@ -261,7 +292,10 @@ def build_seed_plan(
 ) -> list[SeedPlanRow]:
     """Build dry-run plan rows for ordered seed targets."""
 
-    ordered_targets = order_targets_by_dependencies(targets, managers_by_name)
+    ordered_targets, dependencies_by_manager = _order_targets_by_dependencies(
+        targets,
+        managers_by_name,
+    )
     selected = {target.manager_name for target in ordered_targets}
     return [
         SeedPlanRow(
@@ -269,9 +303,9 @@ def build_seed_plan(
             target_count=target.count,
             missing_dependencies=tuple(
                 dependency.__name__
-                for dependency in _required_manager_dependencies(
+                for dependency in dependencies_by_manager[
                     managers_by_name[target.manager_name]
-                )
+                ]
                 if dependency.__name__ not in selected
             ),
         )
@@ -288,10 +322,11 @@ def execute_seed_plan(
 ) -> SeedExecutionResult:
     """Create missing rows for each seed target.
 
-    Each batch runs in its own transaction. With ``continue_on_error=True``,
-    successful earlier batches for a manager remain committed, later managers
-    continue running, and the returned failure includes partial progress for the
-    manager that failed.
+    Each batch runs in its own ``transaction.atomic()`` block with no
+    cross-manager atomicity, so prior manager batches and earlier batches for a
+    failing manager can remain committed regardless of ``continue_on_error``.
+    With ``continue_on_error=True``, partial progress is expected and reported
+    in the returned ``SeedExecutionResult``.
     """
 
     if batch_size < 1:
