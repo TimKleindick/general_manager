@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.38.2 (2026-04-24)
+
+### Bug Fixes
+
+- Bump Django, pytest, and black to resolve Dependabot vulnerabilities
+  ([`50f0e83`](https://github.com/TimKleindick/general_manager/commit/50f0e8371b6479b0c44f0da63b3d1dd7a425a081))
+
+
 ## v0.38.1 (2026-04-23)
 
 ### Bug Fixes
