@@ -28,7 +28,11 @@
     - user: "What projects contain parts with cobalt?"
   expectations:
     tool_calls:
+      - name: search_managers
+      - name: find_path
       - name: query
+        args_contain:
+          manager: ProjectManager
     results_contain: ["Apollo"]
     results_exclude: ["Mercury"]
     answer_contains: ["Apollo"]
@@ -39,7 +43,13 @@
     - user: "What parts are used in the Apollo project?"
   expectations:
     tool_calls:
+      - name: search_managers
+      - name: get_manager_schema
+        args_contain:
+          manager: ProjectManager
       - name: query
+        args_contain:
+          manager: ProjectManager
     results_contain: ["Gear"]
     answer_contains: ["Gear"]
 

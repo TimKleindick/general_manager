@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from collections import deque
+from functools import lru_cache
+import re
 from typing import Any, cast
 
 from general_manager.api.graphql import GraphQL
 from general_manager.utils.path_mapping import PathMap
+
+DEFAULT_SEARCH_LIMIT = 10
 
 
 def _unwrap_graphene_type(field_type: Any) -> Any:
@@ -96,26 +99,74 @@ def build_schema_index() -> dict[str, dict[str, Any]]:
     return _build_schema_index_cached(_schema_index_cache_key())
 
 
-def search_manager_summaries(query: str) -> list[dict[str, Any]]:
-    """Search the schema index by manager name, description, and field names."""
-    index = build_schema_index()
-    query_terms = [term for term in query.lower().split() if term]
-    scored: list[tuple[int, str, dict[str, Any]]] = []
-    for manager_name, summary in index.items():
-        haystack = " ".join(
+def _tokenize_search_text(value: str) -> list[str]:
+    spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", value)
+    normalized = re.sub(r"[^a-zA-Z0-9]+", " ", spaced).lower()
+    return [term for term in normalized.split() if term]
+
+
+def _singularize(term: str) -> str:
+    if len(term) > 3 and term.endswith("ies"):
+        return f"{term[:-3]}y"
+    if len(term) > 3 and term.endswith("s"):
+        return term[:-1]
+    return term
+
+
+def _search_term_groups(query: str) -> list[set[str]]:
+    terms = _tokenize_search_text(query)
+    groups: list[set[str]] = []
+    for term in terms:
+        variants = {term}
+        singular = _singularize(term)
+        if singular != term:
+            variants.add(singular)
+        groups.append(variants)
+    return groups
+
+
+def _summary_search_tokens(manager_name: str, summary: dict[str, Any]) -> list[str]:
+    relation_names = [relation["name"] for relation in summary["relations"]]
+    return _tokenize_search_text(
+        " ".join(
             [
-                manager_name.lower(),
-                summary["description"].lower(),
-                " ".join(summary["fields"]).lower(),
-                " ".join(relation["name"] for relation in summary["relations"]).lower(),
-                " ".join(summary["filters"]).lower(),
+                manager_name,
+                summary["description"],
+                " ".join(summary["fields"]),
+                " ".join(relation_names),
+                " ".join(summary["filters"]),
             ]
         )
-        score = sum(term in haystack for term in query_terms)
+    )
+
+
+def search_manager_summaries(
+    query: str, *, limit: int = DEFAULT_SEARCH_LIMIT
+) -> list[dict[str, Any]]:
+    """Search the schema index by manager name, description, and field names."""
+    index = build_schema_index()
+    query_term_groups = _search_term_groups(query)
+    if not query_term_groups:
+        return []
+    scored: list[tuple[int, int, str, dict[str, Any]]] = []
+    for manager_name, summary in index.items():
+        tokens = _summary_search_tokens(manager_name, summary)
+        token_set = set(tokens)
+        haystack = " ".join(tokens)
+        score = sum(
+            any(term in token_set or term in haystack for term in variants)
+            for variants in query_term_groups
+        )
         if score:
-            scored.append((score, manager_name, summary))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [summary for _, _, summary in scored]
+            scored.append(
+                (score, len(_tokenize_search_text(manager_name)), manager_name, summary)
+            )
+    full_score = len(query_term_groups)
+    full_matches = [item for item in scored if item[0] == full_score]
+    if full_matches:
+        scored = full_matches
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return [summary for _, _, _, summary in scored[:limit]]
 
 
 def get_manager_schema_summary(manager_name: str) -> dict[str, Any] | None:

@@ -7,6 +7,7 @@ from django.test import SimpleTestCase
 from django.test.utils import override_settings
 
 from general_manager.api.graphql import GraphQL
+from general_manager.chat.schema_index import clear_schema_index_cache
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
@@ -114,3 +115,52 @@ class ChatSystemPromptTests(SimpleTestCase):
 
         assert "SecretManager" not in prompt
         assert "Hidden admin manager." not in prompt
+
+    def test_build_system_prompt_includes_tool_decision_answer_and_safety_contracts(
+        self,
+    ) -> None:
+        prompt = build_system_prompt()
+
+        assert "Tool decision process" in prompt
+        assert "If the exact manager is unknown, call search_managers first." in prompt
+        assert (
+            "If fields, filters, or relation names are uncertain, call "
+            "get_manager_schema before query."
+        ) in prompt
+        assert "For cross-manager questions, call find_path" in prompt
+        assert "Answer rules" in prompt
+        assert "Answer data questions only from tool results." in prompt
+        assert "Copy record values exactly from the tool JSON" in prompt
+        assert (
+            "If query returns no rows, say that no matching records were found."
+            in prompt
+        )
+        assert 'Never use wildcard field selections like "*"' in prompt
+        assert "Mutation safety" in prompt
+        assert "Never call mutate unless the user clearly requests a write." in prompt
+
+    def test_build_system_prompt_summarizes_large_manager_registry(self) -> None:
+        for index in range(205):
+            manager_name = f"BulkManager{index:03d}"
+
+            class BulkType(graphene.ObjectType):
+                """Bulk manager used to exercise prompt scaling."""
+
+                name = graphene.String()
+
+            BulkType.__name__ = f"BulkType{index:03d}"
+            GraphQL.graphql_type_registry[manager_name] = BulkType
+            GraphQL.manager_registry[manager_name] = GraphQL.manager_registry[
+                "PartManager"
+            ]
+        clear_schema_index_cache()
+
+        prompt = build_system_prompt()
+
+        assert "207 exposed managers available" in prompt
+        assert "Use search_managers to discover relevant managers by name" in prompt
+        assert (
+            "BulkManager000: Bulk manager used to exercise prompt scaling."
+            not in prompt
+        )
+        assert "Relationship graph omitted for large schemas" in prompt
