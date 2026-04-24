@@ -85,8 +85,17 @@ class Command(BaseCommand):
         )
 
     def handle(self, *_args: Any, **options: Any) -> None:
+        """Run manager seeding with explicit selection and predictable exits.
+
+        ``--all`` and ``--manager`` are mutually exclusive; seeding stops at the
+        first failure unless ``--continue-on-error`` is set. Successful runs exit
+        normally, while validation or seeding errors raise ``CommandError``.
+        """
+
         try:
             overrides = parse_target_overrides(options["targets"])
+            if options["include_all"] and options["managers"]:
+                raise ManagerSelectionError.conflicting_selection()
             managers_by_name = discover_seedable_managers(
                 GeneralManagerMeta.all_classes
             )

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 from django.db import models
-from typing import ClassVar
+from django.test.utils import isolate_apps
+from typing import Any, ClassVar
 
+import general_manager.seeding.manager_landscape as manager_landscape
 from general_manager.seeding.manager_landscape import (
     InvalidSeedTargetError,
     ManagerSeedFailure,
@@ -146,55 +148,65 @@ def test_select_seed_targets_rejects_override_for_unselected_manager() -> None:
         )
 
 
-class _BaseFakeModel(models.Model):
-    class Meta:
-        abstract = True
-        app_label = "tests"
+def test_select_seed_targets_rejects_override_for_unknown_manager() -> None:
+    with pytest.raises(ManagerSelectionError, match="Unknown manager: Missing"):
+        select_seed_targets(
+            managers_by_name={"Project": _SeedableProject},
+            selected_names=["Project"],
+            include_all=False,
+            default_count=2,
+            overrides={"Missing": 4},
+        )
 
 
-class _OwnerModel(_BaseFakeModel):
-    name = models.CharField(max_length=64)
+@isolate_apps("tests")
+def _dependency_managers() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
+    class _BaseFakeModel(models.Model):
+        class Meta:
+            abstract = True
+            app_label = "tests"
 
+    class _OwnerModel(_BaseFakeModel):
+        name = models.CharField(max_length=64)
 
-class _ProjectModel(_BaseFakeModel):
-    owner = models.ForeignKey(_OwnerModel, on_delete=models.CASCADE)
-    optional_owner = models.ForeignKey(
-        _OwnerModel,
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="+",
-    )
+    class _ProjectModel(_BaseFakeModel):
+        owner = models.ForeignKey(_OwnerModel, on_delete=models.CASCADE)
+        optional_owner = models.ForeignKey(
+            _OwnerModel,
+            null=True,
+            blank=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
+    class _OwnerManager:
+        Factory = _FactoryWithBatch
 
-class _OwnerManager:
-    Factory = _FactoryWithBatch
+        class Interface:
+            _model = _OwnerModel
 
-    class Interface:
-        _model = _OwnerModel
+    class _ProjectManager:
+        Factory = _FactoryWithBatch
 
+        class Interface:
+            _model = _ProjectModel
 
-class _ProjectManager:
-    Factory = _FactoryWithBatch
+    _OwnerModel._general_manager_class = _OwnerManager  # type: ignore[attr-defined]
+    _ProjectModel._general_manager_class = _ProjectManager  # type: ignore[attr-defined]
 
-    class Interface:
-        _model = _ProjectModel
-
-
-_OwnerModel._general_manager_class = _OwnerManager  # type: ignore[attr-defined]
-_ProjectModel._general_manager_class = _ProjectManager  # type: ignore[attr-defined]
+    return _OwnerManager, _ProjectManager, _OwnerModel, _ProjectModel
 
 
 def test_required_manager_dependencies_resolves_required_relation_managers() -> None:
-    assert _required_manager_dependencies(_ProjectManager) == {_OwnerManager}
+    owner_manager, project_manager, owner_model, project_model = _dependency_managers()
 
-
-def test_test_managers_point_interfaces_at_expected_models() -> None:
-    assert _OwnerManager.Interface._model is _OwnerModel
-    assert _ProjectManager.Interface._model is _ProjectModel
+    assert owner_manager.Interface._model is owner_model
+    assert project_manager.Interface._model is project_model
+    assert _required_manager_dependencies(project_manager) == {owner_manager}
 
 
 def test_order_targets_by_dependencies_runs_required_relations_first() -> None:
+    owner_manager, project_manager, _, _ = _dependency_managers()
     targets = [
         SeedTarget("_ProjectManager", 2),
         SeedTarget("_OwnerManager", 2),
@@ -203,8 +215,8 @@ def test_order_targets_by_dependencies_runs_required_relations_first() -> None:
     ordered = order_targets_by_dependencies(
         targets,
         {
-            "_ProjectManager": _ProjectManager,
-            "_OwnerManager": _OwnerManager,
+            "_ProjectManager": project_manager,
+            "_OwnerManager": owner_manager,
         },
     )
 
@@ -215,6 +227,7 @@ def test_order_targets_by_dependencies_runs_required_relations_first() -> None:
 
 
 def test_order_targets_by_dependencies_deduplicates_manager_names() -> None:
+    owner_manager, project_manager, _, _ = _dependency_managers()
     targets = [
         SeedTarget("_OwnerManager", 2),
         SeedTarget("_OwnerManager", 5),
@@ -224,8 +237,8 @@ def test_order_targets_by_dependencies_deduplicates_manager_names() -> None:
     ordered = order_targets_by_dependencies(
         targets,
         {
-            "_ProjectManager": _ProjectManager,
-            "_OwnerManager": _OwnerManager,
+            "_ProjectManager": project_manager,
+            "_OwnerManager": owner_manager,
         },
     )
 
@@ -236,9 +249,10 @@ def test_order_targets_by_dependencies_deduplicates_manager_names() -> None:
 
 
 def test_build_seed_plan_reports_missing_required_dependencies() -> None:
+    _, project_manager, _, _ = _dependency_managers()
     rows = build_seed_plan(
         targets=[SeedTarget("_ProjectManager", 2)],
-        managers_by_name={"_ProjectManager": _ProjectManager},
+        managers_by_name={"_ProjectManager": project_manager},
     )
 
     assert rows == [
@@ -248,6 +262,33 @@ def test_build_seed_plan_reports_missing_required_dependencies() -> None:
             missing_dependencies=("_OwnerManager",),
         )
     ]
+
+
+def test_build_seed_plan_reuses_dependency_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner_manager, project_manager, _, _ = _dependency_managers()
+    calls: list[type[Any]] = []
+
+    def required_dependencies(manager: type[Any]) -> set[type[Any]]:
+        calls.append(manager)
+        if manager is project_manager:
+            return {owner_manager}
+        return set()
+
+    monkeypatch.setattr(
+        manager_landscape,
+        "_required_manager_dependencies",
+        required_dependencies,
+    )
+
+    rows = build_seed_plan(
+        targets=[SeedTarget("_ProjectManager", 2)],
+        managers_by_name={"_ProjectManager": project_manager},
+    )
+
+    assert rows[0].missing_dependencies == ("_OwnerManager",)
+    assert calls == [project_manager]
 
 
 class _AllResult:
@@ -350,6 +391,18 @@ def test_execute_seed_plan_skips_when_existing_rows_meet_target() -> None:
     assert _CountingFactory.created_batches == []
 
 
+@pytest.mark.parametrize("batch_size", [0, -1])
+@pytest.mark.django_db
+def test_execute_seed_plan_rejects_invalid_batch_size(batch_size: int) -> None:
+    with pytest.raises(ManagerSelectionError, match="--batch-size"):
+        execute_seed_plan(
+            targets=[SeedTarget("_CountingManager", 1)],
+            managers_by_name={"_CountingManager": _CountingManager},
+            batch_size=batch_size,
+            continue_on_error=False,
+        )
+
+
 @pytest.mark.django_db
 def test_execute_seed_plan_fails_fast_by_default() -> None:
     with pytest.raises(ManagerSeedFailure, match="_FailingManager"):
@@ -365,6 +418,8 @@ def test_execute_seed_plan_fails_fast_by_default() -> None:
             batch_size=1,
             continue_on_error=False,
         )
+
+    assert _CountingFactory.created_batches == []
 
 
 @pytest.mark.django_db
