@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
@@ -11,6 +12,7 @@ from general_manager.seeding.manager_landscape import (
     InvalidSeedTargetError,
     ManagerSeedFailure,
     ManagerSelectionError,
+    SeedableManagerCollisionError,
     build_seed_plan,
     discover_seedable_managers,
     execute_seed_plan,
@@ -66,6 +68,13 @@ class Command(BaseCommand):
             help="Print the seed plan without creating data.",
         )
         parser.add_argument(
+            "--output-format",
+            choices=("human", "json"),
+            default="human",
+            dest="output_format",
+            help="Dry-run output format.",
+        )
+        parser.add_argument(
             "--continue-on-error",
             action="store_true",
             dest="continue_on_error",
@@ -85,11 +94,31 @@ class Command(BaseCommand):
                 default_count=int(options["count"]),
                 overrides=overrides,
             )
-        except (InvalidSeedTargetError, ManagerSelectionError) as exc:
+        except (
+            InvalidSeedTargetError,
+            ManagerSelectionError,
+            SeedableManagerCollisionError,
+        ) as exc:
             raise CommandError(str(exc)) from exc
 
         if options["dry_run"]:
-            for row in build_seed_plan(targets, managers_by_name):
+            plan = build_seed_plan(targets, managers_by_name)
+            if options["output_format"] == "json":
+                self.stdout.write(
+                    json.dumps(
+                        [
+                            {
+                                "manager_name": row.manager_name,
+                                "target_count": row.target_count,
+                                "missing_dependencies": list(row.missing_dependencies),
+                            }
+                            for row in plan
+                        ]
+                    )
+                )
+                return
+
+            for row in plan:
                 missing = (
                     f" missing_dependencies={','.join(row.missing_dependencies)}"
                     if row.missing_dependencies
@@ -115,9 +144,14 @@ class Command(BaseCommand):
 
         if result.failures:
             summary = "; ".join(
-                f"{failure.manager_name}: {failure.error}"
+                f"{failure.manager_name}: {failure.error} "
+                f"(created={failure.created_count}, "
+                f"remaining={failure.remaining_count}, "
+                f"batch_size={failure.batch_size})"
                 for failure in result.failures
             )
-            raise CommandError(_format_failure_summary(summary))
+            message = _format_failure_summary(summary)
+            self.stderr.write(message)
+            raise CommandError(message)
 
         self.stdout.write(self.style.SUCCESS("Manager landscape seeding complete."))

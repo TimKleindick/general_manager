@@ -17,6 +17,7 @@ from general_manager.seeding.manager_landscape import (
     order_targets_by_dependencies,
     parse_target_overrides,
     select_seed_targets,
+    _required_manager_dependencies,
 )
 
 
@@ -62,10 +63,22 @@ class _FactoryWithoutBatch:
         pass
 
 
+def _duplicate_seedable_manager(name: str, module: str) -> type[object]:
+    return type(name, (), {"__module__": module, "Factory": _FactoryWithBatch})
+
+
 def test_discover_seedable_managers_filters_to_create_batch_factories() -> None:
     assert discover_seedable_managers(
         [_SeedableProject, _NoFactory, _FactoryWithoutBatch]
     ) == {"_SeedableProject": _SeedableProject}
+
+
+def test_discover_seedable_managers_rejects_name_collisions() -> None:
+    first = _duplicate_seedable_manager("DuplicateManager", "tests.first")
+    second = _duplicate_seedable_manager("DuplicateManager", "tests.second")
+
+    with pytest.raises(ValueError, match=r"tests\.first\.DuplicateManager"):
+        discover_seedable_managers([first, second])
 
 
 def test_select_seed_targets_requires_explicit_selection() -> None:
@@ -167,10 +180,40 @@ _OwnerModel._general_manager_class = _OwnerManager  # type: ignore[attr-defined]
 _ProjectModel._general_manager_class = _ProjectManager  # type: ignore[attr-defined]
 
 
+def test_required_manager_dependencies_resolves_required_relation_managers() -> None:
+    assert _required_manager_dependencies(_ProjectManager) == {_OwnerManager}
+
+
+def test_test_managers_point_interfaces_at_expected_models() -> None:
+    assert _OwnerManager.Interface._model is _OwnerModel
+    assert _ProjectManager.Interface._model is _ProjectModel
+
+
 def test_order_targets_by_dependencies_runs_required_relations_first() -> None:
     targets = [
         SeedTarget("_ProjectManager", 2),
         SeedTarget("_OwnerManager", 2),
+    ]
+
+    ordered = order_targets_by_dependencies(
+        targets,
+        {
+            "_ProjectManager": _ProjectManager,
+            "_OwnerManager": _OwnerManager,
+        },
+    )
+
+    assert ordered == [
+        SeedTarget("_OwnerManager", 2),
+        SeedTarget("_ProjectManager", 2),
+    ]
+
+
+def test_order_targets_by_dependencies_deduplicates_manager_names() -> None:
+    targets = [
+        SeedTarget("_OwnerManager", 2),
+        SeedTarget("_OwnerManager", 5),
+        SeedTarget("_ProjectManager", 2),
     ]
 
     ordered = order_targets_by_dependencies(
@@ -197,7 +240,7 @@ def test_build_seed_plan_reports_missing_required_dependencies() -> None:
         SeedPlanRow(
             manager_name="_ProjectManager",
             target_count=2,
-            missing_dependencies=["_OwnerManager"],
+            missing_dependencies=("_OwnerManager",),
         )
     ]
 
@@ -228,6 +271,25 @@ class _CountingManager:
         return _AllResult(cls.existing_count)
 
 
+class _PartiallyFailingFactory:
+    created_batches: ClassVar[list[int]] = []
+
+    @classmethod
+    def create_batch(cls, count: int) -> list[object]:
+        if cls.created_batches:
+            raise _FactoryExplodedError
+        cls.created_batches.append(count)
+        return [object() for _ in range(count)]
+
+
+class _PartiallyFailingManager:
+    Factory = _PartiallyFailingFactory
+
+    @classmethod
+    def all(cls) -> _AllResult:
+        return _AllResult(0)
+
+
 class _FailingFactory:
     @staticmethod
     def create_batch(_count: int) -> list[object]:
@@ -246,9 +308,15 @@ class _FactoryExplodedError(RuntimeError):
     pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_counting_state() -> None:
+    _CountingFactory.created_batches = []
+    _CountingManager.existing_count = 0
+    _PartiallyFailingFactory.created_batches = []
+
+
 @pytest.mark.django_db
 def test_execute_seed_plan_creates_only_missing_rows_in_batches() -> None:
-    _CountingFactory.created_batches = []
     _CountingManager.existing_count = 2
 
     result = execute_seed_plan(
@@ -258,13 +326,12 @@ def test_execute_seed_plan_creates_only_missing_rows_in_batches() -> None:
         continue_on_error=False,
     )
 
-    assert result == SeedExecutionResult(created={"_CountingManager": 5}, failures=[])
+    assert result == SeedExecutionResult(created={"_CountingManager": 5}, failures=())
     assert _CountingFactory.created_batches == [3, 2]
 
 
 @pytest.mark.django_db
 def test_execute_seed_plan_skips_when_existing_rows_meet_target() -> None:
-    _CountingFactory.created_batches = []
     _CountingManager.existing_count = 7
 
     result = execute_seed_plan(
@@ -274,7 +341,7 @@ def test_execute_seed_plan_skips_when_existing_rows_meet_target() -> None:
         continue_on_error=False,
     )
 
-    assert result == SeedExecutionResult(created={"_CountingManager": 0}, failures=[])
+    assert result == SeedExecutionResult(created={"_CountingManager": 0}, failures=())
     assert _CountingFactory.created_batches == []
 
 
@@ -309,4 +376,22 @@ def test_execute_seed_plan_collects_failures_when_requested() -> None:
 
     assert result.failures
     assert result.failures[0].manager_name == "_FailingManager"
+    assert result.failures[0].created_count == 0
+    assert result.failures[0].remaining_count == 1
+    assert result.failures[0].batch_size == 1
     assert "_CountingManager" in result.created
+
+
+@pytest.mark.django_db
+def test_execute_seed_plan_failure_reports_partial_progress() -> None:
+    result = execute_seed_plan(
+        targets=[SeedTarget("_PartiallyFailingManager", 5)],
+        managers_by_name={"_PartiallyFailingManager": _PartiallyFailingManager},
+        batch_size=2,
+        continue_on_error=True,
+    )
+
+    assert result.created["_PartiallyFailingManager"] == 2
+    assert result.failures[0].created_count == 2
+    assert result.failures[0].remaining_count == 3
+    assert result.failures[0].batch_size == 2
