@@ -395,6 +395,10 @@ class _FieldDescriptorBuilder:
         """
         if related_model == "self":
             return cast(type[models.Model], self.model)
+        if isinstance(related_model, type) and issubclass(related_model, models.Model):
+            return cast(type[models.Model], related_model)
+        if related_model is not None:
+            return None
         return cast(Optional[type[models.Model]], related_model)
 
 

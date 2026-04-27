@@ -99,7 +99,7 @@ class GeneralManagerMeta(type):
         fields override inherited names the same way bootstrap initialization
         does.
         """
-        if not attribute_name.startswith("_"):
+        if not attribute_name.startswith("_") and attribute_name != "Interface":
             manager_class = cast(Type["GeneralManager"], cls)
             GeneralManagerMeta.ensure_attributes_initialized(
                 manager_class, attribute_name
