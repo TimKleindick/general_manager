@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.39.1 (2026-04-27)
+
+### Bug Fixes
+
+- Avoid premature manager lazy initialization
+  ([`7fc86c5`](https://github.com/TimKleindick/general_manager/commit/7fc86c526e2707687da70463acd88c4c16fc0663))
+
+
 ## v0.39.0 (2026-04-24)
 
 ### Bug Fixes
