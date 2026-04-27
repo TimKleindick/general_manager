@@ -102,3 +102,30 @@ def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> 
     assert relation_field_names == {"fk_a", "fk_b"}
     assert resolve_calls.count("fk_a") == 1
     assert resolve_calls.count("fk_b") == 1
+
+
+def test_build_field_descriptors_skips_unresolved_foreign_key_targets() -> None:
+    model = type("ModelUnderTest", (), {})
+    interface_cls = type("InterfaceUnderTest", (), {"_model": model})
+    unresolved_field = Mock(spec=models.Field)
+    unresolved_field.name = "owner"
+    unresolved_field.related_model = "accounts.User"
+    unresolved_field.null = False
+    unresolved_field.editable = True
+    unresolved_field.default = None
+
+    field_descriptors_module = (
+        "general_manager.interface.capabilities.orm_utils.field_descriptors"
+    )
+    with (
+        patch(f"{field_descriptors_module}._iter_model_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_many_to_many_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_reverse_relations", return_value=[]),
+        patch(
+            f"{field_descriptors_module}._iter_foreign_key_fields",
+            return_value=[unresolved_field],
+        ),
+    ):
+        descriptors = build_field_descriptors(interface_cls)
+
+    assert "owner" not in descriptors

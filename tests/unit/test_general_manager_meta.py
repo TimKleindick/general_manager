@@ -508,6 +508,24 @@ class GeneralManagerMetaTests(SimpleTestCase):
             GeneralManagerMeta.pending_attribute_initialization,
         )
 
+    def test_accessing_interface_does_not_lazy_initialize_manager_attributes(self):
+        class LateImportedCalculation(GeneralManager):
+            user: int
+
+            class Interface(CalculationInterface):
+                user = GMInput(int, possible_values=[1, 2, 3])
+
+        self.assertNotIn("user", vars(LateImportedCalculation))
+
+        interface = LateImportedCalculation.Interface
+
+        self.assertIs(interface, LateImportedCalculation.Interface)
+        self.assertNotIn("user", vars(LateImportedCalculation))
+        self.assertIn(
+            LateImportedCalculation,
+            GeneralManagerMeta.pending_attribute_initialization,
+        )
+
     def test_late_imported_manager_still_raises_for_unknown_attribute(self):
         class LateImportedCalculation(GeneralManager):
             user: int
