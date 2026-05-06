@@ -67,6 +67,9 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                     ),
                 )
 
+                def can_read_instance(self) -> bool:
+                    return self.instance.name != "Hidden"
+
         cls.general_manager_classes = [Employee]
         cls.Employee = Employee
 
@@ -216,6 +219,133 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         self.assertFalse(
             second_event.data["onEmployeeChange"]["item"]["capabilities"]["canKeepName"]
         )
+
+    def test_class_subscription_emits_create_without_initial_snapshot(self) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> object:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+                await asyncio.to_thread(
+                    lambda: self.Employee.create(
+                        name="Class Alice",
+                        creator_id=self.user.id,
+                    )
+                )
+                return await next_event
+            finally:
+                await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "create")
+        self.assertEqual(payload["item"]["name"], "Class Alice")
+
+    def test_class_subscription_suppresses_unreadable_events(self) -> None:
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> object:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.to_thread(
+                    lambda: self.Employee.create(
+                        name="Hidden",
+                        creator_id=self.user.id,
+                    )
+                )
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+                await asyncio.to_thread(
+                    lambda: self.Employee.create(
+                        name="Visible",
+                        creator_id=self.user.id,
+                    )
+                )
+                return await next_event
+            finally:
+                await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "create")
+        self.assertEqual(payload["item"]["name"], "Visible")
+
+    def test_class_subscription_emits_update_events(self) -> None:
+        employee = self.Employee.create(name="Before", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> object:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+                await asyncio.to_thread(
+                    lambda: employee.update(
+                        name="After",
+                        creator_id=self.user.id,
+                    )
+                )
+                return await next_event
+            finally:
+                await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onEmployeeClassChange"]
+        self.assertEqual(payload["action"], "update")
+        self.assertEqual(payload["item"]["name"], "After")
 
 
 class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
@@ -563,6 +693,17 @@ class GraphQLGroupNameTests(unittest.TestCase):
         self.assertIsInstance(name, str)
         self.assertTrue(name.startswith("gm_subscriptions."))
 
+    def test_class_group_name_is_deterministic(self) -> None:
+        """Verify _class_group_name produces a stable class-level group."""
+
+        class TestManager(GeneralManager):
+            pass
+
+        name1 = GraphQL._class_group_name(TestManager)
+        name2 = GraphQL._class_group_name(TestManager)
+        self.assertEqual(name1, name2)
+        self.assertEqual(name1, "gm_subscriptions.TestManager.__class__")
+
 
 class GraphQLPrimePropertiesEdgeCaseTests(unittest.TestCase):
     """Test edge cases in property priming."""
@@ -880,6 +1021,70 @@ class GraphQLBuildIdentificationArgumentsTests(unittest.TestCase):
         self.assertEqual(len(args), 3)
 
 
+class GraphQLAddSubscriptionFieldTests(unittest.TestCase):
+    """Test generated GraphQL subscription field registration."""
+
+    def setUp(self) -> None:
+        self._snapshot = GraphQL.get_registry_snapshot()
+        GraphQL.reset_registry()
+
+    def tearDown(self) -> None:
+        GraphQL._query_class = self._snapshot.query_class
+        GraphQL._mutation_class = self._snapshot.mutation_class
+        GraphQL._subscription_class = self._snapshot.subscription_class
+        GraphQL._schema = self._snapshot.schema
+        GraphQL._mutations = self._snapshot.mutations
+        GraphQL._query_fields = self._snapshot.query_fields
+        GraphQL._subscription_fields = self._snapshot.subscription_fields
+        GraphQL._page_type_registry = self._snapshot.page_type_registry
+        GraphQL._subscription_payload_registry = (
+            self._snapshot.subscription_payload_registry
+        )
+        GraphQL.graphql_type_registry = self._snapshot.graphql_type_registry
+        GraphQL.graphql_filter_type_registry = (
+            self._snapshot.graphql_filter_type_registry
+        )
+        GraphQL.graphql_capability_type_registry = (
+            self._snapshot.graphql_capability_type_registry
+        )
+        GraphQL.manager_registry = self._snapshot.manager_registry
+        GraphQL._search_union = self._snapshot.search_union
+        GraphQL._search_result_type = self._snapshot.search_result_type
+
+    def test_add_subscription_field_registers_entity_and_class_fields(self) -> None:
+        class TestInterface(BaseTestInterface):
+            input_fields: ClassVar[dict[str, object]] = {
+                "id": SimpleNamespace(type=int, required=True),
+            }
+
+        class TestManager(GeneralManager):
+            Interface = TestInterface
+
+        graphene_type = type(
+            "TestManagerType",
+            (graphene.ObjectType,),
+            {"id": graphene.ID()},
+        )
+
+        GraphQL._add_subscription_field(graphene_type, TestManager)
+
+        self.assertIn("on_testmanager_change", GraphQL._subscription_fields)
+        self.assertIn("subscribe_on_testmanager_change", GraphQL._subscription_fields)
+        self.assertIn("resolve_on_testmanager_change", GraphQL._subscription_fields)
+        self.assertIn("on_testmanager_class_change", GraphQL._subscription_fields)
+        self.assertIn(
+            "subscribe_on_testmanager_class_change", GraphQL._subscription_fields
+        )
+        self.assertIn(
+            "resolve_on_testmanager_class_change", GraphQL._subscription_fields
+        )
+
+        entity_field = GraphQL._subscription_fields["on_testmanager_change"]
+        class_field = GraphQL._subscription_fields["on_testmanager_class_change"]
+        self.assertIn("id", entity_field.args)
+        self.assertEqual(class_field.args, {})
+
+
 class GraphQLHandleDataChangeTests(unittest.TestCase):
     """Test signal handler for subscription data changes."""
 
@@ -945,8 +1150,8 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
                 sender=RegisteredManager, instance=instance, action="test"
             )
 
-    def test_handle_data_change_sends_to_channel_group(self) -> None:
-        """Verify _handle_data_change sends message to correct channel group."""
+    def test_handle_data_change_sends_to_instance_and_class_groups(self) -> None:
+        """Verify _handle_data_change sends a rich message to both groups."""
 
         class RegisteredManager(GeneralManager):
             identification: ClassVar[dict[str, int]] = {"id": 1}
@@ -973,16 +1178,20 @@ class GraphQLHandleDataChangeTests(unittest.TestCase):
                 # Verify group_send was wrapped with async_to_sync
                 mock_async_to_sync.assert_called_once_with(mock_layer.group_send)
 
-                # Verify the send was called with correct arguments
-                self.assertEqual(mock_send.call_count, 1)
-                call_args = mock_send.call_args[0]
-                group_name = call_args[0]
-                message = call_args[1]
+                self.assertEqual(mock_send.call_count, 2)
+                sent_groups = {call.args[0] for call in mock_send.call_args_list}
+                instance_group = GraphQL._group_name(
+                    RegisteredManager, instance.identification
+                )
+                class_group = GraphQL._class_group_name(RegisteredManager)
+                self.assertEqual(sent_groups, {instance_group, class_group})
 
-                self.assertIsInstance(group_name, str)
-                self.assertTrue(group_name.startswith("gm_subscriptions."))
-                self.assertEqual(message["type"], "gm.subscription.event")
-                self.assertEqual(message["action"], "update")
+                for call in mock_send.call_args_list:
+                    message = call.args[1]
+                    self.assertEqual(message["type"], "gm.subscription.event")
+                    self.assertEqual(message["action"], "update")
+                    self.assertEqual(message["manager"], "RegisteredManager")
+                    self.assertEqual(message["identification"], {"id": 1})
 
 
 class GraphQLInstantiateManagerTests(GeneralManagerTransactionTestCase):
@@ -1246,6 +1455,62 @@ class GraphQLSubscriptionChannelListenerTests(unittest.TestCase):
 
         # Should complete without hanging
         asyncio.run(test_cancellation())
+
+    def test_channel_message_listener_enqueues_full_messages(self) -> None:
+        """Verify _channel_message_listener preserves subscription messages."""
+
+        async def test_listener() -> list[dict[str, Any]]:
+            mock_layer = MagicMock()
+            messages = [
+                {
+                    "type": "gm.subscription.event",
+                    "action": "update",
+                    "manager": "Project",
+                    "identification": {"id": 1},
+                },
+                {"type": "other.message", "action": "ignored"},
+                {"type": "gm.subscription.event"},
+            ]
+            message_iter = iter(messages)
+
+            async def mock_receive(_channel: str) -> dict[str, Any]:
+                try:
+                    await asyncio.sleep(0.001)
+                    return next(message_iter)
+                except StopIteration as err:
+                    await asyncio.sleep(10)
+                    raise AssertionError("Cancelled") from err
+
+            mock_layer.receive = mock_receive
+
+            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            listener_task = asyncio.create_task(
+                GraphQL._channel_message_listener(mock_layer, "test_channel", queue)
+            )
+            await asyncio.sleep(0.01)
+            listener_task.cancel()
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
+
+            queued = []
+            while not queue.empty():
+                queued.append(await queue.get())
+            return queued
+
+        queued_messages = asyncio.run(test_listener())
+        self.assertEqual(
+            queued_messages,
+            [
+                {
+                    "type": "gm.subscription.event",
+                    "action": "update",
+                    "manager": "Project",
+                    "identification": {"id": 1},
+                }
+            ],
+        )
 
 
 class GraphQLSchemaAccessTests(unittest.TestCase):
