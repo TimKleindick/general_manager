@@ -23,6 +23,22 @@ subscription ($id: ID!) {
 }
 ```
 
+For class-wide streams, GraphQL also exposes `on<ManagerClass>ClassChange` (e.g. `onProjectClassChange`). This field takes no identification arguments and emits one changed item per event:
+
+```graphql
+subscription {
+  onProjectClassChange {
+    action
+    item {
+      id
+      name
+    }
+  }
+}
+```
+
+Class-wide subscriptions do not emit an initial `snapshot`, because there is no single current item to return. They only stream future changes that happen after the subscription is active.
+
 Each event has two fields:
 
 - `action`: describes what triggered the update (`snapshot`, `update`, `delete`, custom signals).
@@ -31,7 +47,7 @@ Each event has two fields:
 ### Signals and channels
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
-- Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant channel group (`gm_subscriptions.<Manager>.<digest>`).
+- Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL listens to `post_data_change` and forwards the event to the relevant instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`).
 
 ### Identification helpers
 
@@ -61,6 +77,8 @@ No additional configuration is necessary. Continue to annotate computed fields w
 
 - Missing channel layer configuration produces a GraphQL error instructing the operator to configure `CHANNEL_LAYERS`.
 - If instantiating the manager or a dependency fails during an update, the subscription sends an event with `item = null` and the incoming `action`. Clients can use this to show a placeholder while retrying the fetch.
+- Class-wide subscriptions check object-level read permission before yielding each event. If the requesting user cannot read the changed object, the event is suppressed entirely so the stream does not reveal hidden object IDs or change timing.
+- If a class-wide event cannot be rehydrated, such as a hard-deleted object that no longer exists, the event is suppressed rather than sent with `item = null`.
 
 ## Testing tips
 

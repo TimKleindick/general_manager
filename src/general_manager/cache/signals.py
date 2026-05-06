@@ -59,7 +59,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         else:
             result = func(*args, **kwargs)
 
-        instance = result
+        instance = result if result is not None else instance_before
 
         post_data_change.send(
             sender=sender,

@@ -87,6 +87,19 @@ def group_name(
     return f"gm_subscriptions.{manager_class.__name__}.{digest}"
 
 
+def class_group_name(manager_class: type[GeneralManager]) -> str:
+    """
+    Build a deterministic channel-group name for all instances of a manager.
+
+    Parameters:
+        manager_class: Manager class used to namespace the group.
+
+    Returns:
+        A stable group identifier for class-wide subscriptions.
+    """
+    return f"gm_subscriptions.{manager_class.__name__}.__class__"
+
+
 async def channel_listener(
     channel_layer: BaseChannelLayer,
     channel_name: str,
@@ -111,6 +124,28 @@ async def channel_listener(
             action = cast(str | None, message.get("action"))
             if action is not None:
                 await queue.put(action)
+    except asyncio.CancelledError:
+        pass
+
+
+async def channel_message_listener(
+    channel_layer: BaseChannelLayer,
+    channel_name: str,
+    queue: asyncio.Queue[dict[str, Any]],
+) -> None:
+    """
+    Listen for subscription event messages and enqueue complete messages.
+
+    Class-wide subscriptions need the event identification, not only the action,
+    so this listener preserves the full channel-layer payload.
+    """
+    try:
+        while True:
+            message = cast(dict[str, Any], await channel_layer.receive(channel_name))
+            if message.get("type") != "gm.subscription.event":
+                continue
+            if message.get("action") is not None:
+                await queue.put(message)
     except asyncio.CancelledError:
         pass
 

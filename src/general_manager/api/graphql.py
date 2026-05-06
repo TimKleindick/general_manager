@@ -85,6 +85,7 @@ from general_manager.api.graphql_resolvers import (
     apply_pagination as _apply_pagination_fn,
     apply_grouping as _apply_grouping_fn,
     check_read_permission as _check_read_permission_fn,
+    can_read_instance as _can_read_instance_fn,
     create_measurement_resolver as _create_measurement_resolver_fn,
     create_normal_resolver as _create_normal_resolver_fn,
     create_list_resolver as _create_list_resolver_fn,
@@ -104,7 +105,9 @@ from general_manager.api.graphql_search import (
 from general_manager.api.graphql_subscriptions import (
     get_channel_layer_safe as _get_channel_layer_fn,
     group_name as _group_name_fn,
+    class_group_name as _class_group_name_fn,
     channel_listener as _channel_listener_fn,
+    channel_message_listener as _channel_message_listener_fn,
     prime_graphql_properties as _prime_graphql_properties_fn,
     dependencies_from_tracker as _dependencies_from_tracker_fn,
     subscription_property_names as _subscription_property_names_fn,
@@ -215,6 +218,11 @@ class GraphQL:
         return _group_name_fn(manager_class, identification)
 
     @staticmethod
+    def _class_group_name(manager_class: type[GeneralManager]) -> str:
+        """Build class-wide channel group name."""
+        return _class_group_name_fn(manager_class)
+
+    @staticmethod
     async def _channel_listener(
         channel_layer: BaseChannelLayer,
         channel_name: str,
@@ -222,6 +230,15 @@ class GraphQL:
     ) -> None:
         """Listen for subscription events. See ``graphql_subscriptions.channel_listener``."""
         await _channel_listener_fn(channel_layer, channel_name, queue)
+
+    @staticmethod
+    async def _channel_message_listener(
+        channel_layer: BaseChannelLayer,
+        channel_name: str,
+        queue: asyncio.Queue[dict[str, Any]],
+    ) -> None:
+        """Listen for complete subscription event messages."""
+        await _channel_message_listener_fn(channel_layer, channel_name, queue)
 
     @classmethod
     def create_graphql_mutation(cls, generalManagerClass: type[GeneralManager]) -> None:
@@ -1073,7 +1090,11 @@ class GraphQL:
         - On termination the subscription cleans up listener tasks and unsubscribes from channel groups.
         """
         field_name = f"on_{generalManagerClass.__name__.lower()}_change"
-        if field_name in cls._subscription_fields:
+        class_field_name = f"on_{generalManagerClass.__name__.lower()}_class_change"
+        if (
+            field_name in cls._subscription_fields
+            and class_field_name in cls._subscription_fields
+        ):
             return
 
         payload_type = cls._subscription_payload_registry.get(
@@ -1094,6 +1115,7 @@ class GraphQL:
 
         identification_args = cls._build_identification_arguments(generalManagerClass)
         subscription_field = graphene.Field(payload_type, **identification_args)
+        class_subscription_field = graphene.Field(payload_type)
 
         async def subscribe(
             _root: Any,
@@ -1210,9 +1232,74 @@ class GraphQL:
             """
             return payload
 
-        cls._subscription_fields[field_name] = subscription_field
-        cls._subscription_fields[f"subscribe_{field_name}"] = subscribe
-        cls._subscription_fields[f"resolve_{field_name}"] = resolve
+        async def subscribe_class(
+            _root: Any,
+            info: GraphQLResolveInfo,
+            **_: Any,
+        ) -> AsyncIterator[SubscriptionEvent]:
+            """
+            Stream future authorized change events for any instance of a manager class.
+
+            Unlike single-entity subscriptions, class-wide subscriptions do not
+            yield an initial snapshot. Each channel event is hydrated and
+            checked against the request user's object-level read permission
+            before it is yielded.
+            """
+            try:
+                channel_layer = cast(
+                    BaseChannelLayer, cls._get_channel_layer(strict=True)
+                )
+            except RuntimeError as exc:
+                raise GraphQLError(str(exc)) from exc
+            channel_name = cast(str, await channel_layer.new_channel())
+            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            group_name = cls._class_group_name(
+                cast(type[GeneralManager], generalManagerClass)
+            )
+            await channel_layer.group_add(group_name, channel_name)
+            listener_task = asyncio.create_task(
+                cls._channel_message_listener(channel_layer, channel_name, queue)
+            )
+
+            async def event_stream() -> AsyncIterator[SubscriptionEvent]:
+                try:
+                    while True:
+                        message = await queue.get()
+                        if message.get("manager") != generalManagerClass.__name__:
+                            continue
+                        action = cast(str | None, message.get("action"))
+                        identification = message.get("identification")
+                        if action is None or not isinstance(identification, dict):
+                            continue
+                        identification_copy = deepcopy(identification)
+                        try:
+                            item, _ = await asyncio.to_thread(
+                                cls._instantiate_manager,
+                                cast(type[GeneralManager], generalManagerClass),
+                                identification_copy,
+                            )
+                        except HANDLED_MANAGER_ERRORS:
+                            continue
+                        if not _can_read_instance_fn(item, info):
+                            continue
+                        clear_capability_context(info)
+                        yield SubscriptionEvent(item=item, action=action)
+                finally:
+                    listener_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await listener_task
+                    await channel_layer.group_discard(group_name, channel_name)
+
+            return event_stream()
+
+        if field_name not in cls._subscription_fields:
+            cls._subscription_fields[field_name] = subscription_field
+            cls._subscription_fields[f"subscribe_{field_name}"] = subscribe
+            cls._subscription_fields[f"resolve_{field_name}"] = resolve
+        if class_field_name not in cls._subscription_fields:
+            cls._subscription_fields[class_field_name] = class_subscription_field
+            cls._subscription_fields[f"subscribe_{class_field_name}"] = subscribe_class
+            cls._subscription_fields[f"resolve_{class_field_name}"] = resolve
 
     @classmethod
     def create_write_fields(cls, interface_cls: InterfaceBase) -> dict[str, Any]:
@@ -1305,19 +1392,22 @@ class GraphQL:
             return
 
         group_name = cls._group_name(manager_class, instance.identification)
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "gm.subscription.event",
-                "action": action,
-            },
-        )
+        class_group_name = cls._class_group_name(manager_class)
+        message = {
+            "type": "gm.subscription.event",
+            "action": action,
+            "manager": manager_class.__name__,
+            "identification": deepcopy(instance.identification),
+        }
+        group_send = async_to_sync(channel_layer.group_send)
+        group_send(group_name, message)
+        group_send(class_group_name, message)
         logger.debug(
             "dispatched subscription event",
             context={
                 "manager": manager_class.__name__,
                 "action": action,
-                "group": group_name,
+                "groups": [group_name, class_group_name],
             },
         )
 
