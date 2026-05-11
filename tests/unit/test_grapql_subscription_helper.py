@@ -660,8 +660,8 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
                     sender=instance, instance=instance, action="test"
                 )
 
-                # Should still work correctly
-                mock_send.assert_called_once()
+                # Should send to the instance and class-level groups.
+                self.assertEqual(mock_send.call_count, 2)
 
     def test_handle_data_change_with_subclass(self) -> None:
         """Verify _handle_data_change works with GeneralManager subclasses."""
@@ -689,4 +689,4 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
                     sender=DerivedManager, instance=instance, action="test"
                 )
 
-                mock_send.assert_called_once()
+                self.assertEqual(mock_send.call_count, 2)
