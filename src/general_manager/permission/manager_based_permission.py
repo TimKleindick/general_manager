@@ -182,12 +182,28 @@ class _ConfiguredManagerPermission(BasePermission):
 
     def __get_based_on_permission(self) -> Optional[BasePermission]:
         from general_manager.manager.general_manager import GeneralManager
+        from general_manager.permission.permission_data_manager import (
+            PermissionDataManager,
+        )
 
         __based_on__ = self.__based_on__
         if __based_on__ is None:
             return None
 
         basis_object = getattr(self.instance, __based_on__, notExistent)
+        if (
+            basis_object is not None
+            and basis_object is not notExistent
+            and not isinstance(basis_object, GeneralManager)
+            and isinstance(self.instance, PermissionDataManager)
+            and self.instance.manager is not None
+        ):
+            field_type = self.instance.manager.Interface.get_field_type(__based_on__)
+            if isinstance(field_type, type) and issubclass(field_type, GeneralManager):
+                if isinstance(basis_object, dict):
+                    basis_object = field_type(**basis_object)
+                else:
+                    basis_object = field_type(id=basis_object)
         if basis_object is notExistent:
             if self._is_class_context:
                 return None
@@ -218,7 +234,7 @@ class _ConfiguredManagerPermission(BasePermission):
             return None
 
         return Permission(
-            instance=getattr(self.instance, __based_on__),
+            instance=basis_object,
             request_user=self.request_user,
         )
 

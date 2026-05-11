@@ -226,6 +226,14 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(human_with_country.name, "David")
         self.assertEqual(human_with_country.country.code, "US")  # type: ignore
 
+        human_with_country_id = self.TestHuman.create(
+            creator_id=None,
+            name="Dora",
+            country=str(self.de.identification["id"]),
+        )
+        self.assertEqual(human_with_country_id.name, "Dora")
+        self.assertEqual(human_with_country_id.country.code, "DE")  # type: ignore
+
         # Test creating human without country -> should fall back to default permissions
         with self.assertRaises(PermissionError):
             self.TestHuman.create(
