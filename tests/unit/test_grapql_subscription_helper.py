@@ -662,6 +662,13 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
 
                 # Should send to the instance and class-level groups.
                 self.assertEqual(mock_send.call_count, 2)
+                self.assertEqual(
+                    {call.args[0] for call in mock_send.call_args_list},
+                    {
+                        GraphQL._group_name(TestManager, instance.identification),
+                        GraphQL._class_group_name(TestManager),
+                    },
+                )
 
     def test_handle_data_change_with_subclass(self) -> None:
         """Verify _handle_data_change works with GeneralManager subclasses."""
