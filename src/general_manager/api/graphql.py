@@ -1413,8 +1413,20 @@ class GraphQL:
             "identification": event_identification,
         }
         group_send = async_to_sync(channel_layer.group_send)
-        group_send(group_name, message)
-        group_send(class_group_name, message)
+        for target_group_name in (group_name, class_group_name):
+            try:
+                group_send(target_group_name, message)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "failed to dispatch subscription event",
+                    context={
+                        "manager": manager_class.__name__,
+                        "action": action,
+                        "group": target_group_name,
+                        "message": message,
+                    },
+                    exc_info=exc,
+                )
         logger.debug(
             "dispatched subscription event",
             context={

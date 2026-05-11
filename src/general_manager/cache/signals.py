@@ -1,5 +1,6 @@
 """Signals and decorators for tracking GeneralManager data changes."""
 
+from copy import deepcopy
 from django.dispatch import Signal
 from typing import Callable, TypeVar, ParamSpec, cast
 
@@ -53,6 +54,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
             **kwargs,
         )
         old_relevant_values = getattr(instance_before, "_old_values", {})
+        pre_identification = deepcopy(getattr(instance_before, "identification", None))
         if isinstance(func, classmethod):
             inner = cast(Callable[P, R], func.__func__)
             result = inner(*args, **kwargs)
@@ -62,7 +64,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         instance = result
         identification = getattr(instance, "identification", None)
         if identification is None:
-            identification = getattr(instance_before, "identification", None)
+            identification = pre_identification
 
         post_data_change.send(
             sender=sender,

@@ -74,9 +74,12 @@ def _manager_change_to_event(
     if action in {"create", "update"} and not relevant_fields:
         return None
 
+    identification = kwargs.get("identification")
+    if identification is None:
+        identification = instance.identification
     common_kwargs: _CommonEventKwargs = {
         "manager": instance.__class__.__name__,
-        "identification": instance.identification,
+        "identification": identification,
         "source": "general_manager.cache.signals.post_data_change",
         "metadata": {"action": action},
         "event_name": "manager_updated",

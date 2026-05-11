@@ -697,3 +697,42 @@ class GraphQLHandleDataChangeEdgeCasesTests(unittest.TestCase):
                 )
 
                 self.assertEqual(mock_send.call_count, 2)
+
+    def test_handle_data_change_continues_when_instance_group_send_fails(
+        self,
+    ) -> None:
+        """Verify class-level dispatch still runs when instance dispatch fails."""
+
+        class TestManager(GeneralManager):
+            identification: ClassVar = {"id": 1}
+            Interface = BaseTestInterface
+
+        GraphQL.manager_registry = {"TestManager": TestManager}
+        instance = TestManager()
+        mock_layer = MagicMock()
+
+        with (
+            patch(
+                "general_manager.api.graphql.GraphQL._get_channel_layer",
+                return_value=mock_layer,
+            ),
+            patch("general_manager.api.graphql.async_to_sync") as mock_async,
+            patch("general_manager.api.graphql.logger") as mock_logger,
+        ):
+            mock_send = MagicMock(side_effect=[RuntimeError("send failed"), None])
+            mock_async.return_value = mock_send
+
+            GraphQL._handle_data_change(
+                sender=TestManager,
+                instance=instance,
+                action="test",
+            )
+
+        self.assertEqual(
+            [call.args[0] for call in mock_send.call_args_list],
+            [
+                GraphQL._group_name(TestManager, instance.identification),
+                GraphQL._class_group_name(TestManager),
+            ],
+        )
+        mock_logger.warning.assert_called_once()

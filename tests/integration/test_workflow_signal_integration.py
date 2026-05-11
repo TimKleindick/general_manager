@@ -209,9 +209,12 @@ class WorkflowSignalIntegrationTests(GeneralManagerTransactionTestCase):
             status="draft",
             ignore_permission=True,
         )
-        identification = dict(project.identification)
+        identification_before = dict(project.identification)
+        project.identification["delete_marker"] = "current"
+        current_identification = dict(project.identification)
 
         project.delete(ignore_permission=True)
 
         assert len(deleted_events) == 1
-        assert deleted_events[0].payload["identification"] == identification
+        assert current_identification != identification_before
+        assert deleted_events[0].payload["identification"] == current_identification
