@@ -38,3 +38,6 @@ query {
 ```
 
 For list-heavy checks, pass `batch_evaluator=` to `object_capability(...)`. The list resolver warms capability values for the returned page only when `capabilities` is selected.
+
+For permission-backed, mutation-backed, and current-user examples, see
+[GraphQL permission capabilities](../concepts/graphql/permission_capabilities.md).
