@@ -64,6 +64,7 @@ def emit_remote_invalidation(
     sender: type["GeneralManager"],
     *,
     instance: "GeneralManager | None" = None,
+    identification: dict[str, Any] | None = None,
     action: str,
     **_: Any,
 ) -> None:
@@ -73,14 +74,17 @@ def emit_remote_invalidation(
     channel_layer = _get_channel_layer_safe()
     if channel_layer is None:
         return
+    event_identification = identification
+    if event_identification is None and instance is not None:
+        event_identification = dict(instance.identification)
     payload = {
         "type": "gm.remote.invalidation",
         "protocol_version": config.protocol_version,
         "base_path": config.base_path,
         "resource_name": config.resource_name,
         "action": action,
-        "identification": _json_safe_identification(dict(instance.identification))
-        if instance is not None
+        "identification": _json_safe_identification(event_identification)
+        if event_identification is not None
         else None,
         "event_id": str(uuid4()),
     }

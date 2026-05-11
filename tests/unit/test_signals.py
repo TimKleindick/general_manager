@@ -118,7 +118,7 @@ class DataChangeSignalTests(TestCase):
         self.assertIsInstance(result, Dummy)
         self.assertEqual(result.value, "baz")
 
-    def test_delete_returning_none_sends_pre_change_instance_to_post_signal(self):
+    def test_delete_returning_none_sends_delete_metadata_to_post_signal(self):
         inst = Dummy()
 
         with capture_signal(post_data_change) as post_calls:
@@ -128,5 +128,7 @@ class DataChangeSignalTests(TestCase):
         self.assertEqual(len(post_calls), 1)
         post = post_calls[0]
         self.assertIs(post["sender"], Dummy)
-        self.assertIs(post["instance"], inst)
+        self.assertIsNone(post["instance"])
+        self.assertIs(post["previous_instance"], inst)
+        self.assertIsNone(post["identification"])
         self.assertEqual(post["action"], "delete")

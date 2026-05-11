@@ -143,3 +143,40 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
         self.assertEqual(payload["identification"]["start_date"], "2026-03-18")
         self.assertEqual(payload["identification"]["updated_at"], "2026-03-18T12:30:00")
         self.assertEqual(payload["identification"]["name"], "Alpha")
+
+    def test_emit_remote_invalidation_uses_delete_identification_metadata(
+        self,
+    ) -> None:
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        channel_layer = SimpleNamespace(group_send=MagicMock())
+
+        with (
+            patch(
+                "general_manager.api.remote_invalidation._get_channel_layer_safe",
+                return_value=channel_layer,
+            ),
+            patch(
+                "general_manager.api.remote_invalidation.async_to_sync",
+                side_effect=lambda fn: fn,
+            ),
+        ):
+            emit_remote_invalidation(
+                Project,
+                instance=None,
+                identification={"id": UUID("12345678-1234-5678-1234-567812345678")},
+                action="delete",
+            )
+
+        _, payload = channel_layer.group_send.call_args.args
+        self.assertEqual(payload["action"], "delete")
+        self.assertEqual(
+            payload["identification"],
+            {"id": "12345678-1234-5678-1234-567812345678"},
+        )

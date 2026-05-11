@@ -22,7 +22,14 @@ _SETTINGS_KEY = "GENERAL_MANAGER"
 _WORKFLOW_SIGNAL_BRIDGE_KEY = "WORKFLOW_SIGNAL_BRIDGE"
 _DISPATCH_UID = "general_manager_workflow_signal_bridge"
 
-_RESERVED_KEYS = {"creator_id", "history_comment", "ignore_permission", "signal"}
+_RESERVED_KEYS = {
+    "creator_id",
+    "history_comment",
+    "identification",
+    "ignore_permission",
+    "previous_instance",
+    "signal",
+}
 
 
 class _CommonEventKwargs(TypedDict):
@@ -105,8 +112,11 @@ def _handle_post_data_change(
     **kwargs: Any,
 ) -> None:
     del sender
+    event_instance = (
+        instance if instance is not None else kwargs.get("previous_instance")
+    )
     event = _manager_change_to_event(
-        instance=instance,
+        instance=event_instance,
         action=action,
         old_relevant_values=old_relevant_values,
         kwargs=kwargs,
