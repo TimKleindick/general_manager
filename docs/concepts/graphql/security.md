@@ -13,6 +13,10 @@ Always execute GraphQL resolvers through managers; do not reach directly for Dja
 
 ## Capability hints
 
+See [GraphQL permission capabilities](permission_capabilities.md) for the full
+concept, declaration helpers, current-user provider configuration, and batching
+examples.
+
 Declare object capability hints on the manager's nested `Permission` class:
 
 ```python
