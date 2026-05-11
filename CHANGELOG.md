@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.40.0 (2026-05-11)
+
+### Bug Fixes
+
+- Isolate subscription dispatch failures
+  ([`e44e858`](https://github.com/TimKleindick/general_manager/commit/e44e858de4448b2ac3c911c106dd64a97d7d2e6e))
+
+- Preserve delete metadata outside signal instance
+  ([`e5a5d77`](https://github.com/TimKleindick/general_manager/commit/e5a5d7701022d75fe5ca8457fbe40f97e4a8a759))
+
+### Features
+
+- Add class-wide graphql subscriptions
+  ([`efb59a1`](https://github.com/TimKleindick/general_manager/commit/efb59a1e2eb816ab999b6455f788e3d87ab56f24))
+
+### Testing
+
+- Assert subscription dispatch groups
+  ([`da2cdd5`](https://github.com/TimKleindick/general_manager/commit/da2cdd51a3abbfaa9d2f7182c2fe27085dcadc02))
+
+- Run suite against local source
+  ([`5f450ea`](https://github.com/TimKleindick/general_manager/commit/5f450ead96ccc2c118a48abf67bd14ea0cb5f54b))
+
+
 ## v0.39.1 (2026-04-27)
 
 ### Bug Fixes
