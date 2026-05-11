@@ -365,6 +365,21 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
                 }
             }
             """
+        self.update_mutation_without_name = """
+            mutation UpdateProject($id: Int!, $budget: MeasurementScalar) {
+                updateTestProject(id: $id, budget: $budget) {
+                    TestProject {
+                        name
+                        number
+                        budget {
+                            value
+                            unit
+                        }
+                    }
+                    success
+                }
+            }
+            """
 
     def _latest_history_user(self, manager):
         history = manager.history.order_by("-history_date").first()
@@ -426,6 +441,34 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(updated_project.name, "Updated Project Without Budget")
         self.assertEqual(updated_project.number, 1)
         self.assertEqual(updated_project.budget, "1000 EUR")
+        self.assertEqual(self._latest_history_user(updated_project), self.user)
+
+    def test_update_project_without_name(self):
+        """
+        Tests that update mutations allow partial updates without resubmitting
+        unchanged non-nullable fields.
+        """
+        variables = {
+            "id": self.project.id,
+            "budget": "2000 EUR",
+        }
+
+        response = self.query(self.update_mutation_without_name, variables=variables)
+        self.assertResponseNoErrors(response)
+        response = response.json()
+        data = response.get("data", {})
+        self.assertTrue(data["updateTestProject"]["success"])
+
+        data = data["updateTestProject"]["TestProject"]
+        self.assertEqual(data["name"], "Initial Project")
+        self.assertEqual(data["number"], 1)
+        self.assertEqual(data["budget"]["value"], 2000)
+        self.assertEqual(data["budget"]["unit"], "EUR")
+
+        updated_project = self.TestProject(self.project.id)
+        self.assertEqual(updated_project.name, "Initial Project")
+        self.assertEqual(updated_project.number, 1)
+        self.assertEqual(updated_project.budget, "2000 EUR")
         self.assertEqual(self._latest_history_user(updated_project), self.user)
 
 

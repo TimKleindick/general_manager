@@ -897,6 +897,7 @@ class TestGrapQlMutation(TestCase):
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
         self.assertIn("field1", mutation_class._meta.arguments)
         self.assertIsInstance(mutation_class._meta.arguments["field1"], graphene.String)
+        self.assertTrue(mutation_class._meta.arguments["field1"].kwargs["required"])
         self.assertEqual(
             mutation_class._meta.arguments["field1"].kwargs["default_value"],
             "test123",
@@ -963,6 +964,9 @@ class TestGrapQlMutation(TestCase):
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
         self.assertIn("field1", mutation_class._meta.arguments)
         self.assertIsInstance(mutation_class._meta.arguments["field1"], graphene.String)
+        self.assertFalse(
+            mutation_class._meta.arguments["field1"].kwargs.get("required", False)
+        )
         self.assertEqual(
             mutation_class._meta.arguments["field1"].kwargs["default_value"],
             "test123",
