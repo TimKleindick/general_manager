@@ -99,6 +99,7 @@ nav:
           - concepts/interfaces/existing_model_interface.md
           - concepts/interfaces/computed_data_interfaces.md
           - concepts/interfaces/dependency_graph.md
+          - concepts/interfaces/request_interface.md
       - Observability:
           - concepts/observability/index.md
           - concepts/observability/logging.md
@@ -145,6 +146,8 @@ nav:
       - examples/existing_model_interface.md
       - examples/custom_capability_examples.md
       - examples/startup_hooks.md
+      - examples/remote_manager_interface_end_to_end.md
+      - examples/request_interface_end_to_end.md
   - API-Reference:
       - api/core.md
       - api/measurement.md
@@ -158,3 +161,4 @@ nav:
       - adr/0004-startup-hooks.md
       - adr/0005-search-backend.md
       - adr/0006-workflow-engine-architecture.md
+      - adr/0007-graphql-capability-exposure.md
