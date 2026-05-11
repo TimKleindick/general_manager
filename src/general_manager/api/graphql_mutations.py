@@ -66,7 +66,11 @@ def _normalize_mutation_kwargs_for_manager(
 # ---------------------------------------------------------------------------
 
 
-def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
+def create_write_fields(
+    interface_cls: InterfaceBase,
+    *,
+    require_fields: bool = True,
+) -> dict[str, Any]:
     """
     Create Graphene input fields for writable attributes defined by an Interface.
 
@@ -79,6 +83,9 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
     Parameters:
         interface_cls: Interface providing attribute metadata used to build
             the input fields.
+        require_fields: Whether generated fields should mirror interface
+            requiredness. Update mutations set this to ``False`` to support
+            partial updates.
 
     Returns:
         Mapping from attribute name to a Graphene input field instance.
@@ -91,7 +98,7 @@ def create_write_fields(interface_cls: InterfaceBase) -> dict[str, Any]:
             continue
 
         typ = info["type"]
-        req = info["is_required"]
+        req = info["is_required"] if require_fields else False
         default = info["default"]
 
         fld: Any
@@ -243,7 +250,8 @@ def generate_update_mutation_class(
                     **{
                         field_name: field
                         for field_name, field in create_write_fields(
-                            interface_cls
+                            interface_cls,
+                            require_fields=False,
                         ).items()
                         if field.editable
                     },

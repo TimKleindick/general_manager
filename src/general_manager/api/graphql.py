@@ -1307,9 +1307,14 @@ class GraphQL:
             cls._subscription_fields[f"resolve_{class_field_name}"] = resolve
 
     @classmethod
-    def create_write_fields(cls, interface_cls: InterfaceBase) -> dict[str, Any]:
+    def create_write_fields(
+        cls,
+        interface_cls: InterfaceBase,
+        *,
+        require_fields: bool = True,
+    ) -> dict[str, Any]:
         """Thin wrapper - see :func:`general_manager.api.graphql_mutations.create_write_fields`."""
-        return _create_write_fields_fn(interface_cls)
+        return _create_write_fields_fn(interface_cls, require_fields=require_fields)
 
     @classmethod
     def generate_create_mutation_class(
