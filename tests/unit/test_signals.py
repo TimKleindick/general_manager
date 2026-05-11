@@ -47,6 +47,19 @@ class Dummy:
         return None
 
 
+class InvalidatingDummy:
+    """Test helper that invalidates identification during delete."""
+
+    def __init__(self):
+        self.identification = {"id": "before"}
+
+    @data_change
+    def delete(self):
+        self.identification["id"] = "after"
+        self.identification = None
+        return None
+
+
 class DataChangeSignalTests(TestCase):
     def setUp(self):
         # Preserve existing receivers so they can be restored after the test run
@@ -132,3 +145,12 @@ class DataChangeSignalTests(TestCase):
         self.assertIs(post["previous_instance"], inst)
         self.assertIsNone(post["identification"])
         self.assertEqual(post["action"], "delete")
+
+    def test_delete_identification_uses_pre_mutation_snapshot(self):
+        inst = InvalidatingDummy()
+
+        with capture_signal(post_data_change) as post_calls:
+            inst.delete()
+
+        self.assertEqual(len(post_calls), 1)
+        self.assertEqual(post_calls[0]["identification"], {"id": "before"})
