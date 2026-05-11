@@ -195,3 +195,23 @@ class WorkflowSignalIntegrationTests(GeneralManagerTransactionTestCase):
         assert len(self.executions) == 1
         assert self.executions[0].workflow_id == "project_status_email"
         assert self.executions[0].state == "completed"
+
+    def test_manager_delete_signal_includes_identification_in_workflow_event(
+        self,
+    ) -> None:
+        deleted_events: list[WorkflowEvent] = []
+        self.event_registry.register(
+            "manager_deleted",
+            handler=deleted_events.append,
+        )
+        project = self.Project.create(
+            name="Delta",
+            status="draft",
+            ignore_permission=True,
+        )
+        identification = dict(project.identification)
+
+        project.delete(ignore_permission=True)
+
+        assert len(deleted_events) == 1
+        assert deleted_events[0].payload["identification"] == identification

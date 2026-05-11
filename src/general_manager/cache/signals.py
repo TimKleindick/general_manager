@@ -59,11 +59,16 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         else:
             result = func(*args, **kwargs)
 
-        instance = result if result is not None else instance_before
+        instance = result
+        identification = getattr(instance, "identification", None)
+        if identification is None:
+            identification = getattr(instance_before, "identification", None)
 
         post_data_change.send(
             sender=sender,
             instance=instance,
+            previous_instance=instance_before,
+            identification=identification,
             action=action,
             old_relevant_values=old_relevant_values,
             **kwargs,

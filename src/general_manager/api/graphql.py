@@ -28,6 +28,7 @@ from typing import (
 import graphene  # type: ignore[import]
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer
+from django.core.exceptions import ObjectDoesNotExist
 from django.utils.module_loading import import_string
 
 from general_manager.bucket.base_bucket import Bucket
@@ -120,6 +121,10 @@ if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
 
 logger = get_logger("api.graphql")
+SUBSCRIPTION_HYDRATION_ERRORS: tuple[type[Exception], ...] = (
+    *HANDLED_MANAGER_ERRORS,
+    ObjectDoesNotExist,
+)
 
 
 GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
@@ -1202,7 +1207,7 @@ class GraphQL:
                                 identification_copy,
                                 property_names=property_names,
                             )
-                        except HANDLED_MANAGER_ERRORS:
+                        except SUBSCRIPTION_HYDRATION_ERRORS:
                             item = None
                         clear_capability_context(info)
                         yield SubscriptionEvent(item=item, action=action)
@@ -1278,7 +1283,7 @@ class GraphQL:
                                 cast(type[GeneralManager], generalManagerClass),
                                 identification_copy,
                             )
-                        except HANDLED_MANAGER_ERRORS:
+                        except SUBSCRIPTION_HYDRATION_ERRORS:
                             continue
                         if not _can_read_instance_fn(item, info):
                             continue
@@ -1350,6 +1355,8 @@ class GraphQL:
         sender: type[GeneralManager] | GeneralManager,
         instance: GeneralManager | None,
         action: str,
+        previous_instance: GeneralManager | None = None,
+        identification: dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
         """
@@ -1362,13 +1369,14 @@ class GraphQL:
             instance (GeneralManager | None): The GeneralManager instance that changed.
             action (str): A string describing the change action (e.g., "created", "updated", "deleted").
         """
-        if instance is None or not isinstance(instance, GeneralManager):
+        event_instance = instance if instance is not None else previous_instance
+        if event_instance is None or not isinstance(event_instance, GeneralManager):
             return
 
         if isinstance(sender, type) and issubclass(sender, GeneralManager):
             manager_class: type[GeneralManager] = sender
         else:
-            manager_class = instance.__class__
+            manager_class = event_instance.__class__
 
         if manager_class.__name__ not in cls.manager_registry:
             logger.debug(
@@ -1391,13 +1399,18 @@ class GraphQL:
             )
             return
 
-        group_name = cls._group_name(manager_class, instance.identification)
+        event_identification = (
+            deepcopy(identification)
+            if identification is not None
+            else deepcopy(event_instance.identification)
+        )
+        group_name = cls._group_name(manager_class, event_identification)
         class_group_name = cls._class_group_name(manager_class)
         message = {
             "type": "gm.subscription.event",
             "action": action,
             "manager": manager_class.__name__,
-            "identification": deepcopy(instance.identification),
+            "identification": event_identification,
         }
         group_send = async_to_sync(channel_layer.group_send)
         group_send(group_name, message)

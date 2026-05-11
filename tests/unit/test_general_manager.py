@@ -359,7 +359,9 @@ class GeneralManagerTestCase(TestCase):
 
             self.assertEqual(len(self.post_list), 1)
             self.assertEqual(self.post_list[0]["action"], "delete")
-            self.assertIs(self.post_list[0]["instance"], manager_obj)
+            self.assertIsNone(self.post_list[0]["instance"])
+            self.assertIs(self.post_list[0]["previous_instance"], manager_obj)
+            self.assertEqual(self.post_list[0]["identification"], {"id": "dummy_id"})
 
     def test_delete_returns_none_when_hard_delete(self):
         """Deletes should return None from the manager API even when the interface returns identifiers."""

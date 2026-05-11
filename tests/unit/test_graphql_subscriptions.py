@@ -2,6 +2,7 @@
 
 
 import asyncio
+import contextlib
 import os
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -70,8 +71,19 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 def can_read_instance(self) -> bool:
                     return self.instance.name != "Hidden"
 
-        cls.general_manager_classes = [Employee]
+        class SoftEmployee(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=120)
+
+                class Meta:
+                    use_soft_delete = True
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+        cls.general_manager_classes = [Employee, SoftEmployee]
         cls.Employee = Employee
+        cls.SoftEmployee = SoftEmployee
 
     def setUp(self) -> None:
         """
@@ -346,6 +358,87 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         payload = event.data["onEmployeeClassChange"]
         self.assertEqual(payload["action"], "update")
         self.assertEqual(payload["item"]["name"], "After")
+
+    def test_class_subscription_emits_soft_delete_events(self) -> None:
+        employee = self.SoftEmployee.create(name="Soft", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onSoftemployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> object:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            try:
+                next_event = asyncio.create_task(generator.__anext__())
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+                await asyncio.to_thread(
+                    lambda: employee.delete(
+                        creator_id=self.user.id,
+                        ignore_permission=True,
+                    )
+                )
+                return await next_event
+            finally:
+                await generator.aclose()
+
+        event = asyncio.run(run_subscription())
+
+        self.assertIsNone(event.errors)
+        payload = event.data["onSoftemployeeClassChange"]
+        self.assertEqual(payload["action"], "delete")
+        self.assertEqual(payload["item"]["name"], "Soft")
+
+    def test_class_subscription_suppresses_hard_delete_events(self) -> None:
+        employee = self.Employee.create(name="Hard", creator_id=self.user.id)
+        schema = self._build_schema()
+        context = SimpleNamespace(user=self.user)
+        subscription = """
+            subscription {
+                onEmployeeClassChange {
+                    action
+                    item {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        async def run_subscription() -> None:
+            generator = await schema.subscribe(subscription, context_value=context)
+            if hasattr(generator, "errors"):
+                raise AssertionError(generator.errors)
+            next_event = asyncio.create_task(generator.__anext__())
+            try:
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+                await asyncio.to_thread(
+                    lambda: employee.delete(
+                        creator_id=self.user.id,
+                        ignore_permission=True,
+                    )
+                )
+                await asyncio.sleep(0.02)
+                self.assertFalse(next_event.done())
+            finally:
+                next_event.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await next_event
+                await generator.aclose()
+
+        asyncio.run(run_subscription())
 
 
 class GraphQLSubscriptionPropertySelectionTests(unittest.TestCase):
