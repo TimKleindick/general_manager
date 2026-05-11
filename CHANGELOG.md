@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.40.1 (2026-05-11)
+
+### Bug Fixes
+
+- Resolve based_on create permission ids
+  ([`96ce693`](https://github.com/TimKleindick/general_manager/commit/96ce69361833dd9ab0bc74c5292591e7739f957e))
+
+
 ## v0.40.0 (2026-05-11)
 
 ### Bug Fixes
