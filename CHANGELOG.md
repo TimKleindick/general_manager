@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.40.2 (2026-05-12)
+
+### Bug Fixes
+
+- Allow partial graphql update mutations
+  ([`d21f148`](https://github.com/TimKleindick/general_manager/commit/d21f1481cb0ffb758a1bf1798c94313f1fc76543))
+
+### Chores
+
+- Bump pinned versions in requirements/base.txt
+  ([`84259e1`](https://github.com/TimKleindick/general_manager/commit/84259e10f33650860809d47ed1a7fa233a635899))
+
+### Documentation
+
+- Add missing pages to mkdocs nav
+  ([`1f91910`](https://github.com/TimKleindick/general_manager/commit/1f91910f3bb8db2a2e6df93db272d1eab01133a2))
+
+- Document graphql permission capabilities
+  ([`ec0e563`](https://github.com/TimKleindick/general_manager/commit/ec0e56357af8608e24588026917c258581c3c5bf))
+
+
 ## v0.40.1 (2026-05-11)
 
 ### Bug Fixes
