@@ -19,6 +19,7 @@ from general_manager.api.graphql import (
 )
 from general_manager.api.graphql_mutations import (
     _normalize_mutation_kwargs_for_manager,
+    create_write_fields as create_write_fields_fn,
 )
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.measurement.measurement import Measurement
@@ -730,10 +731,290 @@ class TestGrapQlMutation(TestCase):
         self.assertNotIn("created_at", fields)
         self.assertNotIn("derived_field", fields)
 
-    def test_create_filter_options_uses_bigint_scalar(self):
+    def test_create_write_fields_require_fields_true_preserves_requiredness(self):
+        """
+        With require_fields=True (default), fields mirror interface is_required.
+        A field with is_required=True must have required=True in the graphene field.
+        A field with is_required=False must NOT have required=True.
+        """
+
         class DummyInterface:
             @staticmethod
             def get_attribute_types():
+                return {
+                    "required_field": {
+                        "type": str,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                    "optional_field": {
+                        "type": int,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                }
+
+        # Explicit require_fields=True
+        fields = create_write_fields_fn(DummyInterface, require_fields=True)
+        self.assertTrue(fields["required_field"].kwargs.get("required", False))
+        self.assertFalse(fields["optional_field"].kwargs.get("required", False))
+
+        # Default (no kwarg) should behave identically to require_fields=True
+        fields_default = create_write_fields_fn(DummyInterface)
+        self.assertTrue(fields_default["required_field"].kwargs.get("required", False))
+        self.assertFalse(fields_default["optional_field"].kwargs.get("required", False))
+
+    def test_create_write_fields_require_fields_false_makes_all_fields_optional(self):
+        """
+        With require_fields=False, every generated field must be optional (required=False)
+        regardless of the interface's is_required setting.
+        """
+
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "mandatory_str": {
+                        "type": str,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                    "mandatory_int": {
+                        "type": int,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                    "optional_bool": {
+                        "type": bool,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                }
+
+        fields = create_write_fields_fn(DummyInterface, require_fields=False)
+
+        for field_name in ("mandatory_str", "mandatory_int", "optional_bool"):
+            self.assertIn(field_name, fields)
+            self.assertFalse(
+                fields[field_name].kwargs.get("required", False),
+                msg=f"Expected {field_name} to be optional when require_fields=False",
+            )
+
+    def test_create_write_fields_require_fields_false_with_general_manager_type(self):
+        """
+        With require_fields=False, GeneralManager ID fields and list fields must also
+        be optional even when is_required=True in the interface.
+        """
+
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "owner": {
+                        "type": GeneralManager,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                    "reviewer_list": {
+                        "type": GeneralManager,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                }
+
+        fields = create_write_fields_fn(DummyInterface, require_fields=False)
+
+        self.assertIn("owner", fields)
+        self.assertIsInstance(fields["owner"], graphene.ID)
+        self.assertFalse(fields["owner"].kwargs.get("required", False))
+
+        self.assertIn("reviewer_list", fields)
+        self.assertIsInstance(fields["reviewer_list"], graphene.List)
+        self.assertFalse(fields["reviewer_list"].kwargs.get("required", False))
+
+    def test_graphql_create_write_fields_passes_require_fields_false(self):
+        """
+        GraphQL.create_write_fields is a thin wrapper; passing require_fields=False
+        must result in all fields being optional.
+        """
+
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "name": {
+                        "type": str,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                }
+
+        fields = GraphQL.create_write_fields(DummyInterface, require_fields=False)
+        self.assertIn("name", fields)
+        self.assertFalse(
+            fields["name"].kwargs.get("required", False),
+            "GraphQL.create_write_fields should forward require_fields=False",
+        )
+
+    def test_graphql_create_write_fields_passes_require_fields_true(self):
+        """
+        GraphQL.create_write_fields is a thin wrapper; passing require_fields=True
+        (or using the default) must preserve interface requiredness.
+        """
+
+        class DummyInterface:
+            @staticmethod
+            def get_attribute_types():
+                return {
+                    "title": {
+                        "type": str,
+                        "is_required": True,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                    "description": {
+                        "type": str,
+                        "is_required": False,
+                        "is_derived": False,
+                        "default": None,
+                        "is_editable": True,
+                    },
+                }
+
+        fields = GraphQL.create_write_fields(DummyInterface, require_fields=True)
+        self.assertTrue(
+            fields["title"].kwargs.get("required", False),
+            "Required interface field must stay required when require_fields=True",
+        )
+        self.assertFalse(
+            fields["description"].kwargs.get("required", False),
+            "Optional interface field must stay optional when require_fields=True",
+        )
+
+    def test_update_mutation_all_write_fields_are_optional(self):
+        """
+        Regression: generate_update_mutation_class must pass require_fields=False so
+        that callers can send a partial update without supplying every required field.
+        """
+
+        class DummyManager:
+            def __init__(self, *_, **kwargs):
+                self.name = kwargs.get("name")
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "name": {
+                            "type": str,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
+                        "count": {
+                            "type": int,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
+                    }
+
+            @classmethod
+            def update(cls, *_args, **kwargs):
+                return DummyManager(**kwargs)
+
+        default_return_values = {"success": graphene.Boolean()}
+        mutation_class = GraphQL.generate_update_mutation_class(
+            DummyManager, default_return_values
+        )
+
+        args = mutation_class._meta.arguments
+        # Every write field (other than id) must be optional in an update mutation
+        for field_name, field in args.items():
+            if field_name == "id":
+                continue
+            self.assertFalse(
+                field.kwargs.get("required", False),
+                msg=f"Update mutation argument '{field_name}' must be optional",
+            )
+
+    def test_create_mutation_required_fields_stay_required(self):
+        """
+        Regression: generate_create_mutation_class must use the default require_fields=True
+        so that mandatory interface fields remain required in the create mutation.
+        """
+
+        class DummyManager:
+            def __init__(self, *_, **kwargs):
+                self.name = kwargs.get("name")
+                self.count = kwargs.get("count")
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "name": {
+                            "type": str,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
+                        "description": {
+                            "type": str,
+                            "is_required": False,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
+                    }
+
+            @classmethod
+            def create(cls, *_args, **kwargs):
+                return DummyManager(**kwargs)
+
+        default_return_values = {"success": graphene.Boolean()}
+        mutation_class = GraphQL.generate_create_mutation_class(
+            DummyManager, default_return_values
+        )
+
+        args = mutation_class._meta.arguments
+        self.assertTrue(
+            args["name"].kwargs.get("required", False),
+            "Required interface field must be required in create mutation",
+        )
+        self.assertFalse(
+            args["description"].kwargs.get("required", False),
+            "Optional interface field must remain optional in create mutation",
+        )
+
+    def test_create_filter_options_uses_bigint_scalar(self):
+        class DummyInterface:
+            @staticmethod
+
                 return {
                     "large_value": {
                         "type": int,
@@ -897,6 +1178,7 @@ class TestGrapQlMutation(TestCase):
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
         self.assertIn("field1", mutation_class._meta.arguments)
         self.assertIsInstance(mutation_class._meta.arguments["field1"], graphene.String)
+        self.assertTrue(mutation_class._meta.arguments["field1"].kwargs["required"])
         self.assertEqual(
             mutation_class._meta.arguments["field1"].kwargs["default_value"],
             "test123",
@@ -963,6 +1245,9 @@ class TestGrapQlMutation(TestCase):
         self.assertTrue(issubclass(mutation_class, graphene.Mutation))
         self.assertIn("field1", mutation_class._meta.arguments)
         self.assertIsInstance(mutation_class._meta.arguments["field1"], graphene.String)
+        self.assertFalse(
+            mutation_class._meta.arguments["field1"].kwargs.get("required", False)
+        )
         self.assertEqual(
             mutation_class._meta.arguments["field1"].kwargs["default_value"],
             "test123",
