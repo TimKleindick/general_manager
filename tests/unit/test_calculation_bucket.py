@@ -294,6 +294,266 @@ class TestGenerateCombinations(TestCase):
         # Compare as multisets since insertion order of fields may vary
         self.assertCountEqual(combos, expected)
 
+    def test_generate_combinations_does_not_instantiate_managers_without_property_work(
+        self, _mock_parse
+    ):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 1}, {"num": 2}, {"num": 3}])
+        self.assertEqual(calls, [])
+
+    def test_iter_instantiates_managers_once_for_input_only_bucket(self, _mock_parse):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
+
+        items = list(bucket)
+
+        self.assertEqual([item.identification for item in items], bucket._data)
+        self.assertEqual(
+            calls,
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+
+    def test_property_filter_still_instantiates_managers_for_property_access(
+        self, _mock_parse
+    ):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+            @property
+            def doubled(self):
+                return self.num * 2
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
+        bucket._filters = {"doubled": {"filter_funcs": [lambda value: value >= 4]}}
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 2}, {"num": 3}])
+        self.assertEqual(
+            calls,
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+
+    def test_property_exclude_still_instantiates_managers_for_property_access(
+        self, _mock_parse
+    ):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+            @property
+            def doubled(self):
+                return self.num * 2
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
+        bucket._excludes = {"doubled": {"filter_funcs": [lambda value: value == 4]}}
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 1}, {"num": 3}])
+        self.assertEqual(
+            calls,
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+
+    def test_input_sort_key_does_not_instantiate_managers(self, _mock_parse):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[3, 1, 2]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager, sort_key="num")
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 1}, {"num": 2}, {"num": 3}])
+        self.assertEqual(calls, [])
+
+    def test_property_sort_key_still_instantiates_managers_for_property_access(
+        self, _mock_parse
+    ):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+            @property
+            def descending_value(self):
+                return -self.num
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager, sort_key="descending_value")
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 3}, {"num": 2}, {"num": 1}])
+        self.assertEqual(
+            calls,
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+
+    def test_property_filter_and_sort_instantiates_managers_once(self, _mock_parse):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=[1, 2, 3]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+            @property
+            def doubled(self):
+                return self.num * 2
+
+            @property
+            def descending_value(self):
+                return -self.num
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager, sort_key="descending_value")
+        bucket._filters = {"doubled": {"filter_funcs": [lambda value: value >= 4]}}
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 3}, {"num": 2}])
+        self.assertEqual(
+            calls,
+            [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+
+    def test_mixed_input_and_property_sort_key_uses_manager_sorting(self, _mock_parse):
+        calls = []
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "group": Input(type=str, possible_values=["b", "a"]),
+                "num": Input(type=int, possible_values=[2, 1]),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                calls.append(dict(kwargs))
+                self.identification = dict(kwargs)
+                self.group = kwargs["group"]
+                self.num = kwargs["num"]
+
+            @property
+            def descending_value(self):
+                return -self.num
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager, sort_key=("group", "descending_value"))
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(
+            combos,
+            [
+                {"group": "a", "num": 2},
+                {"group": "a", "num": 1},
+                {"group": "b", "num": 2},
+                {"group": "b", "num": 1},
+            ],
+        )
+        self.assertEqual(len(calls), 4)
+
     def test_empty_possible_values(self, _mock_parse):
         # A field with no possible_values yields no combinations
 
