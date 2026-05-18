@@ -453,6 +453,40 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             "input_excludes": input_excludes,
         }
 
+    def _normalized_sort_key(self) -> tuple[str, ...] | None:
+        if self.sort_key is None:
+            return None
+        if isinstance(self.sort_key, str):
+            return (self.sort_key,)
+        return self.sort_key
+
+    def _sort_uses_only_inputs(self, sort_key: tuple[str, ...] | None) -> bool:
+        if sort_key is None:
+            return True
+        return all(key in self.input_fields for key in sort_key)
+
+    def _sort_dict_combinations(
+        self,
+        combinations: list[dict[str, Any]],
+        sort_key: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        return sorted(
+            combinations,
+            key=lambda combo: tuple(combo[key] for key in sort_key),
+        )
+
+    def _manager_combinations(
+        self,
+        combinations: list[dict[str, Any]],
+    ) -> list[GeneralManagerType]:
+        return [self._manager_class(**combo) for combo in combinations]
+
+    @staticmethod
+    def _manager_identifications(
+        managers: list[GeneralManagerType],
+    ) -> list[dict[str, Any]]:
+        return [manager.identification for manager in managers]
+
     def generate_combinations(self) -> List[dict[str, Any]]:
         """
         Compute (and cache) the list of valid input combinations.
@@ -460,10 +494,6 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Returns:
             list[dict[str, Any]]: Cached list of input dictionaries satisfying filters, excludes, and ordering.
         """
-
-        def key_func(manager_obj: GeneralManagerType) -> tuple:
-            getters = [attrgetter(key) for key in sort_key]
-            return tuple(getter(manager_obj) for getter in getters)
 
         if self._data is None:
             sorted_inputs = self.topological_sort_inputs()
@@ -473,23 +503,40 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 sorted_filters["input_filters"],
                 sorted_filters["input_excludes"],
             )
-            manager_combinations = self._generate_prop_combinations(
-                current_combinations,
-                sorted_filters["prop_filters"],
-                sorted_filters["prop_excludes"],
+            sort_key = self._normalized_sort_key()
+            needs_manager_access = (
+                bool(sorted_filters["prop_filters"])
+                or bool(sorted_filters["prop_excludes"])
+                or not self._sort_uses_only_inputs(sort_key)
             )
 
-            if self.sort_key is not None:
-                sort_key = self.sort_key
-                if isinstance(sort_key, str):
-                    sort_key = (sort_key,)
-                manager_combinations = sorted(
+            if needs_manager_access:
+                manager_combinations = self._manager_combinations(current_combinations)
+                manager_combinations = self._filter_prop_combinations(
                     manager_combinations,
-                    key=key_func,
+                    sorted_filters["prop_filters"],
+                    sorted_filters["prop_excludes"],
                 )
+                if sort_key is not None:
+                    getters = [attrgetter(key) for key in sort_key]
+                    manager_combinations = sorted(
+                        manager_combinations,
+                        key=lambda manager_obj: tuple(
+                            getter(manager_obj) for getter in getters
+                        ),
+                    )
+                identifications = self._manager_identifications(manager_combinations)
+            else:
+                identifications = current_combinations
+                if sort_key is not None:
+                    identifications = self._sort_dict_combinations(
+                        identifications,
+                        sort_key,
+                    )
+
             if self.reverse:
-                manager_combinations.reverse()
-            self._data = [manager.identification for manager in manager_combinations]
+                identifications.reverse()
+            self._data = identifications
 
         return self._data
 
@@ -670,9 +717,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         return list(helper(0, {}))
 
-    def _generate_prop_combinations(
+    def _filter_prop_combinations(
         self,
-        current_combos: list[dict[str, Any]],
+        manager_combinations: list[GeneralManagerType],
         prop_filters: dict[str, Any],
         prop_excludes: dict[str, Any],
     ) -> list[GeneralManagerType]:
@@ -680,23 +727,22 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Apply property-level filters and excludes to manager combinations.
 
         Parameters:
-            current_combos (list[dict[str, Any]]): Input combinations already passing input filters.
+            manager_combinations (list[GeneralManagerType]): Managers built from
+                input combinations already passing input filters.
             prop_filters (dict[str, Any]): Filter definitions keyed by property name.
             prop_excludes (dict[str, Any]): Exclude definitions keyed by property name.
 
         Returns:
-            list[GeneralManagerType]: Manager instances that satisfy property constraints.
+            list[GeneralManagerType]: Manager instances that satisfy property
+            constraints.
         """
 
         prop_filter_needed = set(prop_filters.keys()) | set(prop_excludes.keys())
-        manager_combinations = [
-            self._manager_class(**combo) for combo in current_combos
-        ]
         if not prop_filter_needed:
             return manager_combinations
 
         # Apply property filters and exclusions
-        filtered_combos = []
+        filtered_combos: list[GeneralManagerType] = []
         for manager in manager_combinations:
             keep = True
             # include filters
