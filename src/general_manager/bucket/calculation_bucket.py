@@ -454,6 +454,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         }
 
     def _normalized_sort_key(self) -> tuple[str, ...] | None:
+        """Return the configured sort key as a tuple, or None when unsorted."""
         if self.sort_key is None:
             return None
         if isinstance(self.sort_key, str):
@@ -461,6 +462,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return self.sort_key
 
     def _sort_uses_only_inputs(self, sort_key: tuple[str, ...] | None) -> bool:
+        """Return whether a sort can be applied to raw input dictionaries."""
         if sort_key is None:
             return True
         return all(key in self.input_fields for key in sort_key)
@@ -470,9 +472,18 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         combinations: list[dict[str, Any]],
         sort_key: tuple[str, ...],
     ) -> list[dict[str, Any]]:
+        """
+        Sort input dictionaries while tolerating missing optional inputs.
+
+        Present values sort before missing values in ascending order. Missing
+        keys use None as the explicit placeholder, guarded by a presence flag so
+        they are not compared directly with concrete input values.
+        """
         return sorted(
             combinations,
-            key=lambda combo: tuple(combo[key] for key in sort_key),
+            key=lambda combo: tuple(
+                (key not in combo, combo.get(key, None)) for key in sort_key
+            ),
         )
 
     def _manager_combinations(

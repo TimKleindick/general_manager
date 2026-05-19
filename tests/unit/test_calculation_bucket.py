@@ -444,6 +444,28 @@ class TestGenerateCombinations(TestCase):
         self.assertEqual(combos, [{"num": 1}, {"num": 2}, {"num": 3}])
         self.assertEqual(calls, [])
 
+    def test_input_sort_key_allows_missing_optional_input(self, _mock_parse):
+        fields = {
+            "a": Input(type=int, possible_values=[2, 1]),
+            "b": Input(
+                type=int,
+                possible_values=lambda a: [10] if a == 2 else None,
+                depends_on=["a"],
+                required=False,
+            ),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+        sorted_bucket = CalculationBucket(
+            bucket._manager_class,
+            bucket.filters,
+            bucket.excludes,
+            sort_key=("b", "a"),
+        )
+
+        combos = sorted_bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"a": 2, "b": 10}, {"a": 1}])
+
     def test_property_sort_key_still_instantiates_managers_for_property_access(
         self, _mock_parse
     ):
