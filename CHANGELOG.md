@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.40.3 (2026-05-20)
+
+### Bug Fixes
+
+- Handle missing optional sort inputs
+  ([`66c6bb9`](https://github.com/TimKleindick/general_manager/commit/66c6bb9e2e252d10d461aa516445ceb9e75ac26d))
+
+- Optimize calculation bucket input generation
+  ([`3cad245`](https://github.com/TimKleindick/general_manager/commit/3cad245bfb25d3cb366fb0497598b46f00d6e4c8))
+
+
 ## v0.40.2 (2026-05-12)
 
 ### Bug Fixes
