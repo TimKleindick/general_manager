@@ -357,10 +357,66 @@ def get_filter_options(
                     )
 
 
+def get_relation_filter_option(
+    attribute_type: type,
+    attribute_name: str,
+    attr_info: Mapping[str, Any],
+    graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]],
+    map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
+    remaining_depth: int,
+) -> tuple[str, Any] | None:
+    """Build a nested relation filter field for direct and collection relations."""
+    if remaining_depth <= 0:
+        return None
+    if not safe_issubclass(attribute_type, GeneralManager):
+        return None
+
+    relation_kind = attr_info.get("relation_kind")
+    if relation_kind not in {"collection", "direct"}:
+        return None
+
+    nested_type = create_filter_options(
+        attribute_type,
+        graphql_filter_type_registry,
+        map_field_to_graphene_read,
+        relation_depth=remaining_depth - 1,
+        _remaining_depth=remaining_depth - 1,
+    )
+    if nested_type is None:
+        return None
+
+    if relation_kind == "collection":
+        relation_type_name = (
+            f"{attribute_type.__name__}{attribute_name.title().replace('_', '')}"
+            f"RelationFilterTypeDepth{remaining_depth - 1}"
+        )
+        if relation_type_name not in graphql_filter_type_registry:
+            graphql_filter_type_registry[relation_type_name] = type(
+                relation_type_name,
+                (graphene.InputObjectType,),
+                {
+                    "any": graphene.InputField(nested_type),
+                    "none": graphene.InputField(nested_type),
+                },
+            )
+        return (
+            attribute_name,
+            graphene.InputField(graphql_filter_type_registry[relation_type_name]),
+        )
+
+    if relation_kind == "direct":
+        return attribute_name, graphene.InputField(nested_type)
+
+    return None
+
+
 def create_filter_options(
     field_type: Type[GeneralManager],
     graphql_filter_type_registry: dict[str, type[graphene.InputObjectType]],
     map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
+    *,
+    relation_depth: int = 1,
+    _remaining_depth: int | None = None,
 ) -> type[graphene.InputObjectType] | None:
     """
     Create (or retrieve from cache) a Graphene InputObjectType exposing all
@@ -378,13 +434,27 @@ def create_filter_options(
         A Graphene ``InputObjectType`` for *field_type*, or ``None`` if no
         filterable fields exist.
     """
-    graphene_filter_type_name = f"{field_type.__name__}FilterType"
+    remaining_depth = relation_depth if _remaining_depth is None else _remaining_depth
+    graphene_filter_type_name = f"{field_type.__name__}FilterTypeDepth{remaining_depth}"
     if graphene_filter_type_name in graphql_filter_type_registry:
         return graphql_filter_type_registry[graphene_filter_type_name]
 
     filter_fields: dict[str, Any] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
         attr_type = attr_info["type"]
+        if safe_issubclass(attr_type, GeneralManager):
+            relation_option = get_relation_filter_option(
+                attr_type,
+                attr_name,
+                attr_info,
+                graphql_filter_type_registry,
+                map_field_to_graphene_read,
+                remaining_depth,
+            )
+            if relation_option is not None:
+                key, value = relation_option
+                filter_fields[key] = value
+            continue
         filter_fields = {
             **filter_fields,
             **{

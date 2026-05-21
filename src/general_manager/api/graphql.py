@@ -704,10 +704,12 @@ class GraphQL:
         field_type: Type[GeneralManager],
     ) -> type[graphene.InputObjectType] | None:
         """Build filter InputObjectType for *field_type*. See ``graphql_search.create_filter_options``."""
+        relation_depth = int(get_setting("GRAPHQL_FILTER_RELATION_DEPTH", 1) or 0)
         return _create_filter_options_fn(
             field_type,
             GraphQL.graphql_filter_type_registry,
             GraphQL._map_field_to_graphene_read,
+            relation_depth=relation_depth,
         )
 
     @staticmethod

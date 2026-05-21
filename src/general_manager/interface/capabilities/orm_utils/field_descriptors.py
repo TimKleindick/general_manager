@@ -205,6 +205,8 @@ class _FieldDescriptorBuilder:
                 default=default,
                 is_derived=False,
                 accessor=accessor,
+                relation_kind="direct",
+                filter_lookup=field.name,
             )
 
     def _add_collection_relations(self) -> None:
@@ -303,6 +305,8 @@ class _FieldDescriptorBuilder:
             default=None,
             is_derived=is_derived,
             accessor=accessor,
+            relation_kind="collection",
+            filter_lookup=field_base,
         )
 
     def _resolve_collection_base_name(
@@ -347,6 +351,8 @@ class _FieldDescriptorBuilder:
         default: Any,
         is_derived: bool,
         accessor: DescriptorAccessor,
+        relation_kind: str | None = None,
+        filter_lookup: str | None = None,
     ) -> None:
         """
         Register a FieldDescriptor for a named interface attribute.
@@ -375,6 +381,10 @@ class _FieldDescriptorBuilder:
         graphql_scalar = _graphql_scalar_hint(raw_type)
         if graphql_scalar is not None:
             metadata["graphql_scalar"] = graphql_scalar
+        if relation_kind is not None:
+            metadata["relation_kind"] = relation_kind
+        if filter_lookup is not None:
+            metadata["filter_lookup"] = filter_lookup
         self._descriptors[attribute_name] = FieldDescriptor(
             name=attribute_name,
             metadata=metadata,
