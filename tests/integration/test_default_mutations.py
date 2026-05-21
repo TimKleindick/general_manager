@@ -12,6 +12,7 @@ from general_manager.permission.manager_based_permission import ManagerBasedPerm
 from typing import ClassVar
 from django.core.exceptions import ObjectDoesNotExist
 from unittest.mock import patch
+from general_manager.api.property import graph_ql_property
 
 
 class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
@@ -314,6 +315,12 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
                 class Meta:
                     app_label = "general_manager"
 
+            @graph_ql_property()
+            def number_rate(self) -> float | None:
+                if self.number is None:
+                    return None
+                return self.number / 100
+
         cls.TestProject = TestProject
         cls.general_manager_classes = [TestProject]
 
@@ -365,6 +372,13 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
                 }
             }
             """
+        self.query_number_rate = """
+            query Project($id: ID!) {
+                testproject(id: $id) {
+                    numberRate
+                }
+            }
+            """
         self.update_mutation_without_name = """
             mutation UpdateProject($id: Int!, $budget: MeasurementScalar) {
                 updateTestProject(id: $id, budget: $budget) {
@@ -413,6 +427,23 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(updated_project.number, 1)
         self.assertEqual(updated_project.budget, "2000 EUR")
         self.assertEqual(self._latest_history_user(updated_project), self.user)
+
+    def test_entry_based_graphql_property_refreshes_after_update(self):
+        response = self.query(
+            self.query_number_rate,
+            variables={"id": self.project.id},
+        )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["testproject"]["numberRate"], 0.01)
+
+        self.project = self.project.update(number=200, ignore_permission=True)
+
+        response = self.query(
+            self.query_number_rate,
+            variables={"id": self.project.id},
+        )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["testproject"]["numberRate"], 2)
 
     def test_update_project_without_budget(self):
         """

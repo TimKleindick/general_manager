@@ -33,6 +33,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 name = CharField(max_length=100)
                 salary = MeasurementField(base_unit="EUR")
 
+            @graph_ql_property()
+            def salary_rate(self) -> float:
+                return float(self.salary.quantity.magnitude / 100)
+
         class TaxCalculation(GeneralManager):
             employee: Employee
 
@@ -92,6 +96,53 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         data = response.json()["data"]["taxcalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 600)
         self.assertEqual(data["calculatedTax"]["unit"], "EUR")
+
+    def test_entry_based_graphql_property_refreshes_after_update(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        query = """
+        query($id: ID!) {
+            employee(id: $id) {
+                salaryRate
+            }
+        }
+        """
+
+        response = self.query(query, variables={"id": employee.id})
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 30)
+
+        employee.update(
+            salary=Measurement(4000, "EUR"),
+            creator_id=self.user.id,
+            ignore_permission=True,
+        )
+
+        response = self.query(query, variables={"id": employee.id})
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 40)
+
+    def test_calculation_graphql_property_refreshes_after_entry_update(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+
+        response = self.query(self.mutation, variables={"employeeId": employee.id})
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]["taxcalculation"]
+        self.assertEqual(data["calculatedTax"]["value"], 600)
+
+        employee.update(
+            salary=Measurement(4000, "EUR"),
+            creator_id=self.user.id,
+            ignore_permission=True,
+        )
+
+        response = self.query(self.mutation, variables={"employeeId": employee.id})
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]["taxcalculation"]
+        self.assertEqual(data["calculatedTax"]["value"], 800)
 
     def test_sort_by_calculation_property(self):
         """
