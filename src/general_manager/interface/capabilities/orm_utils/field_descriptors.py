@@ -9,6 +9,7 @@ import re
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, cast
 from uuid import UUID
 
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.db import models
 
@@ -395,11 +396,38 @@ class _FieldDescriptorBuilder:
         """
         if related_model == "self":
             return cast(type[models.Model], self.model)
+        if isinstance(related_model, str):
+            resolved_model = self._resolve_string_related_model(related_model)
+            if resolved_model is not None:
+                return resolved_model
         if isinstance(related_model, type) and issubclass(related_model, models.Model):
             return cast(type[models.Model], related_model)
         if related_model is not None:
             return None
         return cast(Optional[type[models.Model]], related_model)
+
+    def _resolve_string_related_model(
+        self,
+        related_model: str,
+    ) -> Optional[type[models.Model]]:
+        app_label: str | None
+        if "." in related_model:
+            app_label, model_name = related_model.split(".", 1)
+        else:
+            meta = getattr(self.model, "_meta", None)
+            app_label = getattr(meta, "app_label", None)
+            model_name = related_model
+        if not app_label:
+            return None
+        try:
+            resolved_model = apps.get_model(app_label, model_name)
+        except (LookupError, ValueError):
+            return None
+        if isinstance(resolved_model, type) and issubclass(
+            resolved_model, models.Model
+        ):
+            return cast(type[models.Model], resolved_model)
+        return None
 
 
 def _collect_custom_fields(
