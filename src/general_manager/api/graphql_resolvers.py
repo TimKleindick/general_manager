@@ -83,6 +83,9 @@ def apply_query_parameters(
     exclude_input: dict[str, Any] | str | None,
     sort_by: graphene.Enum | None,
     reverse: bool,
+    *,
+    filter_normalizer: Callable[[dict[str, Any]], dict[str, dict[str, Any]]]
+    | None = None,
 ) -> Bucket[GeneralManager]:
     """
     Apply filtering, exclusion, and sorting to *queryset*.
@@ -96,13 +99,25 @@ def apply_query_parameters(
     Returns:
         The queryset after filters, exclusions, and sorting are applied.
     """
+    normalized_excludes: dict[str, Any] = {}
+
     filters = parse_input(filter_input)
+    if filters and filter_normalizer is not None:
+        normalized = filter_normalizer(filters)
+        filters = normalized["filter"]
+        normalized_excludes = normalized["exclude"]
     if filters:
         queryset = queryset.filter(**filters)
 
     excludes = parse_input(exclude_input)
+    if excludes and filter_normalizer is not None:
+        normalized = filter_normalizer(excludes)
+        excludes = normalized["filter"]
+        normalized_excludes = {**normalized_excludes, **normalized["exclude"]}
     if excludes:
         queryset = queryset.exclude(**excludes)
+    if normalized_excludes:
+        queryset = queryset.exclude(**normalized_excludes)
 
     if sort_by:
         sort_by_str = cast(str, getattr(sort_by, "value", sort_by))
@@ -440,6 +455,10 @@ def create_normal_resolver(field_name: str) -> Callable[..., Any]:
 def create_list_resolver(
     base_getter: Callable[[Any, bool], Any],
     fallback_manager_class: type[GeneralManager],
+    filter_normalizer: Callable[
+        [type[GeneralManager], dict[str, Any]], dict[str, dict[str, Any]]
+    ]
+    | None = None,
 ) -> Callable[..., Any]:
     """
     Build a resolver for list fields that applies filters, permissions, and pagination.
@@ -479,7 +498,22 @@ def create_list_resolver(
         ):
             manager_class = fallback_manager_class
         qs = apply_permission_filters(base_queryset, manager_class, info)
-        qs = apply_query_parameters(qs, filter, exclude, sort_by, reverse)
+        bound_filter_normalizer = None
+        if filter_normalizer is not None:
+
+            def bound_filter_normalizer(
+                filters: dict[str, Any],
+            ) -> dict[str, dict[str, Any]]:
+                return filter_normalizer(manager_class, filters)
+
+        qs = apply_query_parameters(
+            qs,
+            filter,
+            exclude,
+            sort_by,
+            reverse,
+            filter_normalizer=bound_filter_normalizer,
+        )
         qs_grouped = apply_grouping(qs, group_by)
 
         total_count = len(qs_grouped)
@@ -575,7 +609,14 @@ def _selection_set_includes_path(
     return False
 
 
-def create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
+def create_resolver(
+    field_name: str,
+    field_type: type,
+    filter_normalizer: Callable[
+        [type[GeneralManager], dict[str, Any]], dict[str, dict[str, Any]]
+    ]
+    | None = None,
+) -> Callable[..., Any]:
     """
     Return the appropriate resolver for *field_name* based on *field_type*.
 
@@ -586,7 +627,9 @@ def create_resolver(field_name: str, field_type: type) -> Callable[..., Any]:
     """
     if field_name.endswith("_list") and safe_issubclass(field_type, GeneralManager):
         return create_list_resolver(
-            lambda self, _include_inactive: getattr(self, field_name), field_type
+            lambda self, _include_inactive: getattr(self, field_name),
+            field_type,
+            filter_normalizer,
         )
     if safe_issubclass(field_type, Measurement):
         return create_measurement_resolver(field_name)
