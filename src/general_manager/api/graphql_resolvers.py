@@ -39,6 +39,15 @@ GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
 logger = get_logger("api.graphql")
 
 
+class UnsupportedExcludeNoneRelationFilterError(ValueError):
+    """Raised when `none` relation filters are used in GraphQL exclude input."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "`none` relation filters are not supported inside `exclude` inputs."
+        )
+
+
 @dataclass(slots=True)
 class ReadAuthorizationResult(Generic[GeneralManagerT]):
     queryset: Bucket[GeneralManagerT]
@@ -70,6 +79,17 @@ def parse_input(input_val: dict[str, Any] | str | None) -> dict[str, Any]:
         except (json.JSONDecodeError, ValueError):
             return {}
     return input_val
+
+
+def contains_none_relation_filter(input_val: Any) -> bool:
+    """Return True when a nested relation filter contains a ``none`` operator."""
+    if isinstance(input_val, dict):
+        if "none" in input_val:
+            return True
+        return any(contains_none_relation_filter(value) for value in input_val.values())
+    if isinstance(input_val, list):
+        return any(contains_none_relation_filter(value) for value in input_val)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +131,8 @@ def apply_query_parameters(
 
     excludes = parse_input(exclude_input)
     if excludes and filter_normalizer is not None:
+        if contains_none_relation_filter(excludes):
+            raise UnsupportedExcludeNoneRelationFilterError
         normalized = filter_normalizer(excludes)
         excludes = normalized["filter"]
         normalized_excludes = {**normalized_excludes, **normalized["exclude"]}
