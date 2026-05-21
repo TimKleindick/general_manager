@@ -761,7 +761,7 @@ def register_search_query(
 
             hits.sort(key=_sort_key, reverse=sort_desc)
         else:
-            hits.sort(key=lambda item: (item[0] or 0), reverse=True)
+            hits.sort(key=lambda item: item[0] or 0, reverse=True)
 
         items: list[GeneralManager] = []
         for _, _hit, instance in hits[offset : offset + limit]:
