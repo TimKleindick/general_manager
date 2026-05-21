@@ -47,6 +47,47 @@ Schema generation should remain resilient when interface metadata includes edge-
 
 The intended behavior is that startup and schema registration remain reviewable and predictable even when a manager exposes less common field metadata.
 
+## Relation Filters
+
+Generated list queries expose scalar filters and relation filters. Direct
+relations such as foreign keys and one-to-one fields use nested filter input:
+
+```graphql
+query {
+  changerequestfeasibilityList(filter: {
+    changeRequest: { title: "Primary" }
+  }) {
+    items { id score }
+  }
+}
+```
+
+Collection relations such as reverse foreign keys and many-to-many fields expose
+`any` and `none`:
+
+```graphql
+query {
+  changerequestList(filter: {
+    changeRequestFeasibilityList: {
+      any: { score_Gte: 7 }
+    }
+  }) {
+    items { id title }
+  }
+}
+```
+
+`any` keeps rows with at least one related object matching the nested filter.
+`none` removes rows that have a related object matching the nested filter.
+
+The maximum relation nesting depth defaults to `1`. Configure it with:
+
+```python
+GENERAL_MANAGER = {
+    "GRAPHQL_FILTER_RELATION_DEPTH": 2,
+}
+```
+
 ## Buckets and pagination
 
 For bucket-returning fields, the schema registers list fields and page types. `PageInfo` exposes `total_count`, `current_page`, `total_pages`, and optional `page_size` so clients can implement cursor-less pagination quickly.
