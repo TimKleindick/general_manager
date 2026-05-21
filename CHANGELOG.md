@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.40.4 (2026-05-21)
+
+### Bug Fixes
+
+- Resolve string related models in factories
+  ([`8f9d811`](https://github.com/TimKleindick/general_manager/commit/8f9d8115627496955b19c78797707cbf732ce3be))
+
+
 ## v0.40.3 (2026-05-20)
 
 ### Bug Fixes
