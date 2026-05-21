@@ -189,6 +189,26 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
 
         self.assertEqual(self._titles_from_response(response), ["Secondary"])
 
+    def test_exclude_rejects_reverse_relation_none(self):
+        query = """
+        query {
+            changerequestList(exclude: {
+                changeRequestFeasibilityList: { none: { score_Gte: 7 } }
+            }) {
+                items { id title }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        payload = response.json()
+        self.assertIn("errors", payload)
+        self.assertIn(
+            "`none` relation filters are not supported inside `exclude` inputs.",
+            payload["errors"][0]["message"],
+        )
+
     def test_relation_filter_depth_two_exposes_second_level_relation(self):
         parent_filter = GraphQL.graphql_filter_type_registry[
             "ChangeRequestFilterTypeDepth2"
