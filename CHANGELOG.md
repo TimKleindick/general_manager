@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.40.6 (2026-05-21)
+
+### Bug Fixes
+
+- Invalidate null filter caches
+  ([`d95e49a`](https://github.com/TimKleindick/general_manager/commit/d95e49a549ae9447ab8850853d7f8b5205a7a1d7))
+
+### Testing
+
+- Cover graphql property cache refresh
+  ([`e580003`](https://github.com/TimKleindick/general_manager/commit/e580003ad6b9c8d1ca9e39635765602af050dbb7))
+
+- Cover null in dependency invalidation
+  ([`073d458`](https://github.com/TimKleindick/general_manager/commit/073d458e5ec60bb7b84a13b11e0ad39a377d2bff))
+
+
 ## v0.40.5 (2026-05-21)
 
 ### Bug Fixes
