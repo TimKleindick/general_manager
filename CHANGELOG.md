@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.40.5 (2026-05-21)
+
+### Bug Fixes
+
+- Resolve string relation descriptors
+  ([`42abe39`](https://github.com/TimKleindick/general_manager/commit/42abe39ec4617292481af6416d3337fe72c2b922))
+
+
 ## v0.40.4 (2026-05-21)
 
 ### Bug Fixes
