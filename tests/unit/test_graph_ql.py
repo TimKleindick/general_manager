@@ -411,6 +411,110 @@ class GraphQLTests(TestCase):
         child_filter_type = relation_type._meta.fields["any"].type
         self.assertIn("title__icontains", child_filter_type._meta.fields)
 
+    def test_normalize_relation_filter_input_flattens_direct_and_any_filters(self):
+        class ChildManager:
+            __name__ = "NormalizeChildManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"name": {"type": str}}
+
+        class ParentManager:
+            __name__ = "NormalizeParentManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {
+                        "child": {
+                            "type": ChildManager,
+                            "relation_kind": "direct",
+                            "filter_lookup": "child",
+                        },
+                        "child_list": {
+                            "type": ChildManager,
+                            "relation_kind": "collection",
+                            "filter_lookup": "child",
+                        },
+                    }
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is ChildManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_search.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            normalized = GraphQL._normalize_filter_input(
+                ParentManager,
+                {
+                    "child": {"name__icontains": "alpha"},
+                    "child_list": {"any": {"name": "beta"}},
+                },
+            )
+
+        self.assertEqual(
+            normalized,
+            {
+                "filter": {
+                    "child__name__icontains": "alpha",
+                    "child__name": "beta",
+                },
+                "exclude": {},
+            },
+        )
+
+    def test_normalize_relation_filter_input_flattens_none_to_exclude(self):
+        class ChildManager:
+            __name__ = "NormalizeNoneChildManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"name": {"type": str}}
+
+        class ParentManager:
+            __name__ = "NormalizeNoneParentManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {
+                        "child_list": {
+                            "type": ChildManager,
+                            "relation_kind": "collection",
+                            "filter_lookup": "child",
+                        },
+                    }
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is ChildManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_search.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            normalized = GraphQL._normalize_filter_input(
+                ParentManager,
+                {"child_list": {"none": {"name__icontains": "blocked"}}},
+            )
+
+        self.assertEqual(normalized["filter"], {})
+        self.assertEqual(normalized["exclude"], {"child__name__icontains": "blocked"})
+
     def test_build_identification_arguments_respects_optional_inputs(self):
         class DependencyManager(GeneralManager):
             pass

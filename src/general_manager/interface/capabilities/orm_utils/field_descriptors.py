@@ -306,7 +306,7 @@ class _FieldDescriptorBuilder:
             is_derived=is_derived,
             accessor=accessor,
             relation_kind="collection",
-            filter_lookup=field_base,
+            filter_lookup=getattr(field, "name", accessor_name),
         )
 
     def _resolve_collection_base_name(

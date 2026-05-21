@@ -493,6 +493,63 @@ def create_filter_options(
     return filter_class
 
 
+def normalize_filter_input(
+    field_type: Type[GeneralManager],
+    filter_input: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Flatten nested GraphQL relation filters into filter and exclude kwargs."""
+    interface = getattr(field_type, "Interface", None)
+    get_attribute_types = getattr(interface, "get_attribute_types", None)
+    if not callable(get_attribute_types):
+        return {"filter": dict(filter_input), "exclude": {}}
+
+    filters: dict[str, Any] = {}
+    excludes: dict[str, Any] = {}
+    attr_types = get_attribute_types()
+
+    for key, value in filter_input.items():
+        attr_info = attr_types.get(key)
+        if not attr_info or not isinstance(value, dict):
+            filters[key] = value
+            continue
+
+        attr_type = attr_info.get("type")
+        relation_kind = attr_info.get("relation_kind")
+        lookup = attr_info.get("filter_lookup", key)
+        if not safe_issubclass(attr_type, GeneralManager) or relation_kind is None:
+            filters[key] = value
+            continue
+
+        if relation_kind == "direct":
+            nested = normalize_filter_input(attr_type, value)
+            for nested_key, nested_value in nested["filter"].items():
+                filters[f"{lookup}__{nested_key}"] = nested_value
+            for nested_key, nested_value in nested["exclude"].items():
+                excludes[f"{lookup}__{nested_key}"] = nested_value
+            continue
+
+        if relation_kind == "collection":
+            any_value = value.get("any")
+            none_value = value.get("none")
+            if isinstance(any_value, dict):
+                nested = normalize_filter_input(attr_type, any_value)
+                for nested_key, nested_value in nested["filter"].items():
+                    filters[f"{lookup}__{nested_key}"] = nested_value
+                for nested_key, nested_value in nested["exclude"].items():
+                    excludes[f"{lookup}__{nested_key}"] = nested_value
+            if isinstance(none_value, dict):
+                nested = normalize_filter_input(attr_type, none_value)
+                for nested_key, nested_value in nested["filter"].items():
+                    excludes[f"{lookup}__{nested_key}"] = nested_value
+                for nested_key, nested_value in nested["exclude"].items():
+                    filters[f"{lookup}__{nested_key}"] = nested_value
+            continue
+
+        filters[key] = value
+
+    return {"filter": filters, "exclude": excludes}
+
+
 # ---------------------------------------------------------------------------
 # Top-level search query registration
 # ---------------------------------------------------------------------------

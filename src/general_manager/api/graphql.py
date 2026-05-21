@@ -102,6 +102,7 @@ from general_manager.api.graphql_search import (
     passes_permission_filters as _passes_permission_filters_fn,
     get_filter_options as _get_filter_options_fn,
     create_filter_options as _create_filter_options_fn,
+    normalize_filter_input as _normalize_filter_input_fn,
 )
 from general_manager.api.graphql_subscriptions import (
     get_channel_layer_safe as _get_channel_layer_fn,
@@ -782,16 +783,31 @@ class GraphQL:
         return _parse_input_fn(input_val)
 
     @staticmethod
+    def _normalize_filter_input(
+        field_type: Type[GeneralManager],
+        filter_input: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Flatten nested relation filters. See ``graphql_search.normalize_filter_input``."""
+        return _normalize_filter_input_fn(field_type, filter_input)
+
+    @staticmethod
     def _apply_query_parameters(
         queryset: Bucket[GeneralManager],
         filter_input: dict[str, Any] | str | None,
         exclude_input: dict[str, Any] | str | None,
         sort_by: graphene.Enum | None,
         reverse: bool,
+        filter_normalizer: Callable[[dict[str, Any]], dict[str, dict[str, Any]]]
+        | None = None,
     ) -> Bucket[GeneralManager]:
         """Apply filter/exclude/sort to *queryset*. See ``graphql_resolvers.apply_query_parameters``."""
         return _apply_query_parameters_fn(
-            queryset, filter_input, exclude_input, sort_by, reverse
+            queryset,
+            filter_input,
+            exclude_input,
+            sort_by,
+            reverse,
+            filter_normalizer=filter_normalizer,
         )
 
     @staticmethod
@@ -816,7 +832,11 @@ class GraphQL:
         fallback_manager_class: type[GeneralManager],
     ) -> Callable[..., Any]:
         """Build a list-field resolver. See ``graphql_resolvers.create_list_resolver``."""
-        return _create_list_resolver_fn(base_getter, fallback_manager_class)
+        return _create_list_resolver_fn(
+            base_getter,
+            fallback_manager_class,
+            _normalize_filter_input_fn,
+        )
 
     @staticmethod
     def _apply_pagination(
@@ -847,7 +867,7 @@ class GraphQL:
     @classmethod
     def _create_resolver(cls, field_name: str, field_type: type) -> Callable[..., Any]:
         """Dispatch to the appropriate resolver factory. See ``graphql_resolvers.create_resolver``."""
-        return _create_resolver_fn(field_name, field_type)
+        return _create_resolver_fn(field_name, field_type, _normalize_filter_input_fn)
 
     @classmethod
     def _get_or_create_page_type(
