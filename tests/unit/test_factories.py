@@ -431,6 +431,48 @@ class TestGetManyToManyFieldValue(TestCase):
         self.assertIn("test_field", str(ctx.exception))
         self.assertIn("must be a Django model class", str(ctx.exception))
 
+    def test_get_related_model_resolves_dotted_string_reference(self):
+        """String relation references should resolve through Django's app registry."""
+        from general_manager.factory.factories import get_related_model
+
+        field = Mock()
+        field.related_model = "financials.AccountNumber"
+        field.name = "project_number"
+
+        with patch(
+            "django.apps.apps.get_model", return_value=DummyForeignKey
+        ) as get_model:
+            self.assertIs(get_related_model(field), DummyForeignKey)
+
+        get_model.assert_called_once_with("financials", "AccountNumber")
+
+    def test_nullable_relation_with_default_none_returns_none_before_resolution(self):
+        """Nullable relation fields with default=None should not require resolving a related model."""
+        from general_manager.factory.factories import get_field_value
+
+        field = Mock()
+        field.related_model = "financials.AccountNumber"
+        field.name = "project_number"
+        field.null = True
+        field.default = None
+
+        def custom_isinstance(obj, cls):
+            if cls == models.OneToOneField:
+                return True
+            return isinstance(obj, cls)
+
+        with (
+            patch("general_manager.factory.factories._RNG.choice", return_value=False),
+            patch(
+                "general_manager.factory.factories.isinstance",
+                side_effect=custom_isinstance,
+            ),
+            patch("django.apps.apps.get_model") as get_model,
+        ):
+            self.assertIsNone(get_field_value(field))
+
+        get_model.assert_not_called()
+
     def test_nullable_foreign_key_without_factory_returns_none(self):
         """Nullable foreign keys without factories or instances should fall back to None."""
         from general_manager.factory.factories import get_field_value
