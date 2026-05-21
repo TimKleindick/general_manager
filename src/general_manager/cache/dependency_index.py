@@ -661,7 +661,8 @@ def generic_cache_invalidation(
         - "regex": treats `val_key` as a regular expression pattern and tests it against the string form of `value`.
 
         Behavior notes:
-        - If `value` is None the function returns `False`.
+        - If `value` is None the function only matches explicit null equality
+          or membership checks.
         - ``val_key`` is a JSON-serialised string produced by
           :func:`json.dumps`.  Parsing is done with :func:`json.loads`; if
           JSON parsing or type coercion fails, the function falls back to
@@ -676,12 +677,11 @@ def generic_cache_invalidation(
         Returns:
             bool: `True` if the comparison defined by `op` and `val_key` matches `value`, `False` otherwise.
         """
-        if value is None:
-            return False
-
         # eq
         if op == "eq":
             literal_val = _json_loads_val_key(val_key)
+            if literal_val is None:
+                return value is None
             repr_marker = _repr_marker(literal_val)
             if repr_marker is not None:
                 return repr(value) == repr_marker
@@ -697,6 +697,10 @@ def generic_cache_invalidation(
             except (json.JSONDecodeError, ValueError):
                 return False
             for item in seq:
+                if item is None:
+                    if value is None:
+                        return True
+                    continue
                 repr_marker = _repr_marker(item)
                 if repr_marker is not None:
                     if repr(value) == repr_marker:
@@ -712,6 +716,8 @@ def generic_cache_invalidation(
 
         # range comparisons
         if op in ("gt", "gte", "lt", "lte"):
+            if value is None:
+                return False
             literal_val = _json_loads_val_key(val_key)
             thr = _coerce_to_type(value, literal_val)
             if thr is None:
@@ -727,6 +733,8 @@ def generic_cache_invalidation(
 
         # wildcard / regex comparisons
         if op in ("contains", "startswith", "endswith", "regex"):
+            if value is None:
+                return False
             try:
                 literal = json.loads(val_key)
             except (json.JSONDecodeError, ValueError):
