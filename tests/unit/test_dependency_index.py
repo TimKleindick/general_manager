@@ -961,6 +961,31 @@ class GenericCacheInvalidationTests(TestCase):
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
     @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
+    def test_filter_invalidation_when_old_value_was_none(
+        self,
+        mock_remove,
+        mock_invalidate,
+        mock_get_index,
+    ):
+        mock_get_index.return_value = {
+            "filter": {"DummyManager2": {"count": {"null": ["MISSING"]}}},
+            "exclude": {},
+        }
+        old_vals = {"count": None}
+        inst = DummyManager2(status="any", count=1000)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values=old_vals,
+        )
+
+        mock_invalidate.assert_called_once_with("MISSING")
+        mock_remove.assert_called_once_with("MISSING")
+
+    @patch("general_manager.cache.dependency_index.get_full_index")
+    @patch("general_manager.cache.dependency_index.invalidate_cache_key")
+    @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
     def test_exclude_invalidation_only_on_change(
         self,
         mock_remove,
