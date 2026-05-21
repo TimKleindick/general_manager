@@ -7,6 +7,7 @@ from typing import Any, cast
 from factory.declarations import LazyFunction
 from factory.faker import Faker
 import exrex  # type: ignore[import-untyped]
+from django.apps import apps
 from django.core.validators import RegexValidator
 from django.db import models
 from datetime import date, datetime, timezone, timedelta
@@ -18,6 +19,7 @@ from general_manager.manager.general_manager import GeneralManager
 
 
 _RNG = SystemRandom()
+_NO_DEFAULT = object()
 
 
 class MissingFactoryOrInstancesError(ValueError):
@@ -96,6 +98,13 @@ def get_field_value(
         MissingRelatedModelError: When a relational field does not declare a related model.
         InvalidRelatedModelTypeError: When a relational field's related value is not a Django model class.
     """
+    if (
+        getattr(field, "null", False)
+        and getattr(field, "default", _NO_DEFAULT) is None
+        and getattr(field, "is_relation", False)
+    ):
+        return None
+
     if field.null:
         if _RNG.choice([True] + 9 * [False]):
             return None
@@ -246,16 +255,39 @@ def get_related_model(
         MissingRelatedModelError: If the field does not declare a related model.
         InvalidRelatedModelTypeError: If the resolved related model is not a Django model class.
     """
-    related_model = field.related_model
+    related_model: object = field.related_model
     if related_model is None:
         raise MissingRelatedModelError(field.name)
-    if related_model == "self":
-        related_model = field.model
+    if isinstance(related_model, str):
+        related_model = _resolve_related_model_string(field, related_model)
     if not isinstance(related_model, type) or not issubclass(
         related_model, models.Model
     ):
         raise InvalidRelatedModelTypeError(field.name, related_model)
     return cast(type[models.Model], related_model)
+
+
+def _resolve_related_model_string(
+    field: models.ForeignObjectRel | models.Field[Any, Any],
+    related_model: str,
+) -> object:
+    if related_model == "self":
+        return field.model
+    app_label: str | None
+    if "." in related_model:
+        app_label, model_name = related_model.split(".", 1)
+    else:
+        model = getattr(field, "model", None)
+        opts = getattr(model, "_meta", None)
+        app_label_value = getattr(opts, "app_label", None)
+        app_label = app_label_value if isinstance(app_label_value, str) else None
+        model_name = related_model
+    if not app_label:
+        return related_model
+    try:
+        return apps.get_model(app_label, model_name)
+    except LookupError:
+        return related_model
 
 
 def get_many_to_many_field_value(
