@@ -276,6 +276,12 @@ def initialize_general_manager_classes(
         "creating manager attributes",
         context={"pending_attributes": len(pending_attribute_initialization)},
     )
+    for general_manager_class in dict.fromkeys(all_classes):
+        interface = getattr(general_manager_class, "Interface", None)
+        if hasattr(interface, "_field_descriptors"):
+            interface_with_cache: Any = interface
+            interface_with_cache._field_descriptors = None
+
     for general_manager_class in pending_attribute_initialization:
         attributes = general_manager_class.Interface.get_attributes()
         general_manager_class._attributes = attributes

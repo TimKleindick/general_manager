@@ -11,6 +11,7 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _general_manager_many_accessor,
     build_field_descriptors,
 )
+from general_manager.bootstrap import initialize_general_manager_classes
 
 
 def test_general_manager_many_accessor_uses_explicit_relation_field_name() -> None:
@@ -104,28 +105,181 @@ def test_build_field_descriptors_disambiguates_duplicate_reverse_relations() -> 
     assert resolve_calls.count("fk_b") == 1
 
 
-def test_build_field_descriptors_skips_unresolved_foreign_key_targets() -> None:
+def test_build_field_descriptors_resolves_string_relation_targets() -> None:
+    class OwnerModel(models.Model):
+        class Meta:
+            app_label = "accounts"
+
     model = type("ModelUnderTest", (), {})
     interface_cls = type("InterfaceUnderTest", (), {"_model": model})
-    unresolved_field = Mock(spec=models.Field)
-    unresolved_field.name = "owner"
-    unresolved_field.related_model = "accounts.User"
-    unresolved_field.null = False
-    unresolved_field.editable = True
-    unresolved_field.default = None
+    owner_manager = type("OwnerManager", (), {})
+    OwnerModel._general_manager_class = owner_manager  # type: ignore[attr-defined]
+    owner_field = Mock(spec=models.Field)
+    owner_field.name = "owner"
+    owner_field.related_model = "accounts.OwnerModel"
+    owner_field.null = False
+    owner_field.editable = True
+    owner_field.default = None
+    members_field = Mock(spec=models.Field)
+    members_field.name = "members"
+    members_field.related_model = "accounts.OwnerModel"
+    members_field.many_to_many = True
+    members_field.editable = True
 
     field_descriptors_module = (
         "general_manager.interface.capabilities.orm_utils.field_descriptors"
     )
     with (
+        patch("django.apps.apps.get_model", return_value=OwnerModel) as get_model,
+        patch(f"{field_descriptors_module}._iter_model_fields", return_value=[]),
+        patch(
+            f"{field_descriptors_module}._iter_many_to_many_fields",
+            return_value=[members_field],
+        ),
+        patch(f"{field_descriptors_module}._iter_reverse_relations", return_value=[]),
+        patch(
+            f"{field_descriptors_module}._iter_foreign_key_fields",
+            return_value=[owner_field],
+        ),
+    ):
+        descriptors = build_field_descriptors(interface_cls)
+
+    assert descriptors["owner"].metadata["type"] is owner_manager
+    assert descriptors["members_list"].metadata["type"] is owner_manager
+    assert get_model.call_count == 2
+    get_model.assert_any_call("accounts", "OwnerModel")
+
+
+def test_build_field_descriptors_resolves_same_app_string_relation_targets() -> None:
+    class SourceMeta:
+        app_label = "billing"
+
+    model = type("ModelUnderTest", (), {"_meta": SourceMeta})
+    interface_cls = type("InterfaceUnderTest", (), {"_model": model})
+
+    class BillingOwnerModel(models.Model):
+        class Meta:
+            app_label = "billing"
+
+    owner_manager = type("OwnerManager", (), {})
+    BillingOwnerModel._general_manager_class = owner_manager  # type: ignore[attr-defined]
+    owner_field = Mock(spec=models.Field)
+    owner_field.name = "owner"
+    owner_field.related_model = "BillingOwnerModel"
+    owner_field.null = False
+    owner_field.editable = True
+    owner_field.default = None
+
+    field_descriptors_module = (
+        "general_manager.interface.capabilities.orm_utils.field_descriptors"
+    )
+    with (
+        patch(
+            "django.apps.apps.get_model", return_value=BillingOwnerModel
+        ) as get_model,
         patch(f"{field_descriptors_module}._iter_model_fields", return_value=[]),
         patch(f"{field_descriptors_module}._iter_many_to_many_fields", return_value=[]),
         patch(f"{field_descriptors_module}._iter_reverse_relations", return_value=[]),
         patch(
             f"{field_descriptors_module}._iter_foreign_key_fields",
-            return_value=[unresolved_field],
+            return_value=[owner_field],
         ),
     ):
         descriptors = build_field_descriptors(interface_cls)
 
-    assert "owner" not in descriptors
+    assert descriptors["owner"].metadata["type"] is owner_manager
+    get_model.assert_called_once_with("billing", "BillingOwnerModel")
+
+
+def test_build_field_descriptors_skips_invalid_string_relation_targets() -> None:
+    class SourceMeta:
+        app_label = "accounts"
+
+    model = type("ModelUnderTest", (), {"_meta": SourceMeta})
+    interface_cls = type("InterfaceUnderTest", (), {"_model": model})
+    dotted_field = Mock(spec=models.Field)
+    dotted_field.name = "owner"
+    dotted_field.related_model = "accounts.OwnerModel"
+    same_app_field = Mock(spec=models.Field)
+    same_app_field.name = "reviewer"
+    same_app_field.related_model = "ReviewerModel"
+    no_app_model = type("NoAppModelUnderTest", (), {})
+    no_app_interface_cls = type("NoAppInterfaceUnderTest", (), {"_model": no_app_model})
+    no_app_field = Mock(spec=models.Field)
+    no_app_field.name = "creator"
+    no_app_field.related_model = "CreatorModel"
+
+    field_descriptors_module = (
+        "general_manager.interface.capabilities.orm_utils.field_descriptors"
+    )
+    with (
+        patch("django.apps.apps.get_model", side_effect=LookupError),
+        patch(f"{field_descriptors_module}._iter_model_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_many_to_many_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_reverse_relations", return_value=[]),
+        patch(
+            f"{field_descriptors_module}._iter_foreign_key_fields",
+            return_value=[dotted_field, same_app_field],
+        ),
+    ):
+        descriptors = build_field_descriptors(interface_cls)
+
+    with (
+        patch("django.apps.apps.get_model") as get_model,
+        patch(f"{field_descriptors_module}._iter_model_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_many_to_many_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_reverse_relations", return_value=[]),
+        patch(
+            f"{field_descriptors_module}._iter_foreign_key_fields",
+            return_value=[no_app_field],
+        ),
+    ):
+        no_app_descriptors = build_field_descriptors(no_app_interface_cls)
+
+    assert descriptors == {}
+    assert no_app_descriptors == {}
+    get_model.assert_not_called()
+
+
+def test_build_field_descriptors_skips_non_model_app_registry_results() -> None:
+    model = type("ModelUnderTest", (), {})
+    interface_cls = type("InterfaceUnderTest", (), {"_model": model})
+    owner_field = Mock(spec=models.Field)
+    owner_field.name = "owner"
+    owner_field.related_model = "accounts.OwnerModel"
+
+    field_descriptors_module = (
+        "general_manager.interface.capabilities.orm_utils.field_descriptors"
+    )
+    with (
+        patch("django.apps.apps.get_model", return_value=object()),
+        patch(f"{field_descriptors_module}._iter_model_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_many_to_many_fields", return_value=[]),
+        patch(f"{field_descriptors_module}._iter_reverse_relations", return_value=[]),
+        patch(
+            f"{field_descriptors_module}._iter_foreign_key_fields",
+            return_value=[owner_field],
+        ),
+    ):
+        descriptors = build_field_descriptors(interface_cls)
+
+    assert descriptors == {}
+
+
+def test_initialize_general_manager_classes_clears_stale_field_descriptors() -> None:
+    stale_descriptors = {"owner": object()}
+    observed_cache_values: list[object | None] = []
+
+    class Interface:
+        _field_descriptors = stale_descriptors
+
+        @classmethod
+        def get_attributes(cls) -> dict[str, object]:
+            observed_cache_values.append(cls._field_descriptors)
+            return {}
+
+    manager_cls = type("ManagerUnderTest", (), {"Interface": Interface})
+
+    initialize_general_manager_classes([manager_cls], [manager_cls])
+
+    assert observed_cache_values == [None]
