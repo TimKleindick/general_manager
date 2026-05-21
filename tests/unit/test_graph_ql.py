@@ -248,10 +248,13 @@ class GraphQLTests(TestCase):
             result = resolver(mock_instance, self.info, filter="bad", exclude="bad")
             self.assertEqual(result["items"], mock_qs)
 
-    def test_create_filter_options_measurement_fields(self):
+    def test_create_filter_options_includes_scalar_filter_variants(self):
         """
-        Tests that filter options are generated for numeric, string, and measurement fields, and that fields of type GeneralManager are excluded from the filter options.
+        Tests that filter options are generated for numeric, string, and measurement fields.
         """
+
+        class RelatedManager(GeneralManager):
+            pass
 
         class DummyManager:
             __name__ = "DummyManager"
@@ -265,13 +268,12 @@ class GraphQLTests(TestCase):
                         "num_field": {"type": int},
                         "str_field": {"type": str},
                         "measurement_field": {"type": Measurement},
-                        "gm_field": {"type": GeneralManager},
+                        "gm_field": {"type": RelatedManager},
                     }
 
         GraphQL.graphql_filter_type_registry.clear()
         filter_cls = GraphQL._create_filter_options(DummyManager)
         fields = filter_cls._meta.fields
-        self.assertNotIn("gm_field", fields)
         for key in [
             "num_field",
             *[f"num_field__{opt}" for opt in ["exact", "gt", "gte", "lt", "lte"]],
