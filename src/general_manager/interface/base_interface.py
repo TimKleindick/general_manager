@@ -72,6 +72,8 @@ class AttributeTypedDict(TypedDict):
 
     type: type
     graphql_scalar: NotRequired[str]
+    relation_kind: NotRequired[str]
+    filter_lookup: NotRequired[str]
     default: Any
     is_required: bool
     is_editable: bool

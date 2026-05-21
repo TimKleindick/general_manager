@@ -317,6 +317,100 @@ class GraphQLTests(TestCase):
         second = GraphQL._create_filter_options(DummyManager2)
         self.assertIs(first, second)
 
+    def test_create_filter_options_exposes_direct_relation_filter(self):
+        class RelatedManager:
+            __name__ = "RelatedManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}, "name": {"type": str}}
+
+        class DummyManager:
+            __name__ = "DummyManagerWithRelation"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {
+                        "id": {"type": int},
+                        "related": {
+                            "type": RelatedManager,
+                            "relation_kind": "direct",
+                        },
+                    }
+
+        GraphQL.graphql_filter_type_registry.clear()
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is RelatedManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_search.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            filter_type = GraphQL._create_filter_options(DummyManager)
+
+        self.assertIsNotNone(filter_type)
+        self.assertIn("related", filter_type._meta.fields)
+        related_type = filter_type._meta.fields["related"].type
+        self.assertIn("id", related_type._meta.fields)
+        self.assertIn("name__icontains", related_type._meta.fields)
+
+    def test_create_filter_options_exposes_collection_any_none_filter(self):
+        class ChildManager:
+            __name__ = "ChildManager"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}, "title": {"type": str}}
+
+        class ParentManager:
+            __name__ = "ParentManagerWithCollection"
+
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {
+                        "id": {"type": int},
+                        "child_list": {
+                            "type": ChildManager,
+                            "relation_kind": "collection",
+                            "filter_lookup": "child",
+                        },
+                    }
+
+        GraphQL.graphql_filter_type_registry.clear()
+
+        def relation_safe_issubclass(candidate, parent):
+            if parent is GeneralManager and candidate is ChildManager:
+                return True
+            return isinstance(candidate, type) and issubclass(candidate, parent)
+
+        with patch(
+            "general_manager.api.graphql_search.safe_issubclass",
+            side_effect=relation_safe_issubclass,
+        ):
+            filter_type = GraphQL._create_filter_options(ParentManager)
+
+        self.assertIsNotNone(filter_type)
+        relation_type = filter_type._meta.fields["child_list"].type
+        self.assertIn("any", relation_type._meta.fields)
+        self.assertIn("none", relation_type._meta.fields)
+        child_filter_type = relation_type._meta.fields["any"].type
+        self.assertIn("title__icontains", child_filter_type._meta.fields)
+
     def test_build_identification_arguments_respects_optional_inputs(self):
         class DependencyManager(GeneralManager):
             pass
