@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v0.41.0 (2026-05-22)
+
+### Bug Fixes
+
+- Reject unsupported none relation excludes
+  ([`8e2593c`](https://github.com/TimKleindick/general_manager/commit/8e2593c189d87207c5560dadab5e584d4a786d60))
+
+### Documentation
+
+- Document graphql relation filters
+  ([`c365fd7`](https://github.com/TimKleindick/general_manager/commit/c365fd70d6fdd9265064ce73782af6d7b9a8a045))
+
+### Features
+
+- Expose relation filter input types
+  ([`3373f08`](https://github.com/TimKleindick/general_manager/commit/3373f08bbf1e6ad326c3739bf90326228b74da8a))
+
+- Translate nested graphql relation filters
+  ([`b4e8e8d`](https://github.com/TimKleindick/general_manager/commit/b4e8e8d97fcdb90071dc0a7c6778f7c4313acb62))
+
+### Testing
+
+- Clarify graphql scalar filter coverage
+  ([`794ad1e`](https://github.com/TimKleindick/general_manager/commit/794ad1e024276aad4a611b646eaf53e451f85a4c))
+
+
 ## v0.40.6 (2026-05-21)
 
 ### Bug Fixes
