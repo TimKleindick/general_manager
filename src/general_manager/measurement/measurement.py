@@ -2,7 +2,7 @@
 
 # units.py
 from __future__ import annotations
-from typing import Any, Callable
+from typing import Any, Callable, cast
 import math
 import pint
 from decimal import Decimal, getcontext, InvalidOperation
@@ -102,6 +102,27 @@ def _convert_quantity(quantity: PlainQuantity, target_unit: str) -> PlainQuantit
     if _unit_uses_offset(quantity) or _unit_uses_offset(target_unit):
         source_quantity = _quantity_as_float(quantity)
     return source_quantity.to(target_unit)
+
+
+def _currency_component(unit: str) -> tuple[str, int] | None:
+    """Return the single configured currency component in a unit expression."""
+
+    parsed_unit = ureg.parse_units(str(unit))
+    currency_components = [
+        (unit_name, int(cast(Any, power)))
+        for unit_name, power in parsed_unit._units.items()
+        if unit_name in currency_units
+    ]
+    if len(currency_components) != 1:
+        return None
+    return currency_components[0]
+
+
+def _unit_without_currency(unit: str, currency: str, power: int) -> str:
+    """Return a unit expression with one currency component removed."""
+
+    stripped_unit = ureg.parse_units(str(unit)) / (ureg.parse_units(currency) ** power)
+    return str(stripped_unit)
 
 
 def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Decimal:
@@ -457,6 +478,30 @@ class Measurement:
         Raises:
             MissingExchangeRateError: If converting between two different currencies without providing an exchange rate.
         """
+        source_currency = _currency_component(self.unit)
+        target_currency = _currency_component(target_unit)
+        if (
+            source_currency is not None
+            and target_currency is not None
+            and source_currency[0] != target_currency[0]
+        ):
+            if exchange_rate is None:
+                raise MissingExchangeRateError()
+            source_currency_name, source_currency_power = source_currency
+            target_currency_name, target_currency_power = target_currency
+            if source_currency_power == target_currency_power:
+                value = convert_magnitude(
+                    self.magnitude,
+                    _unit_without_currency(
+                        self.unit, source_currency_name, source_currency_power
+                    ),
+                    _unit_without_currency(
+                        target_unit, target_currency_name, target_currency_power
+                    ),
+                )
+                value *= Decimal(str(exchange_rate)) ** source_currency_power
+                return Measurement(value, target_unit)
+
         if self.is_currency():
             if str(self.unit) == str(target_unit):
                 return self  # Same currency, no conversion needed
