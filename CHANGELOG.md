@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.1 (2026-05-28)
+
+### Bug Fixes
+
+- Convert compound currency measurements
+  ([`73359f3`](https://github.com/TimKleindick/general_manager/commit/73359f3a04005cd35bbdea555669ea62083b8d46))
+
+
 ## v0.41.0 (2026-05-22)
 
 ### Bug Fixes
