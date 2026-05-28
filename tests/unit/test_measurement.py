@@ -39,6 +39,35 @@ class MeasurementTestCase(TestCase):
         converted = m.to("USD", exchange_rate=1.2)
         self.assertEqual(str(converted), "120 USD")
 
+    def test_compound_currency_conversion(self):
+        m = Measurement(100, "USD/t")
+
+        converted = m.to("EUR/t", exchange_rate=1.25)
+
+        self.assertEqual(str(converted), "125 EUR / metric_ton")
+
+    def test_compound_currency_conversion_converts_physical_unit(self):
+        m = Measurement(100, "USD/kg")
+
+        converted = m.to("EUR/t", exchange_rate=1.25)
+
+        self.assertEqual(str(converted), "125000 EUR / metric_ton")
+
+    def test_compound_currency_conversion_requires_exchange_rate(self):
+        from general_manager.measurement.measurement import MissingExchangeRateError
+
+        m = Measurement(100, "USD/t")
+
+        with self.assertRaises(MissingExchangeRateError):
+            m.to("EUR/t")
+
+    def test_same_currency_compound_conversion_does_not_require_exchange_rate(self):
+        m = Measurement(100, "EUR/kg")
+
+        converted = m.to("EUR/t")
+
+        self.assertEqual(str(converted), "100000 EUR / metric_ton")
+
     def test_invalid_currency_conversion(self):
         m = Measurement(100, "EUR")
         with self.assertRaises(ValueError):

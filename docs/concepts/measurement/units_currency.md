@@ -16,6 +16,7 @@ Measurements keep both the magnitude and the original unit. Convert units with `
 ```python
 length_cm = length.to("centimeter")
 price_usd = price.to("USD", exchange_rate=1.08)
+freight_eur = Measurement(100, "USD/t").to("EUR/t", exchange_rate=0.92)
 ```
 
 ## Arithmetic and comparisons
