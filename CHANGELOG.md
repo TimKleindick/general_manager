@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.3 (2026-06-01)
+
+### Bug Fixes
+
+- Guard m2m related field resolution
+  ([`54554cd`](https://github.com/TimKleindick/general_manager/commit/54554cdcb9e91a25ec40c713ac508dc47ba87ed1))
+
+
 ## v0.41.2 (2026-06-01)
 
 ### Bug Fixes
