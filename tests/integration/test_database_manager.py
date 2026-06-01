@@ -73,11 +73,23 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         class ChangeRequest(GeneralManager):
             title: str
+            change_request_approval: ChangeRequestApproval
             changerequestfeasibility_list: Bucket[ChangeRequestFeasibility]
             change_request_reviews_list: Bucket[ChangeRequestReview]
 
             class Interface(DatabaseInterface):
                 title = models.CharField(max_length=100)
+
+        class ChangeRequestApproval(GeneralManager):
+            approved_by: str
+            change_request: ChangeRequest
+
+            class Interface(DatabaseInterface):
+                approved_by = models.CharField(max_length=100)
+                change_request = models.OneToOneField(
+                    "general_manager.ChangeRequest",
+                    on_delete=models.CASCADE,
+                )
 
         class ChangeRequestFeasibility(GeneralManager):
             score: int
@@ -106,6 +118,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.TestHuman = TestHuman
         cls.TestFamily = TestFamily
         cls.ChangeRequest = ChangeRequest
+        cls.ChangeRequestApproval = ChangeRequestApproval
         cls.ChangeRequestFeasibility = ChangeRequestFeasibility
         cls.ChangeRequestReview = ChangeRequestReview
         cls.general_manager_classes = [
@@ -113,6 +126,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             TestHuman,
             TestFamily,
             ChangeRequest,
+            ChangeRequestApproval,
             ChangeRequestFeasibility,
             ChangeRequestReview,
         ]
@@ -157,6 +171,12 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             change_request=self.change_request,
             ignore_permission=True,
         )
+        self.change_request_approval = self.ChangeRequestApproval.create(
+            creator_id=None,
+            approved_by="Reviewer",
+            change_request=self.change_request,
+            ignore_permission=True,
+        )
         self.change_request_review = self.ChangeRequestReview.create(
             creator_id=None,
             summary="Initial review",
@@ -179,6 +199,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.TestHuman.Interface._model._meta.model.objects.all().delete()
         self.TestFamily.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequest.Interface._model._meta.model.objects.all().delete()
+        self.ChangeRequestApproval.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestFeasibility.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestReview.Interface._model._meta.model.objects.all().delete()
         super().tearDown()
@@ -327,6 +348,12 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(legacy_matches[0].id, self.change_request.id)
         self.assertEqual(len(explicit_related_name_matches), 1)
         self.assertEqual(explicit_related_name_matches[0].id, self.change_request.id)
+
+    def test_reverse_one_to_one_relation_uses_snake_case_accessor(self):
+        approval = self.change_request.change_request_approval
+
+        self.assertEqual(approval.id, self.change_request_approval.id)
+        self.assertEqual(approval.approved_by, "Reviewer")
 
     def test_exclude_supports_snake_case_reverse_relation_aliases(self):
         remaining = self.ChangeRequest.exclude(

@@ -135,6 +135,7 @@ class _FieldDescriptorBuilder:
         self._add_custom_fields()
         self._add_model_fields()
         self._add_foreign_key_fields()
+        self._add_reverse_one_to_one_relations()
         self._add_collection_relations()
         return self._descriptors
 
@@ -207,6 +208,41 @@ class _FieldDescriptorBuilder:
                 accessor=accessor,
                 relation_kind="direct",
                 filter_lookup=field.name,
+            )
+
+    def _add_reverse_one_to_one_relations(self) -> None:
+        """Register snake_case aliases for reverse one-to-one relation accessors."""
+        for relation in _iter_reverse_one_to_one_relations(self.model):
+            related_model = self._resolve_related_model(
+                getattr(relation, "related_model", None)
+            )
+            if related_model is None:
+                continue
+            accessor_name = relation.get_accessor_name() or relation.name
+            attribute_name = _to_snake_case(related_model.__name__)
+            if attribute_name in self._descriptors:
+                continue
+            general_manager_class = getattr(
+                related_model, "_general_manager_class", None
+            )
+            if general_manager_class:
+                accessor = _general_manager_accessor(
+                    accessor_name, general_manager_class
+                )
+                relation_type = cast(type, general_manager_class)
+            else:
+                accessor = _instance_attribute_accessor(accessor_name)
+                relation_type = cast(type, related_model)
+            self._register(
+                attribute_name=attribute_name,
+                raw_type=relation_type,
+                is_required=False,
+                is_editable=False,
+                default=None,
+                is_derived=True,
+                accessor=accessor,
+                relation_kind="direct",
+                filter_lookup=relation.name,
             )
 
     def _add_collection_relations(self) -> None:
@@ -519,6 +555,22 @@ def _iter_many_to_many_fields(
             field, "many_to_many", False
         ):
             yield cast(models.Field, field)
+
+
+def _iter_reverse_one_to_one_relations(
+    model: type[models.Model],
+) -> Iterable[models.OneToOneRel]:
+    """Yield reverse one-to-one relations declared on a Django model."""
+    meta = getattr(model, "_meta", None)
+    get_fields = getattr(meta, "get_fields", None)
+    if not callable(get_fields):
+        return
+    for field in get_fields():
+        if getattr(field, "is_relation", False) and getattr(field, "one_to_one", False):
+            if getattr(field, "auto_created", False) and not getattr(
+                field, "concrete", False
+            ):
+                yield cast(models.OneToOneRel, field)
 
 
 def _iter_reverse_relations(
