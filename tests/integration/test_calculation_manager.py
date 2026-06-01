@@ -1,7 +1,7 @@
 # type: ignore
 
 from django.contrib.auth import get_user_model
-from django.db.models import CharField
+from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 from django.utils.crypto import get_random_string
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import CalculationInterface, DatabaseInterface
@@ -53,10 +53,38 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
                 """
                 return self.employee.salary * 0.2
 
+        class Bonus(GeneralManager):
+            employee: Employee
+            amount: int
+
+            class Interface(DatabaseInterface):
+                employee = ForeignKey(
+                    "general_manager.Employee",
+                    on_delete=CASCADE,
+                )
+                amount = IntegerField()
+
+        class BonusCalculation(GeneralManager):
+            employee: Employee
+
+            class Interface(CalculationInterface):
+                employee = Input(Employee, possible_values=lambda: Employee.all())
+
+            @graph_ql_property
+            def total_bonus(self) -> int:
+                return sum(bonus.amount for bonus in self.employee.bonus_list)
+
         cls.Employee = Employee
         cls.TaxCalculation = TaxCalculation
+        cls.Bonus = Bonus
+        cls.BonusCalculation = BonusCalculation
 
-        cls.general_manager_classes = [Employee, TaxCalculation]
+        cls.general_manager_classes = [
+            Employee,
+            TaxCalculation,
+            Bonus,
+            BonusCalculation,
+        ]
 
     def setUp(self):
         """
@@ -143,6 +171,27 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         data = response.json()["data"]["taxcalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 800)
+
+    def test_calculation_property_can_traverse_database_reverse_relation(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        self.Bonus.create(
+            employee=employee,
+            amount=100,
+            creator_id=self.user.id,
+            ignore_permission=True,
+        )
+        self.Bonus.create(
+            employee=employee,
+            amount=250,
+            creator_id=self.user.id,
+            ignore_permission=True,
+        )
+
+        calculation = self.BonusCalculation(employee=employee)
+
+        self.assertEqual(calculation.total_bonus, 350)
 
     def test_sort_by_calculation_property(self):
         """

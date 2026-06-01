@@ -196,6 +196,8 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         for name, value in self.__class__.__dict__.items():
             if name == "history":
                 continue
+            if getattr(value, "_general_manager_generated_relation", False):
+                continue
             if isinstance(value, (GraphQLProperty, property)):
                 yield name, getattr(self, name)
 
