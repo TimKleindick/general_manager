@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.41.2 (2026-06-01)
+
+### Bug Fixes
+
+- Expose snake case reverse one-to-one accessors
+  ([`b4387cd`](https://github.com/TimKleindick/general_manager/commit/b4387cd8c9a4311c1a2736846e093cab964dfd68))
+
+- Return none for missing reverse one-to-one relations
+  ([`2fe99eb`](https://github.com/TimKleindick/general_manager/commit/2fe99eb7abee3666bc8633422a0b71f0b8d2ab47))
+
+
 ## v0.41.1 (2026-05-28)
 
 ### Bug Fixes
