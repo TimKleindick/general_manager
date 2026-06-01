@@ -11,6 +11,7 @@ from uuid import UUID
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 
 from general_manager.interface.base_interface import AttributeTypedDict
@@ -610,7 +611,10 @@ def _instance_attribute_accessor(field_name: str) -> DescriptorAccessor:
         Returns:
             The attribute value retrieved from the underlying model instance.
         """
-        return getattr(self._instance, field_name)
+        try:
+            return getattr(self._instance, field_name)
+        except ObjectDoesNotExist:
+            return None
 
     return getter
 
@@ -636,7 +640,10 @@ def _general_manager_accessor(
         Returns:
             The value produced by calling `manager_class` with the related object's primary key, or `None` if the related object is `None`.
         """
-        related = getattr(self._instance, field_name)
+        try:
+            related = getattr(self._instance, field_name)
+        except ObjectDoesNotExist:
+            return None
         if related is None:
             return None
         return manager_class(related.pk)
