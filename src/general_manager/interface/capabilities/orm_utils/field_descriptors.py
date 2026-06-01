@@ -36,6 +36,23 @@ class FieldDescriptor:
     accessor: DescriptorAccessor
 
 
+class MissingRelatedFieldsError(RuntimeError):
+    """Raised when a GeneralManager collection relation cannot be scoped."""
+
+    def __init__(
+        self,
+        *,
+        accessor_name: str,
+        related_model: type[models.Model],
+        source_model: type[models.Model],
+    ) -> None:
+        super().__init__(
+            "Unable to resolve related fields for collection relation "
+            f"'{accessor_name}' from {source_model.__name__} to "
+            f"{related_model.__name__}."
+        )
+
+
 TRANSLATION: dict[type[models.Field], type] = {
     models.fields.BigAutoField: int,
     models.AutoField: int,
@@ -691,6 +708,12 @@ def _general_manager_many_accessor(
         """
         filter_kwargs = {field.name: self.pk for field in related_fields}
         manager_cls = cast(Any, general_manager_class)
+        if not filter_kwargs:
+            raise MissingRelatedFieldsError(
+                accessor_name=accessor_name,
+                related_model=related_model,
+                source_model=source_model,
+            )
         return manager_cls.filter(**filter_kwargs)
 
     return getter

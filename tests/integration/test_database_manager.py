@@ -17,7 +17,11 @@ from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
     run_registered_startup_hooks,
 )
-from general_manager.manager.meta import InvalidManagerStateError
+from general_manager.manager.meta import (
+    AttributeEvaluationError,
+    GeneralManagerMeta,
+    InvalidManagerStateError,
+)
 
 
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
@@ -754,6 +758,45 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         human_names = [h.name for h in smith_family_humans]
         self.assertIn("Alice", human_names)
         self.assertIn("Bob", human_names)
+
+    def test_many_to_many_bucket_raises_without_reverse_metadata(self):
+        """
+        Verify direct many-to-many buckets fail explicitly
+        when Django does not expose the reverse relation on the related model.
+        """
+        self.TestHuman.create(
+            creator_id=None,
+            name="Unrelated",
+            ignore_permission=True,
+        )
+        original_get_fields = self.TestHuman.Interface._model._meta.get_fields
+
+        def get_fields_without_family_reverse(*args, **kwargs):
+            return [
+                field
+                for field in original_get_fields(*args, **kwargs)
+                if getattr(field, "related_model", None)
+                != self.TestFamily.Interface._model
+            ]
+
+        with patch.object(
+            self.TestHuman.Interface._model._meta,
+            "get_fields",
+            side_effect=get_fields_without_family_reverse,
+        ):
+            self.TestFamily.Interface._field_descriptors = None
+            if "_attributes" in vars(self.TestFamily):
+                delattr(self.TestFamily, "_attributes")
+
+            with self.assertRaisesRegex(
+                AttributeEvaluationError,
+                "Unable to resolve related fields",
+            ):
+                _ = self.test_family.humans_list
+        self.TestFamily.Interface._field_descriptors = None
+        if "_attributes" in vars(self.TestFamily):
+            delattr(self.TestFamily, "_attributes")
+        GeneralManagerMeta.ensure_attributes_initialized(self.TestFamily)
 
     def test_edge_cases_and_error_handling(self):
         """
