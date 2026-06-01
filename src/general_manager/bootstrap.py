@@ -28,7 +28,7 @@ from general_manager.api.graphql import GraphQL
 from general_manager.api.remote_api import add_remote_api_urls
 from general_manager.api.remote_invalidation import ensure_remote_invalidation_route
 from general_manager.conf import get_setting
-from general_manager.api.property import graph_ql_property
+from general_manager.api.property import GraphQLProperty
 from general_manager.logging import get_logger
 from general_manager.interface.infrastructure.startup_hooks import (
     registered_startup_hook_entries,
@@ -272,6 +272,32 @@ def initialize_general_manager_classes(
         resolver.__annotations__ = {"return": manager_cls}
         return resolver
 
+    def _iter_manager_relation_fields(
+        general_manager_class: Type[_GM],
+    ) -> Iterable[tuple[str, Type[_GM]]]:
+        seen: set[str] = set()
+        input_fields = getattr(general_manager_class.Interface, "input_fields", {})
+        for attribute_name, attribute in input_fields.items():
+            if isinstance(attribute, Input) and issubclass(attribute.type, _GM):
+                seen.add(attribute_name)
+                yield attribute_name, attribute.type
+
+        get_attribute_types = getattr(
+            general_manager_class.Interface, "get_attribute_types", None
+        )
+        if not callable(get_attribute_types):
+            return
+        try:
+            attribute_types = get_attribute_types()
+        except NotImplementedError:
+            return
+        for attribute_name, metadata in attribute_types.items():
+            if attribute_name in seen or metadata.get("relation_kind") != "direct":
+                continue
+            field_type = metadata.get("type")
+            if isinstance(field_type, type) and issubclass(field_type, _GM):
+                yield attribute_name, field_type
+
     logger.debug(
         "creating manager attributes",
         context={"pending_attributes": len(pending_attribute_initialization)},
@@ -294,18 +320,18 @@ def initialize_general_manager_classes(
         context={"total_classes": len(all_classes)},
     )
     for general_manager_class in all_classes:
-        attributes = getattr(general_manager_class.Interface, "input_fields", {})
-        for attribute_name, attribute in attributes.items():
-            if isinstance(attribute, Input) and issubclass(attribute.type, _GM):
-                connected_manager = attribute.type
-                resolver = _build_connection_resolver(
-                    attribute_name, general_manager_class
-                )
-                setattr(
-                    connected_manager,
-                    f"{general_manager_class.__name__.lower()}_list",
-                    graph_ql_property(resolver),
-                )
+        for attribute_name, connected_manager in _iter_manager_relation_fields(
+            general_manager_class
+        ):
+            resolver = _build_connection_resolver(attribute_name, general_manager_class)
+            relation_property = GraphQLProperty(resolver)
+            marked_relation_property: Any = relation_property
+            marked_relation_property._general_manager_generated_relation = True
+            setattr(
+                connected_manager,
+                f"{general_manager_class.__name__.lower()}_list",
+                relation_property,
+            )
     for general_manager_class in all_classes:
         check_permission_class(general_manager_class)
 
