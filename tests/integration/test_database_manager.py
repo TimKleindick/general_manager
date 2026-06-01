@@ -355,6 +355,9 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(approval.id, self.change_request_approval.id)
         self.assertEqual(approval.approved_by, "Reviewer")
 
+    def test_missing_reverse_one_to_one_relation_returns_none(self):
+        self.assertIsNone(self.other_change_request.change_request_approval)
+
     def test_exclude_supports_snake_case_reverse_relation_aliases(self):
         remaining = self.ChangeRequest.exclude(
             change_request_feasibility__id=self.change_request_feasibility.id
