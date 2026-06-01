@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.4 (2026-06-01)
+
+### Bug Fixes
+
+- Link database manager reverse relations
+  ([`e7b2c25`](https://github.com/TimKleindick/general_manager/commit/e7b2c259b321406fe1abc620c7c794887f632eca))
+
+
 ## v0.41.3 (2026-06-01)
 
 ### Bug Fixes
