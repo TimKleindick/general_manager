@@ -270,10 +270,27 @@ class _FieldDescriptorBuilder:
         Iterates the model's many-to-many and reverse (one-to-many) relations and registers a collection descriptor for each, deriving descriptor names from each relation's base name and accessor name.
         """
         for m2m_field in _iter_many_to_many_fields(self.model):
+            if getattr(m2m_field, "auto_created", False) and not getattr(
+                m2m_field, "concrete", False
+            ):
+                relation_field_name = getattr(
+                    getattr(m2m_field, "field", None),
+                    "name",
+                    None,
+                )
+                relation_filter_name = None
+            else:
+                relation_field_name = None
+                relation_filter_name = _many_to_many_relation_filter_name(
+                    m2m_field,
+                    self.model,
+                )
             self._register_collection_field(
                 field=m2m_field,
                 base_name=m2m_field.name,
                 accessor_name=m2m_field.name,
+                relation_field_name=relation_field_name,
+                relation_filter_name=relation_filter_name,
             )
         for reverse_relation in _iter_reverse_relations(self.model):
             accessor_name = (
@@ -305,6 +322,7 @@ class _FieldDescriptorBuilder:
         base_name: str,
         accessor_name: str,
         relation_field_name: str | None = None,
+        relation_filter_name: str | None = None,
     ) -> None:
         """
         Register a collection relation as a FieldDescriptor under the generated "<base>_list" attribute.
@@ -341,6 +359,7 @@ class _FieldDescriptorBuilder:
                 general_manager_class=general_manager_class,
                 source_model=self.model,
                 relation_field_name=relation_field_name,
+                relation_filter_name=relation_filter_name,
             )
             relation_type = cast(type, general_manager_class)
         else:
@@ -675,6 +694,7 @@ def _general_manager_many_accessor(
     general_manager_class: type,
     source_model: type[models.Model],
     relation_field_name: str | None = None,
+    relation_filter_name: str | None = None,
 ) -> DescriptorAccessor:
     """
     Create an accessor that returns a manager filtered to objects related to the given source model instance.
@@ -688,7 +708,9 @@ def _general_manager_many_accessor(
     Returns:
         DescriptorAccessor: A callable that accepts an OrmInterfaceBase instance and returns the manager/QuerySet of related_model instances whose foreign-key fields pointing to `source_model` match the instance's primary key.
     """
-    if relation_field_name is not None:
+    if relation_filter_name is not None:
+        related_fields: list[models.Field] = []
+    elif relation_field_name is not None:
         related_fields = [
             cast(models.Field, related_model._meta.get_field(relation_field_name))
         ]
@@ -706,7 +728,10 @@ def _general_manager_many_accessor(
         Returns:
             A manager or queryset containing related model instances whose foreign-key fields equal this interface instance's primary key.
         """
-        filter_kwargs = {field.name: self.pk for field in related_fields}
+        if relation_filter_name is not None:
+            filter_kwargs = {relation_filter_name: self.pk}
+        else:
+            filter_kwargs = {field.name: self.pk for field in related_fields}
         manager_cls = cast(Any, general_manager_class)
         if not filter_kwargs:
             raise MissingRelatedFieldsError(
@@ -717,6 +742,29 @@ def _general_manager_many_accessor(
         return manager_cls.filter(**filter_kwargs)
 
     return getter
+
+
+def _many_to_many_relation_filter_name(
+    field: models.Field,
+    source_model: type[models.Model],
+) -> str | None:
+    """Return the target-side query lookup for a direct many-to-many field."""
+    remote_field = getattr(field, "remote_field", None)
+    related_query_name = getattr(remote_field, "related_query_name", None)
+    if callable(related_query_name):
+        related_query_name = related_query_name()
+    if isinstance(related_query_name, str) and related_query_name:
+        return related_query_name
+    related_name = getattr(remote_field, "related_name", None)
+    if related_name == "+":
+        return None
+    if isinstance(related_name, str) and related_name:
+        return related_name
+    source_meta = getattr(source_model, "_meta", None)
+    source_model_name = getattr(source_meta, "model_name", None)
+    if isinstance(source_model_name, str) and source_model_name:
+        return source_model_name
+    return None
 
 
 def _direct_many_accessor(
