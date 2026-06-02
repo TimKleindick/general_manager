@@ -18,7 +18,6 @@ from general_manager.utils.testing import (
     run_registered_startup_hooks,
 )
 from general_manager.manager.meta import (
-    AttributeEvaluationError,
     GeneralManagerMeta,
     InvalidManagerStateError,
 )
@@ -75,6 +74,36 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                 class Meta:
                     use_soft_delete = True
 
+        class TestSupplier(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50)
+
+        class TestProjectQualityStatus(GeneralManager):
+            name: str
+            processing_supplier_list: Bucket[TestSupplier]
+            standard_part_supplier_list: Bucket[TestSupplier]
+            direct_delivery_supplier_list: Bucket[TestSupplier]
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50)
+                processing_supplier = models.ManyToManyField(
+                    "general_manager.TestSupplier",
+                    blank=True,
+                    related_name="processing_supplier",
+                )
+                standard_part_supplier = models.ManyToManyField(
+                    "general_manager.TestSupplier",
+                    blank=True,
+                    related_name="standard_part_supplier",
+                )
+                direct_delivery_supplier = models.ManyToManyField(
+                    "general_manager.TestSupplier",
+                    blank=True,
+                    related_name="direct_delivery_supplier",
+                )
+
         class ChangeRequest(GeneralManager):
             title: str
             change_request_approval: ChangeRequestApproval
@@ -121,6 +150,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.TestCountry = TestCountry
         cls.TestHuman = TestHuman
         cls.TestFamily = TestFamily
+        cls.TestSupplier = TestSupplier
+        cls.TestProjectQualityStatus = TestProjectQualityStatus
         cls.ChangeRequest = ChangeRequest
         cls.ChangeRequestApproval = ChangeRequestApproval
         cls.ChangeRequestFeasibility = ChangeRequestFeasibility
@@ -129,6 +160,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             TestCountry,
             TestHuman,
             TestFamily,
+            TestSupplier,
+            TestProjectQualityStatus,
             ChangeRequest,
             ChangeRequestApproval,
             ChangeRequestFeasibility,
@@ -202,6 +235,8 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.TestCountry.Interface._model._meta.model.objects.all().delete()
         self.TestHuman.Interface._model._meta.model.objects.all().delete()
         self.TestFamily.Interface._model._meta.model.objects.all().delete()
+        self.TestProjectQualityStatus.Interface._model._meta.model.objects.all().delete()
+        self.TestSupplier.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequest.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestApproval.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestFeasibility.Interface._model._meta.model.objects.all().delete()
@@ -759,10 +794,58 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertIn("Alice", human_names)
         self.assertIn("Bob", human_names)
 
-    def test_many_to_many_bucket_raises_without_reverse_metadata(self):
+    def test_multiple_many_to_many_fields_to_same_manager_stay_independent(self):
         """
-        Verify direct many-to-many buckets fail explicitly
-        when Django does not expose the reverse relation on the related model.
+        Verify direct M2M buckets scope reads to their own relation field.
+        """
+        supplier_1 = self.TestSupplier.create(
+            creator_id=None,
+            name="Supplier 1",
+            ignore_permission=True,
+        )
+        supplier_2 = self.TestSupplier.create(
+            creator_id=None,
+            name="Supplier 2",
+            ignore_permission=True,
+        )
+        supplier_3 = self.TestSupplier.create(
+            creator_id=None,
+            name="Supplier 3",
+            ignore_permission=True,
+        )
+        status = self.TestProjectQualityStatus.create(
+            creator_id=None,
+            name="Quality",
+            ignore_permission=True,
+        )
+
+        status.update(
+            processing_supplier_list=[supplier_1, supplier_2],
+            standard_part_supplier_list=[supplier_2],
+            direct_delivery_supplier_list=[supplier_3],
+            ignore_permission=True,
+        )
+
+        self.assertEqual(
+            list(status.processing_supplier_list), [supplier_1, supplier_2]
+        )
+        self.assertEqual(list(status.standard_part_supplier_list), [supplier_2])
+        self.assertEqual(list(status.direct_delivery_supplier_list), [supplier_3])
+
+        status.update(
+            direct_delivery_supplier_list=[supplier_1],
+            ignore_permission=True,
+        )
+
+        self.assertEqual(
+            list(status.processing_supplier_list), [supplier_1, supplier_2]
+        )
+        self.assertEqual(list(status.standard_part_supplier_list), [supplier_2])
+        self.assertEqual(list(status.direct_delivery_supplier_list), [supplier_1])
+
+    def test_many_to_many_bucket_uses_direct_relation_without_reverse_metadata(self):
+        """
+        Verify direct many-to-many buckets do not depend on reverse metadata scans.
         """
         self.TestHuman.create(
             creator_id=None,
@@ -788,11 +871,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             if "_attributes" in vars(self.TestFamily):
                 delattr(self.TestFamily, "_attributes")
 
-            with self.assertRaisesRegex(
-                AttributeEvaluationError,
-                "Unable to resolve related fields",
-            ):
-                _ = self.test_family.humans_list
+            humans = self.test_family.humans_list
+
+        self.assertEqual(len(humans), 2)
+        self.assertIn(self.test_human1, humans)
+        self.assertIn(self.test_human2, humans)
         self.TestFamily.Interface._field_descriptors = None
         if "_attributes" in vars(self.TestFamily):
             delattr(self.TestFamily, "_attributes")
