@@ -332,7 +332,7 @@ class DatabaseBucketTestCase(TestCase):
         """
         search_date = datetime(2024, 1, 1)
         bucket = DatabaseBucket(
-            User.objects.filter(username__in=["alice", "bob"]),
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
             SearchDateManager,
             {"username__in": [["alice", "bob"]]},
             {"is_staff": [True]},
