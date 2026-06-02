@@ -140,6 +140,20 @@ class NonSortablePropertyError(ValueError):
         )
 
 
+class DuplicateDatabaseBucketSnapshotError(ValueError):
+    """Raised when a database bucket snapshot contains duplicate primary keys."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "DatabaseBucket snapshots cannot contain duplicate primary keys."
+        )
+
+
+def _ensure_unique_primary_keys(primary_keys: tuple[Any, ...]) -> None:
+    if len(primary_keys) != len(set(primary_keys)):
+        raise DuplicateDatabaseBucketSnapshotError()
+
+
 def _restore_database_bucket_from_primary_keys(
     model: type[models.Model],
     manager_class: Type[GeneralManagerType],
@@ -151,6 +165,7 @@ def _restore_database_bucket_from_primary_keys(
     sort_keys: tuple[str, ...] | None,
     sort_reverse: bool,
 ) -> DatabaseBucket[GeneralManagerType]:
+    _ensure_unique_primary_keys(primary_keys)
     manager = model._default_manager
     if database_alias is not None:
         manager = manager.db_manager(database_alias)
@@ -216,12 +231,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Preserve a result snapshot without serializing the queryset object.
         """
         self._track_effective_dependencies()
+        primary_keys = tuple(self._data.values_list("pk", flat=True))
+        _ensure_unique_primary_keys(primary_keys)
         return (
             _restore_database_bucket_from_primary_keys,
             (
                 self._data.model,
                 self._manager_class,
-                tuple(self._data.values_list("pk", flat=True)),
+                primary_keys,
                 self.filters,
                 self.excludes,
                 self._data.db,
