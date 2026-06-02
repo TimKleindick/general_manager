@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.41.5 (2026-06-02)
+
+### Bug Fixes
+
+- Preserve database bucket snapshots during serialization
+  ([`6d13814`](https://github.com/TimKleindick/general_manager/commit/6d13814cad3c0cfc93db69bc5239bfbb9380e335))
+
+- Validate database bucket snapshot metadata
+  ([`7c24095`](https://github.com/TimKleindick/general_manager/commit/7c240956547beac10fe2287ea453d450791e6f01))
+
+### Testing
+
+- Stabilize database bucket snapshot order
+  ([`fc916c5`](https://github.com/TimKleindick/general_manager/commit/fc916c529c871c5092277794fce5285524384873))
+
+
 ## v0.41.4 (2026-06-01)
 
 ### Bug Fixes
