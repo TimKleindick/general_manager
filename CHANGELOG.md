@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.6 (2026-06-02)
+
+### Bug Fixes
+
+- Scope direct many-to-many bucket filters
+  ([`8a1d616`](https://github.com/TimKleindick/general_manager/commit/8a1d616609c409f16db5430cf5269e30c84d6d7b))
+
+
 ## v0.41.5 (2026-06-02)
 
 ### Bug Fixes
