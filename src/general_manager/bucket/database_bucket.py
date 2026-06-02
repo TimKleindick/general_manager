@@ -140,6 +140,42 @@ class NonSortablePropertyError(ValueError):
         )
 
 
+def _restore_database_bucket_from_primary_keys(
+    model: type[models.Model],
+    manager_class: Type[GeneralManagerType],
+    primary_keys: tuple[Any, ...],
+    filter_definitions: dict[str, list[Any]],
+    exclude_definitions: dict[str, list[Any]],
+    database_alias: str | None,
+    search_date: datetime | date | None,
+    sort_keys: tuple[str, ...] | None,
+    sort_reverse: bool,
+) -> DatabaseBucket[GeneralManagerType]:
+    manager = model._default_manager
+    if database_alias is not None:
+        manager = manager.db_manager(database_alias)
+    if not primary_keys:
+        queryset = manager.none()
+    else:
+        preserved_order = models.Case(
+            *(
+                models.When(pk=primary_key, then=position)
+                for position, primary_key in enumerate(primary_keys)
+            ),
+            output_field=models.IntegerField(),
+        )
+        queryset = manager.filter(pk__in=primary_keys).order_by(preserved_order)
+    return DatabaseBucket(
+        queryset,
+        manager_class,
+        filter_definitions,
+        exclude_definitions,
+        search_date=search_date,
+        sort_keys=sort_keys,
+        sort_reverse=sort_reverse,
+    )
+
+
 class DatabaseBucket(Bucket[GeneralManagerType]):
     """Bucket implementation backed by Django ORM querysets."""
 
@@ -174,6 +210,26 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self._search_date = search_date
         self._sort_keys = sort_keys
         self._sort_reverse = sort_reverse
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        """
+        Preserve a result snapshot without serializing the queryset object.
+        """
+        self._track_effective_dependencies()
+        return (
+            _restore_database_bucket_from_primary_keys,
+            (
+                self._data.model,
+                self._manager_class,
+                tuple(self._data.values_list("pk", flat=True)),
+                self.filters,
+                self.excludes,
+                self._data.db,
+                self._search_date,
+                self._sort_keys,
+                self._sort_reverse,
+            ),
+        )
 
     def _build_manager(self, pk: Any) -> GeneralManagerType:
         if self._search_date is None:

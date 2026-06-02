@@ -1,5 +1,6 @@
 # type: ignore
 
+from copy import deepcopy
 from datetime import date
 
 from django.contrib.auth import get_user_model
@@ -207,6 +208,17 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         data = response.json()["data"]["optionalinputcalculation"]
         self.assertEqual(data["employee"]["name"], "Alice")
         self.assertEqual(data["asOf"], "2024-02-10")
+
+    def test_database_bucket_possible_values_survive_deepcopy(self) -> None:
+        input_field = self.OptionalInputCalculation.Interface.input_fields["employee"]
+
+        possible_values = input_field.resolve_possible_values({})
+        copied_values = deepcopy(possible_values)
+
+        self.assertEqual(
+            [employee.name for employee in copied_values],
+            ["Alice", "Bob"],
+        )
 
     def test_min_value_constraint_is_enforced_via_graphql(self) -> None:
         query = """
