@@ -5,8 +5,12 @@ from datetime import datetime
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.db.models import functions
+from django.db.models.query import QuerySet
 
-from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.bucket.database_bucket import (
+    DatabaseBucket,
+    _restore_database_bucket_from_primary_keys,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.api.property import graph_ql_property
@@ -320,6 +324,24 @@ class DatabaseBucketTestCase(TestCase):
         sibling_excluded = excluded.all()
         excluded.excludes["username"].append("carol")
         self.assertListEqual(sibling_excluded.excludes["username"], ["bob"])
+
+    def test_reduce_stores_primary_keys_instead_of_queryset(self):
+        """
+        Cache serialization should store a stable identity snapshot, not a live QuerySet.
+        """
+        reduced = self.bucket.__reduce__()
+        restore_func, args = reduced
+
+        self.assertEqual(restore_func, _restore_database_bucket_from_primary_keys)
+        self.assertEqual(args[0], User)
+        self.assertEqual(args[2], (self.u1.pk, self.u2.pk, self.u3.pk))
+        self.assertFalse(any(isinstance(arg, QuerySet) for arg in args))
+
+        restored = restore_func(*args)
+        self.assertEqual(
+            [manager.identification["id"] for manager in restored],
+            [self.u1.pk, self.u2.pk, self.u3.pk],
+        )
 
     def test_or_union_with_bucket(self):
         # split buckets
