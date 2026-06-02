@@ -216,7 +216,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         copied_values = deepcopy(possible_values)
 
         self.assertEqual(
-            [employee.name for employee in copied_values],
+            sorted(employee.name for employee in copied_values),
             ["Alice", "Bob"],
         )
 

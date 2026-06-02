@@ -9,6 +9,7 @@ from django.db.models.query import QuerySet
 
 from general_manager.bucket.database_bucket import (
     DatabaseBucket,
+    DuplicateDatabaseBucketSnapshotError,
     _restore_database_bucket_from_primary_keys,
 )
 from general_manager.manager.general_manager import GeneralManager
@@ -329,19 +330,57 @@ class DatabaseBucketTestCase(TestCase):
         """
         Cache serialization should store a stable identity snapshot, not a live QuerySet.
         """
-        reduced = self.bucket.__reduce__()
+        search_date = datetime(2024, 1, 1)
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]),
+            SearchDateManager,
+            {"username__in": [["alice", "bob"]]},
+            {"is_staff": [True]},
+            search_date=search_date,
+            sort_keys=("username",),
+            sort_reverse=True,
+        )
+        reduced = bucket.__reduce__()
         restore_func, args = reduced
 
         self.assertEqual(restore_func, _restore_database_bucket_from_primary_keys)
         self.assertEqual(args[0], User)
-        self.assertEqual(args[2], (self.u1.pk, self.u2.pk, self.u3.pk))
+        self.assertEqual(args[2], (self.u1.pk, self.u2.pk))
+        self.assertEqual(args[3], bucket.filters)
+        self.assertEqual(args[4], bucket.excludes)
+        self.assertEqual(args[5], bucket._data.db)
+        self.assertEqual(args[6], bucket._search_date)
+        self.assertEqual(args[7], bucket._sort_keys)
+        self.assertEqual(args[8], bucket._sort_reverse)
         self.assertFalse(any(isinstance(arg, QuerySet) for arg in args))
 
         restored = restore_func(*args)
         self.assertEqual(
             [manager.identification["id"] for manager in restored],
-            [self.u1.pk, self.u2.pk, self.u3.pk],
+            [self.u1.pk, self.u2.pk],
         )
+        self.assertEqual(restored.filters, bucket.filters)
+        self.assertEqual(restored.excludes, bucket.excludes)
+        self.assertEqual(restored._search_date, bucket._search_date)
+        self.assertEqual(restored._sort_keys, bucket._sort_keys)
+        self.assertEqual(restored._sort_reverse, bucket._sort_reverse)
+
+    def test_restore_rejects_duplicate_primary_key_snapshots(self):
+        """
+        DatabaseBucket snapshots cannot silently collapse duplicate primary keys.
+        """
+        with self.assertRaises(DuplicateDatabaseBucketSnapshotError):
+            _restore_database_bucket_from_primary_keys(
+                User,
+                UserManager,
+                (self.u1.pk, self.u1.pk),
+                {},
+                {},
+                "default",
+                None,
+                None,
+                False,
+            )
 
     def test_or_union_with_bucket(self):
         # split buckets
