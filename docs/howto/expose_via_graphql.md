@@ -2,6 +2,12 @@
 
 Managers with an `Interface` are registered during GeneralManager startup and receive generated query, mutation, and subscription fields based on their interface capabilities.
 
+## Filter by identifier
+
+Identifier equality filters (`id`, `id_Exact`, and `id_In`) use the GraphQL
+`ID` scalar, matching detail-query arguments. Ordered comparisons such as
+`id_Gt` retain the identifier's underlying numeric scalar when available.
+
 ## Expose authorization hints
 
 Use GraphQL permission capabilities when frontend code needs business-oriented authorization hints, such as whether the current user can rename a project. These fields are advisory only; backend permissions still enforce all reads and writes.
