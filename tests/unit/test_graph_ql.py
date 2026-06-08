@@ -515,6 +515,44 @@ class GraphQLTests(TestCase):
         self.assertEqual(normalized["filter"], {})
         self.assertEqual(normalized["exclude"], {"child__name__icontains": "blocked"})
 
+    def test_normalize_filter_input_casts_id_equality_values(self):
+        class IdentifierManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {"id": Input(int)}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}}
+
+        normalized = GraphQL._normalize_filter_input(
+            IdentifierManager,
+            {"id": "7", "id__exact": "8"},
+        )
+
+        self.assertEqual(
+            normalized,
+            {"filter": {"id": 7, "id__exact": 8}, "exclude": {}},
+        )
+
+    def test_normalize_filter_input_casts_each_id_in_value(self):
+        class IdentifierManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {"id": Input(int)}
+
+                @staticmethod
+                def get_attribute_types():
+                    return {"id": {"type": int}}
+
+        normalized = GraphQL._normalize_filter_input(
+            IdentifierManager,
+            {"id__in": ["7", "8"]},
+        )
+
+        self.assertEqual(
+            normalized,
+            {"filter": {"id__in": [7, 8]}, "exclude": {}},
+        )
+
     def test_build_identification_arguments_respects_optional_inputs(self):
         class DependencyManager(GeneralManager):
             pass

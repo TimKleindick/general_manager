@@ -690,7 +690,12 @@ class GraphQL:
         attribute_type: type, attribute_name: str
     ) -> Generator[
         tuple[
-            str, type[graphene.ObjectType] | MeasurementScalar | graphene.List | None
+            str,
+            type[graphene.ObjectType]
+            | graphene.Scalar
+            | MeasurementScalar
+            | graphene.List
+            | None,
         ],
         None,
         None,
