@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.8 (2026-06-08)
+
+### Bug Fixes
+
+- Support grouping by related managers
+  ([`c76d186`](https://github.com/TimKleindick/general_manager/commit/c76d186a1a5b03b41e3fc0803bd0e6ca0f4958a7))
+
+
 ## v0.41.7 (2026-06-08)
 
 ### Bug Fixes
