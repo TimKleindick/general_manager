@@ -125,6 +125,34 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(data["calculatedTax"]["value"], 600)
         self.assertEqual(data["calculatedTax"]["unit"], "EUR")
 
+    def test_group_by_manager_input(self):
+        first_employee = self.Employee.create(
+            name="Alice",
+            salary=Measurement(3000, "EUR"),
+            creator_id=self.user.id,
+        )
+        second_employee = self.Employee.create(
+            name="Bob",
+            salary=Measurement(4000, "EUR"),
+            creator_id=self.user.id,
+        )
+
+        grouped = self.TaxCalculation.all().group_by("employee")
+
+        self.assertEqual(grouped.count(), 2)
+        self.assertEqual(
+            {group.employee.identification["id"] for group in grouped},
+            {
+                first_employee.identification["id"],
+                second_employee.identification["id"],
+            },
+        )
+        self.assertTrue(all(group._data.count() == 1 for group in grouped))
+        self.assertEqual(
+            grouped,
+            self.TaxCalculation.all().group_by("employee"),
+        )
+
     def test_entry_based_graphql_property_refreshes_after_update(self):
         employee = self.Employee.create(
             name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id

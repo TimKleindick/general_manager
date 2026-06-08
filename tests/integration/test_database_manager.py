@@ -983,6 +983,71 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(len(related_humans), 1)
         self.assertEqual(related_humans[0].name, "Alice")
 
+    def test_group_by_foreign_key(self):
+        grouped = self.TestHuman.all().group_by("country")
+
+        self.assertEqual(grouped.count(), 2)
+        groups_by_country = {
+            group.country.code if group.country is not None else None: group
+            for group in grouped
+        }
+        self.assertEqual(groups_by_country["US"]._data.count(), 1)
+        self.assertEqual(groups_by_country[None]._data.count(), 1)
+
+    def test_group_by_one_to_one_relation(self):
+        first_request = self.ChangeRequest.create(
+            title="First",
+            ignore_permission=True,
+        )
+        second_request = self.ChangeRequest.create(
+            title="Second",
+            ignore_permission=True,
+        )
+        first_approval = self.ChangeRequestApproval.create(
+            approved_by="Alice",
+            change_request=first_request,
+            ignore_permission=True,
+        )
+        second_approval = self.ChangeRequestApproval.create(
+            approved_by="Bob",
+            change_request=second_request,
+            ignore_permission=True,
+        )
+
+        grouped = self.ChangeRequestApproval.filter(
+            id__in=[first_approval.id, second_approval.id]
+        ).group_by("change_request")
+
+        self.assertEqual(grouped.count(), 2)
+        self.assertEqual(
+            {group.change_request.title for group in grouped},
+            {"First", "Second"},
+        )
+        self.assertTrue(all(group._data.count() == 1 for group in grouped))
+
+    def test_group_by_reverse_one_to_one_relation(self):
+        request_without_approval = self.ChangeRequest.create(
+            title="Without approval",
+            ignore_permission=True,
+        )
+
+        grouped = self.ChangeRequest.filter(
+            id__in=[self.change_request.id, request_without_approval.id]
+        ).group_by("change_request_approval")
+
+        self.assertEqual(grouped.count(), 2)
+        groups_by_approval = {
+            group.change_request_approval.approved_by
+            if group.change_request_approval is not None
+            else None: group
+            for group in grouped
+        }
+        self.assertEqual(
+            groups_by_approval[self.change_request_approval.approved_by]._data.count(),
+            1,
+        )
+        self.assertEqual(groups_by_approval[None]._data.count(), 1)
+
     def test_factory_creates_instances(self) -> None:
         """
         Test that the Factory class creates instances of the GeneralManager with correct default attributes.

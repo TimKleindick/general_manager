@@ -1,9 +1,69 @@
 """Grouping bucket implementation for aggregating GeneralManager instances."""
 
 from __future__ import annotations
-from typing import Any, Generator, Generic, Type
+from typing import Any, Generator, Generic, Type, cast
 from general_manager.manager.group_manager import GroupManager
+from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+
+
+def _freeze_group_value(value: Any) -> Any:
+    """Return a hashable identity for values used to distinguish groups."""
+    if isinstance(value, GeneralManager):
+        return (
+            value.__class__,
+            tuple(
+                sorted(
+                    (
+                        key,
+                        _freeze_group_value(identifier),
+                    )
+                    for key, identifier in value.identification.items()
+                )
+            ),
+        )
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    _freeze_group_value(key),
+                    _freeze_group_value(item),
+                )
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_group_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_group_value(item) for item in value)
+    return value
+
+
+def _group_filter_kwargs(
+    manager_class: Type[GeneralManagerType],
+    group_by_value: tuple[tuple[str, Any], ...],
+) -> dict[str, Any]:
+    """Translate grouped manager values into backend-neutral relation lookups."""
+    filters: dict[str, Any] = {}
+    get_attribute_types = getattr(
+        manager_class.Interface,
+        "get_attribute_types",
+        None,
+    )
+    attributes = get_attribute_types() if callable(get_attribute_types) else {}
+    for key, value in group_by_value:
+        attribute_info = cast(dict[str, Any], attributes.get(key, {}))
+        filter_key = attribute_info.get("filter_lookup", key)
+        if isinstance(value, GeneralManager):
+            filters.update(
+                {
+                    f"{filter_key}__{identifier_key}": identifier_value
+                    for identifier_key, identifier_value in value.identification.items()
+                }
+            )
+            continue
+        filters[filter_key] = value
+    return filters
 
 
 class InvalidGroupByKeyTypeError(TypeError):
@@ -191,15 +251,25 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             list[GroupManager[GeneralManagerType]]: A list of GroupManager objects, one per unique tuple of group-by key values; groups are produced in order sorted by the string representation of their key tuples.
         """
-        group_by_values: set[tuple[tuple[str, Any], ...]] = set()
+        group_by_values: dict[
+            tuple[tuple[str, Any], ...],
+            tuple[tuple[str, Any], ...],
+        ] = {}
         for entry in data:
-            key = tuple((arg, getattr(entry, arg)) for arg in self._group_by_keys)
-            group_by_values.add(key)
+            group_by_value = tuple(
+                (arg, getattr(entry, arg)) for arg in self._group_by_keys
+            )
+            group_identity = tuple(
+                (arg, _freeze_group_value(value)) for arg, value in group_by_value
+            )
+            group_by_values.setdefault(group_identity, group_by_value)
 
         groups: list[GroupManager[GeneralManagerType]] = []
-        for group_by_value in sorted(group_by_values, key=str):
+        for group_by_value in sorted(group_by_values.values(), key=str):
             group_by_dict = {key: value for key, value in group_by_value}
-            grouped_manager_objects = data.filter(**group_by_dict)
+            grouped_manager_objects = data.filter(
+                **_group_filter_kwargs(self._manager_class, group_by_value)
+            )
             groups.append(
                 GroupManager(
                     self._manager_class, group_by_dict, grouped_manager_objects
