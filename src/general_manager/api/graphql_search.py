@@ -284,7 +284,14 @@ def get_filter_options(
     map_field_to_graphene_read: Callable[[type, str, Mapping[str, Any] | None], Any],
     attr_info: Mapping[str, Any] | None = None,
 ) -> Generator[
-    tuple[str, type[graphene.ObjectType] | MeasurementScalar | graphene.List | None],
+    tuple[
+        str,
+        type[graphene.ObjectType]
+        | graphene.Scalar
+        | MeasurementScalar
+        | graphene.List
+        | None,
+    ],
     None,
     None,
 ]:
@@ -323,6 +330,19 @@ def get_filter_options(
 
     if safe_issubclass(normalized_type, GeneralManager):
         yield attribute_name, None
+    elif attribute_name == "id":
+        yield attribute_name, graphene.ID()
+        yield f"{attribute_name}__exact", graphene.ID()
+        yield f"{attribute_name}__in", graphene.List(graphene.ID)
+        for option in ("gt", "gte", "lt", "lte"):
+            yield (
+                f"{attribute_name}__{option}",
+                map_field_to_graphene_read(
+                    normalized_type,
+                    attribute_name,
+                    attr_info,
+                ),
+            )
     elif safe_issubclass(normalized_type, Measurement):
         yield attribute_name, MeasurementScalar()
         for option in number_options:
@@ -493,6 +513,28 @@ def create_filter_options(
     return filter_class
 
 
+def normalize_id_filter_value(
+    field_type: Type[GeneralManager],
+    lookup: str,
+    value: Any,
+) -> Any:
+    """Cast equality-style ID filter values to the manager's identifier type."""
+    if lookup not in {"id", "id__exact", "id__in"}:
+        return value
+
+    interface = getattr(field_type, "Interface", None)
+    input_fields = getattr(interface, "input_fields", {})
+    id_input = input_fields.get("id") if isinstance(input_fields, dict) else None
+    if id_input is None:
+        return value
+
+    if lookup == "id__in":
+        if not isinstance(value, (list, tuple)):
+            return value
+        return [id_input.cast(item) for item in value]
+    return id_input.cast(value)
+
+
 def normalize_filter_input(
     field_type: Type[GeneralManager],
     filter_input: dict[str, Any],
@@ -510,7 +552,7 @@ def normalize_filter_input(
     for key, value in filter_input.items():
         attr_info = attr_types.get(key)
         if not attr_info or not isinstance(value, dict):
-            filters[key] = value
+            filters[key] = normalize_id_filter_value(field_type, key, value)
             continue
 
         attr_type = attr_info.get("type")

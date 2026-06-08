@@ -216,10 +216,10 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]
-        self.assertEqual(payload["changerequest"]["id"], str(self.primary.id))
+        self.assertEqual(payload["changerequest"]["id"], self.primary.id)
         self.assertEqual(
             [item["id"] for item in payload["changerequestfeasibilityList"]["items"]],
-            [str(self.high_feasibility.id)],
+            [self.high_feasibility.id],
         )
 
     def test_id_filter_variants_use_identifier_and_numeric_scalars(self):
@@ -227,8 +227,8 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
             "ChangeRequestFilterTypeDepth2"
         ]
 
-        self.assertIsInstance(filter_type._meta.fields["id"].type, graphene.ID)
-        self.assertIsInstance(
+        self.assertIs(filter_type._meta.fields["id"].type, graphene.ID)
+        self.assertIs(
             filter_type._meta.fields["id__exact"].type,
             graphene.ID,
         )
@@ -240,7 +240,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
             filter_type._meta.fields["id__in"].type.of_type,
             graphene.ID,
         )
-        self.assertIsInstance(
+        self.assertIs(
             filter_type._meta.fields["id__gt"].type,
             graphene.Int,
         )
