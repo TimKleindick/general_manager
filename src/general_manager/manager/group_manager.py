@@ -12,6 +12,35 @@ from general_manager.bucket.base_bucket import (
 )
 
 
+def _freeze_manager_value(value: Any) -> Any:
+    """Return a hashable representation for manager-backed group state."""
+    if isinstance(value, GeneralManager):
+        return tuple(
+            sorted(
+                (
+                    key,
+                    _freeze_manager_value(identifier),
+                )
+                for key, identifier in value.identification.items()
+            )
+        )
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    _freeze_manager_value(key),
+                    _freeze_manager_value(item),
+                )
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_manager_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_manager_value(item) for item in value)
+    return value
+
+
 class MissingGroupAttributeError(AttributeError):
     """Raised when a GroupManager access attempts to use an undefined attribute."""
 
@@ -61,8 +90,8 @@ class GroupManager(Generic[GeneralManagerType]):
         return hash(
             (
                 self._manager_class,
-                tuple(self._group_by_value.items()),
-                frozenset(self._data),
+                _freeze_manager_value(self._group_by_value),
+                frozenset(_freeze_manager_value(entry) for entry in self._data),
             )
         )
 
@@ -80,7 +109,8 @@ class GroupManager(Generic[GeneralManagerType]):
             isinstance(other, self.__class__)
             and self._manager_class == other._manager_class
             and self._group_by_value == other._group_by_value
-            and frozenset(self._data) == frozenset(other._data)
+            and frozenset(_freeze_manager_value(entry) for entry in self._data)
+            == frozenset(_freeze_manager_value(entry) for entry in other._data)
         )
 
     def __repr__(self) -> str:
