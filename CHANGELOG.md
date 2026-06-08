@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.41.9 (2026-06-08)
+
+### Bug Fixes
+
+- Graphql schema issues
+  ([`a90b08b`](https://github.com/TimKleindick/general_manager/commit/a90b08b6dcd09f4963c9fc16eeacad9664855f63))
+
+
 ## v0.41.8 (2026-06-08)
 
 ### Bug Fixes
