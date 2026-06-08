@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
-from django.utils.functional import SimpleLazyObject
+from django.utils.functional import SimpleLazyObject, empty
 
 from general_manager.logging import get_logger
 from general_manager.permission.audit import (
@@ -449,7 +449,8 @@ class BasePermission(ABC):
 
         if isinstance(user, SimpleLazyObject):
             lazy_user = cast(Any, user)
-            lazy_user._setup()
+            if lazy_user._wrapped is empty:
+                lazy_user._setup()
             user = lazy_user._wrapped
 
         User = get_user_model()

@@ -623,6 +623,28 @@ class BasePermissionTests(TestCase):
         self.assertIs(permission.request_user, user)
         self.assertTrue(permission.request_user.is_authenticated)
 
+    def test_resolved_lazy_request_user_is_not_evaluated_again(self) -> None:
+        """Permission construction should reuse an already resolved lazy user."""
+        UserModel = get_user_model()
+        user = UserModel.objects.create_user(
+            username="resolved-lazy-user",
+            password=get_random_string(12),
+        )
+        setup_calls = 0
+
+        def resolve_user():
+            nonlocal setup_calls
+            setup_calls += 1
+            return user
+
+        lazy_user = SimpleLazyObject(resolve_user)
+        self.assertTrue(lazy_user.is_authenticated)
+
+        permission = DummyPermission(self.dummy_instance, lazy_user)
+
+        self.assertIs(permission.request_user, user)
+        self.assertEqual(setup_calls, 1)
+
     def test_lazy_anonymous_request_user_is_resolved(self) -> None:
         """Permission checks should receive a concrete AnonymousUser."""
         anonymous_user = AnonymousUser()
