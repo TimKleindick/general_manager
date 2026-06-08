@@ -25,10 +25,22 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
 
         class ChangeRequest(GeneralManager):
             title: str
+            change_request_approval: ChangeRequestApproval
             change_request_feasibility_list: Bucket[ChangeRequestFeasibility]
 
             class Interface(DatabaseInterface):
                 title = models.CharField(max_length=100)
+
+        class ChangeRequestApproval(GeneralManager):
+            approved_by: str
+            change_request: ChangeRequest
+
+            class Interface(DatabaseInterface):
+                approved_by = models.CharField(max_length=100)
+                change_request = models.OneToOneField(
+                    "general_manager.ChangeRequest",
+                    on_delete=models.CASCADE,
+                )
 
         class ChangeRequestFeasibility(GeneralManager):
             score: int
@@ -56,10 +68,12 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
                 )
 
         cls.ChangeRequest = ChangeRequest
+        cls.ChangeRequestApproval = ChangeRequestApproval
         cls.ChangeRequestFeasibility = ChangeRequestFeasibility
         cls.ChangeRequestTeam = ChangeRequestTeam
         cls.general_manager_classes = [
             ChangeRequest,
+            ChangeRequestApproval,
             ChangeRequestFeasibility,
             ChangeRequestTeam,
         ]
@@ -137,6 +151,48 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["score"], 9)
         self.assertEqual(items[0]["changeRequest"]["title"], "Primary")
+
+    def test_multiword_reverse_relation_has_one_canonical_graphql_field(self):
+        query = """
+        query {
+            __type(name: "ChangeRequestType") {
+                fields {
+                    name
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        fields = [
+            field["name"] for field in response.json()["data"]["__type"]["fields"]
+        ]
+        self.assertEqual(fields.count("changeRequestFeasibilityList"), 1)
+        self.assertNotIn("changerequestfeasibilityList", fields)
+
+    def test_reverse_one_to_one_has_only_canonical_singular_graphql_field(self):
+        query = """
+        query {
+            __type(name: "ChangeRequestType") {
+                fields {
+                    name
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        fields = [
+            field["name"] for field in response.json()["data"]["__type"]["fields"]
+        ]
+        self.assertEqual(fields.count("changeRequestApproval"), 1)
+        self.assertNotIn("changerequestapproval", fields)
+        self.assertNotIn("changeRequestApprovalList", fields)
+        self.assertNotIn("changerequestapprovalList", fields)
 
     def test_filters_by_reverse_relation_any(self):
         query = """
