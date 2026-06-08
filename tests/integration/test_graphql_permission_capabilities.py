@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AbstractBaseUser
 from django.db.models import CharField
 from django.test import override_settings
 from django.utils.crypto import get_random_string
+from django.utils.functional import SimpleLazyObject
 
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.manager.general_manager import GeneralManager
@@ -74,6 +76,13 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
                         "canRename",
                         can_rename,
                         batch_evaluator=can_rename_batch,
+                    ),
+                    object_capability(
+                        "hasConcreteUser",
+                        lambda _project, user: (
+                            isinstance(user, AbstractBaseUser)
+                            and not isinstance(user, SimpleLazyObject)
+                        ),
                     ),
                 )
 
@@ -191,6 +200,25 @@ class TestGraphQLPermissionCapabilities(GeneralManagerTransactionTestCase):
                 },
             ],
         )
+
+    def test_object_capability_receives_concrete_authenticated_user(self) -> None:
+        query = """
+        query {
+            projectList(pageSize: 1) {
+                items {
+                    capabilities {
+                        hasConcreteUser
+                    }
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        item = response.json()["data"]["projectList"]["items"][0]
+        self.assertTrue(item["capabilities"]["hasConcreteUser"])
 
     def test_list_query_does_not_warm_capabilities_when_unselected(self) -> None:
         query = """

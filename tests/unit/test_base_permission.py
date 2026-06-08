@@ -13,6 +13,7 @@ from general_manager.permission.permission_data_manager import (
     PermissionDataManager,
 )
 from django.contrib.auth import get_user_model
+from django.utils.functional import SimpleLazyObject
 from django.utils.crypto import get_random_string
 
 if TYPE_CHECKING:
@@ -606,6 +607,30 @@ class BasePermissionTests(TestCase):
     def test_request_user_property(self) -> None:
         """Test request_user property returns the user."""
         self.assertEqual(self.permission_obj.request_user, self.dummy_user)
+
+    def test_lazy_authenticated_request_user_is_resolved(self) -> None:
+        """Permission checks should receive the concrete authenticated user."""
+        UserModel = get_user_model()
+        user = UserModel.objects.create_user(
+            username="lazy-authenticated-user",
+            password=get_random_string(12),
+        )
+        lazy_user = SimpleLazyObject(lambda: user)
+        DummyPermission.read_permissions = {"field": "isAuthenticated"}
+
+        permission = DummyPermission(self.dummy_instance, lazy_user)
+
+        self.assertIs(permission.request_user, user)
+        self.assertTrue(permission.request_user.is_authenticated)
+
+    def test_lazy_anonymous_request_user_is_resolved(self) -> None:
+        """Permission checks should receive a concrete AnonymousUser."""
+        anonymous_user = AnonymousUser()
+        lazy_user = SimpleLazyObject(lambda: anonymous_user)
+
+        permission = DummyPermission(self.dummy_instance, lazy_user)
+
+        self.assertIs(permission.request_user, anonymous_user)
 
     def test_check_permission_all_actions_allowed(self) -> None:
         """Test check_permission when all actions are allowed."""

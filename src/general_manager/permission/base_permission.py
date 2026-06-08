@@ -5,9 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
+from django.utils.functional import SimpleLazyObject
 
 from general_manager.logging import get_logger
 from general_manager.permission.audit import (
@@ -74,7 +75,7 @@ class BasePermission(ABC):
     ) -> None:
         """Initialise the permission context for a specific manager and user."""
         self._instance = instance
-        self._request_user = request_user
+        self._request_user = self.get_user_with_id(request_user)
 
     @property
     def instance(self) -> PermissionDataManager | GeneralManager | GeneralManagerMeta:
@@ -445,6 +446,11 @@ class BasePermission(ABC):
             UserLike: The resolved User instance, or an AnonymousUser when no matching User is found.
         """
         from django.contrib.auth import get_user_model
+
+        if isinstance(user, SimpleLazyObject):
+            lazy_user = cast(Any, user)
+            lazy_user._setup()
+            user = lazy_user._wrapped
 
         User = get_user_model()
         if isinstance(user, (AbstractBaseUser, AnonymousUser)):
