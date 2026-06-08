@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.41.7 (2026-06-08)
+
+### Bug Fixes
+
+- Avoid reevaluating resolved lazy users
+  ([`315a0a8`](https://github.com/TimKleindick/general_manager/commit/315a0a872e61448c5ade8872bb3e343546c3c72e))
+
+- Resolve lazy users in graphql permissions
+  ([`2117567`](https://github.com/TimKleindick/general_manager/commit/2117567232d1a2420207abfcdbc89f425fa43056))
+
+### Continuous Integration
+
+- Make Codecov upload non-blocking
+  ([`f2d22e0`](https://github.com/TimKleindick/general_manager/commit/f2d22e0d2642ddff9163c603a22d92abcb25ffcc))
+
+- Pin Codecov action commit
+  ([`41fd3fb`](https://github.com/TimKleindick/general_manager/commit/41fd3fb924389a33560653c05bdc0d58e709b70b))
+
+- Update Codecov action to v6
+  ([`fe692c0`](https://github.com/TimKleindick/general_manager/commit/fe692c028379f7a1dbef2ed6d28a323355e52930))
+
+
 ## v0.41.6 (2026-06-02)
 
 ### Bug Fixes
