@@ -100,7 +100,15 @@ class CapabilityEvaluationContext:
     """Operation-scoped cache for GraphQL permission capability evaluation."""
 
     def __init__(self, *, user: Any | None = None) -> None:
-        self.user = user if user is not None else _AnonymousUser()
+        from django.contrib.auth.models import AnonymousUser
+
+        from general_manager.permission.base_permission import BasePermission
+
+        self.user = (
+            BasePermission.get_user_with_id(user)
+            if user is not None
+            else AnonymousUser()
+        )
         self._cache: dict[tuple[str, str, str, str], bool] = {}
 
     def evaluate(self, declaration: GraphQLPermissionCapability, instance: Any) -> bool:
@@ -210,7 +218,7 @@ def get_graphql_capabilities(
 def get_capability_context(info: Any) -> CapabilityEvaluationContext:
     """Return the operation-scoped capability context for a GraphQL resolver."""
     request_context = getattr(info, "context", None)
-    user = getattr(request_context, "user", _AnonymousUser())
+    user = getattr(request_context, "user", None)
     operation_key = id(getattr(info, "operation", None))
     storage_name = "_general_manager_graphql_capability_contexts"
     contexts = getattr(request_context, storage_name, None)
@@ -272,10 +280,3 @@ def _instance_identity(instance: Any) -> str:
 
 def _user_identity(user: Any) -> str:
     return repr(getattr(user, "pk", getattr(user, "id", None)))
-
-
-class _AnonymousUser:
-    is_authenticated = False
-    is_superuser = False
-    pk = None
-    id = None
