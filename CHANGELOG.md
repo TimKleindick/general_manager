@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.41.10 (2026-06-08)
+
+### Bug Fixes
+
+- Use GraphQL ID for identifier filters
+  ([`5f6c545`](https://github.com/TimKleindick/general_manager/commit/5f6c545d31a113e92273266897e2b34b79896b6f))
+
+### Documentation
+
+- Clarify GraphQL identifier filters
+  ([`07996e0`](https://github.com/TimKleindick/general_manager/commit/07996e0b0cf804fe5af6471eb5913d6559c52930))
+
+- Design consistent GraphQL ID filters
+  ([`346ebfd`](https://github.com/TimKleindick/general_manager/commit/346ebfd4d044ce80b04ba048c49621d006508e91))
+
+- Plan GraphQL ID filter fix
+  ([`0a4685e`](https://github.com/TimKleindick/general_manager/commit/0a4685e19b22272d796bd9a914c6a35136ec2343))
+
+### Testing
+
+- Reproduce inconsistent GraphQL ID filters
+  ([`80af81b`](https://github.com/TimKleindick/general_manager/commit/80af81b10917eed0c5c2294daf634494377b2682))
+
+
 ## v0.41.9 (2026-06-08)
 
 ### Bug Fixes
