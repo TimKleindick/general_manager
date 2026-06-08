@@ -567,6 +567,10 @@ def _iter_foreign_key_fields(
         An iterable of Django `Field` objects for each many-to-one or one-to-one relation on the model, excluding `GenericForeignKey` fields.
     """
     for field in model._meta.get_fields():
+        if getattr(field, "auto_created", False) and not getattr(
+            field, "concrete", False
+        ):
+            continue
         if not field.is_relation:
             continue
         if isinstance(field, GenericForeignKey):

@@ -298,6 +298,31 @@ def initialize_general_manager_classes(
             if isinstance(field_type, type) and issubclass(field_type, _GM):
                 yield attribute_name, field_type
 
+    def _has_reverse_relation_attribute(
+        manager_class: Type[_GM],
+        related_manager_class: Type[_GM],
+    ) -> bool:
+        get_attribute_types = getattr(
+            manager_class.Interface, "get_attribute_types", None
+        )
+        if not callable(get_attribute_types):
+            return False
+        try:
+            attribute_types = get_attribute_types()
+        except NotImplementedError:
+            return False
+        return any(
+            metadata.get("is_derived", False)
+            and metadata.get("relation_kind") in {"collection", "direct"}
+            and metadata.get("type") is related_manager_class
+            for metadata in attribute_types.values()
+        )
+
+    def _to_snake_case(name: str) -> str:
+        snake = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+        snake = re.sub("([a-z0-9])([A-Z])", r"\1_\2", snake)
+        return snake.lower()
+
     logger.debug(
         "creating manager attributes",
         context={"pending_attributes": len(pending_attribute_initialization)},
@@ -323,13 +348,18 @@ def initialize_general_manager_classes(
         for attribute_name, connected_manager in _iter_manager_relation_fields(
             general_manager_class
         ):
+            if _has_reverse_relation_attribute(
+                connected_manager,
+                general_manager_class,
+            ):
+                continue
             resolver = _build_connection_resolver(attribute_name, general_manager_class)
             relation_property = GraphQLProperty(resolver)
             marked_relation_property: Any = relation_property
             marked_relation_property._general_manager_generated_relation = True
             setattr(
                 connected_manager,
-                f"{general_manager_class.__name__.lower()}_list",
+                f"{_to_snake_case(general_manager_class.__name__)}_list",
                 relation_property,
             )
     for general_manager_class in all_classes:
