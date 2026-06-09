@@ -136,8 +136,25 @@ still enforce their own create, update, or delete permissions.
 
 ## Error handling
 
-Validation and permission errors handled by GeneralManager are converted to
-GraphQL errors by the generated mutation. Other exceptions also surface through
-GraphQL's normal error handling. Keep business logic in manager methods where
-possible so validation, permissions, history, and other framework behavior
-remain consistent.
+The generated mutation converts errors handled by GeneralManager into GraphQL
+errors. Both Django's `ValidationError`, commonly raised by manager methods, and
+a standard `ValueError` raised directly by a resolver become `BAD_USER_INPUT`
+errors:
+
+```python
+from django.core.exceptions import ValidationError
+
+
+@graph_ql_mutation
+def update_project(info, project_id: int, mode: str) -> Project:
+    if mode == "resolver-error":
+        raise ValueError("Unknown update mode.")
+    if mode == "validation-error":
+        raise ValidationError("The project cannot be updated.")
+    return Project(id=project_id)
+```
+
+Exceptions outside GeneralManager's handled error set surface through GraphQL's
+normal error handling. Keep business logic in manager methods where possible so
+validation, permissions, history, and other framework behavior remain
+consistent.
