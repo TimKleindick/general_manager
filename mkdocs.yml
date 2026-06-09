@@ -154,6 +154,14 @@ nav:
       - api/measurement.md
       - api/interface.md
       - api/permission.md
+      - api/graphql.md
+      - api/search.md
+      - api/cache.md
+      - api/factory.md
+      - api/workflow.md
+      - api/metrics.md
+      - api/seeding.md
+      - api/utils.md
   - Architecture Decisions:
       - adr/index.md
       - adr/0001-interface-skeletons.md
