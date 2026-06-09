@@ -7,6 +7,7 @@ from django.contrib.auth.models import AnonymousUser, User
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.input import Input
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.permission.mutation_permission import MutationPermission
 from graphql import GraphQLError
@@ -67,6 +68,50 @@ class DummyGM(GeneralManager):
         pass
 
 
+class SingleInputInterface(DummyInterface):
+    input_fields: ClassVar[dict] = {"id": Input(int)}
+
+    def __init__(self, *args, **kwargs):
+        InterfaceBase.__init__(self, *args, **kwargs)
+
+
+class SingleInputGM(GeneralManager):
+    class Interface(SingleInputInterface):
+        pass
+
+
+# Required because the dummy handle_interface hook does not attach Interface.
+SingleInputGM.Interface = SingleInputInterface
+
+
+class MultiInputInterface(DummyInterface):
+    input_fields: ClassVar[dict] = {
+        "tenant": Input(str),
+        "code": Input(int),
+    }
+
+    def __init__(self, *args, **kwargs):
+        InterfaceBase.__init__(self, *args, **kwargs)
+
+
+class MultiInputGM(GeneralManager):
+    class Interface(MultiInputInterface):
+        pass
+
+
+# Required because the dummy handle_interface hook does not attach Interface.
+MultiInputGM.Interface = MultiInputInterface
+
+
+class RegionInputInterface(DummyInterface):
+    input_fields: ClassVar[dict] = {
+        "region": Input(str),
+    }
+
+    def __init__(self, *args, **kwargs):
+        InterfaceBase.__init__(self, *args, **kwargs)
+
+
 class MutationDecoratorTests(TestCase):
     def tearDown(self) -> None:
         GraphQL._mutations.clear()
@@ -111,7 +156,7 @@ class MutationDecoratorTests(TestCase):
 
     def test_general_manager_argument_uses_id(self):
         @graph_ql_mutation()
-        def gm(info, item: DummyGM) -> str:
+        def gm(info, item: SingleInputGM) -> str:
             _ = info
             _ = item
             return "ok"
@@ -119,6 +164,110 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["gm"]
         arg = mutation._meta.arguments["item"]
         self.assertIsInstance(arg, graphene.ID)
+
+    def test_general_manager_argument_passes_manager_to_permission_and_resolver(self):
+        class CapturePermission(MutationPermission):
+            received_item = None
+
+            @classmethod
+            def check(cls, data: dict, user: object) -> None:
+                cls.received_item = data["item"]
+
+        @graph_ql_mutation(permission=CapturePermission)
+        def gm(info, item: SingleInputGM) -> str:
+            _ = info
+            return str(item.identification["id"])
+
+        mutation = GraphQL._mutations["gm"]
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        result = mutation.mutate(None, info, item="42")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.str, "42")
+        self.assertIsInstance(CapturePermission.received_item, SingleInputGM)
+        self.assertEqual(CapturePermission.received_item.identification, {"id": 42})
+
+    def test_multi_input_general_manager_argument_uses_input_object(self):
+        seen: dict[str, MultiInputGM] = {}
+
+        @graph_ql_mutation()
+        def gm(info, item: MultiInputGM) -> str:
+            _ = info
+            seen["item"] = item
+            return f"{item.identification['tenant']}:{item.identification['code']}"
+
+        mutation = GraphQL._mutations["gm"]
+        arg = mutation._meta.arguments["item"]
+        arg_type = arg.type.of_type if hasattr(arg.type, "of_type") else arg.type
+        self.assertTrue(issubclass(arg_type, graphene.InputObjectType))
+        self.assertIn("tenant", arg_type._meta.fields)
+        self.assertIn("code", arg_type._meta.fields)
+
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+        result = mutation.mutate(
+            None,
+            info,
+            item={"tenant": "customer-a", "code": "7"},
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.str, "customer-a:7")
+        self.assertEqual(seen["item"].identification["code"], 7)
+        self.assertIsInstance(seen["item"].identification["code"], int)
+
+    def test_manager_input_type_cache_uses_unique_manager_identifier(self):
+        FirstSharedName = type(
+            "SharedName",
+            (GeneralManager,),
+            {
+                "__module__": "tests.unit.test_mutation.first",
+                "Interface": MultiInputInterface,
+            },
+        )
+        FirstSharedName.Interface = MultiInputInterface
+        SecondSharedName = type(
+            "SharedName",
+            (GeneralManager,),
+            {
+                "__module__": "tests.unit.test_mutation.second",
+                "Interface": RegionInputInterface,
+            },
+        )
+        SecondSharedName.Interface = RegionInputInterface
+
+        @graph_ql_mutation()
+        def first(info, item: FirstSharedName) -> str:
+            _ = info, item
+            return "first"
+
+        @graph_ql_mutation()
+        def second(info, item: SecondSharedName) -> str:
+            _ = info, item
+            return "second"
+
+        first_type = GraphQL._mutations["first"]._meta.arguments["item"].type.of_type
+        second_type = GraphQL._mutations["second"]._meta.arguments["item"].type.of_type
+
+        self.assertIsNot(first_type, second_type)
+        self.assertIn("tenant", first_type._meta.fields)
+        self.assertIn("code", first_type._meta.fields)
+        self.assertIn("region", second_type._meta.fields)
+        self.assertNotIn("tenant", second_type._meta.fields)
+
+    def test_manager_argument_normalization_errors_are_graphql_errors(self):
+        @graph_ql_mutation()
+        def gm(info, item: SingleInputGM) -> str:
+            _ = info
+            return str(item.identification["id"])
+
+        mutation = GraphQL._mutations["gm"]
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        with self.assertRaises(GraphQLError) as ctx:
+            mutation.mutate(None, info, item="not-an-int")
+
+        self.assertEqual(ctx.exception.extensions["code"], "BAD_USER_INPUT")
 
     def test_list_argument(self):
         @graph_ql_mutation()
@@ -167,7 +316,7 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["add"]
 
         InfoNoAuth = type("Info", (), {"context": type("Ctx", (), {"user": None})()})
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(GraphQLError):
             mutation.mutate(None, InfoNoAuth, a=1, b=2)
 
     def test_mutation_with_manager_return(self):
@@ -238,7 +387,51 @@ class MutationDecoratorTests(TestCase):
         mutation = GraphQL._mutations["bulk"]
         arg = mutation._meta.arguments["items"]
         self.assertIsInstance(arg, graphene.List)
-        self.assertEqual(arg.of_type, graphene.String)  # IDs are strings in GraphQL
+        self.assertEqual(arg.of_type, graphene.ID)
+
+    def test_general_manager_list_argument_normalizes_manager_items(self):
+        seen: dict[str, list] = {}
+
+        @graph_ql_mutation()
+        def bulk_single(info, items: List[SingleInputGM]) -> int:
+            _ = info
+            seen["single"] = items
+            return len(items)
+
+        @graph_ql_mutation()
+        def bulk_multi(info, items: List[MultiInputGM]) -> int:
+            _ = info
+            seen["multi"] = items
+            return len(items)
+
+        info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
+
+        single_result = GraphQL._mutations["bulkSingle"].mutate(
+            None,
+            info,
+            items=["1", "2", "3"],
+        )
+        multi_result = GraphQL._mutations["bulkMulti"].mutate(
+            None,
+            info,
+            items=[
+                {"tenant": "a", "code": "1"},
+                {"tenant": "b", "code": "2"},
+            ],
+        )
+
+        self.assertEqual(single_result.int, 3)
+        self.assertTrue(all(isinstance(item, SingleInputGM) for item in seen["single"]))
+        self.assertEqual(
+            [item.identification["id"] for item in seen["single"]],
+            [1, 2, 3],
+        )
+        self.assertTrue(all(isinstance(item, MultiInputGM) for item in seen["multi"]))
+        self.assertEqual(
+            [item.identification for item in seen["multi"]],
+            [{"tenant": "a", "code": 1}, {"tenant": "b", "code": 2}],
+        )
+        self.assertEqual(multi_result.int, 2)
 
     def test_permission_allows_authenticated(self):
         class addPermission(MutationPermission):
@@ -456,7 +649,7 @@ class MutationDecoratorTests(TestCase):
         Info = type("Info", (), {"context": type("Ctx", (), {"user": object()})()})
 
         # Should fail with negative value
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(GraphQLError):
             mutation.mutate(None, Info, value=-5)
 
         # Should succeed with positive value

@@ -28,6 +28,7 @@ from types import UnionType
 
 
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
+_manager_input_type_registry: dict[str, type[graphene.InputObjectType]] = {}
 
 
 class MissingParameterTypeHintError(TypeError):
@@ -91,6 +92,125 @@ class DuplicateMutationOutputNameError(ValueError):
         )
 
 
+def _is_general_manager_type(annotation: object) -> bool:
+    """Return True for class annotations that subclass GeneralManager."""
+    return inspect.isclass(annotation) and issubclass(annotation, GeneralManager)
+
+
+def _manager_input_fields(
+    manager_class: type[GeneralManager],
+) -> dict[str, Any]:
+    """Extract Interface.input_fields from a manager class."""
+    interface = getattr(manager_class, "Interface", None)
+    input_fields = getattr(interface, "input_fields", {})
+    return dict(input_fields) if isinstance(input_fields, dict) else {}
+
+
+def _uses_single_id_input(manager_class: type[GeneralManager]) -> bool:
+    """Return True when the manager expects one ID instead of nested input."""
+    input_fields = _manager_input_fields(manager_class)
+    return not input_fields or tuple(input_fields) == ("id",)
+
+
+def _manager_input_type_identifier(manager_class: type[GeneralManager]) -> str:
+    """Build a stable cache key from the manager's module and qualname."""
+    return f"{manager_class.__module__}.{manager_class.__qualname__}"
+
+
+def _manager_input_type_name(manager_class: type[GeneralManager]) -> str:
+    """Build a GraphQL-safe input type name from a unique manager identifier."""
+    identifier = _manager_input_type_identifier(manager_class)
+    safe_identifier = "".join(
+        char if char.isalnum() else "_" for char in identifier
+    ).strip("_")
+    if safe_identifier[:1].isdigit():
+        safe_identifier = f"_{safe_identifier}"
+    return f"{safe_identifier}MutationInput"
+
+
+def _get_or_create_manager_input_type(
+    manager_class: type[GeneralManager],
+) -> type[graphene.InputObjectType]:
+    """Build and cache a graphene InputObjectType for nested manager inputs."""
+    cache_key = _manager_input_type_identifier(manager_class)
+    cached = _manager_input_type_registry.get(cache_key)
+    if cached is not None:
+        return cached
+
+    type_name = _manager_input_type_name(manager_class)
+    fields: dict[str, Any] = {}
+    for input_name, input_field in _manager_input_fields(manager_class).items():
+        field_type = input_field.type
+        required = input_field.required
+        if _is_general_manager_type(field_type):
+            if _uses_single_id_input(field_type):
+                fields[input_name] = graphene.ID(required=required)
+            else:
+                fields[input_name] = graphene.InputField(
+                    _get_or_create_manager_input_type(field_type),
+                    required=required,
+                )
+            continue
+
+        fields[input_name] = GraphQL._map_field_to_graphene_base_type(field_type)(
+            required=required,
+        )
+
+    input_type = type(type_name, (graphene.InputObjectType,), fields)
+    _manager_input_type_registry[cache_key] = input_type
+    return input_type
+
+
+def _build_manager_argument_field(
+    manager_class: type[GeneralManager],
+    **kwargs: Any,
+) -> Any:
+    """Return graphene.ID or a nested manager input argument."""
+    if _uses_single_id_input(manager_class):
+        return graphene.ID(**kwargs)
+    return graphene.Argument(_get_or_create_manager_input_type(manager_class), **kwargs)
+
+
+def _normalize_manager_argument(
+    manager_class: type[GeneralManager],
+    value: Any,
+) -> GeneralManager | None:
+    """Normalize None, instances, dict input, or ID input into a manager."""
+    if value is None or isinstance(value, manager_class):
+        return value
+    if isinstance(value, dict):
+        return manager_class(**value)
+    return manager_class(value)
+
+
+def _normalize_mutation_arguments(
+    annotations: dict[str, Any],
+    kwargs: dict[str, object],
+) -> dict[str, Any]:
+    """Normalize manager-typed arguments and lists using resolver annotations."""
+    normalized = dict(kwargs)
+    for name, annotation in annotations.items():
+        if name not in normalized:
+            continue
+
+        origin = get_origin(annotation)
+        if origin is list or origin is List:
+            inner = get_args(annotation)[0]
+            if _is_general_manager_type(inner) and normalized[name] is not None:
+                normalized[name] = [
+                    _normalize_manager_argument(inner, item)
+                    for item in cast(list[Any], normalized[name])
+                ]
+            continue
+
+        if _is_general_manager_type(annotation):
+            normalized[name] = _normalize_manager_argument(
+                annotation,
+                normalized[name],
+            )
+    return normalized
+
+
 def graph_ql_mutation(
     _func: FuncT | type[MutationPermission] | None = None,
     permission: Optional[Type[MutationPermission]] = None,
@@ -133,6 +253,7 @@ def graph_ql_mutation(
 
         # Build Arguments inner class dynamically
         arg_fields: dict[str, Any] = {}
+        argument_annotations: dict[str, Any] = {}
         for name, param in sig.parameters.items():
             if name == "info":
                 continue
@@ -158,17 +279,29 @@ def graph_ql_mutation(
                 ann = next(a for a in get_args(ann) if a is not type(None))
                 kwargs["required"] = False
 
+            argument_annotations[name] = ann
+
             # Resolve list types to List scalar
             field: Any
             if get_origin(ann) is list or get_origin(ann) is List:
                 inner = get_args(ann)[0]
+                if _is_general_manager_type(inner):
+                    if _uses_single_id_input(inner):
+                        field = graphene.List(graphene.ID, **kwargs)
+                    else:
+                        field = graphene.List(
+                            _get_or_create_manager_input_type(inner),
+                            **kwargs,
+                        )
+                    arg_fields[name] = field
+                    continue
                 field = graphene.List(
                     GraphQL._map_field_to_graphene_base_type(inner),
                     **kwargs,
                 )
             else:
-                if inspect.isclass(ann) and issubclass(ann, GeneralManager):
-                    field = graphene.ID(**kwargs)
+                if _is_general_manager_type(ann):
+                    field = _build_manager_argument_field(ann, **kwargs)
                 else:
                     field = GraphQL._map_field_to_graphene_base_type(ann)(**kwargs)
 
@@ -223,10 +356,14 @@ def graph_ql_mutation(
             Returns:
                 mutation_class: Instance of the mutation with output fields populated; `success` is `True` on successful execution and `False` if a handled manager error occurred (after being forwarded to GraphQL._handle_graph_ql_error).
             """
-            if permission:
-                permission.check(kwargs, info.context.user)
             try:
-                result = fn(info, **kwargs)
+                normalized_kwargs = _normalize_mutation_arguments(
+                    argument_annotations,
+                    kwargs,
+                )
+                if permission:
+                    permission.check(normalized_kwargs, info.context.user)
+                result = fn(info, **normalized_kwargs)
                 data: dict[str, Any] = {}
                 if isinstance(result, tuple):
                     # unpack according to outputs ordering after success

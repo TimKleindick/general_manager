@@ -82,7 +82,10 @@ class Invoice(GeneralManager):
         ...
 ```
 
-Because the GraphQL decorator emits `ID` inputs for manager arguments, the resolver and the accompanying mutation permission receive the identifier and must instantiate the manager explicitly:
+Because the GraphQL decorator emits `ID` inputs for conventional manager
+arguments, clients pass the invoice identifier. The decorator casts that input
+through the manager interface before calling the mutation permission or
+resolver, so both receive an `Invoice` instance:
 
 ```python
 from typing import Any
@@ -94,8 +97,7 @@ from general_manager.permission.mutation_permission import MutationPermission
 class RejectInvoicePermission(MutationPermission):
     @classmethod
     def check(cls, data: dict[str, Any], request_user: Any) -> None:
-        invoice_id = int(data["invoice"])
-        invoice = Invoice(id=invoice_id)
+        invoice = data["invoice"]
         if invoice.status != "submitted":
             cls.raise_error("Only submitted invoices can be rejected.")
         if not request_user.groups.filter(name="finance_lead").exists():
@@ -104,18 +106,16 @@ class RejectInvoicePermission(MutationPermission):
 
 @graph_ql_mutation(permission=RejectInvoicePermission)
 def reject_invoice(info, invoice: Invoice, reason: str) -> Invoice:
-    invoice_id = int(invoice)
-    manager = Invoice(id=invoice_id)
-    manager.update(
+    invoice.update(
         creator_id=getattr(info.context.user, "id", None),
         status="rejected",
         rejection_reason=reason,
     )
-    return manager
+    return invoice
 ```
 
 - `graph_ql_mutation` inspects the resolver signature and return annotation to build the GraphQL payload; no separate `base_type` configuration is required.
-- `MutationPermission.check` is a classmethod that receives the mutation data and `request_user`, so convert IDs into managers before enforcing domain rules.
+- `MutationPermission.check` is a classmethod that receives normalized mutation data and `request_user`, so manager-typed arguments are available as manager instances before enforcing domain rules.
 - Use `raise_error()` to produce a structured GraphQL error with `success=False`.
 - Call `GeneralManager.update` instead of writing to model fields directly; it re-runs permission checks and records history comments when provided.
 
