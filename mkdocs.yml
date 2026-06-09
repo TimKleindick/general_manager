@@ -118,6 +118,7 @@ nav:
           - concepts/factories/index.md
           - concepts/factories/performance_caching.md
           - concepts/factories/validation_clean.md
+          - concepts/seeding.md
   - Tutorials:
       - howto/index.md
       - howto/create_project.md
