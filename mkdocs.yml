@@ -83,6 +83,7 @@ nav:
           - concepts/search.md
           - concepts/rules_validation.md
           - concepts/workflow.md
+          - concepts/utils.md
       - Measurement & Currency:
           - concepts/measurement/index.md
           - concepts/measurement/units_currency.md
