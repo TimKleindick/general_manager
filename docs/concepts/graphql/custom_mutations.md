@@ -41,21 +41,39 @@ The decorator builds the GraphQL arguments and payload from type annotations:
 
 Basic Python types such as `str`, `int`, `float`, and `bool` map to their
 corresponding GraphQL scalars. A parameter annotated with a `GeneralManager`
-subclass is exposed as a GraphQL `ID`.
+subclass is exposed as a GraphQL `ID` when the manager uses the conventional
+single `id` input.
 
-!!! important
-    A manager-typed argument is still passed to the resolver as its identifier;
-    the decorator does not instantiate the manager. Convert the value and load
-    the manager explicitly inside the resolver.
+The resolver receives manager-typed arguments as manager instances. The
+decorator casts GraphQL input through the manager's `Interface.input_fields`
+before calling mutation permissions or the resolver.
 
 ```python
 @graph_ql_mutation
 def archive_project(info, project: Project) -> Project:
-    manager = Project(id=int(project))
-    return manager.update(
+    return project.update(
         status="archived",
         creator_id=getattr(info.context.user, "id", None),
     )
+```
+
+Managers with multiple identification inputs are exposed as input objects:
+
+```python
+@graph_ql_mutation
+def preview_price(info, quote: PriceQuote) -> PriceQuote:
+    return quote
+```
+
+```graphql
+mutation {
+  previewPrice(quote: { market: "de", sku: "A-100" }) {
+    success
+    priceQuote {
+      sku
+    }
+  }
+}
 ```
 
 ## Return payloads
@@ -121,8 +139,9 @@ def publish_project(info, project_id: int) -> Project:
     ...
 ```
 
-The permission class receives the raw mutation arguments and
-`info.context.user` before the resolver runs. The positional form is equivalent:
+The permission class receives the normalized mutation arguments and
+`info.context.user` before the resolver runs. Manager-typed arguments are
+manager instances there too. The positional form is equivalent:
 
 ```python
 @graph_ql_mutation(PublishProjectPermission)
