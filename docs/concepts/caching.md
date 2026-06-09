@@ -96,6 +96,15 @@ def project_forecast(project_id: int) -> dict[str, float]:
 ```
 When `timeout` is set, the cache entry expires after the given duration no matter if the tracked dependencies change.
 
+## Manual dependency-index helpers
+
+Most application code should rely on CRUD signals and the `cached` decorator. For integration code and tests, the cache module also exposes lower-level dependency-index helpers:
+
+- `record_dependencies(cache_key, dependencies)` stores the dependency set for an already-computed cache entry.
+- `invalidate_cache_key(cache_key)` invalidates one cache key without recalculating dependency matches.
+- `remove_cache_key_from_index(cache_key)` removes dependency-index metadata for a key that should no longer participate in invalidation.
+
+These helpers are intentionally lower level than `cached`. Use them when building a custom cache backend or verifying invalidation behavior, not as the default application caching API.
 
 ## Recommended practices
 

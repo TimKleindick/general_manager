@@ -205,6 +205,18 @@ without running `search_index --reindex` manually.
 
 ## Backends
 
+### Backend contract and result models
+
+`SearchBackend` is the extension point for adapters. Backends receive index names, queries, filters, sorting, and pagination options, then return a `SearchResult`.
+
+Search result models have stable responsibilities:
+
+- `SearchDocument` is the indexed payload, including the type label, identification mapping, and data fields.
+- `SearchHit` is one matched document plus score and raw backend metadata.
+- `SearchResult` is the paginated response containing hits, totals, timing, and raw backend payloads.
+
+The backend registry functions `configure_search_backend`, `configure_search_backend_from_settings`, and `get_search_backend` centralize adapter selection so GraphQL, indexing tasks, and direct Python usage share the same backend instance.
+
 ### DevSearch backend (service-free)
 
 For local development, the built-in DevSearch backend stores documents in
