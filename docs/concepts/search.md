@@ -211,9 +211,9 @@ without running `search_index --reindex` manually.
 
 Search result models have stable responsibilities:
 
-- `SearchDocument` is the indexed payload, including the type label, identification mapping, and data fields.
-- `SearchHit` is one matched document reference with its type label, identification mapping, optional score, index name, and returned data fields.
-- `SearchResult` is the paginated response containing hits, totals, timing, and raw backend payloads.
+- `SearchDocument` represents the indexed payload, including the type label, identification mapping, and data fields.
+- `SearchHit` denotes one matched document reference with its type label, identification mapping, optional score, index name, and returned data fields.
+- `SearchResult` contains the paginated response with hits, totals, timing, and raw backend payloads.
 
 The backend registry functions `configure_search_backend`, `configure_search_backend_from_settings`, and `get_search_backend` centralize adapter selection and lookup for GraphQL, indexing tasks, and direct Python usage, with same-process backend reuse where applicable.
 

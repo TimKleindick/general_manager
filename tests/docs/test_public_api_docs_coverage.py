@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from importlib import import_module
 from pathlib import Path
 
@@ -25,6 +26,15 @@ DOC_PATHS = [
 
 def _docs_text() -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in DOC_PATHS)
+
+
+def _mentions_export(docs_text: str, export_name: str) -> bool:
+    return (
+        re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(export_name)}(?![A-Za-z0-9_])", docs_text
+        )
+        is not None
+    )
 
 
 def _public_exports() -> dict[str, list[str]]:
@@ -56,7 +66,7 @@ def test_every_public_export_is_mentioned_in_documentation() -> None:
         missing_names = [
             export_name
             for export_name in module_exports
-            if export_name not in docs_text
+            if not _mentions_export(docs_text, export_name)
         ]
         if missing_names:
             missing[module_name] = missing_names

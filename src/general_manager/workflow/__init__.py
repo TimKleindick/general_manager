@@ -23,6 +23,7 @@ from general_manager.workflow.engine import (
 from general_manager.workflow.event_registry import (
     DatabaseEventRegistry,
     EventRegistry,
+    InMemoryEventRegistry,
     WorkflowEvent,
     WorkflowEventHandler,
     EventPredicate,
@@ -54,6 +55,7 @@ __all__ = [
     "DeadLetterHandler",
     "EventPredicate",
     "EventRegistry",
+    "InMemoryEventRegistry",
     "RetryPredicate",
     "WorkflowCancelledError",
     "WorkflowDefinition",
