@@ -36,9 +36,9 @@ Production mode uses the workflow outbox to claim, route, retry, and dead-letter
 
 ## Backends
 
-- `LocalWorkflowEngine` is the zero-setup development backend.
-- `CeleryWorkflowEngine` is the durable production-oriented backend.
-- `N8nWorkflowEngine` is an adapter stub for future remote orchestration support.
+- For zero-setup development, use `LocalWorkflowEngine`.
+- Durable production-oriented workflows use `CeleryWorkflowEngine`.
+- Future remote orchestration support is represented by the `N8nWorkflowEngine` adapter stub.
 
 Choose the backend in `GENERAL_MANAGER["WORKFLOW_ENGINE"]`, or rely on `WORKFLOW_MODE` defaults when they fit the environment.
 
