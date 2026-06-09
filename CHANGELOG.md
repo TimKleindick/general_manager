@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.41.11 (2026-06-09)
+
+### Bug Fixes
+
+- Normalize custom mutation manager arguments
+  ([`b7c393c`](https://github.com/TimKleindick/general_manager/commit/b7c393cb43080fe4ced1e77189d19bae48f3521b))
+
+### Documentation
+
+- Clarify custom mutation errors
+  ([`66b6030`](https://github.com/TimKleindick/general_manager/commit/66b6030f190182b65a6ce7cf00d3658dd882cce3))
+
+- Clarify graphql capability descriptions
+  ([`35a62aa`](https://github.com/TimKleindick/general_manager/commit/35a62aa871a0326ce69729c64822dfc128616183))
+
+- Document custom GraphQL mutations
+  ([`3697c4e`](https://github.com/TimKleindick/general_manager/commit/3697c4e4b122d1cd970266205ec12b69cd679d2e))
+
+
 ## v0.41.10 (2026-06-08)
 
 ### Bug Fixes
