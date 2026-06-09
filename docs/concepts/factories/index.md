@@ -9,7 +9,7 @@ Use factories to populate development databases, seed GraphQL demos, or reproduc
 
 ## Lazy factory helpers
 
-The `general_manager.factory` module exports lazy helper functions for common generated values. They are intended for `AutoFactory` definitions and custom factory declarations where a field value should be generated at object creation time rather than module import time.
+The `general_manager.factory` module exports helper functions that return factory declarations and lazy values for common generated defaults. They are intended for `AutoFactory` definitions and custom factory declarations; when a generated component must vary per object, make that variation explicit in the factory attribute instead of relying on unset helper arguments.
 
 Use the helpers by value category:
 
