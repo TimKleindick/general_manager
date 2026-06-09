@@ -30,6 +30,17 @@ All collection-returning APIs produce a `Bucket`. Buckets behave like Python ite
 - Slice (`bucket[0:10]`) or iterate lazily.
 - Merge buckets with the union operator (`bucket_a | bucket_b`).
 
+### Bucket variants
+
+`Bucket` is the common collection contract. Concrete bucket types preserve the source and evaluation semantics of the managers they contain:
+
+- `DatabaseBucket` wraps ORM-backed manager queries and supports database-side filtering, ordering, slicing, grouping, and dependency tracking.
+- `RequestBucket` represents request-backed manager collections. It compiles declared request filters into a remote request plan and keeps remote pagination and local fallback behavior explicit.
+- `CalculationBucket` evaluates calculation interfaces across compatible input domains and tracks dependencies from the buckets or managers feeding the calculation.
+- `GroupBucket` holds grouped bucket results from `group_by(...)`; each group key points to the bucket slice that belongs to that group.
+
+Most application code should depend on the shared bucket behavior returned by manager APIs. Reach for a concrete bucket type only when documenting source-specific behavior, testing evaluation semantics, or extending an interface.
+
 ### Grouped data
 
 Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped managers expose the grouping key and aggregate the remaining attributes according to their type (e.g., summing numbers, merging lists). See the example in [Cookbook: Volume curve](../examples/project_volume_curve.md).
