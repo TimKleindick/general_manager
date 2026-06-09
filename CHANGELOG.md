@@ -2,6 +2,63 @@
 
 <!-- version list -->
 
+## v0.41.12 (2026-06-09)
+
+### Bug Fixes
+
+- Address documentation review feedback
+  ([`ed8cc4e`](https://github.com/TimKleindick/general_manager/commit/ed8cc4e451d79106953ad11b5d554561022fa941))
+
+### Documentation
+
+- Add seeding concept coverage
+  ([`16658a9`](https://github.com/TimKleindick/general_manager/commit/16658a9d099414c131a4c5a179b6ffb4361602d7))
+
+- Add workflow concept coverage
+  ([`d5e4787`](https://github.com/TimKleindick/general_manager/commit/d5e4787776689ca9e2830f5e187d7ae0ce8a88e5))
+
+- Clarify cache and search public concepts
+  ([`910d98a`](https://github.com/TimKleindick/general_manager/commit/910d98afb663e3878fcab0b7e77f7492d3455c70))
+
+- Clarify factory helper lifecycle
+  ([`499f0ac`](https://github.com/TimKleindick/general_manager/commit/499f0acd81fbb0e5d86882ed181fb37d56e408fe))
+
+- Clarify search backend model wording
+  ([`2fc667d`](https://github.com/TimKleindick/general_manager/commit/2fc667d6ce6243848b36d0c0fa0c948c428d2a04))
+
+- Clarify utility filter helpers
+  ([`028e2e1`](https://github.com/TimKleindick/general_manager/commit/028e2e168ab95f2000c19798a613c433b57fb2f0))
+
+- Cover core interface and bucket variants
+  ([`6972abd`](https://github.com/TimKleindick/general_manager/commit/6972abdf359b140ea9b0abbc2d1ec9215780fcdf))
+
+- Cover factory helper families
+  ([`95abfe7`](https://github.com/TimKleindick/general_manager/commit/95abfe7affb80ba8ad8344a9e5010ee138a16c17))
+
+- Document public utility concepts
+  ([`4357b2e`](https://github.com/TimKleindick/general_manager/commit/4357b2ee412f94b50a09c9ff1cf4e0309757f162))
+
+- Expand public api reference
+  ([`a293a2f`](https://github.com/TimKleindick/general_manager/commit/a293a2f50251cc1870d14618bb986a34c21ab5d2))
+
+- Refine request interface api reference
+  ([`27e8411`](https://github.com/TimKleindick/general_manager/commit/27e8411c9b1c0ccdd78384477e5820df8fcb714f))
+
+- Refine workflow api reference
+  ([`2042acc`](https://github.com/TimKleindick/general_manager/commit/2042acc25fcc2f13aa3b0f53071d791d6416c04f))
+
+### Testing
+
+- Cover additional public docs exports
+  ([`085b66a`](https://github.com/TimKleindick/general_manager/commit/085b66a6ce0c1e84f05265a4bfc97edb6f7be2fb))
+
+- Enforce public api documentation mentions
+  ([`57d8165`](https://github.com/TimKleindick/general_manager/commit/57d8165801e9d1b290215e7be0e7146211f96b0d))
+
+- Exclude unpublished docs from coverage audit
+  ([`00255d6`](https://github.com/TimKleindick/general_manager/commit/00255d662474c3f97284a4c37cd25ffb433be2bd))
+
+
 ## v0.41.11 (2026-06-09)
 
 ### Bug Fixes
