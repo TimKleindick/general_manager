@@ -6,6 +6,7 @@ The concept guides explain the building blocks that power GeneralManager. They p
 - [Domain modelling](models_entities.md) explores how to shape managers, buckets, and grouping utilities.
 - [Caching](caching.md) and [rule validation](rules_validation.md) discuss cross-cutting features that keep data fresh and trustworthy.
 - [Workflow](workflow.md) explains event routing, workflow engines, outbox delivery, and operational state.
+- [Public utilities](utils.md) describes exported helper functions for naming, filtering, JSON encoding, cache keys, and path mapping.
 - [Measurement handling](measurement/index.md), [permissions](permission/index.md), [interfaces](interfaces/index.md), [GraphQL](graphql/index.md), and [factories & testing](factories/index.md) provide deep dives into their respective subsystems.
 - [Seeding](seeding.md) explains dependency-aware manager landscape generation for demos, tests, and local development.
 
