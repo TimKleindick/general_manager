@@ -452,7 +452,10 @@ class GraphQL:
 
         fields: dict[str, Any] = {}
         for declaration in declarations:
-            fields[declaration.name] = graphene.Boolean(required=True)
+            fields[declaration.name] = graphene.Boolean(
+                required=True,
+                description=declaration.description,
+            )
 
             def resolver(
                 parent: dict[str, GeneralManager],
@@ -544,7 +547,10 @@ class GraphQL:
 
         fields: dict[str, Any] = {}
         for declaration in declarations:
-            fields[declaration.name] = graphene.Boolean(required=True)
+            fields[declaration.name] = graphene.Boolean(
+                required=True,
+                description=declaration.description,
+            )
 
             def resolver(
                 parent: dict[str, Any],

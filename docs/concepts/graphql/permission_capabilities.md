@@ -79,6 +79,10 @@ Name capability fields in stable business language. Prefer `canRename`,
 `canArchiveProject`, or `canCreateDerivative` over UI-specific names such as
 `showRenameButton`.
 
+Capability declarations also carry GraphQL field descriptions. The helper
+functions provide default descriptions, and you can pass `description=` when a
+client needs more precise business language in schema introspection.
+
 ## Object capabilities
 
 Use `object_capability(...)` when the rule is domain-specific and cannot be
@@ -99,13 +103,18 @@ def can_lock_project(project, user):
 class Permission(AdditiveManagerPermission):
     __read__ = ["public"]
     graphql_capabilities = (
-        object_capability("canLock", can_lock_project),
+        object_capability(
+            "canLock",
+            can_lock_project,
+            description="Whether the current user can lock this draft project.",
+        ),
     )
 ```
 
 The evaluator receives `(instance, user)` and should return `True` or `False`.
 If it raises an exception, the GraphQL resolver logs the failure and returns
-`false` for the capability.
+`false` for the capability. The optional `description` text is exposed on the
+generated GraphQL field.
 
 ## Permission-backed capabilities
 
@@ -131,6 +140,9 @@ Project.Permission.graphql_capabilities = (
         "update",
         name="canUpdateProject",
         payload=lambda project, _user: {"name": project.name},
+        description=(
+            "Whether the current user can submit an update for this project."
+        ),
     ),
     permission_capability(
         Project,
@@ -146,9 +158,62 @@ Project.Permission.graphql_capabilities = (
 - `action="update"` calls `check_update_permission(payload, instance, user)`
 - `action="delete"` calls `check_delete_permission(instance, user)`
 
-Use `payload=` when create or update permission checks need the fields that
-would be submitted by the real mutation. The payload can be a mapping or a
-callable receiving `(instance, user)`.
+### Payloads
+
+`payload` means "the input data that should be handed to the permission check
+while answering this capability field." Capability evaluation does not execute a
+mutation, so GeneralManager cannot infer the future mutation input by itself.
+Use `payload=` when a permission rule depends on field values that would
+normally come from the GraphQL mutation arguments.
+
+For `permission_capability(...)`, the resolved payload is used like this:
+
+- `action="create"` passes the payload to
+  `check_create_permission(payload, target, user)`.
+- `action="update"` passes the payload to
+  `check_update_permission(payload, instance, user)`.
+- `action="delete"` ignores the payload because
+  `check_delete_permission(instance, user)` does not accept one.
+
+The payload can be a static mapping:
+
+```python
+permission_capability(
+    Project,
+    "create",
+    name="canCreateDraftProject",
+    payload={"status": "draft"},
+)
+```
+
+Or it can be a callable:
+
+```python
+permission_capability(
+    Project,
+    "update",
+    name="canRenameProject",
+    payload=lambda project, user: {
+        "name": project.name,
+        "requested_by": user.id,
+    },
+)
+```
+
+The callable receives `(instance, user)`:
+
+- `instance` is the object whose GraphQL `capabilities` field is being resolved.
+  In a `projectList { items { capabilities { canRenameProject } } }` query, it
+  is the current `Project` item. In a detail query, it is that single resolved
+  object. For create previews, it is still the object currently being rendered,
+  not a new unsaved object.
+- `user` is the request user after GeneralManager's standard permission user
+  resolution. It is the same user object that is passed to the permission check.
+
+Return a mapping whose keys match the field or argument names your permission
+class expects. The mapping is copied to a plain `dict` before evaluation, so the
+lambda should not rely on mutating shared state. If the payload callable raises
+an exception, the capability fails closed and GraphQL returns `false`.
 
 ## Mutation-backed capabilities
 
@@ -186,6 +251,14 @@ Project.Permission.graphql_capabilities = (
 
 The capability calls the mutation permission's `check(payload, user)` method.
 Permission errors return `false`; successful checks return `true`.
+
+`mutation_capability(...)` uses the same payload rules as
+`permission_capability(...)`: a mapping is used directly, and a callable
+receives `(instance, user)`. The returned mapping should contain the arguments
+that the mutation permission validates. For example, if
+`ArchiveProjectPermission` checks a `status` argument, the payload should include
+`{"status": project.status}` or another value that represents the action being
+previewed.
 
 ## Current-user capabilities
 
