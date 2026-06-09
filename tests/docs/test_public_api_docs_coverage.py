@@ -6,11 +6,27 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = ROOT / "tests" / "snapshots" / "public_api_exports.json"
-DOC_PATHS = [ROOT / "README.md", *(ROOT / "docs").rglob("*.md")]
+DOCS_ROOT = ROOT / "docs"
+DOC_PATHS = [
+    ROOT / "README.md",
+    *[
+        path
+        for path in DOCS_ROOT.rglob("*.md")
+        if not path.relative_to(DOCS_ROOT).as_posix().startswith("superpowers/")
+    ],
+]
 
 
 def _docs_text() -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in DOC_PATHS)
+
+
+def test_unpublished_superpowers_docs_are_excluded_from_docs_corpus() -> None:
+    assert not any(
+        path.relative_to(DOCS_ROOT).as_posix().startswith("superpowers/")
+        for path in DOC_PATHS
+        if path.is_relative_to(DOCS_ROOT)
+    )
 
 
 def test_every_public_export_is_mentioned_in_documentation() -> None:
