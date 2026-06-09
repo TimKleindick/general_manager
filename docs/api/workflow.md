@@ -1,6 +1,6 @@
 # Workflow API
 
-::: general_manager.workflow.events.WorkflowEvent
+::: general_manager.workflow.event_registry.WorkflowEvent
 
 ::: general_manager.workflow.events.manager_created_event
 
@@ -49,15 +49,3 @@
 ::: general_manager.workflow.backends.celery.CeleryWorkflowEngine
 
 ::: general_manager.workflow.backends.n8n.N8nWorkflowEngine
-
-::: general_manager.workflow.tasks.publish_outbox_batch
-
-::: general_manager.workflow.tasks.route_outbox_event
-
-::: general_manager.workflow.tasks.route_outbox_claims_batch
-
-::: general_manager.workflow.tasks.execute_workflow_handler
-
-::: general_manager.workflow.tasks.resume_execution_task
-
-::: general_manager.workflow.tasks.cancel_execution_task
