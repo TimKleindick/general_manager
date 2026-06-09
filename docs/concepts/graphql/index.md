@@ -10,6 +10,7 @@ GeneralManager can auto-generate a Graphene schema that exposes your managers, b
 Use the following guides to customise the schema:
 
 - [Schema auto-generation](schema_autogen.md)
+- [Custom GraphQL mutations](custom_mutations.md)
 - [Filtering and pagination](filters_pagination.md)
 - [GraphQL permission capabilities](permission_capabilities.md)
 - [Security considerations](security.md)
