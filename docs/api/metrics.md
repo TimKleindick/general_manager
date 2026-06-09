@@ -13,3 +13,7 @@
 ::: general_manager.metrics.graphql.get_graphql_metrics_backend
 
 ::: general_manager.metrics.graphql.build_graphql_middleware
+
+::: general_manager.metrics.graphql.graphql_metrics_enabled
+
+::: general_manager.metrics.graphql.graphql_metrics_resolver_timing_enabled

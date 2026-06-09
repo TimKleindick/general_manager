@@ -1,5 +1,13 @@
 # Seeding API
 
+::: general_manager.seeding.manager_landscape.InvalidSeedTargetError
+
+::: general_manager.seeding.manager_landscape.ManagerSelectionError
+
+::: general_manager.seeding.manager_landscape.SeedableManagerCollisionError
+
+::: general_manager.seeding.manager_landscape.ManagerSeedFailure
+
 ::: general_manager.seeding.manager_landscape.SeedTarget
 
 ::: general_manager.seeding.manager_landscape.SeedPlanRow
