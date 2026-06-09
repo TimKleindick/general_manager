@@ -28,11 +28,15 @@
 
 ::: general_manager.interface.requests.RequestFilter
 
-::: general_manager.interface.requests.RequestQueryOperation
+::: general_manager.interface.requests.RequestOperation
+
+`RequestQueryOperation` is the public query-operation alias for `RequestOperation`.
 
 ::: general_manager.interface.requests.RequestMutationOperation
 
-::: general_manager.interface.requests.RequestQueryPlan
+::: general_manager.interface.requests.RequestPlan
+
+`RequestQueryPlan` is the public query-plan alias for `RequestPlan`.
 
 ::: general_manager.interface.requests.RequestQueryResult
 
