@@ -58,6 +58,51 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
 
         self.assertIs(public_helper, object_capability)
 
+    def test_object_capability_uses_custom_description(self) -> None:
+        """
+        Verify object capability declarations preserve explicit GraphQL descriptions.
+        """
+        declaration = object_capability(
+            "canRename",
+            lambda _instance, _user: True,
+            description="Whether the current user can rename this draft project.",
+        )
+
+        self.assertEqual(
+            declaration.description,
+            "Whether the current user can rename this draft project.",
+        )
+
+    def test_capability_helpers_provide_default_descriptions(self) -> None:
+        """
+        Verify GraphQL capability helpers produce descriptive schema text by default.
+        """
+
+        class Project:
+            """Manager stub used to derive permission capability descriptions."""
+
+            pass
+
+        def archive_project() -> None:
+            """Mutation stub used to derive mutation capability descriptions."""
+
+        object_declaration = object_capability(
+            "canRename",
+            lambda _instance, _user: True,
+        )
+        permission_declaration = permission_capability(Project, "update")
+        mutation_declaration = mutation_capability(archive_project)
+
+        self.assertIn("canRename capability", object_declaration.description or "")
+        self.assertIn(
+            "Project update permission check",
+            permission_declaration.description or "",
+        )
+        self.assertIn(
+            "archive_project mutation permission check",
+            mutation_declaration.description or "",
+        )
+
     def test_object_capability_evaluates_once_per_operation_cache_key(self) -> None:
         """
         Verify object capability results are cached per operation identity.
@@ -523,7 +568,11 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
 
             pass
 
-        declaration = object_capability("canView", lambda _instance, _user: True)
+        declaration = object_capability(
+            "canView",
+            lambda _instance, _user: True,
+            description="Whether the current user can view this project.",
+        )
         GraphQL.reset_registry()
         try:
             capability_type = GraphQL._get_or_create_capability_type(
@@ -540,6 +589,10 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
             )
 
             self.assertIs(capability_type, cached_type)
+            self.assertEqual(
+                capability_type._meta.fields["canView"].description,
+                "Whether the current user can view this project.",
+            )
             self.assertTrue(
                 resolver({"instance": DummyManager({"code": "ALPHA"})}, info)
             )
@@ -556,6 +609,7 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
         declaration = object_capability(
             "canViewProfile",
             lambda current_user, request_user: current_user is request_user,
+            description="Whether the current user can view this profile.",
         )
         GraphQL.reset_registry()
         try:
@@ -571,6 +625,10 @@ class GraphQLPermissionCapabilityTests(SimpleTestCase):
             )
 
             self.assertIs(capability_type, cached_type)
+            self.assertEqual(
+                capability_type._meta.fields["canViewProfile"].description,
+                "Whether the current user can view this profile.",
+            )
             self.assertTrue(resolver({"instance": user}, info))
         finally:
             GraphQL.reset_registry()

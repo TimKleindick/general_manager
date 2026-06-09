@@ -20,11 +20,20 @@ BatchCapabilityEvaluator = Callable[
 
 @dataclass(frozen=True, slots=True)
 class GraphQLPermissionCapability:
-    """Declarative permission capability exposed as a GraphQL boolean field."""
+    """
+    Boolean authorization hint exposed under a GraphQL ``capabilities`` object.
+
+    Capability fields are advisory frontend hints, not authorization gates. The
+    evaluator receives the resolved object and request user, and GraphQL returns
+    ``false`` if evaluation fails. Use ``description`` to explain the business
+    action the field previews so schema introspection remains useful to client
+    developers.
+    """
 
     name: str
     evaluator: ObjectCapabilityEvaluator
     batch_evaluator: BatchCapabilityEvaluator | None = None
+    description: str | None = None
 
 
 def object_capability(
@@ -32,12 +41,22 @@ def object_capability(
     evaluator: ObjectCapabilityEvaluator,
     *,
     batch_evaluator: BatchCapabilityEvaluator | None = None,
+    description: str | None = None,
 ) -> GraphQLPermissionCapability:
-    """Declare a domain-specific object capability."""
+    """
+    Declare a domain-specific GraphQL capability for one resolved object.
+
+    Use this helper when the capability is a business rule that does not map
+    directly to a generated CRUD mutation or custom mutation permission. The
+    evaluator is called with ``(instance, user)`` and should return a boolean.
+    Provide ``batch_evaluator`` for list pages to avoid repeated per-row policy
+    work, and ``description`` to document the generated GraphQL field.
+    """
     return GraphQLPermissionCapability(
         name=name,
         evaluator=evaluator,
         batch_evaluator=batch_evaluator,
+        description=description or _object_capability_description(name),
     )
 
 
@@ -47,8 +66,22 @@ def permission_capability(
     *,
     name: str | None = None,
     payload: CapabilityPayload | None = None,
+    description: str | None = None,
 ) -> GraphQLPermissionCapability:
-    """Declare a capability backed by a manager Permission CRUD check."""
+    """
+    Declare a GraphQL capability backed by a manager ``Permission`` CRUD check.
+
+    The generated capability previews the same permission method used by the
+    corresponding generated mutation: create delegates to
+    ``check_create_permission``, update to ``check_update_permission``, and
+    delete to ``check_delete_permission``. Pass ``payload`` when create or
+    update checks need proposed field values from the current object context.
+    ``payload`` may be a mapping or a callable receiving ``(instance, user)``:
+    ``instance`` is the object whose GraphQL ``capabilities`` field is being
+    resolved, and ``user`` is the authenticated request user after the standard
+    permission user lookup. The resolved mapping is passed unchanged to create
+    and update permission checks; delete checks ignore it.
+    """
     capability_name = name or _default_capability_name(action, target)
 
     def evaluator(instance: Any, user: Any) -> bool:
@@ -68,16 +101,31 @@ def permission_capability(
             return False
         return True
 
-    return object_capability(capability_name, evaluator)
+    return object_capability(
+        capability_name,
+        evaluator,
+        description=description or _permission_capability_description(action, target),
+    )
 
 
 def mutation_capability(
-    mutation: type[Any],
+    mutation: Any,
     *,
     name: str | None = None,
     payload: CapabilityPayload | None = None,
+    description: str | None = None,
 ) -> GraphQLPermissionCapability:
-    """Declare a capability backed by a custom MutationPermission class."""
+    """
+    Declare a GraphQL capability backed by a custom mutation permission.
+
+    The capability calls the mutation's configured ``MutationPermission`` with a
+    resolved payload and returns whether the current user would pass that check.
+    Use it when a boolean field should preview a custom GraphQL action rather
+    than generated manager create, update, or delete behavior. ``payload`` may
+    be a mapping or a callable receiving ``(instance, user)``: ``instance`` is
+    the object whose GraphQL ``capabilities`` field is being resolved, and the
+    returned mapping is passed to the mutation permission's ``check`` method.
+    """
     capability_name = name or _lower_camel(getattr(mutation, "__name__", "mutation"))
 
     def evaluator(instance: Any, user: Any) -> bool:
@@ -93,7 +141,11 @@ def mutation_capability(
             return False
         return True
 
-    return object_capability(capability_name, evaluator)
+    return object_capability(
+        capability_name,
+        evaluator,
+        description=description or _mutation_capability_description(mutation),
+    )
 
 
 class CapabilityEvaluationContext:
@@ -257,6 +309,34 @@ def _resolve_payload(
 
 def _default_capability_name(action: str, target: type[Any]) -> str:
     return _lower_camel(f"{action}_{target.__name__}")
+
+
+def _object_capability_description(name: str) -> str:
+    return (
+        f"Whether the current user has the {name} capability for this object. "
+        "This is an advisory UI hint; backend permissions still enforce the action."
+    )
+
+
+def _permission_capability_description(
+    action: CapabilityAction,
+    target: type[Any],
+) -> str:
+    manager_name = getattr(target, "__name__", "manager")
+    return (
+        f"Whether the current user would pass the {manager_name} {action} "
+        "permission check for this object context. This is an advisory UI hint; "
+        "the mutation still enforces backend permissions."
+    )
+
+
+def _mutation_capability_description(mutation: Any) -> str:
+    mutation_name = getattr(mutation, "__name__", "mutation")
+    return (
+        f"Whether the current user would pass the {mutation_name} mutation "
+        "permission check for this object context. This is an advisory UI hint; "
+        "the mutation still enforces backend permissions."
+    )
 
 
 def _lower_camel(value: str) -> str:
