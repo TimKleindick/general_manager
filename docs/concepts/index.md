@@ -5,6 +5,7 @@ The concept guides explain the building blocks that power GeneralManager. They p
 - [Core architecture](architecture.md) covers managers, buckets, dependency tracking, and the runtime lifecycle.
 - [Domain modelling](models_entities.md) explores how to shape managers, buckets, and grouping utilities.
 - [Caching](caching.md) and [rule validation](rules_validation.md) discuss cross-cutting features that keep data fresh and trustworthy.
+- [Workflow](workflow.md) explains event routing, workflow engines, outbox delivery, and operational state.
 - [Measurement handling](measurement/index.md), [permissions](permission/index.md), [interfaces](interfaces/index.md), [GraphQL](graphql/index.md), and [factories & testing](factories/index.md) provide deep dives into their respective subsystems.
 
 Use this section as a map; each page links to tutorials and API references relevant to the topic.
