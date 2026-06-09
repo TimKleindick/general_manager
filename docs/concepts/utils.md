@@ -8,7 +8,7 @@ Use `snake_to_pascal`, `snake_to_camel`, `pascal_to_snake`, and `camel_to_snake`
 
 ## Filter helpers
 
-`parse_filters` and `create_filter_function` parse simple filter expressions into callable predicates. They are useful for tests, in-memory filtering, and adapter code. Prefer manager `filter()` and `exclude()` APIs for normal application queries.
+`parse_filters` parses simple filter expressions into structured criteria used by filtering helpers, including `filter_kwargs` for `GeneralManager`-typed fields. `create_filter_function` builds callable predicates for in-memory and filter-helper use where appropriate. Prefer manager `filter()` and `exclude()` APIs for normal application queries.
 
 ## Serialization and cache keys
 
