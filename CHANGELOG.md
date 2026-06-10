@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v0.42.0 (2026-06-10)
+
+### Bug Fixes
+
+- Address cache review feedback
+  ([`6cac26d`](https://github.com/TimKleindick/general_manager/commit/6cac26d9534ff946ea38c61f42692f35e9dd7326))
+
+- Stabilize calculation cache scope behavior
+  ([`112f34f`](https://github.com/TimKleindick/general_manager/commit/112f34f4e1eff56a00272e8b8bbedbd87051f97b))
+
+- Use run cache default for all graphql properties
+  ([`a5f8e27`](https://github.com/TimKleindick/general_manager/commit/a5f8e27cfed220a0ff50b4c63a55dafac1adda85))
+
+### Documentation
+
+- Explain calculation cache scopes
+  ([`49acfd2`](https://github.com/TimKleindick/general_manager/commit/49acfd21c799244e62063473c6d9a16cf506eae4))
+
+### Features
+
+- Add calculation run context
+  ([`8253ea8`](https://github.com/TimKleindick/general_manager/commit/8253ea8be208cf4b1faae769d61505352c119881))
+
+- Add scoped cache decorator
+  ([`1a15218`](https://github.com/TimKleindick/general_manager/commit/1a152180c8563514ad03d7c7004e63963f6f6897))
+
+- Default calculation properties to run cache
+  ([`03aeaf4`](https://github.com/TimKleindick/general_manager/commit/03aeaf4286e83eee6dad6cc8f39e7a9f01eb7af4))
+
+- Share calculation run cache across execution
+  ([`bc7bee0`](https://github.com/TimKleindick/general_manager/commit/bc7bee034b44ee6818c7f883670ed26288ad1eec))
+
+### Refactoring
+
+- Remove graphql property auto cache mode
+  ([`92b552b`](https://github.com/TimKleindick/general_manager/commit/92b552b6215c371a16a34ead2d0243a06dbe9df1))
+
+
 ## v0.41.12 (2026-06-09)
 
 ### Bug Fixes
