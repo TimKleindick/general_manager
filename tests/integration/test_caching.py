@@ -70,7 +70,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     possible_values=lambda: TestProjectForCommercials.all(),
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def budget_left(self) -> Measurement:
                 """
                 Compute the project's remaining budget.
@@ -80,7 +80,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return self.project.budget - self.project.actual_costs
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def budget_used(self) -> Measurement:
                 """
                 Compute the project's used budget as a percentage.
@@ -90,21 +90,21 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return (self.project.actual_costs / self.project.budget).to("percent")
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def project_name(self) -> str:
                 """
                 Return the associated project name for deterministic calculation sorting.
                 """
                 return self.project.name
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def is_over_budget(self) -> bool:
                 """
                 Return True if the project's actual costs exceed its budget, otherwise False.
                 """
                 return self.project.actual_costs > self.project.budget
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def has_duplicate_name(self) -> bool:
                 """
                 Determine whether another project has the same name as this instance.
@@ -117,7 +117,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 ).count()
                 return matching_count > 1
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def other_project_count(self) -> int:
                 """
                 Return the count of projects whose `number` differs from this instance's project's `number`.
@@ -129,7 +129,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     number=self.project.number
                 ).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def has_budget_buffer(self) -> bool:
                 """
                 Indicates whether the project has a positive remaining budget.
@@ -139,7 +139,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 """
                 return self.budget_left > Measurement(0, "EUR")
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def similar_name_count(self) -> int:
                 """
                 Count projects whose names contain the first word of this instance's associated project's name.
@@ -152,14 +152,14 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     name__contains=search_term
                 ).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def active_project_count(self) -> int:
                 """
                 Count all active projects to ensure deactivation triggers cache invalidation.
                 """
                 return TestProjectForCommercials.filter(is_active=True).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def same_name_excluding_self(self) -> int:
                 """
                 Count projects that have the same name as the current project's name, excluding the current project by its number.
@@ -173,7 +173,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .count()
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def project_keyword_number_range_count(self) -> int:
                 """
                 Count projects whose name contains "Project" and whose number is between 1 and 3 inclusive.
@@ -188,7 +188,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     number__in=[1, 2, 3],
                 ).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def exact_start_date_count(self) -> int:
                 """
                 Count projects sharing the exact same start date as the current project.
@@ -197,7 +197,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     start_date=self.project.start_date
                 ).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def recent_project_window_count(self) -> int:
                 """
                 Count projects whose start_date falls within seven days before or after this instance's project.start_date and whose completion_at is no later than seven days after this instance's project.completion_at.
@@ -216,7 +216,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     completion_at__lte=completion_threshold,
                 ).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def staged_bucket_count(self) -> int:
                 """
                 Count TestProjectForCommercials that match a specific sequence of chained filters relative to this instance's project.
@@ -234,7 +234,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 )
                 return bucket.count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def narrowed_all_bucket_count(self) -> int:
                 """
                 Count projects via an ``all().filter().exclude()`` chain.
@@ -246,7 +246,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .count()
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def empty_all_bucket_count(self) -> int:
                 """
                 Count projects for a query that initially matches no rows.
@@ -257,14 +257,14 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .count()
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def exclude_only_project_count(self) -> int:
                 """
                 Count projects through an exclude-only bucket.
                 """
                 return TestProjectForCommercials.all().exclude(number=999).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def unique_name_bucket_length(self) -> int:
                 """
                 Return the length of a narrowed bucket without iterating it.
@@ -273,7 +273,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     TestProjectForCommercials.all().filter(name="Another Project")
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def unique_name_bucket_first_name(self) -> str | None:
                 """
                 Return the first name from a narrowed bucket without iterating it.
@@ -285,7 +285,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 )
                 return None if match is None else match.name
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def unique_name_bucket_get_name(self) -> str:
                 """
                 Return the unique match from a narrowed bucket via ``get()``.
@@ -297,7 +297,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .name
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def unique_name_bucket_index_name(self) -> str:
                 """
                 Return the first narrowed bucket entry via scalar indexing.
@@ -308,7 +308,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .name
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def unique_name_bucket_contains_self_project(self) -> bool:
                 """
                 Check membership against a narrowed bucket without iterating it.
@@ -317,21 +317,21 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     name="Another Project"
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def grouped_project_name_count(self) -> int:
                 """
                 Count project groups built from ``all().group_by()``.
                 """
                 return TestProjectForCommercials.all().group_by("name").count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def available_commercial_count(self) -> int:
                 """
                 Count calculation-bucket combinations for all commercials.
                 """
                 return self.__class__.all().count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def deeply_chained_bucket_count(self) -> int:
                 """
                 Count projects through a deeper ``all().filter().exclude().filter()`` chain.
@@ -342,7 +342,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 bucket = bucket.filter(start_date=self.project.start_date.isoformat())
                 return bucket.count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def empty_chain_bucket_count(self) -> int:
                 """
                 Count projects in a chained query that initially resolves to zero rows.
@@ -354,7 +354,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .count()
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def chained_first_project_name(self) -> str | None:
                 """
                 Return the first project name from a chained all/filter/exclude query.
@@ -370,7 +370,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     return None
                 return first_match.name
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def grouped_filtered_project_count(self) -> int:
                 """
                 Count grouped project names after narrowing via all/filter chaining.
@@ -382,7 +382,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     .count()
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def mixed_terminal_bucket_summary(
                 self,
             ) -> tuple[int, str | None, str | None, bool]:
@@ -396,7 +396,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     return (count, None, None, False)
                 return (count, first.name, bucket[0].name, first in bucket)
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def sliced_sorted_bucket_first_number(self) -> int | None:
                 """
                 Evaluate a sliced narrowed bucket after sorting.
@@ -409,7 +409,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 first = bucket.first()
                 return None if first is None else first.number
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def sorted_project_bucket_summary(self) -> tuple[int, int | None]:
                 """
                 Evaluate count and first() on a sorted narrowed bucket.
@@ -422,7 +422,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                 first = bucket.first()
                 return bucket.count(), None if first is None else first.number
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def python_filtered_negative_number_count(self) -> int:
                 """
                 Count rows through a python-only filterable property.
@@ -431,7 +431,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     TestProjectForCommercials.all().filter(negative_number=-2).count()
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def historical_original_name_count(self) -> int:
                 """
                 Count historical rows using ``search_date`` and the original project name.
@@ -445,7 +445,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     name="Test Project",
                 ).count()
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def grouped_project_terminal_summary(self) -> tuple[str | None, str, bool]:
                 """
                 Exercise non-count terminal operations on a grouped bucket.
@@ -459,7 +459,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
                     self.project in grouped,
                 )
 
-            @graph_ql_property
+            @graph_ql_property(cache="dependency")
             def calculation_bucket_terminal_summary(
                 self,
             ) -> tuple[str | None, str, int, bool]:

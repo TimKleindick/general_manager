@@ -1,9 +1,11 @@
 """GraphQL-aware property descriptor used by GeneralManager classes."""
 
+from functools import wraps
 import sys
-from typing import Any, Callable, TypeVar, get_type_hints, overload
+from typing import Any, Callable, Literal, TypeVar, cast, get_type_hints, overload
 
 T = TypeVar("T", bound=Callable[..., Any])
+GraphQLPropertyCache = Literal["dependency", "run", "none", "auto"]
 
 
 class GraphQLPropertyReturnAnnotationError(TypeError):
@@ -35,6 +37,7 @@ class GraphQLProperty(property):
         sortable: bool = False,
         filterable: bool = False,
         query_annotation: Any | None = None,
+        cache: GraphQLPropertyCache = "auto",
     ) -> None:
         """
         Initialize the GraphQLProperty descriptor with GraphQL-specific metadata.
@@ -49,7 +52,14 @@ class GraphQLProperty(property):
         Raises:
             GraphQLPropertyReturnAnnotationError: If the underlying resolver function does not declare a return type annotation.
         """
-        super().__init__(fget, doc=doc)
+        self._raw_fget = fget
+        self._cached_fget: Callable[..., Any] | None = None
+
+        @wraps(fget)
+        def resolver(instance: Any) -> Any:
+            return self._get_cached_fget()(instance)
+
+        super().__init__(resolver, doc=doc)
         self.is_graphql_resolver = True
         self._owner: type | None = None
         self._name: str | None = None
@@ -58,6 +68,7 @@ class GraphQLProperty(property):
         self.sortable = sortable
         self.filterable = filterable
         self.query_annotation = query_annotation
+        self.cache = cache
 
         orig = getattr(
             fget, "__wrapped__", fget
@@ -76,6 +87,36 @@ class GraphQLProperty(property):
         """
         self._owner = owner
         self._name = name
+        self._cached_fget = self._build_cached_fget(owner)
+
+    def _build_cached_fget(self, owner: type) -> Callable[..., Any]:
+        from general_manager.cache.cache_decorator import cached
+        from general_manager.interface.interfaces.calculation import (
+            CalculationInterface,
+        )
+
+        selected_cache = self.cache
+        if selected_cache == "auto":
+            interface_cls = getattr(owner, "Interface", None)
+            if isinstance(interface_cls, type) and issubclass(
+                interface_cls, CalculationInterface
+            ):
+                selected_cache = "run"
+            else:
+                selected_cache = "dependency"
+        if selected_cache == "none":
+            return self._raw_fget
+        return cached(scope=cast(Literal["dependency", "run"], selected_cache))(
+            self._raw_fget
+        )
+
+    def _get_cached_fget(self) -> Callable[..., Any]:
+        if self._cached_fget is None:
+            if self._owner is None:
+                self._cached_fget = self._raw_fget
+            else:
+                self._cached_fget = self._build_cached_fget(self._owner)
+        return self._cached_fget
 
     def _try_resolve_type_hint(self) -> None:
         """
@@ -116,6 +157,7 @@ def graph_ql_property(
     sortable: bool = False,
     filterable: bool = False,
     query_annotation: Any | None = None,
+    cache: GraphQLPropertyCache = "auto",
 ) -> Callable[[T], GraphQLProperty]: ...
 
 
@@ -125,9 +167,8 @@ def graph_ql_property(
     sortable: bool = False,
     filterable: bool = False,
     query_annotation: Any | None = None,
+    cache: GraphQLPropertyCache = "auto",
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
-    from general_manager.cache.cache_decorator import cached
-
     """
     Decorate a resolver to return a cached ``GraphQLProperty`` descriptor.
 
@@ -143,10 +184,11 @@ def graph_ql_property(
 
     def wrapper(f: Callable[..., Any]) -> GraphQLProperty:
         return GraphQLProperty(
-            cached()(f),
+            f,
             sortable=sortable,
             query_annotation=query_annotation,
             filterable=filterable,
+            cache=cache,
         )
 
     if func is None:

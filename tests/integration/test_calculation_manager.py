@@ -9,6 +9,7 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.measurement import MeasurementField, Measurement
 from general_manager.manager.input import Input
 from general_manager.api.property import graph_ql_property
+from general_manager.cache.run_context import CalculationRunContext
 
 
 class CustomMutationTest(GeneralManagerTransactionTestCase):
@@ -199,6 +200,104 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         data = response.json()["data"]["taxcalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 800)
+
+    def test_calculation_graphql_property_defaults_to_run_scope(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        calls = 0
+
+        class RunScopedCalculation(GeneralManager):
+            employee: self.Employee
+
+            class Interface(CalculationInterface):
+                employee = Input(
+                    self.Employee, possible_values=lambda: self.Employee.all()
+                )
+
+            @graph_ql_property
+            def computed_value(self) -> int:
+                nonlocal calls
+                calls += 1
+                return int(self.employee.salary.quantity.magnitude)
+
+        with CalculationRunContext():
+            first = RunScopedCalculation(employee=employee)
+            second = RunScopedCalculation(employee=employee)
+            self.assertEqual(first.computed_value, 3000)
+            self.assertEqual(second.computed_value, 3000)
+
+        self.assertEqual(calls, 1)
+
+        third = RunScopedCalculation(employee=employee)
+        fourth = RunScopedCalculation(employee=employee)
+        self.assertEqual(third.computed_value, 3000)
+        self.assertEqual(fourth.computed_value, 3000)
+        self.assertEqual(calls, 3)
+
+    def test_calculation_graphql_property_can_opt_into_dependency_cache(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        calls = 0
+
+        class DependencyCachedCalculation(GeneralManager):
+            employee: self.Employee
+
+            class Interface(CalculationInterface):
+                employee = Input(
+                    self.Employee, possible_values=lambda: self.Employee.all()
+                )
+
+            @graph_ql_property(cache="dependency")
+            def computed_value(self) -> int:
+                nonlocal calls
+                calls += 1
+                return int(self.employee.salary.quantity.magnitude)
+
+        first = DependencyCachedCalculation(employee=employee)
+        second = DependencyCachedCalculation(employee=employee)
+        self.assertEqual(first.computed_value, 3000)
+        self.assertEqual(second.computed_value, 3000)
+        self.assertEqual(calls, 1)
+
+        employee.update(
+            salary=Measurement(4000, "EUR"),
+            creator_id=self.user.id,
+            ignore_permission=True,
+        )
+
+        refreshed = DependencyCachedCalculation(employee=employee)
+        self.assertEqual(refreshed.computed_value, 4000)
+        self.assertEqual(calls, 2)
+
+    def test_calculation_graphql_property_can_disable_caching(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        calls = 0
+
+        class UncachedCalculation(GeneralManager):
+            employee: self.Employee
+
+            class Interface(CalculationInterface):
+                employee = Input(
+                    self.Employee, possible_values=lambda: self.Employee.all()
+                )
+
+            @graph_ql_property(cache="none")
+            def computed_value(self) -> int:
+                nonlocal calls
+                calls += 1
+                return int(self.employee.salary.quantity.magnitude)
+
+        with CalculationRunContext():
+            first = UncachedCalculation(employee=employee)
+            second = UncachedCalculation(employee=employee)
+            self.assertEqual(first.computed_value, 3000)
+            self.assertEqual(second.computed_value, 3000)
+
+        self.assertEqual(calls, 2)
 
     def test_calculation_property_can_traverse_database_reverse_relation(self):
         employee = self.Employee.create(
