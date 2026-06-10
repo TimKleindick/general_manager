@@ -23,7 +23,7 @@ class ProjectSummary(GeneralManager):
 
 ## Computing values
 
-Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results per manager instance.
+Expose computed attributes with `@graph_ql_property`. On `CalculationInterface` managers, the decorator registers the method as a GraphQL field and caches results in the active run context by default. On database-backed managers, the default remains dependency-aware caching.
 
 ```python
     @graph_ql_property
@@ -34,6 +34,8 @@ Expose computed attributes with `@graph_ql_property`. The decorator registers th
         )
 ```
 
+Use `@graph_ql_property(cache="dependency")` when a calculation should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
+
 ## Iterating combinations
 
 Call `ProjectSummary.all()` to iterate through all possible input combinations. Filter inputs with keyword arguments:
@@ -43,7 +45,7 @@ for summary in ProjectSummary.filter(project=my_project):
     print(summary.date, summary.total_volume)
 ```
 
-Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking, so cached calculations refresh when related managers change.
+Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking when a property opts into dependency-aware caching.
 
 ## Input helpers
 
