@@ -3,12 +3,13 @@
 import json
 from decimal import Decimal
 from datetime import date, datetime
+from inspect import signature
 import graphene
 from django.test import TestCase, override_settings
 from django.db.models import NOT_PROVIDED
 from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import AnonymousUser
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_args
 
 from general_manager import bootstrap as gm_bootstrap
 from general_manager.api.graphql import (
@@ -24,7 +25,11 @@ from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.measurement.measurement import Measurement
 from general_manager.manager.general_manager import GeneralManager, GeneralManagerMeta
 from general_manager.manager.input import Input
-from general_manager.api.property import GraphQLProperty
+from general_manager.api.property import (
+    GraphQLProperty,
+    GraphQLPropertyCache,
+    graph_ql_property,
+)
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.orm_interface import OrmInterfaceBase  # noqa: F401
 from general_manager.permission.base_permission import ReadPermissionPlan
@@ -53,6 +58,14 @@ class GraphQLPropertyTests(TestCase):
 
         prop = GraphQLProperty(mock_getter)
         self.assertEqual(prop.graphql_type_hint, str)
+
+    def test_graphql_property_cache_options_exclude_auto(self):
+        self.assertEqual(
+            set(get_args(GraphQLPropertyCache)), {"dependency", "run", "none"}
+        )
+        self.assertEqual(
+            signature(graph_ql_property).parameters["cache"].default, "run"
+        )
 
 
 class MeasurementTypeTests(TestCase):

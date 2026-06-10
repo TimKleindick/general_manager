@@ -5,7 +5,7 @@ import sys
 from typing import Any, Callable, Literal, TypeVar, cast, get_type_hints, overload
 
 T = TypeVar("T", bound=Callable[..., Any])
-GraphQLPropertyCache = Literal["dependency", "run", "none", "auto"]
+GraphQLPropertyCache = Literal["dependency", "run", "none"]
 
 
 class GraphQLPropertyReturnAnnotationError(TypeError):
@@ -93,8 +93,6 @@ class GraphQLProperty(property):
         from general_manager.cache.cache_decorator import cached
 
         selected_cache = self.cache
-        if selected_cache == "auto":
-            selected_cache = "run"
         if selected_cache == "none":
             return self._raw_fget
         return cached(scope=cast(Literal["dependency", "run"], selected_cache))(
@@ -148,7 +146,7 @@ def graph_ql_property(
     sortable: bool = False,
     filterable: bool = False,
     query_annotation: Any | None = None,
-    cache: GraphQLPropertyCache = "auto",
+    cache: GraphQLPropertyCache = "run",
 ) -> Callable[[T], GraphQLProperty]: ...
 
 
@@ -158,7 +156,7 @@ def graph_ql_property(
     sortable: bool = False,
     filterable: bool = False,
     query_annotation: Any | None = None,
-    cache: GraphQLPropertyCache = "auto",
+    cache: GraphQLPropertyCache = "run",
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
     """
     Decorate a resolver to return a cached ``GraphQLProperty`` descriptor.
