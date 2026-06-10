@@ -7,10 +7,7 @@ from django.core.cache import cache as django_cache
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import Dependency, record_dependencies
-from general_manager.cache.run_context import (
-    current_calculation_run_context,
-    ensure_calculation_run_context,
-)
+from general_manager.cache.run_context import ensure_calculation_run_context
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.logging import get_logger
 from general_manager.utils.make_cache_key import make_cache_key
@@ -94,11 +91,6 @@ def cached(
 
             if scope == "run":
                 key = make_cache_key(func, args, kwargs)
-                current_context = current_calculation_run_context()
-                if current_context is not None:
-                    return current_context.get_or_set(
-                        key, lambda: func(*args, **kwargs)
-                    )
                 with ensure_calculation_run_context() as context:
                     return context.get_or_set(key, lambda: func(*args, **kwargs))
 

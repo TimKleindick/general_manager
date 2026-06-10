@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import TypeVar
+from typing import Optional, TypeVar
 
 K = TypeVar("K", bound=Hashable)
 T = TypeVar("T")
@@ -65,6 +65,9 @@ def current_calculation_run_context() -> CalculationRunContext | None:
 
 class ensure_calculation_run_context:
     """Use the current run context or create one for the wrapped block."""
+
+    def __init__(self) -> None:
+        self._owned_context: Optional[CalculationRunContext] = None
 
     def __enter__(self) -> CalculationRunContext:
         current = current_calculation_run_context()
