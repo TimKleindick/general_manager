@@ -50,7 +50,7 @@ def cheap_label(self) -> str:
     return f"{self.project.name}: {self.date:%Y-%m-%d}"
 ```
 
-## Step 4: Verify invalidation
+## Step 3: Verify invalidation
 
 For dependency-aware properties, update a derivative that contributes to the summary. The dependency tracker captures the relationship and invalidates the cache entry automatically.
 
@@ -58,7 +58,7 @@ For dependency-aware properties, update a derivative that contributes to the sum
 DerivativeVolume(id=volume_id).update(quantity=42)
 ```
 
-## Step 5: Monitor cache usage
+## Step 4: Monitor cache usage
 
 Enable Django cache logging or use Redis monitoring tools to ensure cache hits increase and invalidations behave as expected.
 

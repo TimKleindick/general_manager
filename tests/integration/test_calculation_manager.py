@@ -204,7 +204,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         )
         query = """
         query($id: ID!) {
-            employee(id: $id) {
+            employeeA: employee(id: $id) {
+                salaryRate
+            }
+            employeeB: employee(id: $id) {
                 salaryRate
             }
         }
@@ -214,12 +217,16 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
         response = self.query(query, variables={"id": employee.id})
         self.assertResponseNoErrors(response)
-        self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 30)
+        data = response.json()["data"]
+        self.assertEqual(data["employeeA"]["salaryRate"], 30)
+        self.assertEqual(data["employeeB"]["salaryRate"], 30)
         self.assertEqual(self.Employee.salary_rate_calls, 1)
 
         response = self.query(query, variables={"id": employee.id})
         self.assertResponseNoErrors(response)
-        self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 30)
+        data = response.json()["data"]
+        self.assertEqual(data["employeeA"]["salaryRate"], 30)
+        self.assertEqual(data["employeeB"]["salaryRate"], 30)
         self.assertEqual(self.Employee.salary_rate_calls, 2)
 
     def test_calculation_graphql_property_refreshes_after_entry_update(self):
