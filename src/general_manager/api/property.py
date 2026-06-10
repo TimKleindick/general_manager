@@ -89,21 +89,12 @@ class GraphQLProperty(property):
         self._name = name
         self._cached_fget = self._build_cached_fget(owner)
 
-    def _build_cached_fget(self, owner: type) -> Callable[..., Any]:
+    def _build_cached_fget(self, _owner: type) -> Callable[..., Any]:
         from general_manager.cache.cache_decorator import cached
-        from general_manager.interface.interfaces.calculation import (
-            CalculationInterface,
-        )
 
         selected_cache = self.cache
         if selected_cache == "auto":
-            interface_cls = getattr(owner, "Interface", None)
-            if isinstance(interface_cls, type) and issubclass(
-                interface_cls, CalculationInterface
-            ):
-                selected_cache = "run"
-            else:
-                selected_cache = "dependency"
+            selected_cache = "run"
         if selected_cache == "none":
             return self._raw_fget
         return cached(scope=cast(Literal["dependency", "run"], selected_cache))(
