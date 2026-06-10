@@ -359,6 +359,18 @@ CACHE_EXPORTS: LazyExportMap = {
     "cached": ("general_manager.cache.cache_decorator", "cached"),
     "CacheBackend": ("general_manager.cache.cache_decorator", "CacheBackend"),
     "DependencyTracker": ("general_manager.cache.cache_tracker", "DependencyTracker"),
+    "CalculationRunContext": (
+        "general_manager.cache.run_context",
+        "CalculationRunContext",
+    ),
+    "current_calculation_run_context": (
+        "general_manager.cache.run_context",
+        "current_calculation_run_context",
+    ),
+    "ensure_calculation_run_context": (
+        "general_manager.cache.run_context",
+        "ensure_calculation_run_context",
+    ),
     "record_dependencies": (
         "general_manager.cache.dependency_index",
         "record_dependencies",
