@@ -37,7 +37,7 @@ class GraphQLProperty(property):
         sortable: bool = False,
         filterable: bool = False,
         query_annotation: Any | None = None,
-        cache: GraphQLPropertyCache = "auto",
+        cache: GraphQLPropertyCache = "none",
     ) -> None:
         """
         Initialize the GraphQLProperty descriptor with GraphQL-specific metadata.
