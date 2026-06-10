@@ -31,6 +31,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             id: int
             name: str
             salary: Measurement
+            salary_rate_calls: ClassVar[int] = 0
 
             class Interface(DatabaseInterface):
                 name = CharField(max_length=100)
@@ -38,6 +39,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
             @graph_ql_property()
             def salary_rate(self) -> float:
+                type(self).salary_rate_calls += 1
                 return float(self.salary.quantity.magnitude / 100)
 
         class TaxCalculation(GeneralManager):
@@ -195,6 +197,30 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         response = self.query(query, variables={"id": employee.id})
         self.assertResponseNoErrors(response)
         self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 40)
+
+    def test_database_graphql_property_defaults_to_run_scope(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        query = """
+        query($id: ID!) {
+            employee(id: $id) {
+                salaryRate
+            }
+        }
+        """
+
+        self.Employee.salary_rate_calls = 0
+
+        response = self.query(query, variables={"id": employee.id})
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 30)
+        self.assertEqual(self.Employee.salary_rate_calls, 1)
+
+        response = self.query(query, variables={"id": employee.id})
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["employee"]["salaryRate"], 30)
+        self.assertEqual(self.Employee.salary_rate_calls, 2)
 
     def test_calculation_graphql_property_refreshes_after_entry_update(self):
         employee = self.Employee.create(

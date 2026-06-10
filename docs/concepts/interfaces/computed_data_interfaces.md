@@ -23,7 +23,7 @@ class ProjectSummary(GeneralManager):
 
 ## Computing values
 
-Expose computed attributes with `@graph_ql_property`. On `CalculationInterface` managers, the decorator registers the method as a GraphQL field and caches results in the active run context by default. On database-backed managers, the default remains dependency-aware caching.
+Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results in the active run context by default for every manager type.
 
 ```python
     @graph_ql_property
@@ -34,7 +34,7 @@ Expose computed attributes with `@graph_ql_property`. On `CalculationInterface` 
         )
 ```
 
-Use `@graph_ql_property(cache="dependency")` when a calculation should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
+Use `@graph_ql_property(cache="dependency")` when a value should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
 
 ## Iterating combinations
 

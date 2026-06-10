@@ -32,7 +32,7 @@ class ProjectSummary(GeneralManager):
 
 ## Step 2: Choose a cache scope
 
-Calculation `@graph_ql_property` methods use run-scoped caching by default. The value is reused within one GraphQL request, calculation graph, bulk operation, or background run, then discarded.
+`@graph_ql_property` methods use run-scoped caching by default on every manager type. The value is reused within one GraphQL request, calculation graph, bulk operation, or background run, then discarded.
 
 Use dependency-aware caching only when a calculation result is stable enough to reuse across requests:
 
@@ -91,3 +91,5 @@ def volume(self) -> int:
     )
     return rows_by_date[self.target_date].quantity
 ```
+
+Use `ensure_calculation_run_context` around custom bulk jobs or background tasks that should share the same run cache but may already execute inside a GraphQL request context.
