@@ -166,6 +166,12 @@ def graph_ql_property(
         sortable (bool): Whether the property can participate in sorting.
         filterable (bool): Whether the property can be used in filtering.
         query_annotation (Any | None): Optional queryset annotation callable or expression.
+        cache (GraphQLPropertyCache): Cache scope for the resolver. ``"run"`` is the
+            default and memoizes the value only within the active GraphQL request,
+            calculation graph, bulk operation, or background run. ``"dependency"``
+            persists the value across runs and records accessed managers so later
+            mutations can invalidate the cache entry. ``"none"`` disables caching
+            and evaluates the resolver on every access.
 
     Returns:
         GraphQLProperty | Callable[[Callable[..., Any]], GraphQLProperty]: Decorated property or decorator factory.
