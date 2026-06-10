@@ -2,6 +2,7 @@ from django.test import SimpleTestCase
 from django.core.cache import cache
 from unittest import mock
 from general_manager.cache.cache_decorator import cached, DependencyTracker
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.make_cache_key import make_cache_key
 import pickle
 import time
@@ -401,3 +402,49 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         res2 = outer_function(2, 3)
         self.assertEqual(res2, 5)
         self.assertEqual(self.record_calls, [])
+
+
+class TestCacheDecoratorScopes(SimpleTestCase):
+    def test_run_scope_reuses_value_inside_context_only(self):
+        calls = 0
+
+        @cached(scope="run")
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        with CalculationRunContext():
+            self.assertEqual(sample(3), 6)
+            self.assertEqual(sample(3), 6)
+
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(calls, 2)
+
+    def test_run_scope_creates_context_when_missing_for_single_call(self):
+        calls = 0
+
+        @cached(scope="run")
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(calls, 2)
+
+    def test_none_scope_never_uses_cache_backend(self):
+        fake_cache = FakeCacheBackend()
+        calls = 0
+
+        @cached(scope="none", cache_backend=fake_cache)
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(calls, 2)
+        self.assertEqual(fake_cache.store, {})

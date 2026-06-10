@@ -1,12 +1,16 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
 from functools import wraps
-from typing import Any, Callable, Optional, Protocol, Set, TypeVar, cast
+from typing import Any, Callable, Literal, Optional, Protocol, Set, TypeVar, cast
 
 from django.core.cache import cache as django_cache
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import Dependency, record_dependencies
+from general_manager.cache.run_context import (
+    current_calculation_run_context,
+    ensure_calculation_run_context,
+)
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.logging import get_logger
 from general_manager.utils.make_cache_key import make_cache_key
@@ -43,15 +47,25 @@ class CacheBackend(Protocol):
 
 RecordFn = Callable[[str, Set[Dependency]], None]
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
+CacheScope = Literal["dependency", "run", "none"]
 
 _SENTINEL = object()
 logger = get_logger("cache.decorator")
+
+
+class UnsupportedCacheScopeError(ValueError):
+    """Raised when a cache decorator receives an unsupported scope."""
+
+    def __init__(self, scope: object) -> None:
+        super().__init__(f"Unsupported cache scope: {scope}")
 
 
 def cached(
     timeout: Optional[int] = None,
     cache_backend: CacheBackend = django_cache,
     record_fn: RecordFn = record_dependencies,
+    *,
+    scope: CacheScope = "dependency",
 ) -> Callable[[FuncT], FuncT]:
     """
     Cache a function call while registering its data dependencies.
@@ -75,6 +89,22 @@ def cached(
     def decorator(func: FuncT) -> FuncT:
         @wraps(func)
         def wrapper(*args: object, **kwargs: object) -> object:
+            if scope == "none":
+                return func(*args, **kwargs)
+
+            if scope == "run":
+                key = make_cache_key(func, args, kwargs)
+                current_context = current_calculation_run_context()
+                if current_context is not None:
+                    return current_context.get_or_set(
+                        key, lambda: func(*args, **kwargs)
+                    )
+                with ensure_calculation_run_context() as context:
+                    return context.get_or_set(key, lambda: func(*args, **kwargs))
+
+            if scope != "dependency":
+                raise UnsupportedCacheScopeError(scope)
+
             key = make_cache_key(func, args, kwargs)
             deps_key = f"{key}:deps"
 
