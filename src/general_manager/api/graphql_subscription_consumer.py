@@ -15,6 +15,7 @@ from graphql import (
 )
 
 from general_manager.api.graphql import GraphQL
+from general_manager.cache.run_context import ensure_calculation_run_context
 
 
 RECOVERABLE_SUBSCRIPTION_ERRORS: tuple[type[Exception], ...] = (
@@ -225,13 +226,14 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         context = self._build_context()
 
         try:
-            subscription = await subscribe(
-                schema.graphql_schema,
-                document,
-                variable_values=variables,
-                operation_name=operation_name,
-                context_value=context,
-            )
+            with ensure_calculation_run_context():
+                subscription = await subscribe(
+                    schema.graphql_schema,
+                    document,
+                    variable_values=variables,
+                    operation_name=operation_name,
+                    context_value=context,
+                )
         except GraphQLError as error:
             await self._send_protocol_message(
                 {
@@ -295,9 +297,14 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         Raises:
             asyncio.CancelledError: Propagated when the surrounding subscription task is cancelled.
         """
+        iterator = async_iterator.__aiter__()
         try:
-            async for result in async_iterator:
-                await self._send_execution_result(operation_id, result)
+            while True:
+                with ensure_calculation_run_context():
+                    result = await iterator.__anext__()
+                    await self._send_execution_result(operation_id, result)
+        except StopAsyncIteration:
+            pass
         except asyncio.CancelledError:
             raise
         except (

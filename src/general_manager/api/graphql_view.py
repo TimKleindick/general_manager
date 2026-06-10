@@ -9,6 +9,7 @@ from graphene_django.constants import MUTATION_ERRORS_FLAG  # type: ignore[impor
 from graphene_django.utils.utils import set_rollback  # type: ignore[import-untyped]
 from graphene_django.views import GraphQLView  # type: ignore[import-untyped]
 
+from general_manager.cache.run_context import ensure_calculation_run_context
 from general_manager.metrics.graphql import (
     GraphQLResolverTimingMiddleware,
     extract_error_code,
@@ -44,9 +45,10 @@ class GeneralManagerGraphQLView(GraphQLView):
         )
 
         start = time.perf_counter()
-        execution_result = self.execute_graphql_request(
-            request, data, query, variables, operation_name, show_graphiql
-        )
+        with ensure_calculation_run_context():
+            execution_result = self.execute_graphql_request(
+                request, data, query, variables, operation_name, show_graphiql
+            )
         duration = time.perf_counter() - start
 
         if getattr(request, MUTATION_ERRORS_FLAG, False) is True:

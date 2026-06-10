@@ -507,6 +507,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         """
 
         if self._data is None:
+            from general_manager.cache.run_context import ensure_calculation_run_context
+
             sorted_inputs = self.topological_sort_inputs()
             sorted_filters = self._sort_filters(sorted_inputs)
             current_combinations = self._generate_input_combinations(
@@ -521,29 +523,34 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 or not self._sort_uses_only_inputs(sort_key)
             )
 
-            if needs_manager_access:
-                manager_combinations = self._manager_combinations(current_combinations)
-                manager_combinations = self._filter_prop_combinations(
-                    manager_combinations,
-                    sorted_filters["prop_filters"],
-                    sorted_filters["prop_excludes"],
-                )
-                if sort_key is not None:
-                    getters = [attrgetter(key) for key in sort_key]
-                    manager_combinations = sorted(
+            with ensure_calculation_run_context():
+                if needs_manager_access:
+                    manager_combinations = self._manager_combinations(
+                        current_combinations
+                    )
+                    manager_combinations = self._filter_prop_combinations(
                         manager_combinations,
-                        key=lambda manager_obj: tuple(
-                            getter(manager_obj) for getter in getters
-                        ),
+                        sorted_filters["prop_filters"],
+                        sorted_filters["prop_excludes"],
                     )
-                identifications = self._manager_identifications(manager_combinations)
-            else:
-                identifications = current_combinations
-                if sort_key is not None:
-                    identifications = self._sort_dict_combinations(
-                        identifications,
-                        sort_key,
+                    if sort_key is not None:
+                        getters = [attrgetter(key) for key in sort_key]
+                        manager_combinations = sorted(
+                            manager_combinations,
+                            key=lambda manager_obj: tuple(
+                                getter(manager_obj) for getter in getters
+                            ),
+                        )
+                    identifications = self._manager_identifications(
+                        manager_combinations
                     )
+                else:
+                    identifications = current_combinations
+                    if sort_key is not None:
+                        identifications = self._sort_dict_combinations(
+                            identifications,
+                            sort_key,
+                        )
 
             if self.reverse:
                 identifications.reverse()

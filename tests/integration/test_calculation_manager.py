@@ -1,5 +1,7 @@
 # type: ignore
 
+from typing import ClassVar
+
 from django.contrib.auth import get_user_model
 from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 from django.utils.crypto import get_random_string
@@ -75,16 +77,30 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             def total_bonus(self) -> int:
                 return sum(bonus.amount for bonus in self.employee.bonus_list)
 
+        class RequestScopedCalculation(GeneralManager):
+            employee: Employee
+            computed_calls: ClassVar[int] = 0
+
+            class Interface(CalculationInterface):
+                employee = Input(Employee, possible_values=lambda: Employee.all())
+
+            @graph_ql_property
+            def computed_value(self) -> int:
+                type(self).computed_calls += 1
+                return int(self.employee.salary.quantity.magnitude)
+
         cls.Employee = Employee
         cls.TaxCalculation = TaxCalculation
         cls.Bonus = Bonus
         cls.BonusCalculation = BonusCalculation
+        cls.RequestScopedCalculation = RequestScopedCalculation
 
         cls.general_manager_classes = [
             Employee,
             TaxCalculation,
             Bonus,
             BonusCalculation,
+            RequestScopedCalculation,
         ]
 
     def setUp(self):
@@ -298,6 +314,31 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             self.assertEqual(second.computed_value, 3000)
 
         self.assertEqual(calls, 2)
+
+    def test_graphql_request_shares_run_cache_across_repeated_calculation_fields(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        self.RequestScopedCalculation.computed_calls = 0
+
+        query = """
+        query($employeeId: ID!) {
+            first: requestscopedcalculation(employeeId: $employeeId) {
+                computedValue
+            }
+            second: requestscopedcalculation(employeeId: $employeeId) {
+                computedValue
+            }
+        }
+        """
+
+        response = self.query(query, variables={"employeeId": employee.id})
+
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]
+        self.assertEqual(data["first"]["computedValue"], 3000)
+        self.assertEqual(data["second"]["computedValue"], 3000)
+        self.assertEqual(self.RequestScopedCalculation.computed_calls, 1)
 
     def test_calculation_property_can_traverse_database_reverse_relation(self):
         employee = self.Employee.create(
