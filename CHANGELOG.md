@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.42.1 (2026-06-11)
+
+### Bug Fixes
+
+- Use camelCase GraphQL root names
+  ([`ae05ed3`](https://github.com/TimKleindick/general_manager/commit/ae05ed33b33555123112cd3d4df8744271f6a54a))
+
+### Documentation
+
+- Document graphql property cache modes
+  ([`49d3116`](https://github.com/TimKleindick/general_manager/commit/49d3116a8458f0314adc3629e5ea680e00673f09))
+
+
 ## v0.42.0 (2026-06-10)
 
 ### Bug Fixes
