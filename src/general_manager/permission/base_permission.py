@@ -437,7 +437,10 @@ class BasePermission(ABC):
         """
         Resolve a user identifier or user-like object to a Django User or AnonymousUser instance.
 
-        If the input is already an AbstractBaseUser or AnonymousUser, it is returned unchanged. If the input is a primary key (or other value used to look up a User by id), the corresponding User is returned; if no such User exists, an AnonymousUser is returned.
+        If the input is already an AbstractBaseUser, AnonymousUser, or configured
+        user-model instance, it is returned unchanged. If the input is a primary
+        key (or other value used to look up a User by id), the corresponding User
+        is returned; if no such User exists, an AnonymousUser is returned.
 
         Parameters:
             user (Any | UserLike): A user object or a value to look up a User by primary key.
@@ -454,7 +457,7 @@ class BasePermission(ABC):
             user = lazy_user._wrapped
 
         User = get_user_model()
-        if isinstance(user, (AbstractBaseUser, AnonymousUser)):
+        if isinstance(user, (AbstractBaseUser, AnonymousUser, User)):
             return user
         try:
             return User.objects.get(pk=user)
