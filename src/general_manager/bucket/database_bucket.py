@@ -689,10 +689,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         self._track_effective_dependencies()
         if isinstance(item, GeneralManager):
-            return item.identification.get("id", None) in self._data.values_list(
-                "pk", flat=True
-            )
-        return item.pk in self._data.values_list("pk", flat=True)
+            pk = item.identification.get("id", None)
+        else:
+            pk = item.pk
+        if pk is None:
+            return False
+        return self._data.filter(pk=pk).exists()
 
     def sort(
         self,

@@ -23,6 +23,11 @@ class Book(GeneralManager):
 
 You can use all field types, including custom fields like `MeasurementField`. Django validators, constraints, and signals run as usual.
 
+Foreign keys expose both the relation field and a raw ID helper. In the example
+above, `book.author` resolves the related object or manager, while
+`book.author_id` returns the stored foreign-key value directly. Prefer the raw
+ID helper in hot paths when you only need the identifier.
+
 ## CRUD operations
 
 Managers expose `create`, `update`, and `delete` methods that call the interface. Each method accepts `creator_id` and `history_comment` arguments for audit trails. `update()` refreshes the current manager in place and returns that same instance for chaining. `delete()` invalidates the current manager instance for later field reads.

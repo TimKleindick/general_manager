@@ -31,6 +31,9 @@ This deferred tracking applies to terminal bucket operations such as:
 - scalar indexing such as `bucket[0]`
 - membership checks such as `manager in bucket`
 
+Membership checks on ORM-backed buckets use a targeted `exists()` lookup for
+the checked primary key instead of materialising every row ID.
+
 Empty result sets still record dependencies. A cached `count() == 0` must invalidate when a later create or update makes the query match.
 
 ### Bucket transformations
@@ -71,12 +74,14 @@ Request-backed buckets are currently the exception. They still use eager `reques
 
 ## Caching helper
 
-Use the `@general_manager.cache.cache_decorator.cached` decorator to memoise expensive functions while automatically tracking dependencies:
+Use the `@general_manager.cache.cache_decorator.cached` decorator to memoise
+expensive helpers for the active request, calculation graph, bulk operation, or
+background run:
 
 ```python
 from general_manager.cache.cache_decorator import cached
 
-@cached
+@cached()
 def project_forecast(project_id: int) -> dict[str, float]:
     project = Project(id=project_id)
     return {
@@ -85,20 +90,59 @@ def project_forecast(project_id: int) -> dict[str, float]:
     }
 ```
 
-When the wrapped function runs, it records every manager it touches. Subsequent calls reuse the cached value until a tracked dependency changes.
+The default `scope="run"` stores values in `CalculationRunContext`. Values are
+discarded when the run ends and do not participate in dependency invalidation.
 
-You can also specify a timeout in seconds:
+Use dependency scope when a value should be reused across runs and invalidated
+when tracked managers change:
 
 ```python
-@cached(timeout=300)  # Cache for 5 minutes
+@cached(scope="dependency")
 def project_forecast(project_id: int) -> dict[str, float]:
     ...
 ```
-When `timeout` is set, the cache entry expires after the given duration no matter if the tracked dependencies change.
+
+When the wrapped dependency-scoped function runs, it records every manager it
+touches. Subsequent calls reuse the cached value until a tracked dependency
+changes.
+
+Use timeout scope when a value should be cached in the configured cache backend
+for a fixed duration without dependency tracking:
+
+```python
+@cached(scope="timeout", timeout=300)  # Cache for 5 minutes
+def project_forecast(project_id: int) -> dict[str, float]:
+    ...
+```
+
+`timeout` is required for `scope="timeout"` and is not accepted on the other
+scopes. The cache entry expires after the given duration and is not invalidated
+through the dependency index.
+
+## Run context storage
+
+`CalculationRunContext` exposes lightweight storage for one request,
+calculation graph, bulk operation, or background run. Use it for working sets
+that should not enter the dependency index:
+
+```python
+from general_manager.cache.run_context import CalculationRunContext
+
+with CalculationRunContext() as context:
+    context.set(("project", project_id), project)
+    project = context.get(("project", project_id))
+```
+
+Use `get_or_set(key, loader)` to load a value once, `has(key)` or `key in
+context` to check storage, `index(key=..., loader=..., index_by=...)` for
+one-row-per-key lookups, and `group_by(...)` or `index_many(...)` when multiple
+rows share the same key.
 
 ## Manual dependency-index helpers
 
-Most application code should rely on CRUD signals and the `cached` decorator. For integration code and tests, the cache module also exposes lower-level dependency-index helpers:
+Most application code should rely on CRUD signals and dependency-scoped
+`cached` calls. For integration code and tests, the cache module also exposes
+lower-level dependency-index helpers:
 
 - `record_dependencies(cache_key, dependencies)` stores the dependency set for an already-computed cache entry.
 - `invalidate_cache_key(cache_key)` invalidates one cache key without recalculating dependency matches.
@@ -108,11 +152,12 @@ These helpers are intentionally lower level than `cached`. Use them when buildin
 
 ## Recommended practices
 
-- Configure a shared cache backend (Redis or Memcached) in production so dependency signals reach all processes.
+- Configure a shared cache backend (Redis or Memcached) in production so dependency signals and timeout-scoped cache entries reach all processes.
 - Keep cache keys deterministic by relying on the built-in `make_cache_key` helper.
-- Avoid caching code paths that bypass permission checks. The cached decorator records dependencies, not the caller identity.
+- Avoid dependency-scoped caching for code paths that bypass permission checks. The cached decorator records dependencies, not the caller identity.
 - Prefer grouping logically inseparable lookup clauses into one `filter()` or `exclude()` call when you want them invalidated as one composite dependency.
 - Treat request-backed bucket caching separately from ORM-backed bucket caching when debugging invalidation behavior.
 - Regularly test cache invalidation by running workflows that update managers and verifying that cached results change accordingly.
 
-For low-latency APIs, combine the cached decorator with bucket-level prefetching and GraphQL data loaders.
+For low-latency APIs, combine run-scoped caching with bucket-level prefetching
+and GraphQL data loaders.

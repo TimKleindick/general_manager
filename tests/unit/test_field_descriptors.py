@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
@@ -148,6 +149,37 @@ def test_build_field_descriptors_resolves_string_relation_targets() -> None:
     assert descriptors["members_list"].metadata["type"] is owner_manager
     assert get_model.call_count == 2
     get_model.assert_any_call("accounts", "OwnerModel")
+
+
+def test_build_field_descriptors_adds_raw_foreign_key_id_accessor() -> None:
+    class RawIdOwnerModel(models.Model):
+        class Meta:
+            app_label = "general_manager"
+
+    class RawIdChildModel(models.Model):
+        owner = models.ForeignKey(
+            RawIdOwnerModel,
+            on_delete=models.CASCADE,
+            null=True,
+        )
+
+        class Meta:
+            app_label = "general_manager"
+
+    interface_cls = type("InterfaceUnderTest", (), {"_model": RawIdChildModel})
+
+    descriptors = build_field_descriptors(
+        interface_cls,
+        resolve_many=lambda *_args: None,
+    )
+
+    assert "owner" in descriptors
+    assert "owner_id" in descriptors
+    assert descriptors["owner_id"].metadata["type"] is int
+
+    interface_instance = SimpleNamespace(_instance=RawIdChildModel(owner_id=42))
+
+    assert descriptors["owner_id"].accessor(interface_instance) == 42
 
 
 def test_build_field_descriptors_resolves_same_app_string_relation_targets() -> None:

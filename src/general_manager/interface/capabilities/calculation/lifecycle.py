@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING, ClassVar
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 
@@ -16,6 +18,15 @@ if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.interfaces.calculation import (
         CalculationInterface,
     )
+
+
+def _track_cached_manager(value: Any) -> None:
+    if isinstance(value, GeneralManager):
+        DependencyTracker.track(
+            value.__class__.__name__,
+            "identification",
+            serialize_dependency_identifier(value.identification),
+        )
 
 
 class CalculationReadCapability(BaseCapability):
@@ -88,8 +99,8 @@ class CalculationReadCapability(BaseCapability):
             input_field = interface_cls.input_fields[field_name]
             if field_name in resolved_values:
                 cached_value = resolved_values[field_name]
-                if not isinstance(cached_value, GeneralManager):
-                    return cached_value
+                _track_cached_manager(cached_value)
+                return cached_value
 
             input_field = interface_cls.input_fields[field_name]
             dependency_values = {
@@ -103,8 +114,7 @@ class CalculationReadCapability(BaseCapability):
                 interface_instance.identification.get(field_name),
                 dependency_values,
             )
-            if not isinstance(value, GeneralManager):
-                resolved_values[field_name] = value
+            resolved_values[field_name] = value
             return value
 
         return {

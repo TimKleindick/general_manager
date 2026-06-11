@@ -227,6 +227,20 @@ class _FieldDescriptorBuilder:
                 relation_kind="direct",
                 filter_lookup=field.name,
             )
+            raw_id_name = getattr(field, "attname", f"{field.name}_id")
+            if raw_id_name not in self._descriptors:
+                target_field = getattr(field, "target_field", None)
+                raw_id_type = type(target_field) if target_field is not None else int
+                self._register(
+                    attribute_name=raw_id_name,
+                    raw_type=raw_id_type,
+                    is_required=not field.null,
+                    is_editable=False,
+                    default=default,
+                    is_derived=False,
+                    accessor=_instance_attribute_accessor(raw_id_name),
+                    filter_lookup=raw_id_name,
+                )
 
     def _add_reverse_one_to_one_relations(self) -> None:
         """Register snake_case aliases for reverse one-to-one relation accessors."""

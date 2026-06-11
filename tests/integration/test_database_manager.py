@@ -347,6 +347,22 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(human_no_country.name, "David")
         self.assertIsNone(human_no_country.country)
 
+    def test_foreign_key_id_accessor_returns_raw_id_without_resolving_relation(self):
+        """
+        Foreign-key ID helpers expose the raw column value without building the related manager.
+        """
+        us_country_pk = self.TestCountry.Interface._model.objects.get(code="US").pk
+
+        with patch.object(
+            self.TestCountry,
+            "__init__",
+            side_effect=AssertionError("country relation should not resolve"),
+        ):
+            self.assertEqual(self.test_human1.country_id, us_country_pk)
+            self.assertIsNone(self.test_human2.country_id)
+
+        self.assertIs(self.TestHuman.country_id, int)
+
     def test_filter_operations(self):
         """
         Test various filter operations on GeneralManager instances.

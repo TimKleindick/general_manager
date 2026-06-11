@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable
 from contextvars import ContextVar, Token
 from types import TracebackType
@@ -44,6 +45,22 @@ class CalculationRunContext:
             self._values[key] = loader()
         return self._values[key]  # type: ignore[return-value]
 
+    def get(self, key: Hashable, default: object = None) -> object:
+        """Return the stored value for key, or default when key is absent."""
+        return self._values.get(key, default)
+
+    def set(self, key: Hashable, value: object) -> None:
+        """Store a value for the active run."""
+        self._values[key] = value
+
+    def has(self, key: Hashable) -> bool:
+        """Return whether key has a value in the active run."""
+        return key in self._values
+
+    def __contains__(self, key: Hashable) -> bool:
+        """Return whether key has a value in the active run."""
+        return self.has(key)
+
     def index(
         self,
         *,
@@ -56,6 +73,33 @@ class CalculationRunContext:
             ("index", key),
             lambda: {index_by(row): row for row in loader()},
         )
+
+    def group_by(
+        self,
+        *,
+        key: Hashable,
+        loader: Callable[[], Iterable[T]],
+        group_by: Callable[[T], K],
+    ) -> dict[K, list[T]]:
+        """Load a working set once and group it by the supplied key function."""
+
+        def load_groups() -> dict[K, list[T]]:
+            grouped: defaultdict[K, list[T]] = defaultdict(list)
+            for row in loader():
+                grouped[group_by(row)].append(row)
+            return dict(grouped)
+
+        return self.get_or_set(("group_by", key), load_groups)
+
+    def index_many(
+        self,
+        *,
+        key: Hashable,
+        loader: Callable[[], Iterable[T]],
+        index_by: Callable[[T], K],
+    ) -> dict[K, list[T]]:
+        """Load a working set once and group rows sharing the same index key."""
+        return self.group_by(key=key, loader=loader, group_by=index_by)
 
 
 def current_calculation_run_context() -> CalculationRunContext | None:

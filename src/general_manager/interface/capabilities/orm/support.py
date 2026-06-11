@@ -330,6 +330,12 @@ class OrmReadCapability(BaseCapability):
         Returns:
             type: The class used to represent the field's values: the related model's `_general_manager_class` when the field is a relation to a model that exposes that attribute, otherwise the Python type of the field object.
         """
+        descriptors = get_support_capability(interface_cls).get_field_descriptors(
+            interface_cls
+        )
+        descriptor = descriptors.get(field_name)
+        if descriptor is not None:
+            return descriptor.metadata["type"]
         field = interface_cls._model._meta.get_field(field_name)
         if (
             field.is_relation
