@@ -665,9 +665,10 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             actual_costs=Measurement(1200, "EUR"), ignore_permission=True
         )
 
-        self.assertFalse(commercials1.has_budget_buffer)
+        refreshed_commercials1 = self.TestCommercials(project=self.project1)
+        self.assertFalse(refreshed_commercials1.has_budget_buffer)
         self.assert_cache_miss()
-        self.assertEqual(commercials1.budget_left, Measurement(-200, "EUR"))
+        self.assertEqual(refreshed_commercials1.budget_left, Measurement(-200, "EUR"))
         self.assert_cache_hit()
 
     def test_contains_lookup_invalidation(self):
