@@ -102,6 +102,22 @@ class TestFilterParser(TestCase):
                 {"id": mock_manager.id},
             )
 
+            filters = parse_filters({"manager_id": mock_manager.id}, possible_values)
+            self.assertEqual(len(filters), 1)
+            self.assertEqual(
+                filters["manager"]["filter_kwargs"],
+                {"id": mock_manager.id},
+            )
+
+            filters = parse_filters(
+                {"manager_id__in": [mock_manager.id, 2]}, possible_values
+            )
+            self.assertEqual(len(filters), 1)
+            self.assertEqual(
+                filters["manager"]["filter_kwargs"],
+                {"id__in": [mock_manager.id, 2]},
+            )
+
     def test_parse_filters_invalid_field(self):
         """
         Tests that parse_filters raises a ValueError when an unknown field is provided.
@@ -112,6 +128,8 @@ class TestFilterParser(TestCase):
         }
         with self.assertRaises(ValueError):
             parse_filters({"unknown_field__exact": "value"}, possible_values)
+        with self.assertRaises(ValueError):
+            parse_filters({"unknown_field_id": "value"}, possible_values)
 
     def test_filter_function_with_deep_lookup(self):
         """

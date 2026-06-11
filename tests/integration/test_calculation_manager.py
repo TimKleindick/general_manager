@@ -488,6 +488,11 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.assertEqual(tax_calculation_bucket_filtered1[0].employee.name, "Tim")
         self.assertEqual(tax_calculation_bucket_filtered1[1].employee.name, "Tina")
 
+        tim = tax_calculation_bucket_filtered1[0].employee
+        tax_calculation_by_id = self.TaxCalculation.filter(employee_id=tim.id)
+        self.assertEqual(len(tax_calculation_by_id), 1)
+        self.assertEqual(tax_calculation_by_id[0].employee.name, "Tim")
+
         tax_calculation_bucket_filtered2 = tax_calculation_bucket_filtered1.filter(
             calculated_tax=Measurement(3000, "EUR") * 0.2
         )
