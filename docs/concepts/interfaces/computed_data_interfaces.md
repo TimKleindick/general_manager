@@ -43,7 +43,12 @@ Call `ProjectSummary.all()` to iterate through all possible input combinations. 
 ```python
 for summary in ProjectSummary.filter(project=my_project):
     print(summary.date, summary.total_volume)
+
+for summary in ProjectSummary.filter(project_id=my_project.id):
+    print(summary.date, summary.total_volume)
 ```
+
+For manager-typed inputs, filters accept either the manager instance (`project=...`) or its identifier (`project_id=...`). Nested lookups such as `project__name__icontains=...` continue to target fields on the input manager.
 
 Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking when a property opts into dependency-aware caching.
 

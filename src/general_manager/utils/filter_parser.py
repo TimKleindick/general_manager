@@ -42,11 +42,26 @@ def parse_filters(
     for kwarg, value in filter_kwargs.items():
         parts = kwarg.split("__")
         field_name = parts[0]
+        id_alias_lookup_prefix = ""
+        if field_name not in possible_values and field_name.endswith("_id"):
+            alias_field_name = field_name.removesuffix("_id")
+            if alias_field_name in possible_values and issubclass(
+                possible_values[alias_field_name].type,
+                GeneralManager,
+            ):
+                field_name = alias_field_name
+                id_alias_lookup_prefix = "id"
         if field_name not in possible_values:
             raise UnknownInputFieldError(field_name)
         input_field = possible_values[field_name]
 
         lookup = "__".join(parts[1:]) if len(parts) > 1 else ""
+        if id_alias_lookup_prefix:
+            lookup = (
+                id_alias_lookup_prefix
+                if lookup == ""
+                else f"{id_alias_lookup_prefix}__{lookup}"
+            )
 
         if issubclass(input_field.type, GeneralManager):
             # Collect filter keyword arguments for the input field
