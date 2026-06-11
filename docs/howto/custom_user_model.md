@@ -83,6 +83,7 @@ Avoid importing `accounts.models.User` when you expect GeneralManager APIs like:
 
 - `User.create(...)`
 - `User.filter(...)`
+- `User.get(...)`
 - `User.Factory.create()`
 
 `manage.py shell` and similar tools naturally surface Django models from `models.py`, so `accounts.managers.User` should be your canonical GeneralManager import path.

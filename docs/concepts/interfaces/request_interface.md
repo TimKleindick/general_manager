@@ -1,6 +1,6 @@
 # Request Interfaces
 
-`RequestInterface` lets a manager read and query data from a remote HTTP-style service while keeping the familiar GeneralManager API (`filter()`, `exclude()`, `all()`, manager attribute access, and named collection operations).
+`RequestInterface` lets a manager read and query data from a remote HTTP-style service while keeping the familiar GeneralManager API (`filter()`, `get()`, `exclude()`, `all()`, manager attribute access, and named collection operations).
 
 If both services use GeneralManager, prefer `RemoteManagerInterface` for the client side and `RemoteAPI` on the server side. That layer builds on top of `RequestInterface` and synthesizes the standard GeneralManager REST contract for you.
 
@@ -27,7 +27,7 @@ Do not use it as a generic ad hoc HTTP client. Request interfaces are resource-f
 
 A request-backed manager has five layers:
 
-1. Manager API: callers use `Project.filter(status="active")`, `Project.exclude(...)`, `Project.all()`, or `Project.Interface.query_operation("search", ...)`.
+1. Manager API: callers use `Project.filter(status="active")`, `Project.get(id=7)`, `Project.exclude(...)`, `Project.all()`, or `Project.Interface.query_operation("search", ...)`.
 2. Field schema: `RequestField` class attributes define the remote resource shape exposed by the manager.
 3. Filter and operation config: `Interface.Meta` declares filters, query operations, mutation operations, auth provider, retry policy, and serializers.
 4. Request plan: GeneralManager builds a `RequestQueryPlan` with method, path, query params, headers, body, path params, and optional local predicates.

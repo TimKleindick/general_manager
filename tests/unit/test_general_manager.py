@@ -282,6 +282,20 @@ class GeneralManagerTestCase(TestCase):
             mock_filter.assert_called_once_with(id__in=["dummy_id", 123])
             self.assertEqual(result, [])
 
+    def test_classmethod_get(self):
+        """
+        Tests that the GeneralManager.get class method delegates through the
+        filtered bucket's get method with the provided lookup arguments.
+        """
+        expected_manager = self.manager()
+        bucket = Mock()
+        bucket.get.return_value = expected_manager
+        with patch.object(DummyInterface, "filter", return_value=bucket) as mock_filter:
+            result = self.manager.get(name="Test Manager")
+            mock_filter.assert_called_once_with(name="Test Manager")
+            bucket.get.assert_called_once_with()
+            self.assertIs(result, expected_manager)
+
     def test_classmethod_exclude(self):
         # Test the exclude class method
         """
