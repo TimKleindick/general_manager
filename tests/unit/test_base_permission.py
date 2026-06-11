@@ -378,6 +378,39 @@ class BasePermissionTests(TestCase):
         result = BasePermission.get_user_with_id(user)
         self.assertEqual(result, user)
 
+    def test_get_user_with_id_preserves_configured_user_model_instance(self) -> None:
+        """Already-resolved configured user instances should not be re-queried."""
+
+        class PlainConfiguredUserManager:
+            def __init__(self) -> None:
+                self.calls: list[object] = []
+
+            def get(self, *, pk: object) -> object:
+                self.calls.append(pk)
+                raise TypeError
+
+        manager = PlainConfiguredUserManager()
+
+        class PlainConfiguredUser:
+            class DoesNotExist(Exception):
+                pass
+
+            objects = manager
+
+            id = 21
+            is_authenticated = True
+            is_superuser = False
+
+        user = PlainConfiguredUser()
+
+        with patch(
+            "django.contrib.auth.get_user_model", return_value=PlainConfiguredUser
+        ):
+            result = BasePermission.get_user_with_id(user)
+
+        self.assertIs(result, user)
+        self.assertEqual(manager.calls, [])
+
     def test_get_user_with_id_anonymous(self):
         """Test get_user_with_id with anonymous user."""
         user = AnonymousUser()
