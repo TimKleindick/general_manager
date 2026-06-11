@@ -29,10 +29,10 @@ Add this method to `GraphQLRelationFilterIntegrationTests`:
 def test_reuses_id_variable_for_detail_and_relation_filter(self):
     query = """
     query Issue247($id: ID!) {
-        changerequest(id: $id) {
+        changeRequest(id: $id) {
             id
         }
-        changerequestfeasibilityList(
+        changeRequestFeasibilityList(
             filter: {changeRequest: {id: $id}}
         ) {
             items {
@@ -47,9 +47,9 @@ def test_reuses_id_variable_for_detail_and_relation_filter(self):
 
     self.assertResponseNoErrors(response)
     payload = response.json()["data"]
-    self.assertEqual(payload["changerequest"]["id"], str(self.primary.id))
+    self.assertEqual(payload["changeRequest"]["id"], str(self.primary.id))
     self.assertEqual(
-        [item["id"] for item in payload["changerequestfeasibilityList"]["items"]],
+        [item["id"] for item in payload["changeRequestFeasibilityList"]["items"]],
         [str(self.high_feasibility.id)],
     )
 ```

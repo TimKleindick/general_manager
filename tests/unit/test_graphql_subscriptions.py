@@ -365,7 +365,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         context = SimpleNamespace(user=self.user)
         subscription = """
             subscription {
-                onSoftemployeeClassChange {
+                onSoftEmployeeClassChange {
                     action
                     item {
                         id
@@ -396,7 +396,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         event = asyncio.run(run_subscription())
 
         self.assertIsNone(event.errors)
-        payload = event.data["onSoftemployeeClassChange"]
+        payload = event.data["onSoftEmployeeClassChange"]
         self.assertEqual(payload["action"], "delete")
         self.assertEqual(payload["item"]["name"], "Soft")
 
@@ -1161,19 +1161,19 @@ class GraphQLAddSubscriptionFieldTests(unittest.TestCase):
 
         GraphQL._add_subscription_field(graphene_type, TestManager)
 
-        self.assertIn("on_testmanager_change", GraphQL._subscription_fields)
-        self.assertIn("subscribe_on_testmanager_change", GraphQL._subscription_fields)
-        self.assertIn("resolve_on_testmanager_change", GraphQL._subscription_fields)
-        self.assertIn("on_testmanager_class_change", GraphQL._subscription_fields)
+        self.assertIn("on_test_manager_change", GraphQL._subscription_fields)
+        self.assertIn("subscribe_on_test_manager_change", GraphQL._subscription_fields)
+        self.assertIn("resolve_on_test_manager_change", GraphQL._subscription_fields)
+        self.assertIn("on_test_manager_class_change", GraphQL._subscription_fields)
         self.assertIn(
-            "subscribe_on_testmanager_class_change", GraphQL._subscription_fields
+            "subscribe_on_test_manager_class_change", GraphQL._subscription_fields
         )
         self.assertIn(
-            "resolve_on_testmanager_class_change", GraphQL._subscription_fields
+            "resolve_on_test_manager_class_change", GraphQL._subscription_fields
         )
 
-        entity_field = GraphQL._subscription_fields["on_testmanager_change"]
-        class_field = GraphQL._subscription_fields["on_testmanager_class_change"]
+        entity_field = GraphQL._subscription_fields["on_test_manager_change"]
+        class_field = GraphQL._subscription_fields["on_test_manager_class_change"]
         self.assertIn("id", entity_field.args)
         self.assertEqual(class_field.args, {})
 

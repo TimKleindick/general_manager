@@ -128,12 +128,41 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
     def _titles_from_response(self, response) -> list[str]:
         self.assertResponseNoErrors(response)
         payload = response.json()
-        return [item["title"] for item in payload["data"]["changerequestList"]["items"]]
+        return [item["title"] for item in payload["data"]["changeRequestList"]["items"]]
+
+    def test_multiword_root_query_fields_use_camel_case_names(self):
+        query = """
+        query {
+            __schema {
+                queryType {
+                    fields {
+                        name
+                    }
+                }
+            }
+        }
+        """
+
+        response = self.query(query)
+
+        self.assertResponseNoErrors(response)
+        fields = [
+            field["name"]
+            for field in response.json()["data"]["__schema"]["queryType"]["fields"]
+        ]
+        self.assertIn("changeRequest", fields)
+        self.assertIn("changeRequestList", fields)
+        self.assertIn("changeRequestFeasibility", fields)
+        self.assertIn("changeRequestFeasibilityList", fields)
+        self.assertNotIn("changerequest", fields)
+        self.assertNotIn("changerequestList", fields)
+        self.assertNotIn("changerequestfeasibility", fields)
+        self.assertNotIn("changerequestfeasibilityList", fields)
 
     def test_filters_by_direct_foreign_key_relation(self):
         query = """
         query {
-            changerequestfeasibilityList(filter: {
+            changeRequestFeasibilityList(filter: {
                 changeRequest: { title: "Primary" }
             }) {
                 items {
@@ -148,7 +177,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         response = self.query(query)
 
         self.assertResponseNoErrors(response)
-        items = response.json()["data"]["changerequestfeasibilityList"]["items"]
+        items = response.json()["data"]["changeRequestFeasibilityList"]["items"]
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["score"], 9)
         self.assertEqual(items[0]["changeRequest"]["title"], "Primary")
@@ -198,10 +227,10 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
     def test_reuses_id_variable_for_detail_and_relation_filter(self):
         query = """
         query Issue247($id: ID!) {
-            changerequest(id: $id) {
+            changeRequest(id: $id) {
                 id
             }
-            changerequestfeasibilityList(
+            changeRequestFeasibilityList(
                 filter: {changeRequest: {id: $id}}
             ) {
                 items {
@@ -216,9 +245,9 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]
-        self.assertEqual(payload["changerequest"]["id"], self.primary.id)
+        self.assertEqual(payload["changeRequest"]["id"], self.primary.id)
         self.assertEqual(
-            [item["id"] for item in payload["changerequestfeasibilityList"]["items"]],
+            [item["id"] for item in payload["changeRequestFeasibilityList"]["items"]],
             [self.high_feasibility.id],
         )
 
@@ -248,7 +277,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
     def test_filters_by_reverse_relation_any(self):
         query = """
         query {
-            changerequestList(filter: {
+            changeRequestList(filter: {
                 changeRequestFeasibilityList: { any: { score_Gte: 7 } }
             }) {
                 items { id title }
@@ -263,7 +292,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
     def test_filters_by_nested_reverse_relation_any(self):
         query = """
         query {
-            changerequestList(filter: {
+            changeRequestList(filter: {
                 changeRequestFeasibilityList: {
                     any: {
                         changeRequestTeamList: {
@@ -284,7 +313,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
     def test_filters_by_reverse_relation_none(self):
         query = """
         query {
-            changerequestList(filter: {
+            changeRequestList(filter: {
                 changeRequestFeasibilityList: { none: { score_Gte: 7 } }
             }) {
                 items { id title }
@@ -299,7 +328,7 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
     def test_exclude_rejects_reverse_relation_none(self):
         query = """
         query {
-            changerequestList(exclude: {
+            changeRequestList(exclude: {
                 changeRequestFeasibilityList: { none: { score_Gte: 7 } }
             }) {
                 items { id title }

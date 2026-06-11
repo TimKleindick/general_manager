@@ -374,7 +374,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             """
         self.query_number_rate = """
             query Project($id: ID!) {
-                testproject(id: $id) {
+                testProject(id: $id) {
                     numberRate
                 }
             }
@@ -434,7 +434,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             variables={"id": self.project.id},
         )
         self.assertResponseNoErrors(response)
-        self.assertEqual(response.json()["data"]["testproject"]["numberRate"], 0.01)
+        self.assertEqual(response.json()["data"]["testProject"]["numberRate"], 0.01)
 
         self.project = self.project.update(number=200, ignore_permission=True)
 
@@ -443,7 +443,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             variables={"id": self.project.id},
         )
         self.assertResponseNoErrors(response)
-        self.assertEqual(response.json()["data"]["testproject"]["numberRate"], 2)
+        self.assertEqual(response.json()["data"]["testProject"]["numberRate"], 2)
 
     def test_update_project_without_budget(self):
         """

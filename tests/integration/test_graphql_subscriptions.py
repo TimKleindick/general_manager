@@ -171,7 +171,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
         Verify a calculation GraphQL subscription updates when an underlying dependency changes.
 
-        Subscribes to `onTaxcalculationChange` for a created employee, asserts the initial snapshot contains the expected calculated tax, updates the employee's salary to provoke a recalculation, and asserts the subsequent update event reflects the new calculated tax and that `calculatedTax` was accessed.
+        Subscribes to `onTaxCalculationChange` for a created employee, asserts the initial snapshot contains the expected calculated tax, updates the employee's salary to provoke a recalculation, and asserts the subsequent update event reflects the new calculated tax and that `calculatedTax` was accessed.
         """
         employee = self.Employee.create(
             name="Alice",
@@ -182,7 +182,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         context = SimpleNamespace(user=self.user)
         subscription = """
             subscription ($employeeId: ID!) {
-                onTaxcalculationChange(employeeId: $employeeId) {
+                onTaxCalculationChange(employeeId: $employeeId) {
                     action
                     item {
                         calculatedTax {
@@ -228,13 +228,13 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         first_event, second_event = asyncio.run(run_subscription())
 
         self.assertIsNone(first_event.errors)
-        snapshot = first_event.data["onTaxcalculationChange"]
+        snapshot = first_event.data["onTaxCalculationChange"]
         self.assertEqual(snapshot["action"], "snapshot")
         self.assertAlmostEqual(snapshot["item"]["calculatedTax"]["value"], 600)
         self.assertEqual(snapshot["item"]["calculatedTax"]["unit"], "EUR")
 
         self.assertIsNone(second_event.errors)
-        update = second_event.data["onTaxcalculationChange"]
+        update = second_event.data["onTaxCalculationChange"]
         self.assertEqual(update["action"], "update")
         self.assertAlmostEqual(update["item"]["calculatedTax"]["value"], 800)
         self.assertEqual(update["item"]["calculatedTax"]["unit"], "EUR")
@@ -246,7 +246,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
         Verify that a GraphQL subscription using a fragment updates calculated GraphQL properties when their backend dependency changes.
 
-        Subscribes to onTaxcalculationChange for a created employee with a fragment that selects `configuredTax`, asserts the initial snapshot value and unit (reflecting the initial TaxRule multiplier), updates the TaxRule multiplier, and asserts the subsequent update event reflects the new computed `configuredTax` value and unit. Also verifies that `TaxCalculation.access_log` records access to `configuredTax` and does not contain `unusedTax`.
+        Subscribes to onTaxCalculationChange for a created employee with a fragment that selects `configuredTax`, asserts the initial snapshot value and unit (reflecting the initial TaxRule multiplier), updates the TaxRule multiplier, and asserts the subsequent update event reflects the new computed `configuredTax` value and unit. Also verifies that `TaxCalculation.access_log` records access to `configuredTax` and does not contain `unusedTax`.
         """
         employee = self.Employee.create(
             name="Alice",
@@ -257,7 +257,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         context = SimpleNamespace(user=self.user)
         subscription = """
             subscription ($employeeId: ID!) {
-                onTaxcalculationChange(employeeId: $employeeId) {
+                onTaxCalculationChange(employeeId: $employeeId) {
                     action
                     item {
                         ...ConfiguredTaxFields
@@ -304,13 +304,13 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         first_event, second_event = asyncio.run(run_subscription())
 
         self.assertIsNone(first_event.errors)
-        snapshot = first_event.data["onTaxcalculationChange"]
+        snapshot = first_event.data["onTaxCalculationChange"]
         self.assertEqual(snapshot["action"], "snapshot")
         self.assertAlmostEqual(snapshot["item"]["configuredTax"]["value"], 600)
         self.assertEqual(snapshot["item"]["configuredTax"]["unit"], "EUR")
 
         self.assertIsNone(second_event.errors)
-        update = second_event.data["onTaxcalculationChange"]
+        update = second_event.data["onTaxCalculationChange"]
         self.assertEqual(update["action"], "update")
         self.assertAlmostEqual(update["item"]["configuredTax"]["value"], 750)
         self.assertEqual(update["item"]["configuredTax"]["unit"], "EUR")
@@ -323,7 +323,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
         Verify that a GraphQL subscription updates when a calculation's GraphQL property depends on another model.
 
-        Subscribes to onTaxcalculationChange for a created employee and asserts the initial snapshot and subsequent update reflect changes to the TaxRule multiplier used by the `configuredTax` calculation. Confirms the reported `value` and `unit` for `configuredTax` in the snapshot and update events and that `configuredTax` was accessed while `unusedTax` was not recorded in the calculation access log.
+        Subscribes to onTaxCalculationChange for a created employee and asserts the initial snapshot and subsequent update reflect changes to the TaxRule multiplier used by the `configuredTax` calculation. Confirms the reported `value` and `unit` for `configuredTax` in the snapshot and update events and that `configuredTax` was accessed while `unusedTax` was not recorded in the calculation access log.
         """
         employee = self.Employee.create(
             name="Alice",
@@ -334,7 +334,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         context = SimpleNamespace(user=self.user)
         subscription = """
             subscription ($employeeId: ID!) {
-                onTaxcalculationChange(employeeId: $employeeId) {
+                onTaxCalculationChange(employeeId: $employeeId) {
                     action
                     item {
                         configuredTax {
@@ -377,13 +377,13 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         first_event, second_event = asyncio.run(run_subscription())
 
         self.assertIsNone(first_event.errors)
-        snapshot = first_event.data["onTaxcalculationChange"]
+        snapshot = first_event.data["onTaxCalculationChange"]
         self.assertEqual(snapshot["action"], "snapshot")
         self.assertAlmostEqual(snapshot["item"]["configuredTax"]["value"], 600)
         self.assertEqual(snapshot["item"]["configuredTax"]["unit"], "EUR")
 
         self.assertIsNone(second_event.errors)
-        update = second_event.data["onTaxcalculationChange"]
+        update = second_event.data["onTaxCalculationChange"]
         self.assertEqual(update["action"], "update")
         self.assertAlmostEqual(update["item"]["configuredTax"]["value"], 750)
         self.assertEqual(update["item"]["configuredTax"]["unit"], "EUR")
@@ -394,7 +394,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
         Verify GraphQL subscription handles aliases for calculation properties.
 
-        Subscribes to onTaxcalculationChange requesting `configuredTax` aliased as `primaryTax`, asserts the initial snapshot and subsequent update reflect the TaxRule multiplier change (values 600 → 900 with unit "EUR"), and verifies that `configuredTax` was accessed while `unusedTax` was not.
+        Subscribes to onTaxCalculationChange requesting `configuredTax` aliased as `primaryTax`, asserts the initial snapshot and subsequent update reflect the TaxRule multiplier change (values 600 → 900 with unit "EUR"), and verifies that `configuredTax` was accessed while `unusedTax` was not.
         """
         employee = self.Employee.create(
             name="Alice",
@@ -405,7 +405,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         context = SimpleNamespace(user=self.user)
         subscription = """
             subscription ($employeeId: ID!) {
-                onTaxcalculationChange(employeeId: $employeeId) {
+                onTaxCalculationChange(employeeId: $employeeId) {
                     action
                     item {
                         primaryTax: configuredTax {
@@ -453,13 +453,13 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         first_event, second_event = asyncio.run(run_subscription())
 
         self.assertIsNone(first_event.errors)
-        snapshot = first_event.data["onTaxcalculationChange"]
+        snapshot = first_event.data["onTaxCalculationChange"]
         self.assertEqual(snapshot["action"], "snapshot")
         self.assertAlmostEqual(snapshot["item"]["primaryTax"]["value"], 600)
         self.assertEqual(snapshot["item"]["primaryTax"]["unit"], "EUR")
 
         self.assertIsNone(second_event.errors)
-        update = second_event.data["onTaxcalculationChange"]
+        update = second_event.data["onTaxCalculationChange"]
         self.assertEqual(update["action"], "update")
         self.assertAlmostEqual(update["item"]["primaryTax"]["value"], 900)
         self.assertEqual(update["item"]["primaryTax"]["unit"], "EUR")
@@ -470,7 +470,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         """
         Verifies that a subscription requesting only the `action` field emits a snapshot and an update without resolving item payloads.
 
-        Subscribes to `onTaxcalculationChange` for an employee, receives an initial snapshot event, updates the employee's salary to trigger a change event, and asserts:
+        Subscribes to `onTaxCalculationChange` for an employee, receives an initial snapshot event, updates the employee's salary to trigger a change event, and asserts:
         - the first event's action is "snapshot",
         - the second event's action is "update",
         - no calculation GraphQL properties were accessed (TaxCalculation.access_log remains empty).
@@ -484,7 +484,7 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         context = SimpleNamespace(user=self.user)
         subscription = """
             subscription ($employeeId: ID!) {
-                onTaxcalculationChange(employeeId: $employeeId) {
+                onTaxCalculationChange(employeeId: $employeeId) {
                     action
                 }
             }
@@ -526,10 +526,10 @@ class TestGraphQLCalculationSubscriptions(GeneralManagerTransactionTestCase):
         first_event, second_event = asyncio.run(run_subscription())
 
         self.assertIsNone(first_event.errors)
-        snapshot = first_event.data["onTaxcalculationChange"]
+        snapshot = first_event.data["onTaxCalculationChange"]
         self.assertEqual(snapshot["action"], "snapshot")
 
         self.assertIsNone(second_event.errors)
-        update = second_event.data["onTaxcalculationChange"]
+        update = second_event.data["onTaxCalculationChange"]
         self.assertEqual(update["action"], "update")
         self.assertEqual(self.TaxCalculation.access_log, [])

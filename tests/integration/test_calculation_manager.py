@@ -119,7 +119,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         self.client.force_login(self.user)
         self.mutation = """
         query($employeeId: ID!) {
-            taxcalculation(employeeId: $employeeId) {
+            taxCalculation(employeeId: $employeeId) {
                 calculatedTax {
                     value
                     unit
@@ -140,7 +140,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
         variables = {"employeeId": employee.id}
         response = self.query(self.mutation, variables=variables)
         self.assertResponseNoErrors(response)
-        data = response.json()["data"]["taxcalculation"]
+        data = response.json()["data"]["taxCalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 600)
         self.assertEqual(data["calculatedTax"]["unit"], "EUR")
 
@@ -236,7 +236,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
         response = self.query(self.mutation, variables={"employeeId": employee.id})
         self.assertResponseNoErrors(response)
-        data = response.json()["data"]["taxcalculation"]
+        data = response.json()["data"]["taxCalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 600)
 
         employee.update(
@@ -247,7 +247,7 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
         response = self.query(self.mutation, variables={"employeeId": employee.id})
         self.assertResponseNoErrors(response)
-        data = response.json()["data"]["taxcalculation"]
+        data = response.json()["data"]["taxCalculation"]
         self.assertEqual(data["calculatedTax"]["value"], 800)
 
     def test_calculation_graphql_property_defaults_to_run_scope(self):
@@ -356,10 +356,10 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
 
         query = """
         query($employeeId: ID!) {
-            first: requestscopedcalculation(employeeId: $employeeId) {
+            first: requestScopedCalculation(employeeId: $employeeId) {
                 computedValue
             }
-            second: requestscopedcalculation(employeeId: $employeeId) {
+            second: requestScopedCalculation(employeeId: $employeeId) {
                 computedValue
             }
         }

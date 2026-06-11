@@ -55,7 +55,7 @@ class TestGraphQLMetrics(GeneralManagerTransactionTestCase):
     def test_graphql_request_metrics_success(self):
         query = """
         query MetricsQuery {
-            metricprojectList {
+            metricProjectList {
                 items {
                     id
                     name
@@ -90,7 +90,7 @@ class TestGraphQLMetrics(GeneralManagerTransactionTestCase):
     def test_graphql_error_metrics(self):
         query = """
         query BadQuery {
-            metricprojectList {
+            metricProjectList {
                 items {
                     doesNotExist
                 }
@@ -121,7 +121,7 @@ class TestGraphQLMetrics(GeneralManagerTransactionTestCase):
     def test_graphql_unknown_operation_name(self):
         query = """
         query {
-            metricprojectList {
+            metricProjectList {
                 items {
                     id
                 }
@@ -175,12 +175,12 @@ class TestGraphQLResolverTimingMetrics(GeneralManagerTransactionTestCase):
     def test_resolver_timing_metrics(self):
         query = """
         query MetricsQuery {
-            metricprojectList {
+            metricProjectList {
                 items { id name }
             }
         }
         """
-        field_name = normalize_field_name("Query.metricprojectList")
+        field_name = normalize_field_name("Query.metricProjectList")
         labels = {"field_name": field_name}
         before = self._get_sample_value(
             "graphql_resolver_duration_seconds_count", labels
