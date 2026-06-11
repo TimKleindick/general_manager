@@ -49,6 +49,11 @@ Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped 
 
 Managers compare equal when their identification dictionaries match. Use `manager.identification` to inspect the underlying primary keys. Buckets support `get()` and `first()` helpers to retrieve specific instances.
 
+For ORM foreign keys, GeneralManager exposes raw ID helpers such as
+`project.customer_id` alongside relation accessors such as `project.customer`.
+Use the raw ID helper when you only need the stored identifier and want to avoid
+resolving the related manager.
+
 ## Pattern recommendations
 
 - Use descriptive attribute names that align with your GraphQL schema.

@@ -6,6 +6,8 @@
 
 ::: general_manager.cache.cache_tracker.DependencyTracker
 
+::: general_manager.cache.run_context.CalculationRunContext
+
 ::: general_manager.cache.dependency_index.record_dependencies
 
 ::: general_manager.cache.dependency_index.invalidate_cache_key

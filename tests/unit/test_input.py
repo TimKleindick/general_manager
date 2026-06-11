@@ -411,6 +411,51 @@ class TestInput(TestCase):
         input_obj = Input(int, normalizer=round_to_nearest_10)
         self.assertEqual(input_obj.cast(47), 50)
 
+    def test_input_normalize_skips_callable_possible_values_without_normalizer(self):
+        calls = 0
+
+        def possible_values():
+            nonlocal calls
+            calls += 1
+            return [1, 2, 3]
+
+        input_obj = Input(int, possible_values=possible_values)
+
+        self.assertEqual(input_obj.cast("2"), 2)
+        self.assertEqual(calls, 0)
+
+    def test_input_normalize_resolves_possible_values_for_custom_normalizer(self):
+        calls = 0
+
+        def possible_values():
+            nonlocal calls
+            calls += 1
+            return [1, 2, 3]
+
+        def normalize_with_domain(value, *, domain):
+            return domain[-1] if value not in domain else value
+
+        input_obj = Input(
+            int,
+            possible_values=possible_values,
+            normalizer=normalize_with_domain,
+        )
+
+        self.assertEqual(input_obj.cast("4"), 3)
+        self.assertEqual(calls, 1)
+
+    def test_input_normalize_uses_static_domain_without_resolving_callable_values(self):
+        input_obj = Input(
+            date,
+            possible_values=DateRangeDomain(
+                date(2024, 1, 1),
+                date(2024, 3, 31),
+                frequency="month_end",
+            ),
+        )
+
+        self.assertEqual(input_obj.cast("2024-02-15"), date(2024, 2, 29))
+
     def test_input_validate_bounds_with_min_only(self):
         input_obj = Input(int, min_value=5)
         self.assertTrue(input_obj.validate_bounds(5))

@@ -1,6 +1,7 @@
 # type: ignore
 
 from datetime import datetime
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.contrib.auth.models import User
@@ -432,6 +433,17 @@ class DatabaseBucketTestCase(TestCase):
         # not in
         fake = User(id=999)
         self.assertNotIn(fake, self.bucket)
+
+    def test_contains_uses_targeted_exists_lookup(self):
+        mgr = UserManager(self.u1.id)
+
+        with patch.object(
+            self.bucket._data,
+            "values_list",
+            side_effect=AssertionError("values_list should not be used"),
+        ):
+            self.assertIn(mgr, self.bucket)
+            self.assertIn(self.u1, self.bucket)
 
     def test_sort(self):
         # default ordering by username asc

@@ -25,6 +25,7 @@ class FakeCacheBackend:
         Initializes the in-memory cache store.
         """
         self.store = {}
+        self.timeouts = {}
 
     def get(self, key, default=None):
         """
@@ -52,6 +53,7 @@ class FakeCacheBackend:
             timeout: Optional expiration time for the cache entry. This backend does not enforce expiration.
         """
         self.store[key] = pickle.dumps(value)
+        self.timeouts[key] = timeout
 
 
 class TestCacheDecoratorBackend(SimpleTestCase):
@@ -112,7 +114,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Tests that the cached decorator does not alter the original function's return value.
         """
 
-        @cached(timeout=5)
+        @cached()
         def sample_function(x, y):
             return x + y
 
@@ -128,7 +130,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Verifies that on the first call, the function result is cached and both cache.get and cache.set are called. On a subsequent call with the same arguments before expiration, only cache.get is called, confirming a cache hit.
         """
 
-        @cached(timeout=5)
+        @cached(scope="timeout", timeout=5)
         def sample_function(x, y):
             return x + y
 
@@ -160,7 +162,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         `cache.get` and `cache.set` to be called again.
         """
 
-        @cached(timeout=0.1)  # type: ignore
+        @cached(scope="timeout", timeout=0.1)  # type: ignore[arg-type]
         def sample_function(x, y):
             return x + y
 
@@ -191,7 +193,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
         custom_cache = FakeCacheBackend()
 
-        @cached(timeout=5, cache_backend=custom_cache)
+        @cached(scope="timeout", timeout=5, cache_backend=custom_cache)
         def sample_function(x, y):
             """
             Returns the sum of two values.
@@ -209,13 +211,19 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertTrue(
             len(custom_cache.store) > 0, "Cache should have stored the result"
         )
+        key = make_cache_key(sample_function, (1, 2), {})
+        self.assertEqual(custom_cache.timeouts[key], 5)
 
     def test_cache_decorator_uses_real_tracker(self):
         """
         Tests that the cached decorator records dependencies using DependencyTracker on cache miss and invokes the record function, but does not record dependencies or call the record function on cache hit.
         """
 
-        @cached(timeout=None, cache_backend=self.fake_cache, record_fn=self.record_fn)
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
         def fn(x, y):
             # Record actual dependencies
             DependencyTracker.track("User", "identification", str(x))
@@ -251,7 +259,12 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         dependency recording function, and that cache hits do not trigger dependency recording.
         """
 
-        @cached(timeout=5, cache_backend=self.fake_cache, record_fn=self.record_fn)
+        @cached(
+            scope="timeout",
+            timeout=5,
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
         def fn(x, y):
             # Record actual dependencies
             DependencyTracker.track("User", "identification", str(x))
@@ -269,6 +282,8 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # no record_fn call because of timeout
         self.assertEqual(len(self.record_calls), 0)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+        self.assertEqual(self.fake_cache.timeouts[key], 5)
         self.assertEqual(res, 5)
         self.assertEqual(self.record_calls, [])
 
@@ -285,12 +300,20 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Ensures that both inner and outer functions store their computed results in the provided cache backend and that the recording function is invoked once per miss with the correct dependency sets (inner first, then outer). Also verifies that subsequent calls that hit the cache do not trigger dependency recording.
         """
 
-        @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
         def outer_function(x, y):
             DependencyTracker.track("User", "identification", str(x))
             return inner_function(x, y)
 
-        @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
         def inner_function(x, y):
             """
             Tracks a dependency and returns the sum of two values.
@@ -345,12 +368,20 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Verifies that dependency recording occurs separately for inner and outer cached functions on cache misses, and that no dependency recording occurs on cache hits. Ensures cached results are correctly stored and retrieved from the custom cache backend.
         """
 
-        @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
         def outer_function(x, y):
             DependencyTracker.track("User", "identification", str(x))
             return inner_function(x, y)
 
-        @cached(cache_backend=self.fake_cache, record_fn=self.record_fn)
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
         def inner_function(x, y):
             """
             Tracks a dependency and returns the sum of two values.
@@ -405,6 +436,72 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
 
 class TestCacheDecoratorScopes(SimpleTestCase):
+    def test_timeout_scope_requires_timeout(self):
+        with self.assertRaisesRegex(ValueError, 'scope="timeout" requires timeout'):
+            cached(scope="timeout")
+
+    def test_set_timeout_is_only_valid_for_timeout_scope(self):
+        for scope in ("run", "dependency", "none"):
+            with (
+                self.subTest(scope=scope),
+                self.assertRaisesRegex(
+                    ValueError,
+                    'timeout is only supported with scope="timeout"',
+                ),
+            ):
+                cached(scope=scope, timeout=5)
+
+    def test_timeout_scope_uses_backend_without_dependency_recording(self):
+        fake_cache = FakeCacheBackend()
+        record_calls = []
+        calls = 0
+
+        def record_fn(key, deps):
+            record_calls.append((key, set(deps)))
+
+        @cached(
+            scope="timeout", timeout=5, cache_backend=fake_cache, record_fn=record_fn
+        )
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(sample(3), 6)
+
+        key = make_cache_key(sample, (3,), {})
+        self.assertEqual(calls, 1)
+        self.assertIn(key, fake_cache.store)
+        self.assertEqual(fake_cache.timeouts[key], 5)
+        self.assertNotIn(f"{key}:deps", fake_cache.store)
+        self.assertEqual(record_calls, [])
+
+    def test_default_scope_reuses_value_inside_context_only(self):
+        fake_cache = FakeCacheBackend()
+        record_calls = []
+        calls = 0
+
+        def record_fn(key, deps):
+            record_calls.append((key, set(deps)))
+
+        @cached(cache_backend=fake_cache, record_fn=record_fn)
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        with CalculationRunContext():
+            self.assertEqual(sample(3), 6)
+            self.assertEqual(sample(3), 6)
+
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(calls, 2)
+        self.assertEqual(fake_cache.store, {})
+        self.assertEqual(record_calls, [])
+
     def test_run_scope_reuses_value_inside_context_only(self):
         calls = 0
 

@@ -661,10 +661,18 @@ class Input(Generic[INPUT_TYPE]):
 
         if value is None:
             return None
-        possible_values = self.resolve_possible_values(identification)
+        possible_values = (
+            self.possible_values
+            if isinstance(self.possible_values, InputDomain)
+            else None
+        )
         if isinstance(possible_values, InputDomain):
             value = possible_values.normalize(value)
         if self.normalizer is not None:
+            if possible_values is None:
+                possible_values = self.resolve_possible_values(identification)
+                if isinstance(possible_values, InputDomain):
+                    value = possible_values.normalize(value)
             dependency_values = self._build_dependency_values(identification)
             return _invoke_callable(
                 self.normalizer,

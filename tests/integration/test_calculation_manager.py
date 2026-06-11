@@ -5,6 +5,8 @@ from typing import ClassVar
 from django.contrib.auth import get_user_model
 from django.db.models import CASCADE, CharField, ForeignKey, IntegerField
 from django.utils.crypto import get_random_string
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
@@ -171,6 +173,39 @@ class CustomMutationTest(GeneralManagerTransactionTestCase):
             grouped,
             self.TaxCalculation.all().group_by("employee"),
         )
+
+    def test_manager_inputs_are_cached_only_within_the_calculation_instance(self):
+        employee = self.Employee.create(
+            name="John Doe", salary=Measurement(3000, "EUR"), creator_id=self.user.id
+        )
+        calculation = self.TaxCalculation(employee=employee)
+
+        cached_employee = calculation.employee
+
+        employee.update(
+            salary=Measurement(4000, "EUR"),
+            creator_id=self.user.id,
+            ignore_permission=True,
+        )
+
+        with DependencyTracker() as dependencies:
+            repeated_employee = calculation.employee
+
+        self.assertIs(repeated_employee, cached_employee)
+        self.assertEqual(
+            dependencies,
+            {
+                (
+                    self.Employee.__name__,
+                    "identification",
+                    serialize_dependency_identifier(cached_employee.identification),
+                )
+            },
+        )
+
+        later_calculation = self.TaxCalculation(employee=employee)
+        self.assertEqual(later_calculation.employee.salary, Measurement(4000, "EUR"))
+        self.assertIsNot(later_calculation.employee, cached_employee)
 
     def test_entry_based_graphql_property_refreshes_after_update(self):
         employee = self.Employee.create(

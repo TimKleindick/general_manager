@@ -21,6 +21,11 @@ class ProjectSummary(GeneralManager):
         date = Input(date)
 ```
 
+Resolved input values are memoized on each calculation instance. This includes
+manager inputs: repeated `self.project` access on one calculation returns the
+same wrapper, while a new calculation instance resolves a fresh wrapper from the
+current database state.
+
 ## Computing values
 
 Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results in the active run context by default for every manager type.
@@ -56,6 +61,7 @@ Because calculation managers do not persist data, `create`, `update`, and `delet
 
 - Use `required=False` for optional inputs. Calculation metadata and parsing now treat those fields as nullable and default them to `None` when omitted.
 - Use `possible_values` to restrict input choices or provide a callable for dynamic options.
+- Callable or bucket-backed `possible_values` are not resolved during ordinary input casting unless a custom normalizer needs them. They are still resolved when enumerating calculation combinations or validating allowed values.
 - Use `min_value`, `max_value`, and `validator` for scalar constraints without eagerly enumerating every allowed value.
 - Employ `Input.date_range(...)`, `Input.monthly_date(...)`, and `Input.yearly_date(...)` for structured date domains such as month-end or year-start inputs.
 - Prefer domain objects such as `DateRangeDomain` and `NumericRangeDomain` when you need structured range metadata rather than an eager list.

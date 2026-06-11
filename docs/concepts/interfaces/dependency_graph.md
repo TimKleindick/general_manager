@@ -8,9 +8,9 @@ CRUD operations on `GeneralManager` instances emit the `data_change` signal defi
 
 ## Recording dependencies
 
-When an interface resolves related data (for example, fetching a bucket of child managers), it calls `DependencyTracker.track()`. Cached functions using `@cached` persist these dependencies so that mutations can invalidate the correct cache entries.
+When an interface resolves related data (for example, fetching a bucket of child managers), it calls `DependencyTracker.track()`. Cached functions using `@cached(scope="dependency")` persist these dependencies so that mutations can invalidate the correct cache entries.
 
-Run-scoped `@graph_ql_property` caching is separate from the dependency index. Values stored in `CalculationRunContext` are discarded at the end of the request or run, so they do not need invalidation and do not appear in the dependency index. Dependency-aware properties opt in with `@graph_ql_property(cache="dependency")`.
+Run-scoped `@cached()` and `@graph_ql_property` caching is separate from the dependency index. Values stored in `CalculationRunContext` are discarded at the end of the request or run, so they do not need invalidation and do not appear in the dependency index. Dependency-aware properties opt in with `@graph_ql_property(cache="dependency")`.
 
 ## Graph traversal
 

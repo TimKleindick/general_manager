@@ -32,7 +32,9 @@ Every data-changing operation emits signals captured by the dependency tracker (
 
 To take advantage of the tracker:
 
-- Wrap expensive resolvers with the `@cached` decorator or the `@graph_ql_property` decorator if you want to expose them in GraphQL.
+- Wrap expensive resolvers with `@cached(scope="dependency")` or `@graph_ql_property(cache="dependency")` when they should persist across runs and invalidate through the dependency index.
+- Use `@cached(scope="timeout", timeout=seconds)` when time-based expiry is enough and dependency tracking would add unnecessary overhead.
+- Use the default `@cached()` or `@graph_ql_property` run scope for helpers that only need reuse within one request, calculation graph, bulk operation, or background run.
 - Mark inputs and outputs clearly so dependencies can be resolved.
 - Configure a shared cache backend when you run multiple worker processes.
 
