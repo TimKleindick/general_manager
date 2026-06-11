@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.42.2 (2026-06-11)
+
+### Bug Fixes
+
+- Support calculation manager id filters
+  ([`42536cb`](https://github.com/TimKleindick/general_manager/commit/42536cb9b6aaf1de40265c2cf97af4e8b4970233))
+
+
 ## v0.42.1 (2026-06-11)
 
 ### Bug Fixes
