@@ -4,7 +4,7 @@
 
 ## Overview
 
-For each manager class (e.g. `Project`), GraphQL exposes a subscription field named `on<ManagerClass>Change` (e.g. `onProjectChange`). The resolver:
+For each manager class (e.g. `Project`), GraphQL exposes a subscription field named `on<ManagerClass>Change` (e.g. `onProjectChange`). Multi-word manager names keep their word boundaries in camelCase, such as `TaxCalculation` becoming `onTaxCalculationChange`. The resolver:
 
 1. Validates the identification arguments (e.g. `id`, other interface inputs).
 2. Instantiates the manager and emits an initial `snapshot` event.
@@ -23,7 +23,7 @@ subscription ($id: ID!) {
 }
 ```
 
-For class-wide streams, GraphQL also exposes `on<ManagerClass>ClassChange` (e.g. `onProjectClassChange`). This field takes no identification arguments and emits one changed item per event:
+For class-wide streams, GraphQL also exposes `on<ManagerClass>ClassChange` (e.g. `onProjectClassChange` or `onTaxCalculationClassChange`). This field takes no identification arguments and emits one changed item per event:
 
 ```graphql
 subscription {

@@ -48,6 +48,7 @@ from general_manager.permission.graphql_capabilities import (
     get_capability_context,
     get_graphql_capabilities,
 )
+from general_manager.utils.format_string import pascal_to_snake
 from general_manager.utils.type_checks import safe_issubclass
 
 from graphql import GraphQLError
@@ -969,7 +970,8 @@ class GraphQL:
             cls._query_fields = cast(dict[str, Any], {})
 
         # resolver and field for the list query
-        list_field_name = f"{generalManagerClass.__name__.lower()}_list"
+        manager_field_name = pascal_to_snake(generalManagerClass.__name__)
+        list_field_name = f"{manager_field_name}_list"
         attributes: dict[str, Any] = {
             "reverse": graphene.Boolean(),
             "page": graphene.Int(),
@@ -1013,7 +1015,7 @@ class GraphQL:
         cls._query_fields[f"resolve_{list_field_name}"] = list_resolver
 
         # resolver and field for the single item query
-        item_field_name = generalManagerClass.__name__.lower()
+        item_field_name = manager_field_name
         identification_fields = cls._build_identification_arguments(generalManagerClass)
         item_field = graphene.Field(graphene_type, **identification_fields)
 
@@ -1127,8 +1129,9 @@ class GraphQL:
         - The subscribe coroutine yields SubscriptionEvent objects with fields `item` (the current instance or None if it cannot be instantiated) and `action` (a string such as `"snapshot"` or other change actions).
         - On termination the subscription cleans up listener tasks and unsubscribes from channel groups.
         """
-        field_name = f"on_{generalManagerClass.__name__.lower()}_change"
-        class_field_name = f"on_{generalManagerClass.__name__.lower()}_class_change"
+        manager_field_name = pascal_to_snake(generalManagerClass.__name__)
+        field_name = f"on_{manager_field_name}_change"
+        class_field_name = f"on_{manager_field_name}_class_change"
         if (
             field_name in cls._subscription_fields
             and class_field_name in cls._subscription_fields

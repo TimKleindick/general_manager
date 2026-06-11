@@ -347,7 +347,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.TestCountry.Permission.__read__ = ["matches:code:DE"]
         gql_query = """
         query {
-            testcountry1List(filter: {code: "DE"}) {
+            testCountry1List(filter: {code: "DE"}) {
                 items {
                     code
                     name
@@ -359,11 +359,11 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response)
         response = response.json()
         data = response.get("data", {})
-        self.assertEqual(len(data["testcountry1List"]["items"]), 1)
+        self.assertEqual(len(data["testCountry1List"]["items"]), 1)
 
         gql_query_2 = """
         query {
-            testcountry1List(filter: {code: "US"}) {
+            testCountry1List(filter: {code: "US"}) {
                 items {
                     code
                     name
@@ -375,7 +375,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.assertResponseNoErrors(response_2)
         response_2 = response_2.json()
         data_2 = response_2.get("data", {})
-        self.assertEqual(len(data_2["testcountry1List"]["items"]), 0)
+        self.assertEqual(len(data_2["testCountry1List"]["items"]), 0)
 
     def test_edge_case_empty_relationships(self):
         """

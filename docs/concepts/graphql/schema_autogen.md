@@ -49,12 +49,16 @@ The intended behavior is that startup and schema registration remain reviewable 
 
 ## Relation Filters
 
+Generated root query fields use the same public camelCase convention as nested
+fields. For example, `PartSoldType` is exposed as `partSoldType` and
+`partSoldTypeList`, not `partsoldtype` or `partsoldtypeList`.
+
 Generated list queries expose scalar filters and relation filters. Direct
 relations such as foreign keys and one-to-one fields use nested filter input:
 
 ```graphql
 query {
-  changerequestfeasibilityList(filter: {
+  changeRequestFeasibilityList(filter: {
     changeRequest: { title: "Primary" }
   }) {
     items { id score }
@@ -67,7 +71,7 @@ Collection relations such as reverse foreign keys and many-to-many fields expose
 
 ```graphql
 query {
-  changerequestList(filter: {
+  changeRequestList(filter: {
     changeRequestFeasibilityList: {
       any: { score_Gte: 7 }
     }

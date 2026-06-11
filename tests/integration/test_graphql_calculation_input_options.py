@@ -171,7 +171,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_optional_input_is_nullable_in_graphql_queries(self) -> None:
         query = """
         query($employeeId: ID!) {
-            optionalinputcalculation(employeeId: $employeeId) {
+            optionalInputCalculation(employeeId: $employeeId) {
                 employee {
                     name
                 }
@@ -183,14 +183,14 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         response = self.query(query, variables={"employeeId": self.employee_a.id})
 
         self.assertResponseNoErrors(response)
-        data = response.json()["data"]["optionalinputcalculation"]
+        data = response.json()["data"]["optionalInputCalculation"]
         self.assertEqual(data["employee"]["name"], "Alice")
         self.assertIsNone(data["asOf"])
 
     def test_optional_input_accepts_explicit_value_in_graphql_queries(self) -> None:
         query = """
         query($employeeId: ID!, $asOf: Date) {
-            optionalinputcalculation(employeeId: $employeeId, asOf: $asOf) {
+            optionalInputCalculation(employeeId: $employeeId, asOf: $asOf) {
                 employee {
                     name
                 }
@@ -205,7 +205,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         )
 
         self.assertResponseNoErrors(response)
-        data = response.json()["data"]["optionalinputcalculation"]
+        data = response.json()["data"]["optionalInputCalculation"]
         self.assertEqual(data["employee"]["name"], "Alice")
         self.assertEqual(data["asOf"], "2024-02-10")
 
@@ -223,7 +223,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_min_value_constraint_is_enforced_via_graphql(self) -> None:
         query = """
         query($quantity: Int!) {
-            minvaluecalculation(quantity: $quantity) {
+            minValueCalculation(quantity: $quantity) {
                 quantity
             }
         }
@@ -231,7 +231,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         response = self.query(query, variables={"quantity": 2})
         self.assertResponseNoErrors(response)
-        self.assertEqual(response.json()["data"]["minvaluecalculation"]["quantity"], 2)
+        self.assertEqual(response.json()["data"]["minValueCalculation"]["quantity"], 2)
 
         invalid_response = self.query(query, variables={"quantity": 1})
         self._assert_error_contains(invalid_response, "Invalid value for quantity")
@@ -239,7 +239,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_max_value_constraint_is_enforced_via_graphql(self) -> None:
         query = """
         query($quantity: Int!) {
-            maxvaluecalculation(quantity: $quantity) {
+            maxValueCalculation(quantity: $quantity) {
                 quantity
             }
         }
@@ -247,7 +247,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         response = self.query(query, variables={"quantity": 5})
         self.assertResponseNoErrors(response)
-        self.assertEqual(response.json()["data"]["maxvaluecalculation"]["quantity"], 5)
+        self.assertEqual(response.json()["data"]["maxValueCalculation"]["quantity"], 5)
 
         invalid_response = self.query(query, variables={"quantity": 6})
         self._assert_error_contains(invalid_response, "Invalid value for quantity")
@@ -255,7 +255,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_validator_is_enforced_via_graphql(self) -> None:
         query = """
         query($code: String!) {
-            validatorcalculation(code: $code) {
+            validatorCalculation(code: $code) {
                 code
             }
         }
@@ -264,7 +264,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         response = self.query(query, variables={"code": "OK-123"})
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["validatorcalculation"]["code"], "OK-123"
+            response.json()["data"]["validatorCalculation"]["code"], "OK-123"
         )
 
         invalid_response = self.query(query, variables={"code": "BAD-123"})
@@ -273,7 +273,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_normalizer_is_applied_via_graphql(self) -> None:
         query = """
         query($code: String!) {
-            normalizercalculation(code: $code) {
+            normalizerCalculation(code: $code) {
                 code
             }
         }
@@ -283,13 +283,13 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["normalizercalculation"]["code"], "ABC"
+            response.json()["data"]["normalizerCalculation"]["code"], "ABC"
         )
 
     def test_date_range_helper_is_enforced_via_graphql(self) -> None:
         query = """
         query($asOf: Date!) {
-            daterangecalculation(asOf: $asOf) {
+            dateRangeCalculation(asOf: $asOf) {
                 asOf
             }
         }
@@ -298,7 +298,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         response = self.query(query, variables={"asOf": "2024-01-15"})
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["daterangecalculation"]["asOf"], "2024-01-15"
+            response.json()["data"]["dateRangeCalculation"]["asOf"], "2024-01-15"
         )
 
         invalid_response = self.query(query, variables={"asOf": "2024-02-01"})
@@ -307,7 +307,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_monthly_date_helper_normalizes_via_graphql(self) -> None:
         query = """
         query($asOf: Date!) {
-            monthlydatecalculation(asOf: $asOf) {
+            monthlyDateCalculation(asOf: $asOf) {
                 asOf
             }
         }
@@ -317,14 +317,14 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["monthlydatecalculation"]["asOf"],
+            response.json()["data"]["monthlyDateCalculation"]["asOf"],
             "2024-02-29",
         )
 
     def test_yearly_date_helper_normalizes_via_graphql(self) -> None:
         query = """
         query($asOf: Date!) {
-            yearlydatecalculation(asOf: $asOf) {
+            yearlyDateCalculation(asOf: $asOf) {
                 asOf
             }
         }
@@ -334,14 +334,14 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
 
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["yearlydatecalculation"]["asOf"],
+            response.json()["data"]["yearlyDateCalculation"]["asOf"],
             "2024-12-31",
         )
 
     def test_date_range_domain_is_enforced_via_graphql(self) -> None:
         query = """
         query($asOf: Date!) {
-            datedomaincalculation(asOf: $asOf) {
+            dateDomainCalculation(asOf: $asOf) {
                 asOf
             }
         }
@@ -350,7 +350,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         response = self.query(query, variables={"asOf": "2024-02-10"})
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["datedomaincalculation"]["asOf"],
+            response.json()["data"]["dateDomainCalculation"]["asOf"],
             "2024-02-29",
         )
 
@@ -360,7 +360,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_numeric_range_domain_is_enforced_via_graphql(self) -> None:
         query = """
         query($amount: Int!) {
-            numericdomaincalculation(amount: $amount) {
+            numericDomainCalculation(amount: $amount) {
                 amount
             }
         }
@@ -369,7 +369,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
         response = self.query(query, variables={"amount": 3})
         self.assertResponseNoErrors(response)
         self.assertEqual(
-            response.json()["data"]["numericdomaincalculation"]["amount"], 3
+            response.json()["data"]["numericDomainCalculation"]["amount"], 3
         )
 
         invalid_response = self.query(query, variables={"amount": 4})
@@ -378,7 +378,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
     def test_from_manager_query_is_enforced_via_graphql(self) -> None:
         query = """
         query($departmentId: ID!, $employeeId: ID!) {
-            managerquerycalculation(
+            managerQueryCalculation(
                 departmentId: $departmentId
                 employeeId: $employeeId
             ) {
@@ -397,7 +397,7 @@ class TestGraphQLCalculationInputOptions(GeneralManagerTransactionTestCase):
             },
         )
         self.assertResponseNoErrors(response)
-        data = response.json()["data"]["managerquerycalculation"]
+        data = response.json()["data"]["managerQueryCalculation"]
         self.assertEqual(data["department"]["name"], "Alpha")
 
         invalid_response = self.query(

@@ -241,7 +241,7 @@ class TestGraphQLIncludeInactive(GeneralManagerTransactionTestCase):
     def test_query_include_inactive_returns_soft_deleted_rows(self):
         query_default = """
         query {
-            softfamilyList {
+            softFamilyList {
                 items {
                     id
                     name
@@ -254,14 +254,14 @@ class TestGraphQLIncludeInactive(GeneralManagerTransactionTestCase):
         """
         default_response = self.query(query_default)
         self.assertResponseNoErrors(default_response)
-        default_data = default_response.json()["data"]["softfamilyList"]
+        default_data = default_response.json()["data"]["softFamilyList"]
         default_names = {item["name"] for item in default_data["items"]}
         self.assertEqual(default_names, {"Active Family"})
         self.assertEqual(default_data["pageInfo"]["totalCount"], 1)
 
         query_with_inactive = """
         query {
-            softfamilyList(includeInactive: true) {
+            softFamilyList(includeInactive: true) {
                 items {
                     id
                     name
@@ -274,7 +274,7 @@ class TestGraphQLIncludeInactive(GeneralManagerTransactionTestCase):
         """
         include_response = self.query(query_with_inactive)
         self.assertResponseNoErrors(include_response)
-        include_data = include_response.json()["data"]["softfamilyList"]
+        include_data = include_response.json()["data"]["softFamilyList"]
         include_names = {item["name"] for item in include_data["items"]}
         self.assertEqual(include_names, {"Active Family", "Inactive Family"})
         self.assertEqual(include_data["pageInfo"]["totalCount"], 2)
@@ -305,7 +305,7 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
     def test_non_admin_list_query_hides_rows_and_total_count(self):
         query = """
         query {
-            internalrecordList {
+            internalRecordList {
                 items {
                     id
                     name
@@ -319,14 +319,14 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
 
         response = self.query(query)
         self.assertResponseNoErrors(response)
-        payload = response.json()["data"]["internalrecordList"]
+        payload = response.json()["data"]["internalRecordList"]
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["pageInfo"]["totalCount"], 0)
 
     def test_non_admin_list_query_logs_aggregate_read_summary(self):
         query = """
         query {
-            internalrecordList {
+            internalRecordList {
                 pageInfo {
                     totalCount
                 }
@@ -359,7 +359,7 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
         self.user.save(update_fields=["is_staff"])
         query = """
         query {
-            internalrecordList {
+            internalRecordList {
                 items {
                     id
                 }
@@ -433,7 +433,7 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
     def test_non_admin_list_query_hides_based_on_denied_rows_and_total_count(self):
         query = """
         query {
-            delegateddocumentList {
+            delegatedDocumentList {
                 items {
                     id
                     title
@@ -447,7 +447,7 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
 
         response = self.query(query)
         self.assertResponseNoErrors(response)
-        payload = response.json()["data"]["delegateddocumentList"]
+        payload = response.json()["data"]["delegatedDocumentList"]
         self.assertEqual(payload["items"], [])
         self.assertEqual(payload["pageInfo"]["totalCount"], 0)
 
@@ -456,7 +456,7 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
         self.user.save(update_fields=["is_staff"])
         query = """
         query {
-            delegateddocumentList {
+            delegatedDocumentList {
                 items {
                     id
                 }
@@ -513,7 +513,7 @@ class TestGraphQLIncludeInactiveValidation(GeneralManagerTransactionTestCase):
     def test_query_include_inactive_fails_without_soft_delete(self):
         query = """
         query {
-            hardfamilyList(includeInactive: true) {
+            hardFamilyList(includeInactive: true) {
                 items {
                     id
                     name
