@@ -348,6 +348,16 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         return cls.Interface.filter(**kwargs)
 
     @classmethod
+    def get(cls, **kwargs: Any) -> Self:
+        """
+        Return the single manager matching the provided lookup expressions.
+
+        This is a convenience wrapper around ``filter(...).get()`` and preserves
+        the underlying bucket's single-item exception behavior.
+        """
+        return cls.filter(**kwargs).get()
+
+    @classmethod
     def exclude(cls, **kwargs: Any) -> Bucket[Self]:
         """
         Return a bucket excluding managers that match the provided lookups.

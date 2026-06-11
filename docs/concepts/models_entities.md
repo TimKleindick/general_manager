@@ -25,6 +25,7 @@ class Project(GeneralManager):
 All collection-returning APIs produce a `Bucket`. Buckets behave like Python iterables while preserving metadata such as applied filters and ordering. You can:
 
 - Call `filter()` and `exclude()` to refine the dataset using Django-style lookups.
+- Call `get()` when the lookup must return exactly one manager.
 - Pass `search_date=...` to `filter()` or `exclude()` to query historical state at a specific point in time.
 - Chain `sort()` calls for deterministic ordering.
 - Slice (`bucket[0:10]`) or iterate lazily.
@@ -47,7 +48,7 @@ Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped 
 
 ## Identity and equality
 
-Managers compare equal when their identification dictionaries match. Use `manager.identification` to inspect the underlying primary keys. Buckets support `get()` and `first()` helpers to retrieve specific instances.
+Managers compare equal when their identification dictionaries match. Use `manager.identification` to inspect the underlying primary keys. Call `Project.get(name="Apollo")` as a shortcut for `Project.filter(name="Apollo").get()` when you expect one match, or use bucket helpers such as `first()` when zero matches are acceptable.
 
 For ORM foreign keys, GeneralManager exposes raw ID helpers such as
 `project.customer_id` alongside relation accessors such as `project.customer`.
