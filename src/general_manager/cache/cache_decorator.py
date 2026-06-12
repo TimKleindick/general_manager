@@ -77,20 +77,24 @@ def cached(
     scope: CacheScope = "run",
 ) -> Callable[[FuncT], FuncT]:
     """
-    Cache a function call.
+    Decorator factory for caching a function call.
 
     By default, cached values are scoped to the active
     :class:`~general_manager.cache.run_context.CalculationRunContext` and are
     discarded when that run ends. Use ``scope="dependency"`` to persist values
-    in ``cache_backend`` and register dependency metadata for invalidation. Use
-    ``scope="timeout"`` for cache-backend storage with time-based expiry and no
-    dependency tracking.
+    in ``cache_backend`` and use ``record_fn`` to persist dependency metadata
+    for invalidation. Use ``scope="timeout"`` with ``timeout`` set for
+    cache-backend storage with time-based expiry; dependency recording is
+    ignored for timeout-scoped values.
 
     Parameters:
         timeout (int | None): Expiration in seconds for timeout-scoped cached values.
+            Required when ``scope`` is ``"timeout"`` and invalid with any other
+            ``CacheScope``.
         cache_backend (CacheBackend): Backend used to read and write cached results.
-        record_fn (RecordFn): Callback invoked to persist dependency metadata when no timeout is
-            defined.  Defaults to :func:`~general_manager.cache.dependency_index.record_dependencies`.
+        record_fn (RecordFn): Callback invoked to persist dependency metadata when
+            ``scope`` is ``"dependency"``. Defaults to
+            :func:`~general_manager.cache.dependency_index.record_dependencies`.
         scope (CacheScope): Cache storage strategy. ``"run"`` memoizes for the active run,
             ``"dependency"`` stores in ``cache_backend`` with dependency tracking,
             ``"timeout"`` stores in ``cache_backend`` with time-based expiry, and
@@ -100,6 +104,9 @@ def cached(
         Callable: Decorator that wraps the target function with caching behaviour.
 
     Raises:
+        ValueError: Raised for invalid ``scope``/``timeout`` combinations, including
+            unsupported ``CacheScope`` values, missing ``timeout`` for
+            ``scope="timeout"``, and ``timeout`` supplied for non-timeout scopes.
         DependencyLockTimeoutError: Propagated from ``record_fn`` (i.e.
             :func:`~general_manager.cache.dependency_index.record_dependencies`) when the
             dependency-index lock cannot be acquired within the configured timeout.  The cached
