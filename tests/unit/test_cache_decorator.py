@@ -162,7 +162,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         `cache.get` and `cache.set` to be called again.
         """
 
-        @cached(scope="timeout", timeout=0.1)  # type: ignore[arg-type]
+        @cached(scope="timeout", timeout=1)
         def sample_function(x, y):
             return x + y
 
@@ -177,7 +177,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
                 set_spy.called, "At cache miss, cache.set() should be called"
             )
             # Wait for the cache to expire
-            time.sleep(0.15)
+            time.sleep(1.1)
             get_spy.reset_mock()
             set_spy.reset_mock()
 
