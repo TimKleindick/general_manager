@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.43.0 (2026-06-12)
+
+### Bug Fixes
+
+- Address cache decorator review feedback
+  ([`2496120`](https://github.com/TimKleindick/general_manager/commit/2496120ba310da6160e29b126c8eb264951c5e28))
+
+- Restore orm field type behavior
+  ([`e5c401f`](https://github.com/TimKleindick/general_manager/commit/e5c401f00cce4ea3b42a6d9d7921ebc4ce69da71))
+
+### Features
+
+- Improve calculation performance overhead
+  ([`4f8a6db`](https://github.com/TimKleindick/general_manager/commit/4f8a6dbdcda0b36de98b53dc80bf5dd57cb30607))
+
+
 ## v0.42.3 (2026-06-12)
 
 ### Bug Fixes
