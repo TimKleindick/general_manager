@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.42.3 (2026-06-12)
+
+### Bug Fixes
+
+- Preserve configured user instances
+  ([`3b043c0`](https://github.com/TimKleindick/general_manager/commit/3b043c0e0bbc4c03b049d0104c33a82e9b4b73d1))
+
+
 ## v0.42.2 (2026-06-11)
 
 ### Bug Fixes
