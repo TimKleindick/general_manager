@@ -1,8 +1,14 @@
 from django.test import TestCase, override_settings
 from general_manager.cache.dependency_index import (
+    DATA_CHANGE_LOCK_KEY,
+    DEPENDENCY_GENERATION_KEY,
     acquire_lock,
-    release_lock,
+    begin_dependency_data_change,
+    end_dependency_data_change,
     get_full_index,
+    get_dependency_generation,
+    is_dependency_data_change_active,
+    release_lock,
     set_full_index,
     record_dependencies,
     record_many_dependencies,
@@ -122,6 +128,37 @@ class TestFullIndex(TestCase):
                 "all": {},
             },
         )
+
+
+@override_settings(CACHES=TEST_CACHES)
+class TestDependencyGenerationAndBarrier(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_generation_defaults_to_zero(self):
+        self.assertEqual(get_dependency_generation(), 0)
+
+    def test_begin_data_change_bumps_generation_and_sets_barrier(self):
+        generation = begin_dependency_data_change()
+
+        self.assertEqual(generation, 1)
+        self.assertEqual(cache.get(DEPENDENCY_GENERATION_KEY), 1)
+        self.assertTrue(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_LOCK_KEY), "1")
+
+    def test_end_data_change_releases_barrier_without_changing_generation(self):
+        begin_dependency_data_change()
+
+        end_dependency_data_change()
+
+        self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(get_dependency_generation(), 1)
+
+    def test_capture_old_values_begins_data_change_for_create(self):
+        capture_old_values(sender=SimpleNamespace, instance=None)
+
+        self.assertEqual(get_dependency_generation(), 1)
+        self.assertTrue(is_dependency_data_change_active())
 
 
 @override_settings(CACHES=TEST_CACHES)
