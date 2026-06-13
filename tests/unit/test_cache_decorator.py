@@ -10,6 +10,7 @@ from general_manager.cache.dependency_publish import CachePublishAborted
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.make_cache_key import make_cache_key
 import pickle
+import threading
 import time
 
 
@@ -31,6 +32,7 @@ class FakeCacheBackend:
         """
         self.store = {}
         self.timeouts = {}
+        self.lock = threading.RLock()
 
     def get(self, key, default=None):
         """
@@ -43,7 +45,8 @@ class FakeCacheBackend:
         Returns:
             The unpickled value associated with the key, or the default if not found.
         """
-        cached_value = self.store.get(key, default)
+        with self.lock:
+            cached_value = self.store.get(key, default)
         if cached_value is not default:
             return _trusted_pickle_loads(cached_value)  # type: ignore
         return default
@@ -57,8 +60,9 @@ class FakeCacheBackend:
             value: The Python object to cache; it is serialized with pickle prior to storage.
             timeout: Optional expiration time for the cache entry. This backend does not enforce expiration.
         """
-        self.store[key] = pickle.dumps(value)
-        self.timeouts[key] = timeout
+        with self.lock:
+            self.store[key] = pickle.dumps(value)
+            self.timeouts[key] = timeout
 
 
 class TestCacheDecoratorBackend(SimpleTestCase):
@@ -364,6 +368,57 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         key = make_cache_key(fn, (3,), {})
         self.assertNotIn(key, self.fake_cache.store)
         self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+
+    def test_dependency_scope_concurrent_miss_computes_once(self):
+        calls = 0
+        calls_lock = threading.Lock()
+        compute_started = threading.Event()
+        release_compute = threading.Event()
+        start_together = threading.Barrier(2)
+        results = []
+        errors = []
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            compute_started.set()
+            self.assertTrue(release_compute.wait(timeout=2))
+            return value * 2
+
+        def call_cached_function():
+            try:
+                start_together.wait(timeout=2)
+                results.append(fn(3))
+            except (AssertionError, RuntimeError) as exc:  # pragma: no cover
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=call_cached_function),
+            threading.Thread(target=call_cached_function),
+        ]
+        for thread in threads:
+            thread.start()
+
+        self.assertTrue(compute_started.wait(timeout=2))
+        release_compute.set()
+
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        if errors:
+            raise AssertionError(errors)
+
+        self.assertEqual(sorted(results), [6, 6])
+        self.assertEqual(calls, 1)
+        self.assertEqual(len(self.record_calls), 1)
 
     def test_cache_decorator_with_timeout_and_record_fn(self):
         """
