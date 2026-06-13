@@ -1262,6 +1262,9 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         mock_invalidate_request_queries.return_value = ()
+        invalidated_keys = ("ROOT-1", "ALL-1", "ALL-2")
+        for cache_key in invalidated_keys:
+            cache.set(cache_key, f"value-{cache_key}", None)
         mock_get_index.return_value = {
             "filter": {"DummyManager2": {"__all__": {"__all__": {"ALL-1", "ALL-2"}}}},
             "exclude": {},
@@ -1278,11 +1281,11 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate_request_queries.assert_not_called()
         mock_invalidate.assert_not_called()
         mock_remove.assert_not_called()
+        for cache_key in invalidated_keys:
+            self.assertIsNone(cache.get(cache_key))
         self.assert_cache_keys_removed_from_index(
             mock_get_index.return_value,
-            "ROOT-1",
-            "ALL-1",
-            "ALL-2",
+            *invalidated_keys,
         )
 
     @patch("general_manager.cache.dependency_index.get_full_index")
@@ -1418,6 +1421,7 @@ class GenericCacheInvalidationTests(TestCase):
 
         Sets up an index containing an exclude rule for DummyManager2 (count__gt 5) and simulates a transition from an old value that matched the exclude (count = 10) to a new instance value that no longer matches (count = 3); asserts that the affected cache key is invalidated and removed.
         """
+        cache.set("X", "value-X", None)
         mock_get_index.return_value = {
             "filter": {},
             "exclude": {"DummyManager2": {"count__gt": {"5": ["X"]}}},
@@ -1433,6 +1437,7 @@ class GenericCacheInvalidationTests(TestCase):
 
         mock_invalidate.assert_not_called()
         mock_remove.assert_not_called()
+        self.assertIsNone(cache.get("X"))
         self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
@@ -1515,6 +1520,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_invalidate,
         mock_get_index,
     ):
+        cache.set("X", "value-X", None)
         mock_get_index.return_value = {
             "filter": {"DummyManager": {"title__contains": {'"hallo"': ["X"]}}},
             "exclude": {},
@@ -1530,6 +1536,7 @@ class GenericCacheInvalidationTests(TestCase):
         )
         mock_invalidate.assert_not_called()
         mock_remove.assert_not_called()
+        self.assertIsNone(cache.get("X"))
         self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
@@ -2074,6 +2081,7 @@ class GenericCacheInvalidationTests(TestCase):
         mock_get_index,
     ):
         identifier = json.dumps({"status": "blocked", "count__gte": 5})
+        cache.set("EXC", "value-EXC", None)
         mock_get_index.return_value = {
             "filter": {},
             "exclude": {
@@ -2095,6 +2103,7 @@ class GenericCacheInvalidationTests(TestCase):
 
         mock_invalidate.assert_not_called()
         mock_remove.assert_not_called()
+        self.assertIsNone(cache.get("EXC"))
         self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "EXC")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
