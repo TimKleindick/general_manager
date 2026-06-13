@@ -119,7 +119,14 @@ def publish_dependency_cache_entry(
     started_generation: int,
     record_many_fn: RecordManyDependenciesFn | None = None,
 ) -> None:
-    """Publish dependency metadata and value only if the computation is current."""
+    """Publish dependency metadata and value only if the computation is current.
+
+    When supplied, ``record_many_fn`` is called while the dependency-index lock
+    acquired by ``acquire_lock_with_retry`` is still held. Custom callbacks must
+    not acquire that lock again or call helpers that do so. The cache decorator
+    passes ``None`` for the default ``record_dependencies`` implementation so
+    this function can use the non-reentrant locked helper directly.
+    """
     dependency_set = set(dependencies)
 
     acquire_lock_with_retry("publish_dependency_cache_entry")
