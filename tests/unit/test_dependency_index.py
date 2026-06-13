@@ -155,11 +155,19 @@ class TestDependencyGenerationAndBarrier(TestCase):
         self.assertFalse(is_dependency_data_change_active())
         self.assertEqual(get_dependency_generation(), 1)
 
-    def test_capture_old_values_begins_data_change_for_create(self):
-        capture_old_values(sender=SimpleNamespace, instance=None)
+    def test_create_data_change_owns_generation_and_barrier_lifecycle(self):
+        class Example:
+            @classmethod
+            @data_change
+            def create(cls):
+                return SimpleNamespace(identification=None)
 
+        result = Example.create()
+
+        self.assertIsNotNone(result)
         self.assertEqual(get_dependency_generation(), 1)
-        self.assertTrue(is_dependency_data_change_active())
+        self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
 
     def test_overlapping_data_changes_keep_barrier_until_last_end(self):
         begin_dependency_data_change()
@@ -197,25 +205,64 @@ class TestDependencyGenerationAndBarrier(TestCase):
 
         self.assertEqual(calls, [])
         self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
 
-    def test_generic_cache_invalidation_releases_barrier_when_invalidation_raises(self):
-        begin_dependency_data_change()
+    def test_pre_data_change_exception_releases_dependency_barrier(self):
+        class Example:
+            @data_change
+            def update(self):
+                return self
 
-        with (
-            patch(
-                "general_manager.cache.dependency_index."
-                "invalidate_request_query_dependencies",
-                side_effect=RuntimeError("boom"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "boom"),
-        ):
-            generic_cache_invalidation(
-                sender=SimpleNamespace,
-                instance=SimpleNamespace(),
-                old_relevant_values={},
+        def receiver(**kwargs):
+            raise RuntimeError
+
+        pre_data_change.connect(
+            receiver,
+            weak=False,
+            dispatch_uid="test_pre_failure_releases_barrier",
+        )
+        try:
+            with self.assertRaises(RuntimeError):
+                Example().update()
+        finally:
+            pre_data_change.disconnect(
+                dispatch_uid="test_pre_failure_releases_barrier",
             )
 
         self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
+
+    def test_post_data_change_exception_releases_dependency_barrier(self):
+        class Example:
+            @data_change
+            def mutate(self):
+                return self
+
+        def receiver(**kwargs):
+            raise RuntimeError
+
+        post_data_change.connect(
+            receiver,
+            weak=False,
+            dispatch_uid="test_post_failure_releases_barrier",
+        )
+        try:
+            with self.assertRaises(RuntimeError):
+                Example().mutate()
+        finally:
+            post_data_change.disconnect(
+                dispatch_uid="test_post_failure_releases_barrier",
+            )
+
+        self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
+
+    def test_begin_data_change_stores_barrier_and_count_without_timeout(self):
+        with patch.object(cache, "set", wraps=cache.set) as set_spy:
+            begin_dependency_data_change()
+
+        set_spy.assert_any_call(DATA_CHANGE_COUNT_KEY, 1, None)
+        set_spy.assert_any_call(DATA_CHANGE_LOCK_KEY, "1", None)
 
 
 @override_settings(CACHES=TEST_CACHES)

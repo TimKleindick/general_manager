@@ -39,55 +39,58 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         Returns:
             R: The result returned by the wrapped function.
         """
-        action = func.__name__
-        if func.__name__ == "create":
-            sender = args[0]
-            instance_before = None
-        else:
-            instance = args[0]
-            sender = instance.__class__
-            instance_before = instance
-        pre_data_change.send(
-            sender=sender,
-            instance=instance_before,
-            action=action,
-            **kwargs,
+        from general_manager.cache.dependency_index import (
+            begin_dependency_data_change,
+            end_dependency_data_change,
         )
-        old_relevant_values = getattr(instance_before, "_old_values", {})
-        pre_identification = deepcopy(getattr(instance_before, "identification", None))
+
+        begin_dependency_data_change()
         try:
+            action = func.__name__
+            if func.__name__ == "create":
+                sender = args[0]
+                instance_before = None
+            else:
+                instance = args[0]
+                sender = instance.__class__
+                instance_before = instance
+            pre_data_change.send(
+                sender=sender,
+                instance=instance_before,
+                action=action,
+                **kwargs,
+            )
+            old_relevant_values = getattr(instance_before, "_old_values", {})
+            pre_identification = deepcopy(
+                getattr(instance_before, "identification", None)
+            )
             if isinstance(func, classmethod):
                 inner = cast(Callable[P, R], func.__func__)
                 result = inner(*args, **kwargs)
             else:
                 result = func(*args, **kwargs)
-        except Exception:
-            from general_manager.cache.dependency_index import (
-                end_dependency_data_change,
+
+            instance = result
+            identification = getattr(instance, "identification", None)
+            if identification is None:
+                identification = pre_identification
+
+            post_data_change.send(
+                sender=sender,
+                instance=instance,
+                previous_instance=instance_before,
+                identification=identification,
+                action=action,
+                old_relevant_values=old_relevant_values,
+                **kwargs,
             )
-
+            if instance_before is not None:
+                try:
+                    delattr(instance_before, "_old_values")
+                except AttributeError:
+                    pass
+            return result
+        finally:
             end_dependency_data_change()
-            raise
-
-        instance = result
-        identification = getattr(instance, "identification", None)
-        if identification is None:
-            identification = pre_identification
-
-        post_data_change.send(
-            sender=sender,
-            instance=instance,
-            previous_instance=instance_before,
-            identification=identification,
-            action=action,
-            old_relevant_values=old_relevant_values,
-            **kwargs,
-        )
-        if instance_before is not None:
-            try:
-                delattr(instance_before, "_old_values")
-            except AttributeError:
-                pass
-        return result
 
     return wrapper
