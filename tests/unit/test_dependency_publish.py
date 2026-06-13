@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pickle
 from typing import Any
+from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
@@ -68,17 +69,21 @@ class TestDependencyPublish(SimpleTestCase):
     def test_release_compute_lease_only_releases_owned_token(self) -> None:
         lease = acquire_compute_lease("cache-a")
         assert lease is not None
+
+        release_compute_lease(lease)
+
+        self.assertEqual(coordination_cache.get(lease.key), lease.token)
+        self.assertIsNone(acquire_compute_lease("cache-a"))
+
+    def test_release_compute_lease_never_removes_new_owner_token(self) -> None:
+        lease = acquire_compute_lease("cache-a")
+        assert lease is not None
         coordination_cache.set(lease.key, "other-token", None)
 
         release_compute_lease(lease)
 
         self.assertEqual(coordination_cache.get(lease.key), "other-token")
         self.assertIsNone(acquire_compute_lease("cache-a"))
-
-        release_compute_lease(CacheComputeLease(lease.key, "other-token"))
-
-        self.assertIsNone(coordination_cache.get(lease.key))
-        self.assertIsInstance(acquire_compute_lease("cache-a"), CacheComputeLease)
 
     def test_publish_records_dependencies_before_deps_and_value(self) -> None:
         cache_backend = FakeDependencyCacheBackend()
@@ -168,6 +173,123 @@ class TestDependencyPublish(SimpleTestCase):
 
         self.assertEqual(recorded_entries, [])
         self.assertEqual(cache_backend.store, {})
+
+    def test_publish_aborts_without_writes_when_generation_changes_after_recording(
+        self,
+    ) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+        started_generation = get_dependency_generation()
+        recorded_entries: list[Any] = []
+
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_publish.get_dependency_generation",
+                side_effect=[started_generation, started_generation + 1],
+            ),
+            self.assertRaises(CachePublishAborted),
+        ):
+            publish_dependency_cache_entry(
+                cache_key="cache-a",
+                deps_key="cache-a:deps",
+                result="stale",
+                dependencies={("Project", "identification", "1")},
+                cache_backend=cache_backend,
+                timeout=None,
+                started_generation=started_generation,
+                record_many_fn=recorded_entries.extend,
+            )
+
+        self.assertEqual(
+            recorded_entries,
+            [("cache-a", {("Project", "identification", "1")})],
+        )
+        self.assertEqual(cache_backend.store, {})
+
+    def test_publish_aborts_without_writes_when_barrier_starts_after_recording(
+        self,
+    ) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+        started_generation = get_dependency_generation()
+        recorded_entries: list[Any] = []
+
+        with (
+            mock.patch(
+                "general_manager.cache.dependency_publish.is_dependency_data_change_active",
+                side_effect=[False, True],
+            ),
+            self.assertRaises(CachePublishAborted),
+        ):
+            publish_dependency_cache_entry(
+                cache_key="cache-a",
+                deps_key="cache-a:deps",
+                result="stale",
+                dependencies={("Project", "identification", "1")},
+                cache_backend=cache_backend,
+                timeout=None,
+                started_generation=started_generation,
+                record_many_fn=recorded_entries.extend,
+            )
+
+        self.assertEqual(
+            recorded_entries,
+            [("cache-a", {("Project", "identification", "1")})],
+        )
+        self.assertEqual(cache_backend.store, {})
+
+    def test_wait_for_cached_dependency_value_returns_cached_none(self) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+        cache_backend.set("cache-a", None, None)
+
+        self.assertIsNone(
+            wait_for_cached_dependency_value(
+                cache_backend,
+                "cache-a",
+                timeout_seconds=0.01,
+            )
+        )
+
+    def test_wait_for_cached_dependency_value_returns_sentinel_on_timeout(
+        self,
+    ) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+        marker = object()
+
+        self.assertIs(
+            wait_for_cached_dependency_value(
+                cache_backend,
+                "cache-a",
+                timeout_seconds=0,
+                sentinel=marker,
+            ),
+            marker,
+        )
+
+    def test_wait_for_cached_dependency_value_polls_until_value_exists(self) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+        marker = object()
+        attempts = 0
+        original_get = cache_backend.get
+
+        def delayed_get(key: str, default: Any = None) -> Any:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 3:
+                cache_backend.set(key, "ready", None)
+            return original_get(key, default)
+
+        cache_backend.get = delayed_get  # type: ignore[method-assign]
+
+        with mock.patch("general_manager.cache.dependency_publish.time.sleep"):
+            self.assertEqual(
+                wait_for_cached_dependency_value(
+                    cache_backend,
+                    "cache-a",
+                    timeout_seconds=1,
+                    sentinel=marker,
+                ),
+                "ready",
+            )
+        self.assertEqual(attempts, 3)
 
     def test_wait_for_cached_dependency_value_returns_published_value(self) -> None:
         cache_backend = FakeDependencyCacheBackend()
