@@ -340,13 +340,13 @@ class OrmUpdateCapability(BaseCapability):
                 creator_id=creator_id,
                 history_comment=history_comment,
             )
+            discard_orm_instance_cache(interface_instance.__class__, pk)
             mutation.apply_many_to_many(
                 interface_instance.__class__,
                 instance,
                 many_to_many_kwargs=normalized_many,
                 history_comment=history_comment,
             )
-            discard_orm_instance_cache(interface_instance.__class__, pk)
             return {"id": pk}
 
         return call_with_observability(
