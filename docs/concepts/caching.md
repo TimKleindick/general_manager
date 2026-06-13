@@ -106,6 +106,24 @@ When the wrapped dependency-scoped function runs, it records every manager it
 touches. Subsequent calls reuse the cached value until a tracked dependency
 changes.
 
+Dependency-scoped cache entries are published through a guarded write path:
+
+- a mutation generation is read before computation starts
+- data-changing operations raise the generation and hold a publish barrier while invalidation runs
+- the dependency index, dependency metadata, and visible cached value are written under the dependency-index lock
+- dependency metadata is published before the cached value, so a visible value is already reachable by later invalidation
+- if the generation changed or the publish barrier is active, the fresh function result is returned to the caller but is not stored
+
+This means a dependency-scoped value is only shared after GeneralManager can
+prove that no data mutation overlapped the computation and publish step.
+
+Concurrent workers for the same dependency-scoped cache key coordinate with a
+short-lived compute lease. The worker that acquires the lease performs the
+function body and publishes the value. Other workers wait for that value to
+appear and then reuse it instead of repeating the same CPU work. If the
+computing worker fails before publishing, the lease expires and a later worker
+can retry the computation.
+
 Use timeout scope when a value should be cached in the configured cache backend
 for a fixed duration without dependency tracking:
 

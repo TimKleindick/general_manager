@@ -6,12 +6,16 @@ from typing import Callable, TypeVar, ParamSpec, cast
 
 from functools import wraps
 
+from general_manager.logging import get_logger
+
 post_data_change = Signal()
 
 pre_data_change = Signal()
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+logger = get_logger("cache.signals")
 
 
 def data_change(func: Callable[P, R]) -> Callable[P, R]:
@@ -39,47 +43,72 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         Returns:
             R: The result returned by the wrapped function.
         """
-        action = func.__name__
-        if func.__name__ == "create":
-            sender = args[0]
-            instance_before = None
-        else:
-            instance = args[0]
-            sender = instance.__class__
-            instance_before = instance
-        pre_data_change.send(
-            sender=sender,
-            instance=instance_before,
-            action=action,
-            **kwargs,
+        from general_manager.cache.dependency_index import (
+            begin_dependency_data_change,
+            end_dependency_data_change,
         )
-        old_relevant_values = getattr(instance_before, "_old_values", {})
-        pre_identification = deepcopy(getattr(instance_before, "identification", None))
-        if isinstance(func, classmethod):
-            inner = cast(Callable[P, R], func.__func__)
-            result = inner(*args, **kwargs)
+
+        primary_exc: BaseException | None = None
+        begin_dependency_data_change()
+        try:
+            action = func.__name__
+            if func.__name__ == "create":
+                sender = args[0]
+                instance_before = None
+            else:
+                instance = args[0]
+                sender = instance.__class__
+                instance_before = instance
+            pre_data_change.send(
+                sender=sender,
+                instance=instance_before,
+                action=action,
+                **kwargs,
+            )
+            old_relevant_values = getattr(instance_before, "_old_values", {})
+            pre_identification = deepcopy(
+                getattr(instance_before, "identification", None)
+            )
+            if isinstance(func, classmethod):
+                inner = cast(Callable[P, R], func.__func__)
+                result = inner(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
+
+            instance = result
+            identification = getattr(instance, "identification", None)
+            if identification is None:
+                identification = pre_identification
+
+            post_data_change.send(
+                sender=sender,
+                instance=instance,
+                previous_instance=instance_before,
+                identification=identification,
+                action=action,
+                old_relevant_values=old_relevant_values,
+                **kwargs,
+            )
+            if instance_before is not None:
+                try:
+                    delattr(instance_before, "_old_values")
+                except AttributeError:
+                    pass
+        except BaseException as error:
+            primary_exc = error
+            raise
         else:
-            result = func(*args, **kwargs)
-
-        instance = result
-        identification = getattr(instance, "identification", None)
-        if identification is None:
-            identification = pre_identification
-
-        post_data_change.send(
-            sender=sender,
-            instance=instance,
-            previous_instance=instance_before,
-            identification=identification,
-            action=action,
-            old_relevant_values=old_relevant_values,
-            **kwargs,
-        )
-        if instance_before is not None:
+            return result
+        finally:
             try:
-                delattr(instance_before, "_old_values")
-            except AttributeError:
-                pass
-        return result
+                end_dependency_data_change()
+            except Exception:
+                if primary_exc is not None:
+                    logger.exception(
+                        "Dependency data-change cleanup failed while handling "
+                        "another exception."
+                    )
+                else:
+                    raise
 
     return wrapper

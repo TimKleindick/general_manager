@@ -2,9 +2,15 @@ from django.test import SimpleTestCase
 from django.core.cache import cache
 from unittest import mock
 from general_manager.cache.cache_decorator import cached, DependencyTracker
+from general_manager.cache.dependency_index import (
+    begin_dependency_data_change,
+    end_dependency_data_change,
+)
+from general_manager.cache.dependency_publish import CachePublishAborted
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.make_cache_key import make_cache_key
 import pickle
+import threading
 import time
 
 
@@ -26,6 +32,7 @@ class FakeCacheBackend:
         """
         self.store = {}
         self.timeouts = {}
+        self.lock = threading.RLock()
 
     def get(self, key, default=None):
         """
@@ -38,7 +45,8 @@ class FakeCacheBackend:
         Returns:
             The unpickled value associated with the key, or the default if not found.
         """
-        cached_value = self.store.get(key, default)
+        with self.lock:
+            cached_value = self.store.get(key, default)
         if cached_value is not default:
             return _trusted_pickle_loads(cached_value)  # type: ignore
         return default
@@ -52,8 +60,9 @@ class FakeCacheBackend:
             value: The Python object to cache; it is serialized with pickle prior to storage.
             timeout: Optional expiration time for the cache entry. This backend does not enforce expiration.
         """
-        self.store[key] = pickle.dumps(value)
-        self.timeouts[key] = timeout
+        with self.lock:
+            self.store[key] = pickle.dumps(value)
+            self.timeouts[key] = timeout
 
 
 class TestCacheDecoratorBackend(SimpleTestCase):
@@ -66,6 +75,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Initializes a fake cache backend and a call recording list, and resets thread-local dependency tracking state to ensure test isolation.
         """
         DependencyTracker.reset_thread_local_storage()
+        cache.clear()
 
         self.fake_cache = FakeCacheBackend()
         self.record_calls = []
@@ -90,6 +100,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
         with DependencyTracker():
             pass
+        cache.clear()
 
     def test_real_tracker_records_manual_tracks(self):
         """
@@ -252,6 +263,162 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         res2 = fn(2, 3)
         self.assertEqual(res2, 5)
         self.assertEqual(self.record_calls, [])
+
+    def test_dependency_scope_waits_for_published_value_when_lease_is_owned(self):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+        deps_key = f"{key}:deps"
+        self.fake_cache.set(deps_key, {("User", "identification", "3")}, None)
+        original_get = self.fake_cache.get
+        key_reads = 0
+
+        def publish_after_initial_miss(cache_key, default=None):
+            nonlocal key_reads
+            if cache_key == key:
+                key_reads += 1
+                if key_reads == 2:
+                    self.fake_cache.set(key, 6, None)
+            return original_get(cache_key, default)
+
+        self.fake_cache.get = publish_after_initial_miss
+
+        with mock.patch(
+            "general_manager.cache.cache_decorator.acquire_compute_lease",
+            return_value=None,
+        ):
+            with DependencyTracker() as dependencies:
+                self.assertEqual(fn(3), 6)
+
+        self.assertEqual(calls, 0)
+        self.assertEqual(dependencies, {("User", "identification", "3")})
+
+    def test_dependency_scope_returns_result_without_caching_when_publish_aborts(self):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        with mock.patch(
+            "general_manager.cache.cache_decorator.publish_dependency_cache_entry",
+            side_effect=CachePublishAborted,
+        ):
+            self.assertEqual(fn(3), 6)
+
+        key = make_cache_key(fn, (3,), {})
+        self.assertEqual(calls, 1)
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+        self.assertEqual(self.record_calls, [])
+
+    def test_dependency_scope_does_not_cache_when_generation_changes_during_compute(
+        self,
+    ):
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+        )
+        def fn(value):
+            DependencyTracker.track("User", "identification", str(value))
+            begin_dependency_data_change()
+            end_dependency_data_change()
+            return value * 2
+
+        self.assertEqual(fn(3), 6)
+
+        key = make_cache_key(fn, (3,), {})
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+
+    def test_dependency_scope_does_not_cache_when_barrier_is_active_at_publish(
+        self,
+    ):
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+        )
+        def fn(value):
+            DependencyTracker.track("User", "identification", str(value))
+            begin_dependency_data_change()
+            return value * 2
+
+        try:
+            self.assertEqual(fn(3), 6)
+        finally:
+            end_dependency_data_change()
+
+        key = make_cache_key(fn, (3,), {})
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+
+    def test_dependency_scope_concurrent_miss_computes_once(self):
+        calls = 0
+        calls_lock = threading.Lock()
+        compute_started = threading.Event()
+        release_compute = threading.Event()
+        start_together = threading.Barrier(2)
+        results = []
+        errors = []
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            compute_started.set()
+            self.assertTrue(release_compute.wait(timeout=2))
+            return value * 2
+
+        def call_cached_function():
+            try:
+                start_together.wait(timeout=2)
+                results.append(fn(3))
+            except (AssertionError, RuntimeError) as exc:  # pragma: no cover
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=call_cached_function),
+            threading.Thread(target=call_cached_function),
+        ]
+        for thread in threads:
+            thread.start()
+
+        self.assertTrue(compute_started.wait(timeout=2))
+        release_compute.set()
+
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        if errors:
+            raise AssertionError(errors)
+
+        self.assertEqual(sorted(results), [6, 6])
+        self.assertEqual(calls, 1)
+        self.assertEqual(len(self.record_calls), 1)
 
     def test_cache_decorator_with_timeout_and_record_fn(self):
         """
