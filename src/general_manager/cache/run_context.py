@@ -53,6 +53,12 @@ class CalculationRunContext:
         """Store a value for the active run."""
         self._values[key] = value
 
+    def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
+        """Discard tuple keys that start with the supplied prefix."""
+        for key in list(self._values):
+            if isinstance(key, tuple) and key[: len(prefix)] == prefix:
+                del self._values[key]
+
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""
         return key in self._values

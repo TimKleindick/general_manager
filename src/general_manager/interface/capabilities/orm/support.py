@@ -12,6 +12,7 @@ from django.db import models
 from django.db.models import Subquery
 from django.utils import timezone
 from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
@@ -270,11 +271,21 @@ class OrmReadCapability(BaseCapability):
                 raise missing_error
             raise model_cls.DoesNotExist  # type: ignore[attr-defined]
 
+        context = current_calculation_run_context()
+        read_func = (
+            _perform
+            if context is None
+            else lambda: context.get_or_set(
+                _orm_instance_cache_key(interface_instance),
+                _perform,
+            )
+        )
+
         return call_with_observability(
             interface_instance,
             operation="read",
             payload={"pk": interface_instance.pk},
-            func=_perform,
+            func=read_func,
         )
 
     def get_attribute_types(
@@ -843,3 +854,26 @@ def _history_capability_for(
         "history",
         expected_type=OrmHistoryCapability,
     )
+
+
+def _orm_instance_cache_key(interface_instance: "OrmInterfaceBase") -> tuple[Any, ...]:
+    interface_cls = interface_instance.__class__
+    support = get_support_capability(interface_cls)
+    only_active = not is_soft_delete_enabled(interface_cls)
+    return (
+        "orm_instance",
+        interface_cls,
+        interface_instance.pk,
+        support.get_database_alias(interface_cls),
+        only_active,
+        interface_instance._search_date,
+    )
+
+
+def discard_orm_instance_cache(
+    interface_cls: type["OrmInterfaceBase"],
+    pk: Any,
+) -> None:
+    context = current_calculation_run_context()
+    if context is not None:
+        context.discard_prefix(("orm_instance", interface_cls, pk))

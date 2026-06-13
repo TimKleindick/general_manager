@@ -12,6 +12,7 @@ from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.cache.run_context import CalculationRunContext
 
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
@@ -292,6 +293,42 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             self.test_family.update(name="Mutated After Delete", ignore_permission=True)
         with self.assertRaises(InvalidManagerStateError):
             self.test_family.delete(ignore_permission=True)
+
+    def test_update_invalidates_run_scoped_orm_identity_cache(self):
+        with CalculationRunContext():
+            cached_human = self.TestHuman(id=self.test_human1.id)
+            self.assertEqual(cached_human.name, "Alice")
+
+            cached_human.update(name="Alice Updated", ignore_permission=True)
+
+            self.assertEqual(cached_human.name, "Alice Updated")
+            self.assertEqual(
+                self.TestHuman(id=self.test_human1.id).name,
+                "Alice Updated",
+            )
+
+    def test_delete_invalidates_run_scoped_orm_identity_cache(self):
+        human_id = self.test_human2.id
+
+        with CalculationRunContext():
+            cached_human = self.TestHuman(id=human_id)
+            self.assertEqual(cached_human.name, "Bob")
+
+            cached_human.delete(ignore_permission=True)
+
+            with self.assertRaises(self.TestHuman.Interface._model.DoesNotExist):
+                self.TestHuman(id=human_id)
+
+    def test_soft_delete_invalidates_run_scoped_orm_identity_cache(self):
+        family_id = self.test_family.id
+
+        with CalculationRunContext():
+            cached_family = self.TestFamily(id=family_id)
+            self.assertTrue(cached_family.is_active)
+
+            cached_family.delete(ignore_permission=True)
+
+            self.assertFalse(self.TestFamily(id=family_id).is_active)
 
     def test_manager_connections(self):
         """
