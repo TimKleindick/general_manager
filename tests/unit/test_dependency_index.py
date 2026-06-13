@@ -1190,6 +1190,64 @@ class GenericCacheInvalidationTests(TestCase):
             {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
         )
 
+    def test_generic_invalidation_serializes_multiple_mutations_under_one_lock(self):
+        invalidated_keys = ("rq-key", "all-key", "filter-key")
+        for cache_key in invalidated_keys:
+            cache.set(cache_key, f"value-{cache_key}", None)
+        cache.set("unaffected-key", "still-cached", None)
+        set_full_index(
+            {
+                "filter": {
+                    "DummyManager2": {
+                        "status": {
+                            '"active"': {"filter-key"},
+                            '"archived"': {"unaffected-key"},
+                        }
+                    }
+                },
+                "exclude": {},
+                "request_query": {
+                    "DummyManager2": {"query": {"rq-key"}},
+                    "OtherManager": {"query": {"unaffected-key"}},
+                },
+                "all": {"DummyManager2": {"all-key"}},
+            }
+        )
+        inst = DummyManager2(status="active", count=1)
+
+        with (
+            patch(
+                "general_manager.cache.dependency_index.acquire_lock_with_retry"
+            ) as mock_acquire,
+            patch(
+                "general_manager.cache.dependency_index.release_lock"
+            ) as mock_release,
+            patch("general_manager.cache.dependency_index.set_full_index") as mock_set,
+        ):
+            generic_cache_invalidation(
+                sender=DummyManager2,
+                instance=inst,
+                old_relevant_values={"status": "inactive"},
+            )
+
+        mock_acquire.assert_called_once_with("generic_cache_invalidation")
+        mock_release.assert_called_once()
+        mock_set.assert_called_once()
+        for cache_key in invalidated_keys:
+            self.assertIsNone(cache.get(cache_key))
+        self.assertEqual(cache.get("unaffected-key"), "still-cached")
+
+        persisted_idx = mock_set.call_args.args[0]
+        self.assert_cache_keys_removed_from_index(persisted_idx, *invalidated_keys)
+        self.assertEqual(
+            persisted_idx["filter"],
+            {"DummyManager2": {"status": {'"archived"': {"unaffected-key"}}}},
+        )
+        self.assertEqual(
+            persisted_idx["request_query"],
+            {"OtherManager": {"query": {"unaffected-key"}}},
+        )
+
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1233,7 +1291,7 @@ class GenericCacheInvalidationTests(TestCase):
     @patch(
         "general_manager.cache.dependency_index.invalidate_request_query_dependencies"
     )
-    def test_request_query_invalidation_uses_batch_helper(
+    def test_request_query_invalidation_uses_locked_helper(
         self,
         mock_invalidate_request_queries,
         mock_invalidate,
