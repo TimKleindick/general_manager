@@ -264,6 +264,23 @@ class TestDependencyGenerationAndBarrier(TestCase):
         set_spy.assert_any_call(DATA_CHANGE_COUNT_KEY, 1, None)
         set_spy.assert_any_call(DATA_CHANGE_LOCK_KEY, "1", None)
 
+    def test_end_data_change_preserves_positive_count_without_timeout(self):
+        original_set = cache.set
+        set_calls = []
+
+        def set_spy(key, value, timeout=None):
+            set_calls.append((key, value, timeout))
+            return original_set(key, value, timeout)
+
+        with patch.object(cache, "set", side_effect=set_spy):
+            begin_dependency_data_change()
+            begin_dependency_data_change()
+            end_dependency_data_change()
+
+        self.assertTrue(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 1)
+        self.assertIn((DATA_CHANGE_COUNT_KEY, 1, None), set_calls)
+
 
 @override_settings(CACHES=TEST_CACHES)
 class TestRecordDependencies(TestCase):
