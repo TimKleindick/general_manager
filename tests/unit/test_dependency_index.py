@@ -1,5 +1,6 @@
 from django.test import TestCase, override_settings
 from general_manager.cache.dependency_index import (
+    DATA_CHANGE_COUNT_KEY,
     DATA_CHANGE_LOCK_KEY,
     DEPENDENCY_GENERATION_KEY,
     acquire_lock,
@@ -27,7 +28,7 @@ import time
 import json
 from datetime import datetime, timezone, date
 from unittest.mock import patch, call
-from general_manager.cache.signals import pre_data_change
+from general_manager.cache.signals import data_change, pre_data_change
 from types import SimpleNamespace
 
 
@@ -159,6 +160,48 @@ class TestDependencyGenerationAndBarrier(TestCase):
 
         self.assertEqual(get_dependency_generation(), 1)
         self.assertTrue(is_dependency_data_change_active())
+
+    def test_overlapping_data_changes_keep_barrier_until_last_end(self):
+        begin_dependency_data_change()
+        begin_dependency_data_change()
+
+        end_dependency_data_change()
+        self.assertTrue(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 1)
+
+        end_dependency_data_change()
+        self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
+
+    def test_data_change_exception_releases_dependency_barrier(self):
+        class Example:
+            @data_change
+            def update(self):
+                raise RuntimeError("boom")
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            Example().update()
+
+        self.assertFalse(is_dependency_data_change_active())
+
+    def test_generic_cache_invalidation_releases_barrier_when_invalidation_raises(self):
+        begin_dependency_data_change()
+
+        with (
+            patch(
+                "general_manager.cache.dependency_index."
+                "invalidate_request_query_dependencies",
+                side_effect=RuntimeError("boom"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "boom"),
+        ):
+            generic_cache_invalidation(
+                sender=SimpleNamespace,
+                instance=SimpleNamespace(),
+                old_relevant_values={},
+            )
+
+        self.assertFalse(is_dependency_data_change_active())
 
 
 @override_settings(CACHES=TEST_CACHES)

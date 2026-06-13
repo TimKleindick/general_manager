@@ -64,6 +64,7 @@ INDEX_KEY = "dependency_index"  # Cache key storing the complete dependency inde
 LOCK_KEY = "dependency_index_lock"  # Cache key used for the dependency lock
 DEPENDENCY_GENERATION_KEY = "dependency_index_generation"
 DATA_CHANGE_LOCK_KEY = "dependency_index_data_change_lock"
+DATA_CHANGE_COUNT_KEY = "dependency_index_data_change_count"
 LOCK_TIMEOUT = 5  # Lock TTL in seconds
 UNDEFINED = object()  # Sentinel for undefined values
 ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
@@ -113,6 +114,16 @@ def _set_dependency_generation(generation: int) -> int:
     return generation
 
 
+def _get_dependency_data_change_count() -> int:
+    count = cache.get(DATA_CHANGE_COUNT_KEY, 0)
+    return max(int(count or 0), 0)
+
+
+def _set_dependency_data_change_count(count: int) -> int:
+    cache.set(DATA_CHANGE_COUNT_KEY, count, LOCK_TIMEOUT)
+    return count
+
+
 def begin_dependency_data_change() -> int:
     """
     Mark a data change as active and bump the dependency generation.
@@ -123,6 +134,7 @@ def begin_dependency_data_change() -> int:
     acquire_lock_with_retry("begin_dependency_data_change")
     try:
         generation = _set_dependency_generation(get_dependency_generation() + 1)
+        _set_dependency_data_change_count(_get_dependency_data_change_count() + 1)
         cache.set(DATA_CHANGE_LOCK_KEY, "1", LOCK_TIMEOUT)
         return generation
     finally:
@@ -131,7 +143,17 @@ def begin_dependency_data_change() -> int:
 
 def end_dependency_data_change() -> None:
     """Release the publish barrier for a completed data change."""
-    cache.delete(DATA_CHANGE_LOCK_KEY)
+    acquire_lock_with_retry("end_dependency_data_change")
+    try:
+        count = _set_dependency_data_change_count(
+            max(_get_dependency_data_change_count() - 1, 0)
+        )
+        if count == 0:
+            cache.delete(DATA_CHANGE_LOCK_KEY)
+        else:
+            cache.set(DATA_CHANGE_LOCK_KEY, "1", LOCK_TIMEOUT)
+    finally:
+        release_lock()
 
 
 def is_dependency_data_change_active() -> bool:
