@@ -2,6 +2,11 @@ from django.test import SimpleTestCase
 from django.core.cache import cache
 from unittest import mock
 from general_manager.cache.cache_decorator import cached, DependencyTracker
+from general_manager.cache.dependency_index import (
+    begin_dependency_data_change,
+    end_dependency_data_change,
+)
+from general_manager.cache.dependency_publish import CachePublishAborted
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.make_cache_key import make_cache_key
 import pickle
@@ -66,6 +71,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Initializes a fake cache backend and a call recording list, and resets thread-local dependency tracking state to ensure test isolation.
         """
         DependencyTracker.reset_thread_local_storage()
+        cache.clear()
 
         self.fake_cache = FakeCacheBackend()
         self.record_calls = []
@@ -90,6 +96,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
         with DependencyTracker():
             pass
+        cache.clear()
 
     def test_real_tracker_records_manual_tracks(self):
         """
@@ -252,6 +259,111 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         res2 = fn(2, 3)
         self.assertEqual(res2, 5)
         self.assertEqual(self.record_calls, [])
+
+    def test_dependency_scope_waits_for_published_value_when_lease_is_owned(self):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+        deps_key = f"{key}:deps"
+        self.fake_cache.set(deps_key, {("User", "identification", "3")}, None)
+        original_get = self.fake_cache.get
+        key_reads = 0
+
+        def publish_after_initial_miss(cache_key, default=None):
+            nonlocal key_reads
+            if cache_key == key:
+                key_reads += 1
+                if key_reads == 2:
+                    self.fake_cache.set(key, 6, None)
+            return original_get(cache_key, default)
+
+        self.fake_cache.get = publish_after_initial_miss
+
+        with mock.patch(
+            "general_manager.cache.cache_decorator.acquire_compute_lease",
+            return_value=None,
+        ):
+            with DependencyTracker() as dependencies:
+                self.assertEqual(fn(3), 6)
+
+        self.assertEqual(calls, 0)
+        self.assertEqual(dependencies, {("User", "identification", "3")})
+
+    def test_dependency_scope_returns_result_without_caching_when_publish_aborts(self):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        with mock.patch(
+            "general_manager.cache.cache_decorator.publish_dependency_cache_entry",
+            side_effect=CachePublishAborted,
+        ):
+            self.assertEqual(fn(3), 6)
+
+        key = make_cache_key(fn, (3,), {})
+        self.assertEqual(calls, 1)
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+        self.assertEqual(self.record_calls, [])
+
+    def test_dependency_scope_does_not_cache_when_generation_changes_during_compute(
+        self,
+    ):
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+        )
+        def fn(value):
+            DependencyTracker.track("User", "identification", str(value))
+            begin_dependency_data_change()
+            end_dependency_data_change()
+            return value * 2
+
+        self.assertEqual(fn(3), 6)
+
+        key = make_cache_key(fn, (3,), {})
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+
+    def test_dependency_scope_does_not_cache_when_barrier_is_active_at_publish(
+        self,
+    ):
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+        )
+        def fn(value):
+            DependencyTracker.track("User", "identification", str(value))
+            begin_dependency_data_change()
+            return value * 2
+
+        try:
+            self.assertEqual(fn(3), 6)
+        finally:
+            end_dependency_data_change()
+
+        key = make_cache_key(fn, (3,), {})
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
 
     def test_cache_decorator_with_timeout_and_record_fn(self):
         """
