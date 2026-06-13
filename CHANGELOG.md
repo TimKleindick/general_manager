@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.44.0 (2026-06-13)
+
+### Features
+
+- Add manager get shortcut
+  ([`e10c152`](https://github.com/TimKleindick/general_manager/commit/e10c15211a038a6d6b0d6e7861bde087eb1c87ad))
+
+
 ## v0.43.0 (2026-06-12)
 
 ### Bug Fixes
