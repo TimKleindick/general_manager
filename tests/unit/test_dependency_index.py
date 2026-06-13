@@ -5,6 +5,7 @@ from general_manager.cache.dependency_index import (
     get_full_index,
     set_full_index,
     record_dependencies,
+    record_many_dependencies,
     remove_cache_key_from_index,
     invalidate_cache_key,
     invalidate_and_remove_cache_keys,
@@ -383,6 +384,81 @@ class TestRecordDependencies(TestCase):
                     ("project", "identification", json.dumps({"id": 1})),
                 ],
             )
+
+
+@override_settings(CACHES=TEST_CACHES)
+class TestRecordManyDependencies(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    @patch("general_manager.cache.dependency_index.acquire_lock")
+    def test_records_many_dependency_sets_under_one_lock(self, mock_acquire):
+        mock_acquire.return_value = True
+
+        record_many_dependencies(
+            [
+                (
+                    "cache-a",
+                    {
+                        ("project", "filter", json.dumps({"name": "A"})),
+                        ("project", "identification", "1"),
+                    },
+                ),
+                (
+                    "cache-b",
+                    {
+                        ("project", "filter", json.dumps({"name": "B"})),
+                        ("project", "identification", "2"),
+                    },
+                ),
+            ]
+        )
+
+        self.assertEqual(mock_acquire.call_count, 1)
+        self.assertEqual(
+            get_full_index(),
+            {
+                "filter": {
+                    "project": {
+                        "name": {
+                            '"A"': {"cache-a"},
+                            '"B"': {"cache-b"},
+                        },
+                        "identification": {
+                            "1": {"cache-a"},
+                            "2": {"cache-b"},
+                        },
+                    }
+                },
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            },
+        )
+
+    def test_record_many_deduplicates_exact_cache_dependency_pairs(self):
+        dependency = ("project", "filter", json.dumps({"name": "A"}))
+
+        record_many_dependencies(
+            [
+                ("cache-a", {dependency}),
+                ("cache-a", {dependency}),
+                ("cache-b", {dependency}),
+            ]
+        )
+
+        self.assertEqual(
+            get_full_index()["filter"]["project"]["name"],
+            {'"A"': {"cache-a", "cache-b"}},
+        )
+
+    def test_record_many_ignores_empty_dependency_sets(self):
+        record_many_dependencies([("cache-a", set()), ("cache-b", [])])
+
+        self.assertEqual(
+            get_full_index(),
+            {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
+        )
 
 
 @override_settings(CACHES=TEST_CACHES)

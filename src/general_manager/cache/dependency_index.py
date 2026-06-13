@@ -212,6 +212,62 @@ def parse_dependency_identifier(identifier: str) -> Any:
 # -----------------------------------------------------------------------------
 # DEPENDENCY RECORDING
 # -----------------------------------------------------------------------------
+def _record_dependencies_locked(
+    idx: dependency_index,
+    cache_key: str,
+    dependencies: Iterable[Dependency],
+) -> None:
+    """Mutate an already-loaded dependency index for one cache key."""
+    for model_name, action, identifier in set(dependencies):
+        if action in ("filter", "exclude"):
+            action_key = cast(Literal["filter", "exclude"], action)
+            params = parse_dependency_identifier(identifier)
+            if not isinstance(params, dict):
+                continue
+            action_section = cast(
+                dict[general_manager_name, manager_dependency_section],
+                idx[action_key],
+            )
+            section = action_section.setdefault(model_name, {})
+            if not params:
+                lookup_map = section.setdefault(ALL_RECORDS_LOOKUP, {})
+                lookup_map.setdefault(ALL_RECORDS_VALUE, set()).add(cache_key)
+                continue
+            if len(params) > 1:
+                cache_dependencies = section.setdefault("__cache_dependencies__", {})
+                cache_dependencies.setdefault(cache_key, set()).add(identifier)
+            for lookup, val in params.items():
+                lookup_map = section.setdefault(lookup, {})
+                val_key = json.dumps(
+                    _normalize_dependency_identifier(val), sort_keys=True
+                )
+                lookup_map.setdefault(val_key, set()).add(cache_key)
+
+        elif action == "request_query":
+            request_index = cast(
+                dict[str, dict[str, set[str]]],
+                idx.setdefault("request_query", {}),
+            )
+            request_section = request_index.setdefault(model_name, {})
+            request_section.setdefault(identifier, set()).add(cache_key)
+
+        elif action == "all":
+            all_index = cast(
+                dict[str, set[str]],
+                idx.setdefault("all", {}),
+            )
+            all_index.setdefault(model_name, set()).add(cache_key)
+
+        else:
+            filter_section = cast(
+                dict[general_manager_name, manager_dependency_section],
+                idx["filter"],
+            )
+            section = filter_section.setdefault(model_name, {})
+            lookup_map = section.setdefault("identification", {})
+            lookup_map.setdefault(identifier, set()).add(cache_key)
+
+
 def record_dependencies(
     cache_key: str,
     dependencies: Iterable[Dependency],
@@ -232,61 +288,32 @@ def record_dependencies(
     acquire_lock_with_retry("record_dependencies")
     try:
         idx = get_full_index()
-        for model_name, action, identifier in dependencies:
-            if action in ("filter", "exclude"):
-                action_key = cast(Literal["filter", "exclude"], action)
-                params = parse_dependency_identifier(identifier)
-                if not isinstance(params, dict):
-                    continue
-                action_section = cast(
-                    dict[general_manager_name, manager_dependency_section],
-                    idx[action_key],
-                )
-                section = action_section.setdefault(model_name, {})
-                if not params:
-                    lookup_map = section.setdefault(ALL_RECORDS_LOOKUP, {})
-                    lookup_map.setdefault(ALL_RECORDS_VALUE, set()).add(cache_key)
-                    continue
-                if len(params) > 1:
-                    cache_dependencies = section.setdefault(
-                        "__cache_dependencies__", {}
-                    )
-                    cache_dependencies.setdefault(cache_key, set()).add(identifier)
-                for lookup, val in params.items():
-                    lookup_map = section.setdefault(lookup, {})
-                    val_key = json.dumps(
-                        _normalize_dependency_identifier(val), sort_keys=True
-                    )
-                    lookup_map.setdefault(val_key, set()).add(cache_key)
-
-            elif action == "request_query":
-                request_index = cast(
-                    dict[str, dict[str, set[str]]],
-                    idx.setdefault("request_query", {}),
-                )
-                request_section = request_index.setdefault(model_name, {})
-                request_section.setdefault(identifier, set()).add(cache_key)
-
-            elif action == "all":
-                all_index = cast(
-                    dict[str, set[str]],
-                    idx.setdefault("all", {}),
-                )
-                all_index.setdefault(model_name, set()).add(cache_key)
-
-            else:
-                # Treat identification lookups as a simple filter on `id`
-                filter_section = cast(
-                    dict[general_manager_name, manager_dependency_section],
-                    idx["filter"],
-                )
-                section = filter_section.setdefault(model_name, {})
-                lookup_map = section.setdefault("identification", {})
-                val_key = identifier
-                lookup_map.setdefault(val_key, set()).add(cache_key)
-
+        _record_dependencies_locked(idx, cache_key, dependencies)
         set_full_index(idx)
+    finally:
+        release_lock()
 
+
+def record_many_dependencies(
+    entries: Iterable[tuple[str, Iterable[Dependency]]],
+) -> None:
+    """
+    Register dependency metadata for many cache keys while holding one index lock.
+    """
+    normalized: dict[str, set[Dependency]] = {}
+    for cache_key, dependencies in entries:
+        dep_set = set(dependencies)
+        if dep_set:
+            normalized.setdefault(cache_key, set()).update(dep_set)
+    if not normalized:
+        return
+
+    acquire_lock_with_retry("record_many_dependencies")
+    try:
+        idx = get_full_index()
+        for cache_key, dependencies in normalized.items():
+            _record_dependencies_locked(idx, cache_key, dependencies)
+        set_full_index(idx)
     finally:
         release_lock()
 
