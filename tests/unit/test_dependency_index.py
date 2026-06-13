@@ -275,11 +275,13 @@ class TestDependencyGenerationAndBarrier(TestCase):
         with patch.object(cache, "set", side_effect=set_spy):
             begin_dependency_data_change()
             begin_dependency_data_change()
+            set_calls.clear()
             end_dependency_data_change()
 
         self.assertTrue(is_dependency_data_change_active())
         self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 1)
         self.assertIn((DATA_CHANGE_COUNT_KEY, 1, None), set_calls)
+        self.assertIn((DATA_CHANGE_LOCK_KEY, "1", None), set_calls)
 
 
 @override_settings(CACHES=TEST_CACHES)
