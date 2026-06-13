@@ -20,6 +20,13 @@ from general_manager.api.remote_api import clear_remote_api_urls
 from general_manager.api.remote_invalidation import clear_remote_invalidation_routes
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.cache.cache_decorator import _SENTINEL
+from general_manager.cache.dependency_index import (
+    DATA_CHANGE_COUNT_KEY,
+    DATA_CHANGE_LOCK_KEY,
+    DEPENDENCY_GENERATION_KEY,
+    INDEX_KEY,
+    LOCK_KEY,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.interface.base_interface import InterfaceBase
@@ -32,6 +39,13 @@ from general_manager.interface.infrastructure.startup_hooks import (
 _original_get_app: Callable[[str], AppConfig | None] = (
     global_apps.get_containing_app_config
 )
+_DEPENDENCY_COORDINATION_KEYS = {
+    DATA_CHANGE_COUNT_KEY,
+    DATA_CHANGE_LOCK_KEY,
+    DEPENDENCY_GENERATION_KEY,
+    INDEX_KEY,
+    LOCK_KEY,
+}
 
 
 def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | None]:
@@ -533,10 +547,15 @@ class GeneralManagerTransactionTestCase(
             "Cache.get should have been called and found something",
         )
 
-        self.assertNotIn(
-            ("set", ANY),
-            ops,
-            "Cache.set should not have stored anything",
+        value_sets = [
+            op
+            for op in ops
+            if op[0] == "set" and op[1] not in _DEPENDENCY_COORDINATION_KEYS
+        ]
+        self.assertEqual(
+            value_sets,
+            [],
+            "Cache.set should not have stored a cached value",
         )
         self.__reset_cache_counter()
 
