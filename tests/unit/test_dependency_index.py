@@ -28,7 +28,7 @@ import time
 import json
 from datetime import datetime, timezone, date
 from unittest.mock import patch, call
-from general_manager.cache.signals import data_change, pre_data_change
+from general_manager.cache.signals import data_change, post_data_change, pre_data_change
 from types import SimpleNamespace
 
 
@@ -179,9 +179,23 @@ class TestDependencyGenerationAndBarrier(TestCase):
             def update(self):
                 raise RuntimeError("boom")
 
-        with self.assertRaisesRegex(RuntimeError, "boom"):
-            Example().update()
+        calls = []
 
+        def receiver(**kwargs):
+            calls.append(kwargs)
+
+        post_data_change.connect(
+            receiver,
+            weak=False,
+            dispatch_uid="test_failed_mutation_no_post",
+        )
+        try:
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                Example().update()
+        finally:
+            post_data_change.disconnect(dispatch_uid="test_failed_mutation_no_post")
+
+        self.assertEqual(calls, [])
         self.assertFalse(is_dependency_data_change_active())
 
     def test_generic_cache_invalidation_releases_barrier_when_invalidation_raises(self):
