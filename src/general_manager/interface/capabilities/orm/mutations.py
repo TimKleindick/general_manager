@@ -21,7 +21,11 @@ from general_manager.interface.utils.errors import (
 from general_manager.interface.utils.models import model_has_field
 
 from ._compat import call_update_change_reason, call_with_observability
-from .support import get_support_capability, is_soft_delete_enabled
+from .support import (
+    discard_orm_instance_cache,
+    get_support_capability,
+    is_soft_delete_enabled,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.orm_interface import OrmInterfaceBase
@@ -342,6 +346,7 @@ class OrmUpdateCapability(BaseCapability):
                 many_to_many_kwargs=normalized_many,
                 history_comment=history_comment,
             )
+            discard_orm_instance_cache(interface_instance.__class__, pk)
             return {"id": pk}
 
         return call_with_observability(
@@ -419,6 +424,7 @@ class OrmDeleteCapability(BaseCapability):
                     creator_id=creator_id,
                     history_comment=history_comment_local,
                 )
+                discard_orm_instance_cache(interface_instance.__class__, pk)
                 return {"id": pk}
 
             history_comment_local = (
@@ -443,6 +449,9 @@ class OrmDeleteCapability(BaseCapability):
                     instance.delete(using=database_alias)
                 else:
                     instance.delete()
+            discard_orm_instance_cache(
+                interface_instance.__class__, interface_instance.pk
+            )
             return {"id": interface_instance.pk}
 
         return call_with_observability(

@@ -11,6 +11,7 @@ from django.apps import apps
 from django.db import models
 from django.utils import timezone
 
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.capabilities.orm import (
     HistoryNotSupportedError,
     OrmHistoryCapability,
@@ -156,6 +157,56 @@ class TestOrmPersistenceSupportCapability:
 
 class TestOrmReadCapability:
     """Tests for ORM read capability."""
+
+    def test_get_data_reuses_instance_inside_calculation_run_context(self):
+        """Test that repeated ORM reads reuse the row within an explicit run context."""
+        capability = OrmReadCapability()
+
+        class DoesNotExist(Exception):
+            pass
+
+        class Model:
+            pass
+
+        Model.DoesNotExist = DoesNotExist
+
+        class InterfaceInstance:
+            _model = Model
+            database = "secondary"
+            historical_lookup_buffer_seconds = 0
+
+            def __init__(self, pk: int) -> None:
+                self.pk = pk
+                self._search_date = None
+
+        model_instance = object()
+        first = InterfaceInstance(pk=42)
+        second = InterfaceInstance(pk=42)
+
+        mock_manager = Mock()
+        mock_manager.get = Mock(return_value=model_instance)
+
+        with patch(
+            "general_manager.interface.capabilities.orm.support.get_support_capability"
+        ) as mock_get_support:
+            mock_support = Mock()
+            mock_support.get_database_alias = Mock(return_value="secondary")
+            mock_support.get_manager = Mock(return_value=mock_manager)
+            mock_get_support.return_value = mock_support
+
+            with patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ):
+                with patch(
+                    "general_manager.interface.capabilities.orm.with_observability",
+                    side_effect=lambda *_args, **kwargs: kwargs["func"](),
+                ):
+                    with CalculationRunContext():
+                        assert capability.get_data(first) is model_instance
+                        assert capability.get_data(second) is model_instance
+
+        mock_manager.get.assert_called_once_with(pk=42)
 
     def test_get_data_retrieves_instance_by_pk(self):
         """Test that get_data retrieves model instance by primary key."""

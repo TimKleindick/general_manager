@@ -136,7 +136,15 @@ with CalculationRunContext() as context:
 Use `get_or_set(key, loader)` to load a value once, `has(key)` or `key in
 context` to check storage, `index(key=..., loader=..., index_by=...)` for
 one-row-per-key lookups, and `group_by(...)` or `index_many(...)` when multiple
-rows share the same key.
+rows share the same key. Use `discard_prefix(prefix)` when code that owns a
+structured key namespace needs to invalidate a group of run-scoped values.
+
+ORM-backed managers use this explicit run context to deduplicate repeated row
+materialization for the same manager identity. The optimization is active only
+inside an existing `CalculationRunContext`; constructing managers outside a run
+context continues to read from the database normally. Negative lookups are not
+cached, and ORM update/delete paths clear affected row entries in the active run
+context after successful mutations.
 
 ## Manual dependency-index helpers
 

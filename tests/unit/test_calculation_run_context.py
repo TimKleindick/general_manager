@@ -42,6 +42,21 @@ def test_public_storage_helpers_store_and_check_values() -> None:
         assert "answer" in ctx
 
 
+def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set(("orm_instance", "Human", 1, "default"), "alice")
+        ctx.set(("orm_instance", "Human", 2, "default"), "bob")
+        ctx.set(("other", "Human", 1), "other")
+        ctx.set("plain", "value")
+
+        ctx.discard_prefix(("orm_instance", "Human", 1))
+
+        assert not ctx.has(("orm_instance", "Human", 1, "default"))
+        assert ctx.get(("orm_instance", "Human", 2, "default")) == "bob"
+        assert ctx.get(("other", "Human", 1)) == "other"
+        assert ctx.get("plain") == "value"
+
+
 def test_index_loads_once_and_groups_by_key() -> None:
     calls = 0
 
