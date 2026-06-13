@@ -120,7 +120,7 @@ def _get_dependency_data_change_count() -> int:
 
 
 def _set_dependency_data_change_count(count: int) -> int:
-    cache.set(DATA_CHANGE_COUNT_KEY, count, LOCK_TIMEOUT)
+    cache.set(DATA_CHANGE_COUNT_KEY, count, None)
     return count
 
 
@@ -135,7 +135,7 @@ def begin_dependency_data_change() -> int:
     try:
         generation = _set_dependency_generation(get_dependency_generation() + 1)
         _set_dependency_data_change_count(_get_dependency_data_change_count() + 1)
-        cache.set(DATA_CHANGE_LOCK_KEY, "1", LOCK_TIMEOUT)
+        cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
         return generation
     finally:
         release_lock()
@@ -151,7 +151,7 @@ def end_dependency_data_change() -> None:
         if count == 0:
             cache.delete(DATA_CHANGE_LOCK_KEY)
         else:
-            cache.set(DATA_CHANGE_LOCK_KEY, "1", LOCK_TIMEOUT)
+            cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
     finally:
         release_lock()
 
@@ -575,7 +575,6 @@ def capture_old_values(
     Parameters:
         instance (GeneralManager | None): Manager instance about to change; if provided, this function sets instance._old_values to a mapping of lookup keys to their current values for use by post-change invalidation logic.
     """
-    begin_dependency_data_change()
     if instance is None:
         return
     manager_name = sender.__name__
@@ -628,539 +627,530 @@ def generic_cache_invalidation(
         instance (GeneralManager): The manager instance that was changed.
         old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
-    try:
-        manager_name = sender.__name__
-        invalidated_request_query_keys = invalidate_request_query_dependencies(
-            manager_name
+    manager_name = sender.__name__
+    invalidated_request_query_keys = invalidate_request_query_dependencies(manager_name)
+    for cache_key in invalidated_request_query_keys:
+        logger.info(
+            "invalidating request query cache key",
+            context={
+                "manager": manager_name,
+                "key": cache_key,
+                "action": REQUEST_QUERY_ACTION,
+            },
         )
-        for cache_key in invalidated_request_query_keys:
-            logger.info(
-                "invalidating request query cache key",
-                context={
-                    "manager": manager_name,
-                    "key": cache_key,
-                    "action": REQUEST_QUERY_ACTION,
-                },
-            )
-        idx = get_full_index()
-        all_cache_keys = tuple(
-            cast(dict[str, set[str]], idx.get("all", {})).get(manager_name, set())
+    idx = get_full_index()
+    all_cache_keys = tuple(
+        cast(dict[str, set[str]], idx.get("all", {})).get(manager_name, set())
+    )
+    for cache_key in all_cache_keys:
+        logger.info(
+            "invalidating cache key",
+            context={
+                "manager": manager_name,
+                "key": cache_key,
+                "action": "all",
+            },
         )
-        for cache_key in all_cache_keys:
-            logger.info(
-                "invalidating cache key",
-                context={
-                    "manager": manager_name,
-                    "key": cache_key,
-                    "action": "all",
-                },
-            )
-            invalidate_cache_key(cache_key)
-            remove_cache_key_from_index(cache_key)
+        invalidate_cache_key(cache_key)
+        remove_cache_key_from_index(cache_key)
 
-        def _json_loads_val_key(val_key: Any) -> Any:
-            if isinstance(val_key, str):
-                try:
-                    return json.loads(val_key)
-                except (json.JSONDecodeError, ValueError):
-                    return val_key  # treat as opaque string
-            return val_key
+    def _json_loads_val_key(val_key: Any) -> Any:
+        if isinstance(val_key, str):
+            try:
+                return json.loads(val_key)
+            except (json.JSONDecodeError, ValueError):
+                return val_key  # treat as opaque string
+        return val_key
 
-        def _repr_marker(raw: Any) -> str | None:
-            if isinstance(raw, dict) and set(raw.keys()) == {"__repr__"}:
-                marker = raw.get("__repr__")
-                return marker if isinstance(marker, str) else None
+    def _repr_marker(raw: Any) -> str | None:
+        if isinstance(raw, dict) and set(raw.keys()) == {"__repr__"}:
+            marker = raw.get("__repr__")
+            return marker if isinstance(marker, str) else None
+        return None
+
+    def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
+        """
+        Coerces a raw value to match the type and semantics of a sample value.
+
+        Attempts to convert `raw` into the same type as `sample`. Handles:
+        - datetimes: parses ISO-like strings, preserves or aligns timezone info with `sample`,
+        - dates: parses ISO date strings,
+        - booleans: recognizes common textual and numeric boolean representations,
+        - other types: attempts to call the sample's type on `raw`.
+
+        Parameters:
+            sample: A value whose type and semantics should be used as the target.
+            raw: The input value to coerce.
+
+        Returns:
+            The coerced value of the same type as `sample`, or `None` if `raw` cannot be sensibly converted.
+        """
+        if sample is None:
             return None
 
-        def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
-            """
-            Coerces a raw value to match the type and semantics of a sample value.
-
-            Attempts to convert `raw` into the same type as `sample`. Handles:
-            - datetimes: parses ISO-like strings, preserves or aligns timezone info with `sample`,
-            - dates: parses ISO date strings,
-            - booleans: recognizes common textual and numeric boolean representations,
-            - other types: attempts to call the sample's type on `raw`.
-
-            Parameters:
-                sample: A value whose type and semantics should be used as the target.
-                raw: The input value to coerce.
-
-            Returns:
-                The coerced value of the same type as `sample`, or `None` if `raw` cannot be sensibly converted.
-            """
-            if sample is None:
-                return None
-
-            if isinstance(sample, datetime):
-                if isinstance(raw, datetime):
-                    parsed = raw
-                elif isinstance(raw, str):
-                    candidate = raw.replace("Z", "+00:00")
-                    candidate = candidate.replace(" ", "T", 1)
-                    try:
-                        parsed = datetime.fromisoformat(candidate)
-                    except ValueError:
-                        return None
-                else:
+        if isinstance(sample, datetime):
+            if isinstance(raw, datetime):
+                parsed = raw
+            elif isinstance(raw, str):
+                candidate = raw.replace("Z", "+00:00")
+                candidate = candidate.replace(" ", "T", 1)
+                try:
+                    parsed = datetime.fromisoformat(candidate)
+                except ValueError:
                     return None
-
-                if sample.tzinfo and parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=sample.tzinfo)
-                elif not sample.tzinfo and parsed.tzinfo is not None:
-                    parsed = parsed.replace(tzinfo=None)
-                return parsed
-
-            if isinstance(sample, date) and not isinstance(sample, datetime):
-                if isinstance(raw, date) and not isinstance(raw, datetime):
-                    return raw
-                if isinstance(raw, str):
-                    try:
-                        return date.fromisoformat(raw)
-                    except ValueError:
-                        return None
+            else:
                 return None
 
-            # Booleans: avoid bool("False") == True
-            if isinstance(sample, bool):
-                if isinstance(raw, bool):
-                    return raw
-                if isinstance(raw, (int,)):
-                    return bool(raw)
-                if isinstance(raw, str):
-                    s = raw.strip().lower()
-                    if s in {"true", "1", "yes", "y", "t"}:
-                        return True
-                    if s in {"false", "0", "no", "n", "f"}:
-                        return False
-                return None
+            if sample.tzinfo and parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=sample.tzinfo)
+            elif not sample.tzinfo and parsed.tzinfo is not None:
+                parsed = parsed.replace(tzinfo=None)
+            return parsed
+
+        if isinstance(sample, date) and not isinstance(sample, datetime):
+            if isinstance(raw, date) and not isinstance(raw, datetime):
+                return raw
+            if isinstance(raw, str):
+                try:
+                    return date.fromisoformat(raw)
+                except ValueError:
+                    return None
+            return None
+
+        # Booleans: avoid bool("False") == True
+        if isinstance(sample, bool):
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, (int,)):
+                return bool(raw)
+            if isinstance(raw, str):
+                s = raw.strip().lower()
+                if s in {"true", "1", "yes", "y", "t"}:
+                    return True
+                if s in {"false", "0", "no", "n", "f"}:
+                    return False
+            return None
+        try:
+            return type(sample)(raw)  # type: ignore
+        except (TypeError, ValueError):
+            if isinstance(raw, type(sample)):
+                return raw
+            return None
+
+    def matches(op: str, value: Any, val_key: Any) -> bool:
+        """
+        Evaluate whether a given value satisfies a lookup operation described by `op` and `val_key`.
+
+        Supports operators:
+        - "eq": equality; attempts to interpret `val_key` as a literal and coerce it to `value`'s type before comparing.
+        - "in": membership; expects `val_key` to be a literal iterable and checks if any coerced element equals `value`.
+        - "gt", "gte", "lt", "lte": numeric/date comparisons; `val_key` is interpreted as a literal and coerced to `value`'s type.
+        - "contains", "startswith", "endswith": string containment/prefix/suffix checks; both sides are compared as strings.
+        - "regex": treats `val_key` as a regular expression pattern and tests it against the string form of `value`.
+
+        Behavior notes:
+        - If `value` is None the function only matches explicit null equality
+          or membership checks.
+        - ``val_key`` is a JSON-serialised string produced by
+          :func:`json.dumps`.  Parsing is done with :func:`json.loads`; if
+          JSON parsing or type coercion fails, the function falls back to
+          conservative comparisons or returns ``False`` where appropriate.
+        - Regex patterns that fail to compile are treated as non-matching.
+
+        Parameters:
+            op (str): The lookup operator name (one of the supported operators above).
+            value (Any): The runtime value to test.
+            val_key (Any): The stored comparison key (often a string representation) to interpret for the comparison.
+
+        Returns:
+            bool: `True` if the comparison defined by `op` and `val_key` matches `value`, `False` otherwise.
+        """
+        # eq
+        if op == "eq":
+            literal_val = _json_loads_val_key(val_key)
+            if literal_val is None:
+                return value is None
+            repr_marker = _repr_marker(literal_val)
+            if repr_marker is not None:
+                return repr(value) == repr_marker
+            comparable = _coerce_to_type(value, literal_val)
+            if comparable is None:
+                return repr(value) == val_key
+            return value == comparable
+
+        # in
+        if op == "in":
             try:
-                return type(sample)(raw)  # type: ignore
-            except (TypeError, ValueError):
-                if isinstance(raw, type(sample)):
-                    return raw
-                return None
-
-        def matches(op: str, value: Any, val_key: Any) -> bool:
-            """
-            Evaluate whether a given value satisfies a lookup operation described by `op` and `val_key`.
-
-            Supports operators:
-            - "eq": equality; attempts to interpret `val_key` as a literal and coerce it to `value`'s type before comparing.
-            - "in": membership; expects `val_key` to be a literal iterable and checks if any coerced element equals `value`.
-            - "gt", "gte", "lt", "lte": numeric/date comparisons; `val_key` is interpreted as a literal and coerced to `value`'s type.
-            - "contains", "startswith", "endswith": string containment/prefix/suffix checks; both sides are compared as strings.
-            - "regex": treats `val_key` as a regular expression pattern and tests it against the string form of `value`.
-
-            Behavior notes:
-            - If `value` is None the function only matches explicit null equality
-              or membership checks.
-            - ``val_key`` is a JSON-serialised string produced by
-              :func:`json.dumps`.  Parsing is done with :func:`json.loads`; if
-              JSON parsing or type coercion fails, the function falls back to
-              conservative comparisons or returns ``False`` where appropriate.
-            - Regex patterns that fail to compile are treated as non-matching.
-
-            Parameters:
-                op (str): The lookup operator name (one of the supported operators above).
-                value (Any): The runtime value to test.
-                val_key (Any): The stored comparison key (often a string representation) to interpret for the comparison.
-
-            Returns:
-                bool: `True` if the comparison defined by `op` and `val_key` matches `value`, `False` otherwise.
-            """
-            # eq
-            if op == "eq":
-                literal_val = _json_loads_val_key(val_key)
-                if literal_val is None:
-                    return value is None
-                repr_marker = _repr_marker(literal_val)
+                seq = json.loads(val_key)
+            except (json.JSONDecodeError, ValueError):
+                return False
+            for item in seq:
+                if item is None:
+                    if value is None:
+                        return True
+                    continue
+                repr_marker = _repr_marker(item)
                 if repr_marker is not None:
-                    return repr(value) == repr_marker
-                comparable = _coerce_to_type(value, literal_val)
-                if comparable is None:
-                    return repr(value) == val_key
-                return value == comparable
-
-            # in
-            if op == "in":
-                try:
-                    seq = json.loads(val_key)
-                except (json.JSONDecodeError, ValueError):
-                    return False
-                for item in seq:
-                    if item is None:
-                        if value is None:
-                            return True
-                        continue
-                    repr_marker = _repr_marker(item)
-                    if repr_marker is not None:
-                        if repr(value) == repr_marker:
-                            return True
-                        continue
-                    comparable = _coerce_to_type(value, item)
-                    if comparable is not None:
-                        if value == comparable:
-                            return True
-                    elif repr(value) == repr(item):
+                    if repr(value) == repr_marker:
                         return True
-                return False
-
-            # range comparisons
-            if op in ("gt", "gte", "lt", "lte"):
-                if value is None:
-                    return False
-                literal_val = _json_loads_val_key(val_key)
-                thr = _coerce_to_type(value, literal_val)
-                if thr is None:
-                    return False
-                if op == "gt":
-                    return value > thr
-                if op == "gte":
-                    return value >= thr
-                if op == "lt":
-                    return value < thr
-                if op == "lte":
-                    return value <= thr
-
-            # wildcard / regex comparisons
-            if op in ("contains", "startswith", "endswith", "regex"):
-                if value is None:
-                    return False
-                try:
-                    literal = json.loads(val_key)
-                except (json.JSONDecodeError, ValueError):
-                    literal = val_key
-
-                # ensure we always work with strings to avoid TypeErrors
-                text = "" if value is None else str(value)
-                if op == "contains":
-                    return literal in text
-                if op == "startswith":
-                    return text.startswith(literal)
-                if op == "endswith":
-                    return text.endswith(literal)
-                # regex: treat the stored key as the regex pattern
-                if op == "regex":
-                    try:
-                        pattern_source = (
-                            literal if isinstance(literal, str) else str(literal)
-                        )
-                        pattern = re.compile(pattern_source)
-                    except re.error:
-                        return False
-                    return bool(pattern.search(text))
-
+                    continue
+                comparable = _coerce_to_type(value, item)
+                if comparable is not None:
+                    if value == comparable:
+                        return True
+                elif repr(value) == repr(item):
+                    return True
             return False
 
-        def current_value_for_path(path: list[str]) -> Any:
-            """
-            Fetches the current value from the captured `instance` by following a sequence of attribute names.
+        # range comparisons
+        if op in ("gt", "gte", "lt", "lte"):
+            if value is None:
+                return False
+            literal_val = _json_loads_val_key(val_key)
+            thr = _coerce_to_type(value, literal_val)
+            if thr is None:
+                return False
+            if op == "gt":
+                return value > thr
+            if op == "gte":
+                return value >= thr
+            if op == "lt":
+                return value < thr
+            if op == "lte":
+                return value <= thr
 
-            Parameters:
-                path (list[str]): Ordered attribute names to traverse on the instance (e.g., ["user", "profile", "email"]).
+        # wildcard / regex comparisons
+        if op in ("contains", "startswith", "endswith", "regex"):
+            if value is None:
+                return False
+            try:
+                literal = json.loads(val_key)
+            except (json.JSONDecodeError, ValueError):
+                literal = val_key
 
-            Returns:
-                The value found at the end of the attribute path, or `None` if any attribute along the path is missing.
-            """
-            current: object = instance
-            for attr in path:
-                current = getattr(current, attr, UNDEFINED)
-                if current is UNDEFINED:
-                    return None
-            return current
-
-        def evaluate_composite(
-            cache_key: str,
-            lookup_key: str,
-            action: Literal["filter", "exclude"],
-            model_section: dict[str, dict[str, set[str]]],
-        ) -> bool | None:
-            """
-            Determine whether a composite dependency (multiple lookup params grouped under a single identifier)
-            for a given cache key and lookup should cause cache invalidation.
-
-            Parameters:
-                cache_key (str): The cache key being evaluated.
-                lookup_key (str): The specific lookup (operator and attribute path joined by `"__"`) that prompted evaluation.
-                action (Literal["filter", "exclude"]): The dependency action context; "filter" treats a match as cause for invalidation,
-                    "exclude" treats a change in match membership as cause for invalidation.
-                model_section (dict[str, dict[str, set[str]]]): The index section for the model containing lookup maps and an
-                    optional "__cache_dependencies__" mapping from cache keys to sets of identifier strings (each identifier
-                    encodes multiple lookup parameters).
-
-            Returns:
-                bool | None: `True` if the composite dependency indicates the cache entry should be invalidated,
-                `False` if it indicates no invalidation is required, or `None` if there are no composite identifiers
-                registered for `cache_key`.
-            """
-            cache_dependencies = model_section.get("__cache_dependencies__", {})
-            identifiers = (
-                cache_dependencies.get(cache_key) if cache_dependencies else None
-            )
-            if not identifiers:
-                return None
-
-            for identifier in identifiers:
-                params = parse_dependency_identifier(identifier)
-                if not isinstance(params, dict):
-                    continue
-                if lookup_key not in params:
-                    continue
-                old_all = True
-                new_all = True
-                for param_lookup, expected in params.items():
-                    parts_param = param_lookup.split("__")
-                    if parts_param[-1] in (
-                        "gt",
-                        "gte",
-                        "lt",
-                        "lte",
-                        "in",
-                        "contains",
-                        "startswith",
-                        "endswith",
-                        "regex",
-                    ):
-                        op_param = parts_param[-1]
-                        attr_path_param = parts_param[:-1]
-                    else:
-                        op_param = "eq"
-                        attr_path_param = parts_param
-                    expected_key = json.dumps(
-                        _normalize_dependency_identifier(expected), sort_keys=True
+            # ensure we always work with strings to avoid TypeErrors
+            text = "" if value is None else str(value)
+            if op == "contains":
+                return literal in text
+            if op == "startswith":
+                return text.startswith(literal)
+            if op == "endswith":
+                return text.endswith(literal)
+            # regex: treat the stored key as the regex pattern
+            if op == "regex":
+                try:
+                    pattern_source = (
+                        literal if isinstance(literal, str) else str(literal)
                     )
-                    old_val_param = old_relevant_values.get("__".join(attr_path_param))
-                    new_val_param = current_value_for_path(attr_path_param)
-                    if not matches(op_param, old_val_param, expected_key):
-                        old_all = False
-                    if not matches(op_param, new_val_param, expected_key):
-                        new_all = False
-                    if not old_all and not new_all and action == "filter":
-                        break
-                if action == "filter":
-                    if old_all or new_all:
-                        return True
-                else:  # exclude
-                    if old_all != new_all:
-                        return True
+                    pattern = re.compile(pattern_source)
+                except re.error:
+                    return False
+                return bool(pattern.search(text))
+
+        return False
+
+    def current_value_for_path(path: list[str]) -> Any:
+        """
+        Fetches the current value from the captured `instance` by following a sequence of attribute names.
+
+        Parameters:
+            path (list[str]): Ordered attribute names to traverse on the instance (e.g., ["user", "profile", "email"]).
+
+        Returns:
+            The value found at the end of the attribute path, or `None` if any attribute along the path is missing.
+        """
+        current: object = instance
+        for attr in path:
+            current = getattr(current, attr, UNDEFINED)
+            if current is UNDEFINED:
+                return None
+        return current
+
+    def evaluate_composite(
+        cache_key: str,
+        lookup_key: str,
+        action: Literal["filter", "exclude"],
+        model_section: dict[str, dict[str, set[str]]],
+    ) -> bool | None:
+        """
+        Determine whether a composite dependency (multiple lookup params grouped under a single identifier)
+        for a given cache key and lookup should cause cache invalidation.
+
+        Parameters:
+            cache_key (str): The cache key being evaluated.
+            lookup_key (str): The specific lookup (operator and attribute path joined by `"__"`) that prompted evaluation.
+            action (Literal["filter", "exclude"]): The dependency action context; "filter" treats a match as cause for invalidation,
+                "exclude" treats a change in match membership as cause for invalidation.
+            model_section (dict[str, dict[str, set[str]]]): The index section for the model containing lookup maps and an
+                optional "__cache_dependencies__" mapping from cache keys to sets of identifier strings (each identifier
+                encodes multiple lookup parameters).
+
+        Returns:
+            bool | None: `True` if the composite dependency indicates the cache entry should be invalidated,
+            `False` if it indicates no invalidation is required, or `None` if there are no composite identifiers
+            registered for `cache_key`.
+        """
+        cache_dependencies = model_section.get("__cache_dependencies__", {})
+        identifiers = cache_dependencies.get(cache_key) if cache_dependencies else None
+        if not identifiers:
+            return None
+
+        for identifier in identifiers:
+            params = parse_dependency_identifier(identifier)
+            if not isinstance(params, dict):
+                continue
+            if lookup_key not in params:
+                continue
+            old_all = True
+            new_all = True
+            for param_lookup, expected in params.items():
+                parts_param = param_lookup.split("__")
+                if parts_param[-1] in (
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "in",
+                    "contains",
+                    "startswith",
+                    "endswith",
+                    "regex",
+                ):
+                    op_param = parts_param[-1]
+                    attr_path_param = parts_param[:-1]
+                else:
+                    op_param = "eq"
+                    attr_path_param = parts_param
+                expected_key = json.dumps(
+                    _normalize_dependency_identifier(expected), sort_keys=True
+                )
+                old_val_param = old_relevant_values.get("__".join(attr_path_param))
+                new_val_param = current_value_for_path(attr_path_param)
+                if not matches(op_param, old_val_param, expected_key):
+                    old_all = False
+                if not matches(op_param, new_val_param, expected_key):
+                    new_all = False
+                if not old_all and not new_all and action == "filter":
+                    break
+            if action == "filter":
+                if old_all or new_all:
+                    return True
+            else:  # exclude
+                if old_all != new_all:
+                    return True
+        return False
+
+    def bucket_membership_matches(
+        params: dict[str, Any],
+        *,
+        use_old_values: bool,
+    ) -> bool:
+        """
+        Check whether the changed row belongs to a bucket described by filters/excludes.
+        """
+        filters = params.get("filters", {})
+        excludes = params.get("excludes", {})
+        if not isinstance(filters, dict) or not isinstance(excludes, dict):
             return False
 
-        def bucket_membership_matches(
-            params: dict[str, Any],
-            *,
-            use_old_values: bool,
-        ) -> bool:
-            """
-            Check whether the changed row belongs to a bucket described by filters/excludes.
-            """
-            filters = params.get("filters", {})
-            excludes = params.get("excludes", {})
-            if not isinstance(filters, dict) or not isinstance(excludes, dict):
+        def value_for_lookup(attr_path: list[str]) -> Any:
+            if use_old_values:
+                return old_relevant_values.get("__".join(attr_path))
+            return current_value_for_path(attr_path)
+
+        for lookup, expected in filters.items():
+            parts = lookup.split("__")
+            if parts[-1] in (
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "contains",
+                "startswith",
+                "endswith",
+                "regex",
+            ):
+                op = parts[-1]
+                attr_path = parts[:-1]
+            else:
+                op = "eq"
+                attr_path = parts
+            expected_key = json.dumps(
+                _normalize_dependency_identifier(expected), sort_keys=True
+            )
+            if not matches(op, value_for_lookup(attr_path), expected_key):
                 return False
 
-            def value_for_lookup(attr_path: list[str]) -> Any:
-                if use_old_values:
-                    return old_relevant_values.get("__".join(attr_path))
-                return current_value_for_path(attr_path)
-
-            for lookup, expected in filters.items():
-                parts = lookup.split("__")
-                if parts[-1] in (
-                    "gt",
-                    "gte",
-                    "lt",
-                    "lte",
-                    "in",
-                    "contains",
-                    "startswith",
-                    "endswith",
-                    "regex",
-                ):
-                    op = parts[-1]
-                    attr_path = parts[:-1]
-                else:
-                    op = "eq"
-                    attr_path = parts
-                expected_key = json.dumps(
-                    _normalize_dependency_identifier(expected), sort_keys=True
-                )
-                if not matches(op, value_for_lookup(attr_path), expected_key):
-                    return False
-
-            for lookup, expected in excludes.items():
-                parts = lookup.split("__")
-                if parts[-1] in (
-                    "gt",
-                    "gte",
-                    "lt",
-                    "lte",
-                    "in",
-                    "contains",
-                    "startswith",
-                    "endswith",
-                    "regex",
-                ):
-                    op = parts[-1]
-                    attr_path = parts[:-1]
-                else:
-                    op = "eq"
-                    attr_path = parts
-                expected_key = json.dumps(
-                    _normalize_dependency_identifier(expected), sort_keys=True
-                )
-                if matches(op, value_for_lookup(attr_path), expected_key):
-                    return False
-
-            return True
-
-        for action in ACTIONS:
-            action_section = cast(
-                dict[general_manager_name, manager_dependency_section],
-                idx[action],
+        for lookup, expected in excludes.items():
+            parts = lookup.split("__")
+            if parts[-1] in (
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "contains",
+                "startswith",
+                "endswith",
+                "regex",
+            ):
+                op = parts[-1]
+                attr_path = parts[:-1]
+            else:
+                op = "eq"
+                attr_path = parts
+            expected_key = json.dumps(
+                _normalize_dependency_identifier(expected), sort_keys=True
             )
-            model_section = action_section.get(manager_name)
-            if not isinstance(model_section, dict):
-                continue
-            for lookup, lookup_map in model_section.items():
-                if lookup.startswith("__"):
-                    if lookup == ALL_RECORDS_LOOKUP:
-                        for cache_keys in cast(
-                            lookup_dependency_map, lookup_map
-                        ).values():
-                            for ck in list(cache_keys):
-                                logger.info(
-                                    "invalidating cache key",
-                                    context={
-                                        "manager": manager_name,
-                                        "key": ck,
-                                        "lookup": lookup,
-                                        "action": action,
-                                        "value": ALL_RECORDS_VALUE,
-                                    },
-                                )
-                                invalidate_cache_key(ck)
-                                remove_cache_key_from_index(ck)
-                    elif lookup.startswith("__sort__"):
-                        sort_lookup = lookup.removeprefix("__sort__")
-                        attr_path = sort_lookup.split("__")
-                        old_sort_value = old_relevant_values.get(sort_lookup)
-                        new_sort_value = current_value_for_path(attr_path)
-                        if old_sort_value == new_sort_value:
+            if matches(op, value_for_lookup(attr_path), expected_key):
+                return False
+
+        return True
+
+    for action in ACTIONS:
+        action_section = cast(
+            dict[general_manager_name, manager_dependency_section],
+            idx[action],
+        )
+        model_section = action_section.get(manager_name)
+        if not isinstance(model_section, dict):
+            continue
+        for lookup, lookup_map in model_section.items():
+            if lookup.startswith("__"):
+                if lookup == ALL_RECORDS_LOOKUP:
+                    for cache_keys in cast(lookup_dependency_map, lookup_map).values():
+                        for ck in list(cache_keys):
+                            logger.info(
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": ALL_RECORDS_VALUE,
+                                },
+                            )
+                            invalidate_cache_key(ck)
+                            remove_cache_key_from_index(ck)
+                elif lookup.startswith("__sort__"):
+                    sort_lookup = lookup.removeprefix("__sort__")
+                    attr_path = sort_lookup.split("__")
+                    old_sort_value = old_relevant_values.get(sort_lookup)
+                    new_sort_value = current_value_for_path(attr_path)
+                    if old_sort_value == new_sort_value:
+                        continue
+                    for val_key, cache_keys in list(
+                        cast(lookup_dependency_map, lookup_map).items()
+                    ):
+                        payload = _json_loads_val_key(val_key)
+                        if not isinstance(payload, dict):
                             continue
-                        for val_key, cache_keys in list(
-                            cast(lookup_dependency_map, lookup_map).items()
-                        ):
-                            payload = _json_loads_val_key(val_key)
-                            if not isinstance(payload, dict):
-                                continue
-                            old_in_bucket = bucket_membership_matches(
-                                payload,
-                                use_old_values=True,
-                            )
-                            new_in_bucket = bucket_membership_matches(
-                                payload,
-                                use_old_values=False,
-                            )
-                            if not (old_in_bucket or new_in_bucket):
-                                continue
-                            for ck in list(cache_keys):
-                                logger.info(
-                                    "invalidating cache key",
-                                    context={
-                                        "manager": manager_name,
-                                        "key": ck,
-                                        "lookup": lookup,
-                                        "action": action,
-                                        "value": val_key,
-                                    },
-                                )
-                                invalidate_cache_key(ck)
-                                remove_cache_key_from_index(ck)
-                    continue
-                lookup_map = cast(lookup_dependency_map, lookup_map)
-                # 1) get operator and attribute path
-                parts = lookup.split("__")
-                if parts[-1] in (
-                    "gt",
-                    "gte",
-                    "lt",
-                    "lte",
-                    "in",
-                    "contains",
-                    "startswith",
-                    "endswith",
-                    "regex",
-                ):
-                    op = parts[-1]
-                    attr_path = parts[:-1]
-                else:
-                    op = "eq"
-                    attr_path = parts
-
-                # 2) get old & new value
-                old_val = old_relevant_values.get("__".join(attr_path))
-
-                current: object = instance
-                for attr in attr_path:
-                    current = getattr(current, attr, None)
-                    if current is None:
-                        break
-                new_val = current
-
-                # 3) check against all cache_keys
-                for val_key, cache_keys in list(lookup_map.items()):
-                    old_match = matches(op, old_val, val_key)
-                    new_match = matches(op, new_val, val_key)
-
-                    if action == "filter":
-                        # Filter: invalidate if new match or old match
+                        old_in_bucket = bucket_membership_matches(
+                            payload,
+                            use_old_values=True,
+                        )
+                        new_in_bucket = bucket_membership_matches(
+                            payload,
+                            use_old_values=False,
+                        )
+                        if not (old_in_bucket or new_in_bucket):
+                            continue
                         for ck in list(cache_keys):
-                            composite_decision = evaluate_composite(
-                                ck, lookup, action, model_section
+                            logger.info(
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": val_key,
+                                },
                             )
-                            should_invalidate = (
-                                composite_decision
-                                if composite_decision is not None
-                                else (new_match or old_match)
-                            )
-                            if should_invalidate:
-                                logger.info(
-                                    "invalidating cache key",
-                                    context={
-                                        "manager": manager_name,
-                                        "key": ck,
-                                        "lookup": lookup,
-                                        "action": action,
-                                        "value": val_key,
-                                    },
-                                )
-                                invalidate_cache_key(ck)
-                                remove_cache_key_from_index(ck)
+                            invalidate_cache_key(ck)
+                            remove_cache_key_from_index(ck)
+                continue
+            lookup_map = cast(lookup_dependency_map, lookup_map)
+            # 1) get operator and attribute path
+            parts = lookup.split("__")
+            if parts[-1] in (
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "contains",
+                "startswith",
+                "endswith",
+                "regex",
+            ):
+                op = parts[-1]
+                attr_path = parts[:-1]
+            else:
+                op = "eq"
+                attr_path = parts
 
-                    else:  # action == 'exclude'
-                        # Excludes: invalidate only if matches changed
-                        for ck in list(cache_keys):
-                            composite_decision = evaluate_composite(
-                                ck, lookup, action, model_section
+            # 2) get old & new value
+            old_val = old_relevant_values.get("__".join(attr_path))
+
+            current: object = instance
+            for attr in attr_path:
+                current = getattr(current, attr, None)
+                if current is None:
+                    break
+            new_val = current
+
+            # 3) check against all cache_keys
+            for val_key, cache_keys in list(lookup_map.items()):
+                old_match = matches(op, old_val, val_key)
+                new_match = matches(op, new_val, val_key)
+
+                if action == "filter":
+                    # Filter: invalidate if new match or old match
+                    for ck in list(cache_keys):
+                        composite_decision = evaluate_composite(
+                            ck, lookup, action, model_section
+                        )
+                        should_invalidate = (
+                            composite_decision
+                            if composite_decision is not None
+                            else (new_match or old_match)
+                        )
+                        if should_invalidate:
+                            logger.info(
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": val_key,
+                                },
                             )
-                            should_invalidate = (
-                                composite_decision
-                                if composite_decision is not None
-                                else (old_match != new_match)
+                            invalidate_cache_key(ck)
+                            remove_cache_key_from_index(ck)
+
+                else:  # action == 'exclude'
+                    # Excludes: invalidate only if matches changed
+                    for ck in list(cache_keys):
+                        composite_decision = evaluate_composite(
+                            ck, lookup, action, model_section
+                        )
+                        should_invalidate = (
+                            composite_decision
+                            if composite_decision is not None
+                            else (old_match != new_match)
+                        )
+                        if should_invalidate:
+                            logger.info(
+                                "invalidating cache key",
+                                context={
+                                    "manager": manager_name,
+                                    "key": ck,
+                                    "lookup": lookup,
+                                    "action": action,
+                                    "value": val_key,
+                                },
                             )
-                            if should_invalidate:
-                                logger.info(
-                                    "invalidating cache key",
-                                    context={
-                                        "manager": manager_name,
-                                        "key": ck,
-                                        "lookup": lookup,
-                                        "action": action,
-                                        "value": val_key,
-                                    },
-                                )
-                                invalidate_cache_key(ck)
-                                remove_cache_key_from_index(ck)
-    finally:
-        end_dependency_data_change()
+                            invalidate_cache_key(ck)
+                            remove_cache_key_from_index(ck)
