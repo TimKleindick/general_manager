@@ -1,12 +1,33 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
 from functools import wraps
-from typing import Any, Callable, Literal, Optional, Protocol, Set, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Literal,
+    Optional,
+    Protocol,
+    Set,
+    TypeVar,
+    cast,
+)
 
 from django.core.cache import cache as django_cache
 
 from general_manager.cache.cache_tracker import DependencyTracker
-from general_manager.cache.dependency_index import Dependency, record_dependencies
+from general_manager.cache.dependency_index import (
+    Dependency,
+    get_dependency_generation,
+    record_dependencies,
+)
+from general_manager.cache.dependency_publish import (
+    CachePublishAborted,
+    acquire_compute_lease,
+    publish_dependency_cache_entry,
+    release_compute_lease,
+    wait_for_cached_dependency_value,
+)
 from general_manager.cache.run_context import ensure_calculation_run_context
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.logging import get_logger
@@ -160,32 +181,86 @@ def cached(
 
             deps_key = f"{key}:deps"
 
-            cached_result = cache_backend.get(key, _SENTINEL)
-            if cached_result is not _SENTINEL:
-                # saved dependencies are added to the current tracker
+            def track_cached_dependencies() -> None:
                 cached_deps = cache_backend.get(deps_key)
                 if cached_deps:
                     for class_name, operation, identifier in cached_deps:
                         DependencyTracker.track(class_name, operation, identifier)
+
+            cached_result = cache_backend.get(key, _SENTINEL)
+            if cached_result is not _SENTINEL:
+                track_cached_dependencies()
                 logger.debug(
                     "cache hit",
                     context={
                         "function": func.__qualname__,
                         "key": key,
-                        "dependency_count": len(cached_deps) if cached_deps else 0,
+                        "scope": scope,
                     },
                 )
                 return cached_result
 
-            with DependencyTracker() as dependencies:
-                result = func(*args, **kwargs)
-                ModelDependencyCollector.add_args(dependencies, args, kwargs)
+            lease = acquire_compute_lease(key)
+            while lease is None:
+                cached_result = wait_for_cached_dependency_value(
+                    cache_backend,
+                    key,
+                    sentinel=_SENTINEL,
+                )
+                if cached_result is not _SENTINEL:
+                    track_cached_dependencies()
+                    logger.debug(
+                        "cache hit after waiting for dependency publish",
+                        context={
+                            "function": func.__qualname__,
+                            "key": key,
+                            "scope": scope,
+                        },
+                    )
+                    return cached_result
+                lease = acquire_compute_lease(key)
 
-                cache_backend.set(key, result, timeout)
-                cache_backend.set(deps_key, dependencies, timeout)
+            try:
+                cached_result = cache_backend.get(key, _SENTINEL)
+                if cached_result is not _SENTINEL:
+                    track_cached_dependencies()
+                    return cached_result
 
-                if dependencies and timeout is None:
-                    record_fn(key, dependencies)
+                started_generation = get_dependency_generation()
+                with DependencyTracker() as dependencies:
+                    result = func(*args, **kwargs)
+                    ModelDependencyCollector.add_args(dependencies, args, kwargs)
+
+                def record_many(
+                    entries: Iterable[tuple[str, Iterable[Dependency]]],
+                ) -> None:
+                    for entry_key, entry_dependencies in entries:
+                        record_fn(entry_key, set(entry_dependencies))
+
+                try:
+                    publish_dependency_cache_entry(
+                        cache_key=key,
+                        deps_key=deps_key,
+                        result=result,
+                        dependencies=dependencies,
+                        cache_backend=cache_backend,
+                        timeout=timeout,
+                        started_generation=started_generation,
+                        record_many_fn=(
+                            None if record_fn is record_dependencies else record_many
+                        ),
+                    )
+                except CachePublishAborted:
+                    logger.debug(
+                        "dependency cache publish aborted",
+                        context={
+                            "function": func.__qualname__,
+                            "key": key,
+                            "scope": scope,
+                        },
+                    )
+            finally:
+                release_compute_lease(lease)
 
             logger.debug(
                 "cache miss recorded",
