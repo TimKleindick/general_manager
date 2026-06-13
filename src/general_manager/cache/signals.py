@@ -6,12 +6,16 @@ from typing import Callable, TypeVar, ParamSpec, cast
 
 from functools import wraps
 
+from general_manager.logging import get_logger
+
 post_data_change = Signal()
 
 pre_data_change = Signal()
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+logger = get_logger("cache.signals")
 
 
 def data_change(func: Callable[P, R]) -> Callable[P, R]:
@@ -44,6 +48,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
             end_dependency_data_change,
         )
 
+        primary_exc: BaseException | None = None
         begin_dependency_data_change()
         try:
             action = func.__name__
@@ -89,8 +94,21 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
                     delattr(instance_before, "_old_values")
                 except AttributeError:
                     pass
+        except BaseException as error:
+            primary_exc = error
+            raise
+        else:
             return result
         finally:
-            end_dependency_data_change()
+            try:
+                end_dependency_data_change()
+            except Exception:
+                if primary_exc is not None:
+                    logger.exception(
+                        "Dependency data-change cleanup failed while handling "
+                        "another exception."
+                    )
+                else:
+                    raise
 
     return wrapper

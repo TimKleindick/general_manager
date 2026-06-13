@@ -207,6 +207,40 @@ class TestDependencyGenerationAndBarrier(TestCase):
         self.assertFalse(is_dependency_data_change_active())
         self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
 
+    @patch(
+        "general_manager.cache.dependency_index.end_dependency_data_change",
+        side_effect=RuntimeError("cleanup"),
+    )
+    def test_data_change_preserves_mutation_exception_when_cleanup_fails(
+        self, mock_end_dependency_data_change
+    ):
+        class Example:
+            @data_change
+            def update(self):
+                raise RuntimeError("boom")
+
+        with self.assertRaisesRegex(RuntimeError, "^boom$"):
+            Example().update()
+
+        mock_end_dependency_data_change.assert_called_once_with()
+
+    @patch(
+        "general_manager.cache.dependency_index.end_dependency_data_change",
+        side_effect=RuntimeError("cleanup"),
+    )
+    def test_data_change_propagates_cleanup_exception_after_success(
+        self, mock_end_dependency_data_change
+    ):
+        class Example:
+            @data_change
+            def mutate(self):
+                return self
+
+        with self.assertRaisesRegex(RuntimeError, "^cleanup$"):
+            Example().mutate()
+
+        mock_end_dependency_data_change.assert_called_once_with()
+
     def test_pre_data_change_exception_releases_dependency_barrier(self):
         class Example:
             @data_change
