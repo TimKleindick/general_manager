@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.45.0 (2026-06-13)
+
+### Bug Fixes
+
+- Move ORM cache invalidation before m2m apply in update
+  ([`ddd4449`](https://github.com/TimKleindick/general_manager/commit/ddd44496244d2f1bb9a4870dfcbc72f721303abe))
+
+### Features
+
+- Add run-scoped ORM identity cache
+  ([`21cc529`](https://github.com/TimKleindick/general_manager/commit/21cc529495fb01f8179c6f9f6310e9ff324e1471))
+
+
 ## v0.44.0 (2026-06-13)
 
 ### Features
