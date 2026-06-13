@@ -27,7 +27,7 @@ from general_manager.cache.dependency_index import (
 import time
 import json
 from datetime import datetime, timezone, date
-from unittest.mock import patch, call
+from unittest.mock import patch
 from general_manager.cache.signals import data_change, post_data_change, pre_data_change
 from types import SimpleNamespace
 
@@ -1137,6 +1137,59 @@ class MissingAttrManager:
 
 
 class GenericCacheInvalidationTests(TestCase):
+    def assert_cache_keys_removed_from_index(
+        self,
+        idx: dict[object, object],
+        *cache_keys: str,
+    ) -> None:
+        remaining_keys = set(cache_keys)
+
+        def assert_absent(value: object) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    self.assertNotIn(key, remaining_keys)
+                    assert_absent(nested)
+            elif isinstance(value, (list, set, tuple)):
+                for nested in value:
+                    self.assertNotIn(nested, remaining_keys)
+
+        assert_absent(idx)
+
+    @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
+    @patch(
+        "general_manager.cache.dependency_index.invalidate_request_query_dependencies",
+        return_value=(),
+    )
+    def test_filter_invalidation_uses_locked_internals_without_public_helper_reentry(
+        self,
+        mock_invalidate_request_queries,
+        mock_remove,
+    ):
+        cache.set("FILTER-1", "value", None)
+        set_full_index(
+            {
+                "filter": {"DummyManager2": {"status": {'"active"': {"FILTER-1"}}}},
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            }
+        )
+        inst = DummyManager2(status="active", count=1)
+
+        generic_cache_invalidation(
+            sender=DummyManager2,
+            instance=inst,
+            old_relevant_values={"status": "inactive"},
+        )
+
+        mock_invalidate_request_queries.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assertIsNone(cache.get("FILTER-1"))
+        self.assertEqual(
+            get_full_index(),
+            {"filter": {}, "exclude": {}, "request_query": {}, "all": {}},
+        )
+
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.remove_cache_key_from_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1164,13 +1217,14 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values={},
         )
 
-        self.assertCountEqual(
-            mock_invalidate.call_args_list,
-            [call("ROOT-1"), call("ALL-1"), call("ALL-2")],
-        )
-        self.assertCountEqual(
-            mock_remove.call_args_list,
-            [call("ROOT-1"), call("ALL-1"), call("ALL-2")],
+        mock_invalidate_request_queries.assert_not_called()
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(
+            mock_get_index.return_value,
+            "ROOT-1",
+            "ALL-1",
+            "ALL-2",
         )
 
     @patch("general_manager.cache.dependency_index.get_full_index")
@@ -1186,8 +1240,12 @@ class GenericCacheInvalidationTests(TestCase):
         mock_remove,
         mock_get_index,
     ):
-        mock_invalidate_request_queries.return_value = ("rq-1", "rq-2")
-        mock_get_index.return_value = {"filter": {}, "exclude": {}}
+        mock_get_index.return_value = {
+            "filter": {},
+            "exclude": {},
+            "request_query": {"DummyManager2": {"query": {"rq-1", "rq-2"}}},
+            "all": {},
+        }
         inst = DummyManager2(status="active", count=1)
 
         generic_cache_invalidation(
@@ -1196,9 +1254,14 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values={"status": "inactive"},
         )
 
-        mock_invalidate_request_queries.assert_called_once_with("DummyManager2")
+        mock_invalidate_request_queries.assert_not_called()
         mock_invalidate.assert_not_called()
         mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(
+            mock_get_index.return_value,
+            "rq-1",
+            "rq-2",
+        )
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1223,10 +1286,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        # Assert: filter => new_match=True ⇒ invalidate & remove per key
-        expected_calls = [call("A"), call("B")]
-        self.assertEqual(mock_invalidate.call_args_list, expected_calls)
-        self.assertEqual(mock_remove.call_args_list, expected_calls)
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "A", "B")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1250,8 +1312,11 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("MISSING")
-        mock_remove.assert_called_once_with("MISSING")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(
+            mock_get_index.return_value, "MISSING"
+        )
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1275,8 +1340,11 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("MISSING")
-        mock_remove.assert_called_once_with("MISSING")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(
+            mock_get_index.return_value, "MISSING"
+        )
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1305,8 +1373,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1351,8 +1420,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values={},
         )
 
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1400,8 +1470,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1450,8 +1521,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1475,8 +1547,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1505,9 +1578,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        expected_calls = [call("X"), call("Y")]
-        self.assertEqual(mock_invalidate.call_args_list, expected_calls)
-        self.assertEqual(mock_remove.call_args_list, expected_calls)
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X", "Y")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1531,8 +1604,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1581,8 +1655,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1606,8 +1681,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1631,8 +1707,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1656,8 +1733,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1681,8 +1759,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1731,8 +1810,9 @@ class GenericCacheInvalidationTests(TestCase):
             instance=inst,
             old_relevant_values={"count": 3},
         )
-        mock_invalidate.assert_called_once_with("X")
-        mock_remove.assert_called_once_with("X")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "X")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1796,8 +1876,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("DATE")
-        mock_remove.assert_called_once_with("DATE")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "DATE")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1827,8 +1908,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("OBJ")
-        mock_remove.assert_called_once_with("OBJ")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "OBJ")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1888,8 +1970,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("DATEZ")
-        mock_remove.assert_called_once_with("DATEZ")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "DATEZ")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1919,8 +2002,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("DAY")
-        mock_remove.assert_called_once_with("DAY")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "DAY")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1951,9 +2035,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        expected_calls = [call("EXC"), call("EXC")]
-        self.assertEqual(mock_invalidate.call_args_list, expected_calls)
-        self.assertEqual(mock_remove.call_args_list, expected_calls)
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "EXC")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -1982,8 +2066,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("OBJ")
-        mock_remove.assert_called_once_with("OBJ")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "OBJ")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -2012,8 +2097,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("OBJ")
-        mock_remove.assert_called_once_with("OBJ")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "OBJ")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -2069,8 +2155,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values={},
         )
 
-        mock_invalidate.assert_called_once_with("REP")
-        mock_remove.assert_called_once_with("REP")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "REP")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -2130,8 +2217,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("NAIVE")
-        mock_remove.assert_called_once_with("NAIVE")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "NAIVE")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")
@@ -2190,8 +2278,9 @@ class GenericCacheInvalidationTests(TestCase):
             old_relevant_values=old_vals,
         )
 
-        mock_invalidate.assert_called_once_with("DAYOBJ")
-        mock_remove.assert_called_once_with("DAYOBJ")
+        mock_invalidate.assert_not_called()
+        mock_remove.assert_not_called()
+        self.assert_cache_keys_removed_from_index(mock_get_index.return_value, "DAYOBJ")
 
     @patch("general_manager.cache.dependency_index.get_full_index")
     @patch("general_manager.cache.dependency_index.invalidate_cache_key")

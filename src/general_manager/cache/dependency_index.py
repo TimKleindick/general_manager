@@ -468,7 +468,8 @@ def _remove_cache_keys_from_index_locked(
     all_section = cast(dict[str, set[str]], idx.get("all", {}))
     for mname, key_set in list(all_section.items()):
         for cache_key in cache_keys:
-            key_set.discard(cache_key)
+            if cache_key in key_set:
+                key_set.remove(cache_key)
         if not key_set:
             del all_section[mname]
     for action in ACTIONS:
@@ -484,7 +485,8 @@ def _remove_cache_keys_from_index_locked(
                 lookup_map = cast(lookup_dependency_map, lookup_map)
                 for val_key, key_set in list(lookup_map.items()):
                     for cache_key in cache_keys:
-                        key_set.discard(cache_key)
+                        if cache_key in key_set:
+                            key_set.remove(cache_key)
                     if not key_set:
                         del lookup_map[val_key]
                 if not lookup_map:
@@ -503,7 +505,8 @@ def _remove_cache_keys_from_index_locked(
     for mname, query_section in list(request_query_section.items()):
         for identifier, key_set in list(query_section.items()):
             for cache_key in cache_keys:
-                key_set.discard(cache_key)
+                if cache_key in key_set:
+                    key_set.remove(cache_key)
             if not key_set:
                 del query_section[identifier]
         if not query_section:
@@ -531,6 +534,25 @@ def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
         release_lock()
 
 
+def _invalidate_request_query_dependencies_locked(
+    idx: dependency_index,
+    manager_name: str,
+) -> tuple[str, ...]:
+    request_queries = cast(
+        request_query_manager_section,
+        idx.get("request_query", {}).get(manager_name, {}),
+    )
+    cache_keys = tuple(
+        dict.fromkeys(
+            cache_key for key_set in request_queries.values() for cache_key in key_set
+        )
+    )
+    for cache_key in cache_keys:
+        cache.delete(cache_key)
+    _remove_cache_keys_from_index_locked(idx, cache_keys)
+    return cache_keys
+
+
 def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
     """
     Invalidate all request-query cache keys tracked for a manager atomically.
@@ -541,24 +563,12 @@ def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
     acquire_lock_with_retry("invalidate_request_query_dependencies")
     try:
         idx = get_full_index()
-        request_queries = cast(
-            request_query_manager_section,
-            idx.get("request_query", {}).get(manager_name, {}),
+        invalidated_keys = _invalidate_request_query_dependencies_locked(
+            idx, manager_name
         )
-        cache_keys = tuple(
-            dict.fromkeys(
-                cache_key
-                for key_set in request_queries.values()
-                for cache_key in key_set
-            )
-        )
-        if not cache_keys:
-            return ()
-        for cache_key in cache_keys:
-            cache.delete(cache_key)
-        _remove_cache_keys_from_index_locked(idx, cache_keys)
-        set_full_index(idx)
-        return cache_keys
+        if invalidated_keys:
+            set_full_index(idx)
+        return invalidated_keys
     finally:
         release_lock()
 
@@ -610,25 +620,26 @@ def capture_old_values(
         instance._old_values = vals
 
 
-@receiver(post_data_change)
-def generic_cache_invalidation(
-    sender: type[GeneralManager],
+def _generic_cache_invalidation_locked(
+    idx: dependency_index,
+    manager_name: str,
     instance: GeneralManager,
     old_relevant_values: dict[str, Any],
-    **kwargs: object,
 ) -> None:
     """
-    Invalidate cache entries whose recorded dependencies are affected by changes to a GeneralManager instance.
+    Invalidate cache entries affected by a change while the dependency lock is held.
 
     Uses the dependency index to compare previously captured values against the instance's current values for tracked lookups, evaluates both simple and composite dependency conditions for "filter" and "exclude" actions, and for any dependency that warrants invalidation it deletes the corresponding cache entry and removes its references from the index.
 
     Parameters:
-        sender (type[GeneralManager]): Manager class that emitted the signal.
+        idx (dependency_index): Dependency index loaded by the public receiver.
+        manager_name (str): Name of the manager class that emitted the signal.
         instance (GeneralManager): The manager instance that was changed.
         old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
-    manager_name = sender.__name__
-    invalidated_request_query_keys = invalidate_request_query_dependencies(manager_name)
+    invalidated_request_query_keys = _invalidate_request_query_dependencies_locked(
+        idx, manager_name
+    )
     for cache_key in invalidated_request_query_keys:
         logger.info(
             "invalidating request query cache key",
@@ -638,7 +649,6 @@ def generic_cache_invalidation(
                 "action": REQUEST_QUERY_ACTION,
             },
         )
-    idx = get_full_index()
     all_cache_keys = tuple(
         cast(dict[str, set[str]], idx.get("all", {})).get(manager_name, set())
     )
@@ -651,8 +661,8 @@ def generic_cache_invalidation(
                 "action": "all",
             },
         )
-        invalidate_cache_key(cache_key)
-        remove_cache_key_from_index(cache_key)
+        cache.delete(cache_key)
+        _remove_cache_keys_from_index_locked(idx, (cache_key,))
 
     def _json_loads_val_key(val_key: Any) -> Any:
         if isinstance(val_key, str):
@@ -1016,10 +1026,12 @@ def generic_cache_invalidation(
         model_section = action_section.get(manager_name)
         if not isinstance(model_section, dict):
             continue
-        for lookup, lookup_map in model_section.items():
+        for lookup, lookup_map in list(model_section.items()):
             if lookup.startswith("__"):
                 if lookup == ALL_RECORDS_LOOKUP:
-                    for cache_keys in cast(lookup_dependency_map, lookup_map).values():
+                    for cache_keys in list(
+                        cast(lookup_dependency_map, lookup_map).values()
+                    ):
                         for ck in list(cache_keys):
                             logger.info(
                                 "invalidating cache key",
@@ -1031,8 +1043,8 @@ def generic_cache_invalidation(
                                     "value": ALL_RECORDS_VALUE,
                                 },
                             )
-                            invalidate_cache_key(ck)
-                            remove_cache_key_from_index(ck)
+                            cache.delete(ck)
+                            _remove_cache_keys_from_index_locked(idx, (ck,))
                 elif lookup.startswith("__sort__"):
                     sort_lookup = lookup.removeprefix("__sort__")
                     attr_path = sort_lookup.split("__")
@@ -1067,8 +1079,8 @@ def generic_cache_invalidation(
                                     "value": val_key,
                                 },
                             )
-                            invalidate_cache_key(ck)
-                            remove_cache_key_from_index(ck)
+                            cache.delete(ck)
+                            _remove_cache_keys_from_index_locked(idx, (ck,))
                 continue
             lookup_map = cast(lookup_dependency_map, lookup_map)
             # 1) get operator and attribute path
@@ -1127,8 +1139,8 @@ def generic_cache_invalidation(
                                     "value": val_key,
                                 },
                             )
-                            invalidate_cache_key(ck)
-                            remove_cache_key_from_index(ck)
+                            cache.delete(ck)
+                            _remove_cache_keys_from_index_locked(idx, (ck,))
 
                 else:  # action == 'exclude'
                     # Excludes: invalidate only if matches changed
@@ -1152,5 +1164,37 @@ def generic_cache_invalidation(
                                     "value": val_key,
                                 },
                             )
-                            invalidate_cache_key(ck)
-                            remove_cache_key_from_index(ck)
+                            cache.delete(ck)
+                            _remove_cache_keys_from_index_locked(idx, (ck,))
+
+
+@receiver(post_data_change)
+def generic_cache_invalidation(
+    sender: type[GeneralManager],
+    instance: GeneralManager,
+    old_relevant_values: dict[str, Any],
+    **kwargs: object,
+) -> None:
+    """
+    Invalidate cache entries whose recorded dependencies are affected by changes to a GeneralManager instance.
+
+    Uses the dependency index to compare previously captured values against the instance's current values for tracked lookups, evaluates both simple and composite dependency conditions for "filter" and "exclude" actions, and for any dependency that warrants invalidation it deletes the corresponding cache entry and removes its references from the index.
+
+    Parameters:
+        sender (type[GeneralManager]): Manager class that emitted the signal.
+        instance (GeneralManager): The manager instance that was changed.
+        old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
+    """
+    manager_name = sender.__name__
+    acquire_lock_with_retry("generic_cache_invalidation")
+    try:
+        idx = get_full_index()
+        _generic_cache_invalidation_locked(
+            idx,
+            manager_name,
+            instance,
+            old_relevant_values,
+        )
+        set_full_index(idx)
+    finally:
+        release_lock()
