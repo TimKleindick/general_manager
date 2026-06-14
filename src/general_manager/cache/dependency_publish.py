@@ -69,10 +69,12 @@ def release_compute_lease(lease: CacheComputeLease) -> None:
     """Release a compute lease without risking deletion of a newer owner.
 
     Django's cache API does not provide an atomic compare-and-delete operation.
-    Leaving the lease to expire avoids a check-then-delete race where an expired
-    lease could delete another worker's freshly acquired token.
+    Checking the owner token first keeps normal recomputes fast while avoiding
+    deletion when the lease has already been replaced by another worker.
     """
-    return None
+    if coordination_cache.get(lease.key) != lease.token:
+        return
+    coordination_cache.delete(lease.key)
 
 
 def wait_for_cached_dependency_hit(

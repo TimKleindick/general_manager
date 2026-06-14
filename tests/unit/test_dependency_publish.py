@@ -70,14 +70,19 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertEqual(coordination_cache.get(lease.key), lease.token)
         self.assertIsNone(acquire_compute_lease("cache-a"))
 
-    def test_release_compute_lease_leaves_owned_token_until_timeout(self) -> None:
+    def test_release_compute_lease_removes_owned_token_for_immediate_reuse(
+        self,
+    ) -> None:
         lease = acquire_compute_lease("cache-a")
         assert lease is not None
 
         release_compute_lease(lease)
 
-        self.assertEqual(coordination_cache.get(lease.key), lease.token)
-        self.assertIsNone(acquire_compute_lease("cache-a"))
+        self.assertIsNone(coordination_cache.get(lease.key))
+        next_lease = acquire_compute_lease("cache-a")
+        self.assertIsInstance(next_lease, CacheComputeLease)
+        assert next_lease is not None
+        self.assertNotEqual(next_lease.token, lease.token)
 
     def test_release_compute_lease_never_removes_new_owner_token(self) -> None:
         lease = acquire_compute_lease("cache-a")
