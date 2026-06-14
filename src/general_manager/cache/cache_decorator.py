@@ -16,6 +16,11 @@ from typing import (
 from django.core.cache import cache as django_cache
 
 from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.dependency_cache import (
+    DependencyCacheHit,
+    read_dependency_cache_hit,
+    replay_dependency_cache_hit,
+)
 from general_manager.cache.dependency_index import (
     Dependency,
     get_dependency_generation,
@@ -26,7 +31,7 @@ from general_manager.cache.dependency_publish import (
     acquire_compute_lease,
     publish_dependency_cache_entry,
     release_compute_lease,
-    wait_for_cached_dependency_value,
+    wait_for_cached_dependency_hit,
 )
 from general_manager.cache.run_context import ensure_calculation_run_context
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
@@ -179,52 +184,48 @@ def cached(
                 )
                 return result
 
-            deps_key = f"{key}:deps"
-
-            def track_cached_dependencies() -> None:
-                cached_deps = cache_backend.get(deps_key)
-                if cached_deps:
-                    for class_name, operation, identifier in cached_deps:
-                        DependencyTracker.track(class_name, operation, identifier)
-
-            cached_result = cache_backend.get(key, _SENTINEL)
-            if cached_result is not _SENTINEL:
-                track_cached_dependencies()
+            def return_cached_hit(hit: DependencyCacheHit, message: str) -> object:
+                replay_dependency_cache_hit(hit)
                 logger.debug(
-                    "cache hit",
+                    message,
                     context={
                         "function": func.__qualname__,
                         "key": key,
                         "scope": scope,
                     },
                 )
-                return cached_result
+                return hit.value
+
+            cached_hit = read_dependency_cache_hit(
+                cache_backend,
+                key,
+                sentinel=_SENTINEL,
+            )
+            if cached_hit is not _SENTINEL:
+                return return_cached_hit(cached_hit, "cache hit")
 
             lease = acquire_compute_lease(key)
             while lease is None:
-                cached_result = wait_for_cached_dependency_value(
+                cached_hit = wait_for_cached_dependency_hit(
                     cache_backend,
                     key,
                     sentinel=_SENTINEL,
                 )
-                if cached_result is not _SENTINEL:
-                    track_cached_dependencies()
-                    logger.debug(
+                if cached_hit is not _SENTINEL:
+                    return return_cached_hit(
+                        cached_hit,
                         "cache hit after waiting for dependency publish",
-                        context={
-                            "function": func.__qualname__,
-                            "key": key,
-                            "scope": scope,
-                        },
                     )
-                    return cached_result
                 lease = acquire_compute_lease(key)
 
             try:
-                cached_result = cache_backend.get(key, _SENTINEL)
-                if cached_result is not _SENTINEL:
-                    track_cached_dependencies()
-                    return cached_result
+                cached_hit = read_dependency_cache_hit(
+                    cache_backend,
+                    key,
+                    sentinel=_SENTINEL,
+                )
+                if cached_hit is not _SENTINEL:
+                    return return_cached_hit(cached_hit, "cache hit")
 
                 started_generation = get_dependency_generation()
                 with DependencyTracker() as dependencies:
@@ -240,7 +241,6 @@ def cached(
                 try:
                     publish_dependency_cache_entry(
                         cache_key=key,
-                        deps_key=deps_key,
                         result=result,
                         dependencies=dependencies,
                         cache_backend=cache_backend,

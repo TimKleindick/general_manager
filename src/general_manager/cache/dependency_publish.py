@@ -5,10 +5,15 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Protocol
+from typing import Any, Callable, Iterable
 
 from django.core.cache import cache as coordination_cache
 
+from general_manager.cache.dependency_cache import (
+    DependencyCacheBackend,
+    make_dependency_cache_entry,
+    read_dependency_cache_hit,
+)
 from general_manager.cache.dependency_index import (
     LOCK_TIMEOUT,
     Dependency,
@@ -32,14 +37,6 @@ class CacheComputeLease:
 
     key: str
     token: str
-
-
-class DependencyCacheBackend(Protocol):
-    def get(self, key: str, default: Any = None) -> Any:
-        raise NotImplementedError
-
-    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
-        raise NotImplementedError
 
 
 RecordManyDependenciesFn = Callable[[Iterable[tuple[str, Iterable[Dependency]]]], None]
@@ -78,20 +75,24 @@ def release_compute_lease(lease: CacheComputeLease) -> None:
     return None
 
 
-def wait_for_cached_dependency_value(
+def wait_for_cached_dependency_hit(
     cache_backend: DependencyCacheBackend,
     cache_key: str,
     timeout_seconds: float = LOCK_TIMEOUT,
     sentinel: Any = _WAIT_MISS,
 ) -> Any:
-    """Poll for a cached dependency value until it appears or the wait expires."""
+    """Poll for a dependency-cache hit until it appears or the wait expires."""
     deadline = time.monotonic() + timeout_seconds
     delay = WAIT_INITIAL_DELAY
 
     while True:
-        cached_value = cache_backend.get(cache_key, sentinel)
-        if cached_value is not sentinel:
-            return cached_value
+        cached_hit = read_dependency_cache_hit(
+            cache_backend,
+            cache_key,
+            sentinel=sentinel,
+        )
+        if cached_hit is not sentinel:
+            return cached_hit
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -111,7 +112,6 @@ def _ensure_publish_current(started_generation: int) -> None:
 def publish_dependency_cache_entry(
     *,
     cache_key: str,
-    deps_key: str,
     result: Any,
     dependencies: Iterable[Dependency],
     cache_backend: DependencyCacheBackend,
@@ -142,12 +142,12 @@ def publish_dependency_cache_entry(
             if dependency_set:
                 _record_dependencies_locked(idx, cache_key, dependency_set)
             _ensure_publish_current(started_generation)
-            cache_backend.set(deps_key, dependency_set, timeout)
             set_full_index(idx)
-            cache_backend.set(cache_key, result, timeout)
-            return
 
-        cache_backend.set(deps_key, dependency_set, timeout)
-        cache_backend.set(cache_key, result, timeout)
+        cache_backend.set(
+            cache_key,
+            make_dependency_cache_entry(result, dependency_set),
+            timeout,
+        )
     finally:
         release_lock()
