@@ -219,6 +219,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             filter_definitions (dict[str, list[Any]] | None): Pre-existing filter expressions captured from parent buckets.
             exclude_definitions (dict[str, list[Any]] | None): Pre-existing exclusion expressions captured from parent buckets.
             search_date (datetime | date | None): Optional timestamp applied when instantiating manager instances.
+            sort_keys (tuple[str, ...] | None): Property names used by a previous bucket sort operation.
+            sort_reverse (bool): Whether sorted keys should be interpreted in descending order for dependency tracking.
+            run_scoped_cacheable (bool): Whether terminal results from this bucket are safe to reuse inside the active calculation run.
 
         Returns:
             None
@@ -288,7 +291,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         }
 
     def _query_signature(self) -> tuple[Hashable, ...] | None:
-        """Return a conservative run-cache signature for this queryset."""
+        """
+        Return a conservative run-scoped cache signature for this queryset.
+
+        The signature is only produced for queryset shapes whose SQL, database
+        alias, manager class, model, search date, and sort state can safely
+        distinguish equivalent terminal results. Unsupported or risky query
+        forms return ``None`` so callers fall back to normal ORM evaluation.
+
+        Returns:
+            tuple[Hashable, ...] | None: Cache key components for equivalent
+            queryset results, or ``None`` when reuse should be bypassed.
+        """
         if not self._run_scoped_cacheable:
             return None
         query = self._data.query
@@ -316,6 +330,19 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
     def _get_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
+        """
+        Load or reuse a bounded primary-key snapshot for this bucket.
+
+        The method materializes at most ``MAX_RUN_SCOPED_BUCKET_RESULT_ROWS``
+        primary keys and stores them in the active
+        :class:`CalculationRunContext`. Buckets without an active context,
+        without a safe signature, or above the materialization guardrail return
+        ``None`` so terminal operations continue through the database.
+
+        Returns:
+            tuple[Any, ...] | None: Cached or newly materialized primary keys,
+            or ``None`` when run-scoped reuse is unavailable.
+        """
         context = current_calculation_run_context()
         if context is None:
             return None
@@ -337,6 +364,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         return primary_keys
 
     def _peek_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
+        """
+        Return an already cached primary-key snapshot without evaluating the ORM.
+
+        Terminal operations such as ``count()`` and membership checks call this
+        helper so they can reuse a snapshot created by iteration without forcing
+        materialization on their own.
+
+        Returns:
+            tuple[Any, ...] | None: Cached primary keys for this bucket, or
+            ``None`` when no snapshot exists.
+        """
         context = current_calculation_run_context()
         if context is None:
             return None
@@ -350,6 +388,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     @staticmethod
     def _snapshot_get_primary_key(kwargs: dict[str, Any]) -> Any | None:
+        """
+        Extract the primary key from a snapshot-safe ``get()`` lookup.
+
+        Only single-key ``pk`` and ``id`` lookups can be answered from the
+        cached primary-key tuple while preserving Django's ``QuerySet.get()``
+        semantics. All other lookup shapes return ``None`` and use the normal
+        ORM path.
+
+        Parameters:
+            kwargs (dict[str, Any]): Lookup arguments passed to ``get()``.
+
+        Returns:
+            Any | None: Requested primary key when the lookup is snapshot-safe,
+            otherwise ``None``.
+        """
         if len(kwargs) != 1:
             return None
         if "pk" in kwargs:
