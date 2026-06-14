@@ -1,20 +1,24 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
+from collections.abc import Hashable
 from datetime import date, datetime
 from typing import Any, Generator, Type, TypeVar
 
-from django.core.exceptions import FieldError
+from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import models
+from django.db.models.sql.query import Query
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
+from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
+MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 
 
 class DatabaseBucketTypeMismatchError(TypeError):
@@ -281,6 +285,53 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             for key, values in definitions.items()
         }
 
+    def _query_signature(self) -> tuple[Hashable, ...] | None:
+        """Return a conservative run-cache signature for this queryset."""
+        query = self._data.query
+        if not isinstance(query, Query):
+            return None
+        if query.select_for_update:
+            return None
+        if query.combinator:
+            return None
+        if query.distinct:
+            return None
+        try:
+            sql, params = self._data.query.sql_with_params()
+        except (EmptyResultSet, FieldError, TypeError, ValueError):
+            return None
+        return (
+            self._manager_class,
+            self._data.model,
+            self._data.db,
+            sql,
+            tuple(params),
+            self._search_date,
+            self._sort_keys,
+            self._sort_reverse,
+        )
+
+    def _get_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
+        context = current_calculation_run_context()
+        if context is None:
+            return None
+        signature = self._query_signature()
+        if signature is None:
+            return None
+        cached = context.get_orm_bucket_result(signature)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        primary_keys = tuple(
+            self._data.values_list("pk", flat=True)[
+                : MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1
+            ]
+        )
+        if len(primary_keys) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
+            return None
+        context.set_orm_bucket_result(signature, primary_keys)
+        return primary_keys
+
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
         manager_name = self._manager_class.__name__
@@ -321,6 +372,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
         self._track_effective_dependencies()
+        primary_keys = self._get_run_scoped_primary_keys()
+        if primary_keys is not None:
+            for primary_key in primary_keys:
+                yield self._build_manager(primary_key)
+            return
         for item in self._data:
             yield self._build_manager(item.pk)
 
