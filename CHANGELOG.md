@@ -2,6 +2,76 @@
 
 <!-- version list -->
 
+## v0.46.0 (2026-06-14)
+
+### Bug Fixes
+
+- Centralize dependency cache barrier ownership
+  ([`d2a93bd`](https://github.com/TimKleindick/general_manager/commit/d2a93bd95995005971d670baa463e5ea1dd2a444))
+
+- Harden dependency cache barrier lifecycle
+  ([`6fb5c94`](https://github.com/TimKleindick/general_manager/commit/6fb5c94a17fa856ca2fe7d5461098cb9054a97e8))
+
+- Harden dependency cache publish coordinator
+  ([`5eaae45`](https://github.com/TimKleindick/general_manager/commit/5eaae451d04ad628427dc94e78cd9878620f5fa9))
+
+- Preserve data change primary exceptions
+  ([`22d532b`](https://github.com/TimKleindick/general_manager/commit/22d532b54b452ed07862ddde83f3895aa46f93bf))
+
+### Documentation
+
+- Clarify dependency publish callback locking
+  ([`e1787e9`](https://github.com/TimKleindick/general_manager/commit/e1787e99c94d651786bdecee193915fd5099edeb))
+
+- Describe dependency cache coherency
+  ([`b32db70`](https://github.com/TimKleindick/general_manager/commit/b32db7092595d818c8c7b8d9a1034167198626b5))
+
+### Features
+
+- Add dependency cache generation barrier
+  ([`01b70c6`](https://github.com/TimKleindick/general_manager/commit/01b70c63971632f6c313a58bfb807024698eac65))
+
+- Batch dependency index recording
+  ([`9b66407`](https://github.com/TimKleindick/general_manager/commit/9b66407e1e15c33cc1ffee51bdd5bb2bdd249de7))
+
+- Coordinate dependency cache computation
+  ([`70f8edc`](https://github.com/TimKleindick/general_manager/commit/70f8edc677185ed6cce1ffdb37b84c8375dc6e57))
+
+- Coordinate dependency cache publishing
+  ([`f17e840`](https://github.com/TimKleindick/general_manager/commit/f17e840cc927d7b46022ad634a91a9547e95c301))
+
+### Refactoring
+
+- Serialize dependency invalidation updates
+  ([`a2e1b85`](https://github.com/TimKleindick/general_manager/commit/a2e1b850ae4250724e6c4e7170c569fb0234438b))
+
+### Testing
+
+- Assert direct cache deletion during invalidation
+  ([`7f29936`](https://github.com/TimKleindick/general_manager/commit/7f29936b859178413d97aaef8042fd615f19d26b))
+
+- Clarify compute lease release expectation
+  ([`1d5230a`](https://github.com/TimKleindick/general_manager/commit/1d5230ae046471f5d8ed2bbac74c5ace711af63c))
+
+- Cover concurrent dependency cache miss
+  ([`2949370`](https://github.com/TimKleindick/general_manager/commit/294937022f1b26b7e142fe1a3909a3d8bc66b991))
+
+- Cover dependency barrier count timeout
+  ([`01a9058`](https://github.com/TimKleindick/general_manager/commit/01a9058d3fc2270d06ac9e99d6f5c4b17c28d874))
+
+- Cover dependency barrier rewrite timeout
+  ([`8fad7f1`](https://github.com/TimKleindick/general_manager/commit/8fad7f16d050719ad34467a974b0c1f81df0ad91))
+
+- Cover failed dependency data change signal flow
+  ([`c87531a`](https://github.com/TimKleindick/general_manager/commit/c87531aafdc56dd579a6799d15ae786298800c12))
+
+- Cover serialized dependency invalidation lock lifecycle
+  ([`6724115`](https://github.com/TimKleindick/general_manager/commit/6724115544d5e0e0cfa513dff1f0a23f02efba4f))
+
+- Ignore dependency coordination writes in cache hit assertions
+  ([`aeb40c0`](https://github.com/TimKleindick/general_manager/commit/aeb40c0e850b4d94b835c93af4bcaa38ca7675bd))
+
+
 ## v0.45.0 (2026-06-13)
 
 ### Bug Fixes
