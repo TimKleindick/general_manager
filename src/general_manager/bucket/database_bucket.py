@@ -722,8 +722,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if primary_keys is not None:
             requested_primary_key = self._snapshot_get_primary_key(kwargs)
             if requested_primary_key is not None:
-                if requested_primary_key in primary_keys:
+                match_count = primary_keys.count(requested_primary_key)
+                if match_count == 1:
                     return self._build_manager(requested_primary_key)
+                if match_count > 1:
+                    raise self._data.model.MultipleObjectsReturned
                 raise self._data.model.DoesNotExist
         element = self._data.get(**kwargs)
         return self._build_manager(element.pk)
@@ -754,6 +757,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self._track_effective_dependencies()
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
+            if item < 0:
+                raise ValueError
             return self._build_manager(primary_keys[item])
         return self._build_manager(self._data[item].pk)
 
