@@ -11,6 +11,7 @@ from django.db.models.query import QuerySet
 from general_manager.bucket.database_bucket import (
     DatabaseBucket,
     DuplicateDatabaseBucketSnapshotError,
+    MAX_RUN_SCOPED_BUCKET_RESULT_ROWS,
     _restore_database_bucket_from_primary_keys,
 )
 from general_manager.cache.cache_tracker import DependencyTracker
@@ -318,6 +319,36 @@ class DatabaseBucketTestCase(TestCase):
             ),
             dependencies,
         )
+
+    def test_large_bucket_result_bypasses_run_scoped_materialization(self):
+        users = [
+            User(username=f"user-{index:04d}")
+            for index in range(MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1)
+        ]
+        User.objects.bulk_create(users)
+        bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(2):
+            self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 4)
+            self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 4)
+
+    def test_union_bucket_bypasses_run_scoped_result_reuse(self):
+        first = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+        second = DatabaseBucket(User.objects.filter(username="bob"), UserManager)
+        first_union = first | second
+        second_union = DatabaseBucket(
+            User.objects.filter(username="alice"), UserManager
+        ) | DatabaseBucket(User.objects.filter(username="bob"), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(2):
+            self.assertEqual(
+                sorted(manager.identification["id"] for manager in first_union),
+                sorted([self.u1.id, self.u2.id]),
+            )
+            self.assertEqual(
+                sorted(manager.identification["id"] for manager in second_union),
+                sorted([self.u1.id, self.u2.id]),
+            )
 
     def test_first_and_last(self):
         # first() returns the first manager

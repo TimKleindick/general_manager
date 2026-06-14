@@ -208,6 +208,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         search_date: datetime | date | None = None,
         sort_keys: tuple[str, ...] | None = None,
         sort_reverse: bool = False,
+        run_scoped_cacheable: bool = True,
     ) -> None:
         """
         Instantiate a database-backed bucket with optional filter state.
@@ -229,6 +230,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self._search_date = search_date
         self._sort_keys = sort_keys
         self._sort_reverse = sort_reverse
+        self._run_scoped_cacheable = run_scoped_cacheable
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         """
@@ -287,6 +289,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def _query_signature(self) -> tuple[Hashable, ...] | None:
         """Return a conservative run-cache signature for this queryset."""
+        if not self._run_scoped_cacheable:
+            return None
         query = self._data.query
         if not isinstance(query, Query):
             return None
@@ -443,6 +447,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=self._search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,
+            run_scoped_cacheable=False,
         )
 
     def __merge_filter_definitions(
@@ -580,6 +585,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,
+            run_scoped_cacheable=self._run_scoped_cacheable,
         )
 
     def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
@@ -627,6 +633,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,
+            run_scoped_cacheable=self._run_scoped_cacheable,
         )
 
     def first(self) -> GeneralManagerType | None:
@@ -693,6 +700,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=self._search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,
+            run_scoped_cacheable=self._run_scoped_cacheable,
         )
 
     def get(self, **kwargs: Any) -> GeneralManagerType:
@@ -741,6 +749,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 search_date=self._search_date,
                 sort_keys=self._sort_keys,
                 sort_reverse=self._sort_reverse,
+                run_scoped_cacheable=self._run_scoped_cacheable,
             )
         self._track_effective_dependencies()
         primary_keys = self._peek_run_scoped_primary_keys()
@@ -886,6 +895,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             search_date=self._search_date,
             sort_keys=key,
             sort_reverse=reverse,
+            run_scoped_cacheable=self._run_scoped_cacheable,
         )
 
     def none(self) -> DatabaseBucket[GeneralManagerType]:
