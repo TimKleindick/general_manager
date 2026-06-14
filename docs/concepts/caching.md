@@ -164,6 +164,16 @@ context continues to read from the database normally. Negative lookups are not
 cached, and ORM update/delete paths clear affected row entries in the active run
 context after successful mutations.
 
+ORM-backed `DatabaseBucket` terminal operations also reuse conservative
+run-scoped primary-key snapshots inside the active context. Equivalent bounded
+bucket evaluations can share the materialized result for iteration, length,
+`count()`, `first()`, `last()`, scalar indexing, primary-key `get()`, and
+membership checks after a snapshot exists. The cache is intentionally
+conservative: unsupported query shapes and large buckets bypass reuse, count-only
+paths do not force full materialization, dependencies are still tracked on every
+terminal operation, and any framework mutation clears bucket snapshots in the
+active run before the data changes.
+
 ## Manual dependency-index helpers
 
 Most application code should rely on CRUD signals and dependency-scoped
