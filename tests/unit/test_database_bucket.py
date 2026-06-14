@@ -299,6 +299,12 @@ class DatabaseBucketTestCase(TestCase):
         with CalculationRunContext(), self.assertNumQueries(1):
             self.assertIn(self.u1, bucket)
 
+    def test_contains_returns_false_for_unsaved_model_without_query(self):
+        unsaved = User(username="unsaved")
+
+        with self.assertNumQueries(0):
+            self.assertNotIn(unsaved, self.bucket)
+
     def test_bucket_result_cache_hit_still_tracks_dependencies(self):
         bucket = DatabaseBucket(
             User.objects.filter(username="alice"),
@@ -332,6 +338,93 @@ class DatabaseBucketTestCase(TestCase):
             self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 4)
             self.assertEqual(bucket.count(), MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 4)
 
+    def test_over_limit_iteration_bypasses_run_scoped_materialization(self):
+        first_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+        second_bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with (
+            patch(
+                "general_manager.bucket.database_bucket.MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+                1,
+            ),
+            CalculationRunContext(),
+            self.assertNumQueries(4),
+        ):
+            self.assertEqual(
+                [manager.identification["id"] for manager in first_bucket],
+                [self.u1.id, self.u2.id, self.u3.id],
+            )
+            self.assertEqual(
+                [manager.identification["id"] for manager in second_bucket],
+                [self.u1.id, self.u2.id, self.u3.id],
+            )
+
+    def test_uncacheable_queryset_shapes_bypass_run_scoped_iteration_reuse(self):
+        cases = [
+            (
+                DatabaseBucket(User.objects.select_for_update(), UserManager),
+                DatabaseBucket(User.objects.select_for_update(), UserManager),
+            ),
+            (
+                DatabaseBucket(User.objects.distinct(), UserManager),
+                DatabaseBucket(User.objects.distinct(), UserManager),
+            ),
+            (
+                DatabaseBucket(
+                    User.objects.filter(username="alice").union(
+                        User.objects.filter(username="bob")
+                    ),
+                    UserManager,
+                ),
+                DatabaseBucket(
+                    User.objects.filter(username="alice").union(
+                        User.objects.filter(username="bob")
+                    ),
+                    UserManager,
+                ),
+            ),
+        ]
+
+        for first_bucket, second_bucket in cases:
+            with self.subTest(query=first_bucket._data.query):
+                with CalculationRunContext(), self.assertNumQueries(2):
+                    first_count = sum(1 for _manager in first_bucket)
+                    second_count = sum(1 for _manager in second_bucket)
+                    self.assertEqual(first_count, second_count)
+
+    def test_non_query_queryset_shape_bypasses_run_scoped_iteration_reuse(self):
+        first_bucket = DatabaseBucket(User.objects.all(), UserManager)
+        second_bucket = DatabaseBucket(User.objects.all(), UserManager)
+
+        with (
+            patch("general_manager.bucket.database_bucket.Query", str),
+            CalculationRunContext(),
+            self.assertNumQueries(2),
+        ):
+            first_count = sum(1 for _manager in first_bucket)
+            second_count = sum(1 for _manager in second_bucket)
+            self.assertEqual(first_count, second_count)
+
+    def test_sql_signature_errors_bypass_run_scoped_iteration_reuse(self):
+        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+
+        with patch.object(
+            bucket._data.query, "sql_with_params", side_effect=ValueError
+        ):
+            with CalculationRunContext(), self.assertNumQueries(1):
+                self.assertEqual(
+                    [manager.identification["id"] for manager in bucket],
+                    [self.u1.id],
+                )
+
+    def test_uncacheable_bucket_count_uses_database_path(self):
+        bucket = DatabaseBucket(
+            User.objects.all(), UserManager, run_scoped_cacheable=False
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(bucket.count(), 3)
+
     def test_union_bucket_bypasses_run_scoped_result_reuse(self):
         first = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
         second = DatabaseBucket(User.objects.filter(username="bob"), UserManager)
@@ -349,6 +442,60 @@ class DatabaseBucketTestCase(TestCase):
                 sorted(manager.identification["id"] for manager in second_union),
                 sorted([self.u1.id, self.u2.id]),
             )
+
+    def test_empty_snapshot_first_and_last_return_none_without_queries(self):
+        bucket = DatabaseBucket(User.objects.filter(username="nobody"), UserManager)
+
+        with CalculationRunContext():
+            self.assertEqual(list(bucket), [])
+            with self.assertNumQueries(0):
+                self.assertIsNone(bucket.first())
+                self.assertIsNone(bucket.last())
+
+    def test_snapshot_get_uses_id_lookup_without_query(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+
+        with CalculationRunContext():
+            list(bucket)
+            with self.assertNumQueries(0):
+                manager = bucket.get(id=self.u2.id)
+
+        self.assertEqual(manager.identification["id"], self.u2.id)
+
+    def test_snapshot_get_missing_primary_key_raises_without_query(self):
+        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+
+        with CalculationRunContext():
+            list(bucket)
+            with self.assertNumQueries(0), self.assertRaises(User.DoesNotExist):
+                bucket.get(pk=999)
+
+    def test_snapshot_get_falls_back_for_non_primary_key_lookup(self):
+        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+
+        with CalculationRunContext():
+            list(bucket)
+            with self.assertNumQueries(1):
+                manager = bucket.get(username="alice")
+
+        self.assertEqual(manager.identification["id"], self.u1.id)
+
+    def test_snapshot_get_falls_back_for_ambiguous_lookup_shape(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]),
+            UserManager,
+        )
+
+        with CalculationRunContext():
+            list(bucket)
+            with (
+                self.assertNumQueries(1),
+                self.assertRaises(User.MultipleObjectsReturned),
+            ):
+                bucket.get()
 
     def test_first_and_last(self):
         # first() returns the first manager
