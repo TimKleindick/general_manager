@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v0.46.1 (2026-06-14)
+
+### Bug Fixes
+
+- Combine dependency cache payloads
+  ([`f750cc4`](https://github.com/TimKleindick/general_manager/commit/f750cc4d515f8d19e5a3b11f3f1788f84374d658))
+
+- Consolidated dependency-scoped cache entry writing to improve cache invalidation accuracy and
+  reliability.
+  ([`f750cc4`](https://github.com/TimKleindick/general_manager/commit/f750cc4d515f8d19e5a3b11f3f1788f84374d658))
+
+- Release dependency compute leases promptly
+  ([`f750cc4`](https://github.com/TimKleindick/general_manager/commit/f750cc4d515f8d19e5a3b11f3f1788f84374d658))
+
+### Documentation
+
+- Update dependency cache internals
+  ([`f750cc4`](https://github.com/TimKleindick/general_manager/commit/f750cc4d515f8d19e5a3b11f3f1788f84374d658))
+
+
 ## v0.46.0 (2026-06-14)
 
 ### Bug Fixes
