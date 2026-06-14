@@ -47,9 +47,13 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
             begin_dependency_data_change,
             end_dependency_data_change,
         )
+        from general_manager.cache.run_context import current_calculation_run_context
 
         primary_exc: BaseException | None = None
         begin_dependency_data_change()
+        context = current_calculation_run_context()
+        if context is not None:
+            context.clear_orm_bucket_results()
         try:
             action = func.__name__
             if func.__name__ == "create":
