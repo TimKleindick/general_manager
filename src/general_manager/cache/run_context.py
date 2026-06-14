@@ -18,6 +18,7 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
     "general_manager_calculation_run_context",
     default=None,
 )
+ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
 
 
 class CalculationRunContext:
@@ -78,6 +79,18 @@ class CalculationRunContext:
         for key in list(self._values):
             if isinstance(key, tuple) and key[: len(prefix)] == prefix:
                 del self._values[key]
+
+    def get_orm_bucket_result(self, key: Hashable) -> object:
+        """Return a cached ORM bucket result for key, or None when absent."""
+        return self.get((ORM_BUCKET_RESULT_PREFIX, key))
+
+    def set_orm_bucket_result(self, key: Hashable, value: object) -> None:
+        """Store an ORM bucket result for the active run."""
+        self.set((ORM_BUCKET_RESULT_PREFIX, key), value)
+
+    def clear_orm_bucket_results(self) -> None:
+        """Discard all run-scoped ORM bucket result entries."""
+        self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
 
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""
