@@ -2,6 +2,11 @@ from django.test import SimpleTestCase
 from django.core.cache import cache
 from unittest import mock
 from general_manager.cache.cache_decorator import cached, DependencyTracker
+from general_manager.cache.dependency_cache import (
+    DependencyCacheHit,
+    make_dependency_cache_entry,
+    read_dependency_cache_hit,
+)
 from general_manager.cache.dependency_index import (
     begin_dependency_data_change,
     end_dependency_data_change,
@@ -101,6 +106,14 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         with DependencyTracker():
             pass
         cache.clear()
+
+    def assert_dependency_cache_hit(self, key, value, dependencies=None):
+        hit = read_dependency_cache_hit(self.fake_cache, key)
+        self.assertIsInstance(hit, DependencyCacheHit)
+        assert isinstance(hit, DependencyCacheHit)
+        self.assertEqual(hit.value, value)
+        if dependencies is not None:
+            self.assertEqual(hit.dependencies, frozenset(dependencies))
 
     def test_real_tracker_records_manual_tracks(self):
         """
@@ -248,7 +261,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key, self.fake_cache.store)
-        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key]), 5)
+        self.assert_dependency_cache_hit(
+            key,
+            5,
+            {("User", "identification", "2"), ("Profile", "identification", "3")},
+        )
 
         # record_fn should have been called once
         self.assertEqual(len(self.record_calls), 1)
@@ -264,7 +281,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertEqual(res2, 5)
         self.assertEqual(self.record_calls, [])
 
-    def test_dependency_scope_waits_for_published_value_when_lease_is_owned(self):
+    def test_dependency_scope_replays_dependencies_from_combined_cache_hit(self):
         calls = 0
 
         @cached(
@@ -278,8 +295,37 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             return value * 2
 
         key = make_cache_key(fn, (3,), {})
-        deps_key = f"{key}:deps"
-        self.fake_cache.set(deps_key, {("User", "identification", "3")}, None)
+        dependencies = {("User", "identification", "3")}
+        self.fake_cache.set(
+            key,
+            make_dependency_cache_entry(6, dependencies),
+            None,
+        )
+
+        with DependencyTracker() as tracked_dependencies:
+            self.assertEqual(fn(3), 6)
+
+        self.assertEqual(calls, 0)
+        self.assertEqual(tracked_dependencies, dependencies)
+        self.assertEqual(self.record_calls, [])
+
+    def test_dependency_scope_waits_for_published_combined_entry_when_lease_is_owned(
+        self,
+    ):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+        expected_dependencies = {("User", "identification", "3")}
         original_get = self.fake_cache.get
         key_reads = 0
 
@@ -288,7 +334,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             if cache_key == key:
                 key_reads += 1
                 if key_reads == 2:
-                    self.fake_cache.set(key, 6, None)
+                    self.fake_cache.set(
+                        key,
+                        make_dependency_cache_entry(6, expected_dependencies),
+                        None,
+                    )
             return original_get(cache_key, default)
 
         self.fake_cache.get = publish_after_initial_miss
@@ -301,7 +351,31 @@ class TestCacheDecoratorBackend(SimpleTestCase):
                 self.assertEqual(fn(3), 6)
 
         self.assertEqual(calls, 0)
-        self.assertEqual(dependencies, {("User", "identification", "3")})
+        self.assertEqual(dependencies, expected_dependencies)
+
+    def test_dependency_scope_reads_legacy_split_cache_entry(self):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+        dependencies = {("User", "identification", "3")}
+        self.fake_cache.set(key, 6, None)
+        self.fake_cache.set(f"{key}:deps", dependencies, None)
+
+        with DependencyTracker() as tracked_dependencies:
+            self.assertEqual(fn(3), 6)
+
+        self.assertEqual(calls, 0)
+        self.assertEqual(tracked_dependencies, dependencies)
 
     def test_dependency_scope_returns_result_without_caching_when_publish_aborts(self):
         calls = 0
@@ -504,8 +578,16 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         # Result should be in the fake cache
         self.assertIn(key_outer, self.fake_cache.store)
         self.assertIn(key_inner, self.fake_cache.store)
-        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_outer]), 5)
-        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_inner]), 5)
+        self.assert_dependency_cache_hit(
+            key_outer,
+            5,
+            {("User", "identification", "2"), ("Profile", "identification", "3")},
+        )
+        self.assert_dependency_cache_hit(
+            key_inner,
+            5,
+            {("Profile", "identification", "3")},
+        )
 
         # record_fn should have been called twice
         # once for the outer function and once for the inner function
@@ -569,7 +651,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         # now the inner function should be in the cache
         key_inner = make_cache_key(inner_function, (2, 3), {})
         self.assertIn(key_inner, self.fake_cache.store)
-        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_inner]), 5)
+        self.assert_dependency_cache_hit(
+            key_inner,
+            5,
+            {("Profile", "identification", "3")},
+        )
 
         # second call: outer function: Cache miss
         res = outer_function(2, 3)
@@ -578,7 +664,11 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
         # Result should be in the fake cache
         self.assertIn(key_outer, self.fake_cache.store)
-        self.assertEqual(_trusted_pickle_loads(self.fake_cache.store[key_outer]), 5)
+        self.assert_dependency_cache_hit(
+            key_outer,
+            5,
+            {("User", "identification", "2"), ("Profile", "identification", "3")},
+        )
 
         # record_fn should have been called twice
         # once for the outer function and once for the inner function

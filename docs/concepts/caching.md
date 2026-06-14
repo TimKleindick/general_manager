@@ -110,8 +110,8 @@ Dependency-scoped cache entries are published through a guarded write path:
 
 - a mutation generation is read before computation starts
 - data-changing operations raise the generation and hold a publish barrier while invalidation runs
-- the dependency index, dependency metadata, and visible cached value are written under the dependency-index lock
-- dependency metadata is published before the cached value, so a visible value is already reachable by later invalidation
+- the dependency index and combined value/dependency payload are written under the dependency-index lock
+- dependency metadata is stored with the cached value, so a visible value is already reachable by later invalidation
 - if the generation changed or the publish barrier is active, the fresh function result is returned to the caller but is not stored
 
 This means a dependency-scoped value is only shared after GeneralManager can
