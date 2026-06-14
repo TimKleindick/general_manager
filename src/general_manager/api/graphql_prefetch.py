@@ -129,6 +129,7 @@ def plan_dependency_cache_prefetches(
         return {}
 
     available_properties = interface_cls.get_graph_ql_properties()
+    instance_list = list(instances)
     selected = set(property_names)
     plans: dict[str, DependencyCachePrefetchPlan] = {}
 
@@ -140,7 +141,7 @@ def plan_dependency_cache_prefetches(
             continue
 
         cached_getter = prop._get_cached_fget()
-        for instance in instances:
+        for instance in instance_list:
             if not can_read_field(instance, property_name):
                 continue
             cache_key = make_cache_key(cached_getter, (instance,), {})
