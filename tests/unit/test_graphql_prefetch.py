@@ -115,6 +115,10 @@ class PlannedObject:
     def computed_value(self) -> int:
         return self.value * 2
 
+    @graph_ql_property(cache="dependency")
+    def other_computed_value(self) -> int:
+        return self.value * 4
+
     @graph_ql_property(cache="run")
     def run_value(self) -> int:
         return self.value * 3
@@ -124,6 +128,7 @@ class PlannedObject:
         def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
             return {
                 "computed_value": PlannedObject.computed_value,
+                "other_computed_value": PlannedObject.other_computed_value,
                 "run_value": PlannedObject.run_value,
             }
 
@@ -158,6 +163,24 @@ class GraphQLPrefetchPlanningTests(SimpleTestCase):
 
         self.assertEqual(len(plans), 1)
         self.assertIs(next(iter(plans.values())).instance, first)
+
+    def test_reiterates_one_shot_instance_iterables_for_each_property(self) -> None:
+        first = PlannedObject(1)
+        second = PlannedObject(2)
+        instances = (instance for instance in (first, second))
+
+        plans = plan_dependency_cache_prefetches(
+            instances,
+            PlannedObject,
+            {"computed_value", "other_computed_value"},
+            can_read_field=lambda _instance, _field_name: True,
+        )
+
+        self.assertEqual(len(plans), 4)
+        self.assertEqual(
+            {plan.property_name for plan in plans.values()},
+            {"computed_value", "other_computed_value"},
+        )
 
 
 class GraphQLPrefetchExecutionTests(SimpleTestCase):
