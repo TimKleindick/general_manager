@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from django.utils import timezone
 from general_manager.cache.dependency_index import get_full_index
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 from general_manager.manager import GeneralManager, Input
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
@@ -1491,6 +1492,22 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             refreshed_commercials1.chained_first_project_name, "Third Project"
         )
         self.assert_cache_hit()
+
+    def test_run_scoped_bucket_results_clear_after_mutation_inside_run(self):
+        with CalculationRunContext():
+            bucket = self.TestProject.filter(name="Another Project")
+            self.assertEqual(
+                [project.identification["id"] for project in bucket],
+                [self.project2.identification["id"]],
+            )
+
+            self.project2 = self.project2.update(
+                name="Renamed Project",
+                ignore_permission=True,
+            )
+
+            refreshed_bucket = self.TestProject.filter(name="Another Project")
+            self.assertEqual(list(refreshed_bucket), [])
 
     def test_grouped_filtered_bucket_count_invalidates_on_create(self):
         """
