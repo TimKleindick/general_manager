@@ -37,6 +37,7 @@ class FakeCacheBackend:
         """
         self.store = {}
         self.timeouts = {}
+        self.get_calls = []
         self.lock = threading.RLock()
 
     def get(self, key, default=None):
@@ -50,6 +51,7 @@ class FakeCacheBackend:
         Returns:
             The unpickled value associated with the key, or the default if not found.
         """
+        self.get_calls.append(key)
         with self.lock:
             cached_value = self.store.get(key, default)
         if cached_value is not default:
@@ -689,6 +691,32 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.record_calls.clear()
         res2 = outer_function(2, 3)
         self.assertEqual(res2, 5)
+        self.assertEqual(self.record_calls, [])
+
+    def test_dependency_scope_uses_prefetched_hit_before_backend_read(self):
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def sample(value):
+            del value
+            self.fail("prefetched hit should avoid calculation")
+
+        key = make_cache_key(sample, (7,), {})
+        hit = DependencyCacheHit(
+            value=21,
+            dependencies=frozenset({("Project", "identification", '{"id": 7}')}),
+        )
+
+        with CalculationRunContext() as context:
+            context.set_dependency_cache_hits({key: hit})
+            with DependencyTracker() as dependencies:
+                result = sample(7)
+
+        self.assertEqual(result, 21)
+        self.assertEqual(dependencies, set(hit.dependencies))
+        self.assertEqual(self.fake_cache.get_calls, [])
         self.assertEqual(self.record_calls, [])
 
 

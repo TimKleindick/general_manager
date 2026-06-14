@@ -33,7 +33,10 @@ from general_manager.cache.dependency_publish import (
     release_compute_lease,
     wait_for_cached_dependency_hit,
 )
-from general_manager.cache.run_context import ensure_calculation_run_context
+from general_manager.cache.run_context import (
+    current_calculation_run_context,
+    ensure_calculation_run_context,
+)
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.logging import get_logger
 from general_manager.utils.make_cache_key import make_cache_key
@@ -195,6 +198,17 @@ def cached(
                     },
                 )
                 return hit.value
+
+            prefetch_context = current_calculation_run_context()
+            if prefetch_context is not None:
+                prefetched_hit = prefetch_context.get_dependency_cache_hit(
+                    key, _SENTINEL
+                )
+                if isinstance(prefetched_hit, DependencyCacheHit):
+                    return return_cached_hit(
+                        prefetched_hit,
+                        "cache hit from dependency prefetch",
+                    )
 
             cached_hit = read_dependency_cache_hit(
                 cache_backend,

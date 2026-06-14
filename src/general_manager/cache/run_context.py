@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Optional, TypeVar
+from typing import TYPE_CHECKING, Optional, TypeVar
+
+if TYPE_CHECKING:
+    from general_manager.cache.dependency_cache import DependencyCacheHit
 
 K = TypeVar("K", bound=Hashable)
 T = TypeVar("T")
@@ -22,6 +25,7 @@ class CalculationRunContext:
 
     def __init__(self) -> None:
         self._values: dict[Hashable, object] = {}
+        self._dependency_cache_hits: dict[str, DependencyCacheHit] = {}
         self._token: Token[CalculationRunContext | None] | None = None
 
     def __enter__(self) -> "CalculationRunContext":
@@ -38,6 +42,7 @@ class CalculationRunContext:
             _active_context.reset(self._token)
             self._token = None
         self._values.clear()
+        self._dependency_cache_hits.clear()
 
     def get_or_set(self, key: Hashable, loader: Callable[[], T]) -> T:
         """Return a cached value for key, loading it once per active context."""
@@ -52,6 +57,21 @@ class CalculationRunContext:
     def set(self, key: Hashable, value: object) -> None:
         """Store a value for the active run."""
         self._values[key] = value
+
+    def set_dependency_cache_hits(
+        self,
+        hits: Mapping[str, DependencyCacheHit],
+    ) -> None:
+        """Store dependency-cache hits prefetched for the active run."""
+        self._dependency_cache_hits.update(hits)
+
+    def get_dependency_cache_hit(
+        self,
+        key: str,
+        default: object = None,
+    ) -> DependencyCacheHit | object:
+        """Return a prefetched dependency-cache hit, or default when absent."""
+        return self._dependency_cache_hits.get(key, default)
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
         """Discard tuple keys that start with the supplied prefix."""

@@ -2,7 +2,7 @@
 
 from contextlib import suppress
 from importlib import import_module
-from typing import Any, Callable, ClassVar, Sequence, cast
+from typing import Any, Callable, ClassVar, Iterable, Sequence, cast
 
 from django.apps import AppConfig, apps as global_apps
 from django.conf import settings
@@ -294,7 +294,11 @@ class LoggingCache(LocMemCache):
     def __init__(self, location: str, params: dict[str, Any]) -> None:
         """Initialise the cache backend and the operation log store."""
         super().__init__(location, params)
-        self.ops: list[tuple[str, object, bool] | tuple[str, object]] = []
+        self.ops: list[
+            tuple[str, object, bool]
+            | tuple[str, object]
+            | tuple[str, tuple[str, ...], tuple[str, ...]]
+        ] = []
 
     def get(
         self,
@@ -316,6 +320,17 @@ class LoggingCache(LocMemCache):
         val = super().get(key, default)
         self.ops.append(("get", key, val is not _SENTINEL))
         return val
+
+    def get_many(
+        self,
+        keys: Iterable[str],
+        version: int | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve multiple keys and record the bulk lookup."""
+        key_tuple = tuple(keys)
+        values: dict[str, Any] = super().get_many(key_tuple, version=version)
+        self.ops.append(("get_many", key_tuple, tuple(values.keys())))
+        return values
 
     def set(
         self,
@@ -557,6 +572,14 @@ class GeneralManagerTransactionTestCase(
             [],
             "Cache.set should not have stored a cached value",
         )
+        self.__reset_cache_counter()
+
+    def cache_ops(self) -> list[tuple[Any, ...]]:
+        """Return recorded cache operations for assertions."""
+        return list(cast(Any, caches["default"]).ops)
+
+    def reset_cache_ops(self) -> None:
+        """Clear recorded cache operations for assertions."""
         self.__reset_cache_counter()
 
     def __reset_cache_counter(self) -> None:

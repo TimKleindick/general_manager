@@ -1,3 +1,4 @@
+from general_manager.cache.dependency_cache import DependencyCacheHit
 from general_manager.cache.run_context import (
     CalculationRunContext,
     current_calculation_run_context,
@@ -40,6 +41,30 @@ def test_public_storage_helpers_store_and_check_values() -> None:
         assert ctx.get("answer") == 42
         assert ctx.has("answer")
         assert "answer" in ctx
+
+
+def test_dependency_cache_prefetch_hits_are_available_inside_context() -> None:
+    hit = DependencyCacheHit(
+        value="ready",
+        dependencies=frozenset({("Project", "identification", '{"id": 1}')}),
+    )
+
+    with CalculationRunContext() as context:
+        context.set_dependency_cache_hits({"cache-key": hit})
+
+        assert context.get_dependency_cache_hit("cache-key") == hit
+        assert context.get_dependency_cache_hit("missing", "fallback") == "fallback"
+
+
+def test_dependency_cache_prefetch_hits_are_cleared_on_exit() -> None:
+    hit = DependencyCacheHit(value=10, dependencies=frozenset())
+    context = CalculationRunContext()
+
+    with context:
+        context.set_dependency_cache_hits({"cache-key": hit})
+        assert context.get_dependency_cache_hit("cache-key") == hit
+
+    assert context.get_dependency_cache_hit("cache-key", None) is None
 
 
 def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
