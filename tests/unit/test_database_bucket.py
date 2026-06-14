@@ -271,6 +271,32 @@ class DatabaseBucketTestCase(TestCase):
                 [self.u2.id, self.u1.id],
             )
 
+    def test_mixed_terminal_operations_reuse_materialized_bucket_snapshot(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(
+                [manager.identification["id"] for manager in bucket],
+                [self.u1.id, self.u2.id],
+            )
+            self.assertEqual(bucket.count(), 2)
+            self.assertEqual(len(bucket), 2)
+            self.assertEqual(bucket.first().identification["id"], self.u1.id)
+            self.assertEqual(bucket.last().identification["id"], self.u2.id)
+            self.assertEqual(bucket.get(pk=self.u1.pk).identification["id"], self.u1.id)
+            self.assertEqual(bucket[1].identification["id"], self.u2.id)
+            self.assertIn(self.u1, bucket)
+
+    def test_contains_does_not_materialize_uncached_bucket(self):
+        bucket = DatabaseBucket(User.objects.all(), UserManager)
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertIn(self.u1, bucket)
+
     def test_first_and_last(self):
         # first() returns the first manager
         """
