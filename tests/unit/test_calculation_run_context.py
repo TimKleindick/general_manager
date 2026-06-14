@@ -82,6 +82,27 @@ def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
         assert ctx.get("plain") == "value"
 
 
+def test_orm_bucket_result_helpers_store_and_clear_entries() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_result(("query", "a"), ("pk1", "pk2"))
+        ctx.set(("other", "query", "a"), "keep")
+
+        assert ctx.get_orm_bucket_result(("query", "a")) == ("pk1", "pk2")
+
+        ctx.clear_orm_bucket_results()
+
+        assert ctx.get_orm_bucket_result(("query", "a")) is None
+        assert ctx.get(("other", "query", "a")) == "keep"
+
+
+def test_orm_bucket_result_helpers_distinguish_empty_tuple_from_missing() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_result(("query", "empty"), ())
+
+        assert ctx.get_orm_bucket_result(("query", "empty")) == ()
+        assert ctx.get_orm_bucket_result(("query", "missing")) is None
+
+
 def test_index_loads_once_and_groups_by_key() -> None:
     calls = 0
 
