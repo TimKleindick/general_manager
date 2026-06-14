@@ -332,6 +332,28 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context.set_orm_bucket_result(signature, primary_keys)
         return primary_keys
 
+    def _peek_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
+        context = current_calculation_run_context()
+        if context is None:
+            return None
+        signature = self._query_signature()
+        if signature is None:
+            return None
+        cached = context.get_orm_bucket_result(signature)
+        if cached is None:
+            return None
+        return cached  # type: ignore[return-value]
+
+    @staticmethod
+    def _snapshot_get_primary_key(kwargs: dict[str, Any]) -> Any | None:
+        if len(kwargs) != 1:
+            return None
+        if "pk" in kwargs:
+            return kwargs["pk"]
+        if "id" in kwargs:
+            return kwargs["id"]
+        return None
+
     def _track_effective_dependencies(self) -> None:
         """Record the bucket's effective filter/exclude state when it is evaluated."""
         manager_name = self._manager_class.__name__
@@ -615,6 +637,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | None: First manager instance if available.
         """
         self._track_effective_dependencies()
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            if not primary_keys:
+                return None
+            return self._build_manager(primary_keys[0])
         first_element = self._data.first()
         if first_element is None:
             return None
@@ -628,6 +655,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | None: Last manager instance if available.
         """
         self._track_effective_dependencies()
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            if not primary_keys:
+                return None
+            return self._build_manager(primary_keys[-1])
         first_element = self._data.last()
         if first_element is None:
             return None
@@ -641,6 +673,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             int: Number of queryset rows.
         """
         self._track_effective_dependencies()
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            return len(primary_keys)
         return self._data.count()
 
     def all(self) -> DatabaseBucket[GeneralManagerType]:
@@ -675,6 +710,13 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             models.MultipleObjectsReturned: Propagated when multiple rows satisfy the lookup.
         """
         self._track_effective_dependencies()
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            requested_primary_key = self._snapshot_get_primary_key(kwargs)
+            if requested_primary_key is not None:
+                if requested_primary_key in primary_keys:
+                    return self._build_manager(requested_primary_key)
+                raise self._data.model.DoesNotExist
         element = self._data.get(**kwargs)
         return self._build_manager(element.pk)
 
@@ -701,6 +743,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 sort_reverse=self._sort_reverse,
             )
         self._track_effective_dependencies()
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            return self._build_manager(primary_keys[item])
         return self._build_manager(self._data[item].pk)
 
     def __len__(self) -> int:
@@ -711,6 +756,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             int: Size of the queryset.
         """
         self._track_effective_dependencies()
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            return len(primary_keys)
         return self._data.count()
 
     def __str__(self) -> str:
@@ -750,6 +798,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             pk = item.pk
         if pk is None:
             return False
+        primary_keys = self._peek_run_scoped_primary_keys()
+        if primary_keys is not None:
+            return pk in primary_keys
         return self._data.filter(pk=pk).exists()
 
     def sort(
