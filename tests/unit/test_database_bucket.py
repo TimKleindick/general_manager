@@ -13,6 +13,7 @@ from general_manager.bucket.database_bucket import (
     DuplicateDatabaseBucketSnapshotError,
     _restore_database_bucket_from_primary_keys,
 )
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
@@ -296,6 +297,27 @@ class DatabaseBucketTestCase(TestCase):
 
         with CalculationRunContext(), self.assertNumQueries(1):
             self.assertIn(self.u1, bucket)
+
+    def test_bucket_result_cache_hit_still_tracks_dependencies(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username="alice"),
+            UserManager,
+            {"username": ["alice"]},
+        )
+
+        with CalculationRunContext():
+            list(bucket)
+            with DependencyTracker() as dependencies:
+                list(bucket)
+
+        self.assertIn(
+            (
+                "UserManager",
+                "filter",
+                '{"username": "alice"}',
+            ),
+            dependencies,
+        )
 
     def test_first_and_last(self):
         # first() returns the first manager
