@@ -3,10 +3,11 @@
 from datetime import datetime
 from unittest.mock import patch
 
-from django.test import TestCase
 from django.contrib.auth.models import User
+from django.contrib.auth.models import Group
 from django.db.models import functions
 from django.db.models.query import QuerySet
+from django.test import TestCase
 
 from general_manager.bucket.database_bucket import (
     DatabaseBucket,
@@ -473,6 +474,26 @@ class DatabaseBucketTestCase(TestCase):
             with self.assertNumQueries(0), self.assertRaises(User.DoesNotExist):
                 bucket.get(pk=999)
 
+    def test_snapshot_get_duplicate_primary_key_raises_without_query(self):
+        first_group = Group.objects.create(name="first-group")
+        second_group = Group.objects.create(name="second-group")
+        self.u1.groups.add(first_group, second_group)
+        bucket = DatabaseBucket(
+            User.objects.filter(groups__name__in=[first_group.name, second_group.name]),
+            UserManager,
+        )
+
+        with CalculationRunContext():
+            self.assertEqual(
+                [manager.identification["id"] for manager in bucket],
+                [self.u1.id, self.u1.id],
+            )
+            with (
+                self.assertNumQueries(0),
+                self.assertRaises(User.MultipleObjectsReturned),
+            ):
+                bucket.get(pk=self.u1.pk)
+
     def test_snapshot_get_falls_back_for_non_primary_key_lookup(self):
         bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
 
@@ -762,6 +783,14 @@ class DatabaseBucketTestCase(TestCase):
 
         with self.assertRaises(ValueError):
             _ = self.bucket[-10]
+
+    def test_getitem_cached_negative_index_matches_queryset_behavior(self):
+        bucket = DatabaseBucket(User.objects.order_by("username"), UserManager)
+
+        with CalculationRunContext():
+            list(bucket)
+            with self.assertRaises(ValueError):
+                _ = bucket[-1]
 
     def test_slice_with_step_and_negative_slice(self):
         """
