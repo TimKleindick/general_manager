@@ -21,6 +21,11 @@ from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.graphql_errors import get_read_permission_filter
+from general_manager.api.graphql_prefetch import (
+    collect_selected_graphql_property_names,
+    plan_dependency_cache_prefetches,
+    prefetch_dependency_cache_hits,
+)
 from general_manager.permission.graphql_capabilities import (
     get_capability_context,
     get_graphql_capabilities,
@@ -543,6 +548,26 @@ def create_list_resolver(
         qs_paginated: Any = apply_pagination(qs_grouped, page, page_size)
         if not hasattr(qs_paginated, "groups"):
             qs_paginated = list(qs_paginated)
+        if isinstance(qs_paginated, list):
+            selected_property_names = collect_selected_graphql_property_names(
+                info,
+                manager_class,
+                root_field="items",
+            )
+            if selected_property_names:
+                prefetch_plans = plan_dependency_cache_prefetches(
+                    qs_paginated,
+                    manager_class,
+                    selected_property_names,
+                    can_read_field=lambda instance, property_name: (
+                        check_read_permission(
+                            instance,
+                            info,
+                            property_name,
+                        )
+                    ),
+                )
+                prefetch_dependency_cache_hits(prefetch_plans)
         if isinstance(qs_paginated, list) and selection_includes_path(
             info, ("items", "capabilities")
         ):

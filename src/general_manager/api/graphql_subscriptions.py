@@ -16,18 +16,14 @@ from typing import Any, Callable, Iterable, TYPE_CHECKING, cast
 
 from channels.layers import BaseChannelLayer, get_channel_layer  # type: ignore[import]
 
-from graphql.language.ast import (
-    FieldNode,
-    FragmentSpreadNode,
-    InlineFragmentNode,
-    SelectionSetNode,
-)
-
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
     Dependency,
     parse_dependency_identifier,
     serialize_dependency_identifier,
+)
+from general_manager.api.graphql_prefetch import (
+    collect_selected_graphql_property_names,
 )
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
@@ -334,50 +330,12 @@ def subscription_property_names(
     Returns:
         Set of selected ``GraphQLProperty`` names; empty set if none found.
     """
-    interface_cls = getattr(manager_class, "Interface", None)
-    if interface_cls is None:
-        return set()
-    available_properties = set(interface_cls.get_graph_ql_properties().keys())
-    if not available_properties:
-        return set()
-
-    property_names: set[str] = set()
-
-    def collect_from_selection(selection_set: SelectionSetNode | None) -> None:
-        if selection_set is None:
-            return
-        for selection in selection_set.selections:
-            if isinstance(selection, FieldNode):
-                name = selection.name.value
-                normalized = normalize_graphql_name(name)
-                if normalized in available_properties:
-                    property_names.add(normalized)
-            elif isinstance(selection, FragmentSpreadNode):
-                fragment = info.fragments.get(selection.name.value)
-                if fragment is not None:
-                    collect_from_selection(fragment.selection_set)
-            elif isinstance(selection, InlineFragmentNode):
-                collect_from_selection(selection.selection_set)
-
-    def inspect_selection_set(selection_set: SelectionSetNode | None) -> None:
-        if selection_set is None:
-            return
-        for selection in selection_set.selections:
-            if isinstance(selection, FieldNode):
-                if selection.name.value == "item":
-                    collect_from_selection(selection.selection_set)
-                else:
-                    inspect_selection_set(selection.selection_set)
-            elif isinstance(selection, FragmentSpreadNode):
-                fragment = info.fragments.get(selection.name.value)
-                if fragment is not None:
-                    inspect_selection_set(fragment.selection_set)
-            elif isinstance(selection, InlineFragmentNode):
-                inspect_selection_set(selection.selection_set)
-
-    for node in info.field_nodes:
-        inspect_selection_set(node.selection_set)
-    return property_names
+    return collect_selected_graphql_property_names(
+        info,
+        manager_class,
+        root_field="item",
+        normalize_name=normalize_graphql_name,
+    )
 
 
 # ---------------------------------------------------------------------------
