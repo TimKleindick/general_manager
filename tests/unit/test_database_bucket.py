@@ -13,6 +13,7 @@ from general_manager.bucket.database_bucket import (
     DuplicateDatabaseBucketSnapshotError,
     _restore_database_bucket_from_primary_keys,
 )
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.api.property import graph_ql_property
@@ -221,6 +222,54 @@ class DatabaseBucketTestCase(TestCase):
         # __len__ and count()
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
+
+    def test_equivalent_bucket_queries_share_iter_sql_inside_run_context(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(
+                [manager.identification["id"] for manager in first_bucket],
+                [self.u1.id, self.u2.id],
+            )
+            self.assertEqual(
+                [manager.identification["id"] for manager in second_bucket],
+                [self.u1.id, self.u2.id],
+            )
+
+    def test_different_ordering_does_not_share_iter_sql_inside_run_context(self):
+        ascending = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+            sort_keys=("username",),
+            sort_reverse=False,
+        )
+        descending = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("-username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+            sort_keys=("username",),
+            sort_reverse=True,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(2):
+            self.assertEqual(
+                [manager.identification["id"] for manager in ascending],
+                [self.u1.id, self.u2.id],
+            )
+            self.assertEqual(
+                [manager.identification["id"] for manager in descending],
+                [self.u2.id, self.u1.id],
+            )
 
     def test_first_and_last(self):
         # first() returns the first manager
