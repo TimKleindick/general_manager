@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.47.0 (2026-06-14)
+
+### Bug Fixes
+
+- Address graphql prefetch review feedback
+  ([`2d1f686`](https://github.com/TimKleindick/general_manager/commit/2d1f6865cf74f057cb9bad101b67e0124c057870))
+
+### Features
+
+- Prefetch dependency-cached GraphQL list fields
+  ([`d3dff49`](https://github.com/TimKleindick/general_manager/commit/d3dff49b237222bdf1195705aa3af1357056418d))
+
+
 ## v0.46.1 (2026-06-14)
 
 ### Bug Fixes
