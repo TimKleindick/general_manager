@@ -54,6 +54,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         context = current_calculation_run_context()
         if context is not None:
             context.clear_orm_bucket_results()
+            context.clear_bucket_indexes()
         try:
             action = func.__name__
             if func.__name__ == "create":

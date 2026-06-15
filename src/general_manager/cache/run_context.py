@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar
 
@@ -12,6 +13,7 @@ from general_manager.logging import get_logger
 
 if TYPE_CHECKING:
     from general_manager.cache.dependency_cache import DependencyCacheHit
+    from general_manager.cache.dependency_index import Dependency
     from general_manager.cache.dependency_publish import (
         PendingDependencyCachePublication,
     )
@@ -24,8 +26,15 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
     default=None,
 )
 ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
+BUCKET_INDEX_PREFIX = "bucket_index"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 logger = get_logger("cache.run_context")
+
+
+@dataclass(frozen=True)
+class BucketIndexRunCacheEntry:
+    value: object
+    dependencies: frozenset["Dependency"]
 
 
 class CalculationRunContext:
@@ -183,6 +192,52 @@ class CalculationRunContext:
     def clear_orm_bucket_results(self) -> None:
         """Discard all run-scoped ORM bucket result entries."""
         self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
+
+    def _bucket_index_cache_key(
+        self,
+        source_signature: Hashable,
+        key_spec: Hashable,
+        many: bool,
+    ) -> tuple[Hashable, ...]:
+        return (BUCKET_INDEX_PREFIX, source_signature, key_spec, many)
+
+    def get_bucket_index_result(
+        self,
+        source_signature: Hashable,
+        key_spec: Hashable,
+        many: bool,
+    ) -> object:
+        """Return a cached bucket index and replay its source dependencies."""
+        entry = self.get(self._bucket_index_cache_key(source_signature, key_spec, many))
+        if not isinstance(entry, BucketIndexRunCacheEntry):
+            return None
+
+        from general_manager.cache.cache_tracker import DependencyTracker
+
+        for class_name, operation, identifier in entry.dependencies:
+            DependencyTracker.track(class_name, operation, identifier)
+        return entry.value
+
+    def set_bucket_index_result(
+        self,
+        source_signature: Hashable,
+        key_spec: Hashable,
+        many: bool,
+        value: object,
+        dependencies: Iterable["Dependency"],
+    ) -> None:
+        """Store a bucket index and the dependencies touched while building it."""
+        self.set(
+            self._bucket_index_cache_key(source_signature, key_spec, many),
+            BucketIndexRunCacheEntry(
+                value=value,
+                dependencies=frozenset(dependencies),
+            ),
+        )
+
+    def clear_bucket_indexes(self) -> None:
+        """Discard all run-scoped bucket index entries."""
+        self.discard_prefix((BUCKET_INDEX_PREFIX,))
 
     def has(self, key: Hashable) -> bool:
         """Return whether key has a value in the active run."""

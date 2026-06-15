@@ -2,7 +2,9 @@ from unittest import mock
 
 import pytest
 
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_cache import DependencyCacheHit
+from general_manager.cache.dependency_index import Dependency
 from general_manager.cache.dependency_publish import (
     CacheComputeLease,
     PendingDependencyCachePublication,
@@ -262,6 +264,73 @@ def test_orm_bucket_result_helpers_distinguish_empty_tuple_from_missing() -> Non
 
         assert ctx.get_orm_bucket_result(("query", "empty")) == ()
         assert ctx.get_orm_bucket_result(("query", "missing")) is None
+
+
+def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
+    dependencies: set[Dependency] = {
+        ("Project", "filter", '{"status": "active"}'),
+    }
+
+    with CalculationRunContext() as ctx:
+        ctx.set_bucket_index_result(
+            ("source", "projects"),
+            ("field", ("code",), False),
+            False,
+            {"A": "project-a"},
+            dependencies,
+        )
+
+        with DependencyTracker() as tracked_dependencies:
+            result = ctx.get_bucket_index_result(
+                ("source", "projects"),
+                ("field", ("code",), False),
+                False,
+            )
+
+        assert result == {"A": "project-a"}
+        assert dependencies <= tracked_dependencies
+
+        ctx.clear_bucket_indexes()
+
+        assert (
+            ctx.get_bucket_index_result(
+                ("source", "projects"),
+                ("field", ("code",), False),
+                False,
+            )
+            is None
+        )
+
+
+def test_bucket_index_helpers_distinguish_unique_and_many_indexes() -> None:
+    key_spec = ("field", ("code",), False)
+
+    with CalculationRunContext() as ctx:
+        ctx.set_bucket_index_result(
+            ("source", "projects"),
+            key_spec,
+            False,
+            {"A": "project-a"},
+            set(),
+        )
+        ctx.set_bucket_index_result(
+            ("source", "projects"),
+            key_spec,
+            True,
+            {"A": ("project-a", "project-b")},
+            set(),
+        )
+
+        assert ctx.get_bucket_index_result(
+            ("source", "projects"),
+            key_spec,
+            False,
+        ) == {"A": "project-a"}
+        assert ctx.get_bucket_index_result(
+            ("source", "projects"),
+            key_spec,
+            True,
+        ) == {"A": ("project-a", "project-b")}
 
 
 def test_index_loads_once_and_groups_by_key() -> None:
