@@ -405,6 +405,75 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertNotIn(f"{key}:deps", self.fake_cache.store)
         self.assertEqual(self.record_calls, [])
 
+    def test_dependency_scope_reuses_buffered_miss_inside_run_context(self):
+        calls = 0
+
+        @cached(scope="dependency", cache_backend=self.fake_cache)
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+        expected_dependencies = {("User", "identification", "3")}
+
+        with CalculationRunContext():
+            self.assertEqual(fn(3), 6)
+            with DependencyTracker() as tracked_dependencies:
+                self.assertEqual(fn(3), 6)
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(tracked_dependencies, expected_dependencies)
+        self.assert_dependency_cache_hit(key, 6, expected_dependencies)
+
+    def test_dependency_scope_batch_abort_returns_result_without_cache_write(self):
+        calls = 0
+
+        @cached(scope="dependency", cache_backend=self.fake_cache)
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+
+        try:
+            with CalculationRunContext():
+                self.assertEqual(fn(3), 6)
+                begin_dependency_data_change()
+        finally:
+            end_dependency_data_change()
+
+        self.assertEqual(calls, 1)
+        self.assertNotIn(key, self.fake_cache.store)
+        self.assertNotIn(f"{key}:deps", self.fake_cache.store)
+
+    def test_dependency_scope_custom_record_fn_uses_immediate_publication(self):
+        calls = 0
+
+        @cached(
+            scope="dependency",
+            cache_backend=self.fake_cache,
+            record_fn=self.record_fn,
+        )
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        key = make_cache_key(fn, (3,), {})
+        expected_dependencies = {("User", "identification", "3")}
+
+        with CalculationRunContext():
+            self.assertEqual(fn(3), 6)
+            self.assert_dependency_cache_hit(key, 6, expected_dependencies)
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(self.record_calls, [(key, expected_dependencies)])
+
     def test_dependency_scope_does_not_cache_when_generation_changes_during_compute(
         self,
     ):

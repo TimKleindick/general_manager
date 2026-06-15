@@ -28,6 +28,7 @@ from general_manager.cache.dependency_index import (
 )
 from general_manager.cache.dependency_publish import (
     CachePublishAborted,
+    PendingDependencyCachePublication,
     acquire_compute_lease,
     publish_dependency_cache_entry,
     release_compute_lease,
@@ -232,6 +233,7 @@ def cached(
                     )
                 lease = acquire_compute_lease(key)
 
+            lease_transferred_to_context = False
             try:
                 cached_hit = read_dependency_cache_hit(
                     cache_backend,
@@ -252,29 +254,47 @@ def cached(
                     for entry_key, entry_dependencies in entries:
                         record_fn(entry_key, set(entry_dependencies))
 
-                try:
-                    publish_dependency_cache_entry(
-                        cache_key=key,
-                        result=result,
-                        dependencies=dependencies,
-                        cache_backend=cache_backend,
-                        timeout=timeout,
-                        started_generation=started_generation,
-                        record_many_fn=(
-                            None if record_fn is record_dependencies else record_many
-                        ),
+                publish_context = current_calculation_run_context()
+                if publish_context is not None and record_fn is record_dependencies:
+                    publish_context.buffer_dependency_cache_publication(
+                        PendingDependencyCachePublication(
+                            cache_key=key,
+                            result=result,
+                            dependencies=frozenset(dependencies),
+                            cache_backend=cache_backend,
+                            timeout=timeout,
+                            started_generation=started_generation,
+                            lease=lease,
+                        )
                     )
-                except CachePublishAborted:
-                    logger.debug(
-                        "dependency cache publish aborted",
-                        context={
-                            "function": func.__qualname__,
-                            "key": key,
-                            "scope": scope,
-                        },
-                    )
+                    lease_transferred_to_context = True
+                else:
+                    try:
+                        publish_dependency_cache_entry(
+                            cache_key=key,
+                            result=result,
+                            dependencies=dependencies,
+                            cache_backend=cache_backend,
+                            timeout=timeout,
+                            started_generation=started_generation,
+                            record_many_fn=(
+                                None
+                                if record_fn is record_dependencies
+                                else record_many
+                            ),
+                        )
+                    except CachePublishAborted:
+                        logger.debug(
+                            "dependency cache publish aborted",
+                            context={
+                                "function": func.__qualname__,
+                                "key": key,
+                                "scope": scope,
+                            },
+                        )
             finally:
-                release_compute_lease(lease)
+                if not lease_transferred_to_context:
+                    release_compute_lease(lease)
 
             logger.debug(
                 "cache miss recorded",
