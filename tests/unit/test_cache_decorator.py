@@ -474,6 +474,35 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertEqual(calls, 1)
         self.assertEqual(self.record_calls, [(key, expected_dependencies)])
 
+    def test_dependency_scope_batches_multiple_run_misses_under_one_index_write(self):
+        calls = 0
+
+        @cached(scope="dependency", cache_backend=self.fake_cache)
+        def fn(value):
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(value))
+            return value * 2
+
+        with mock.patch(
+            "general_manager.cache.dependency_index.acquire_lock",
+            return_value=True,
+        ) as acquire_lock:
+            with CalculationRunContext():
+                self.assertEqual(fn(1), 2)
+                self.assertEqual(fn(2), 4)
+                self.assertEqual(fn(3), 6)
+
+        self.assertEqual(calls, 3)
+        self.assertEqual(acquire_lock.call_count, 1)
+        for value in (1, 2, 3):
+            key = make_cache_key(fn, (value,), {})
+            self.assert_dependency_cache_hit(
+                key,
+                value * 2,
+                {("User", "identification", str(value))},
+            )
+
     def test_dependency_scope_does_not_cache_when_generation_changes_during_compute(
         self,
     ):
