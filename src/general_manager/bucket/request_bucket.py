@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Hashable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
+from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.interface.requests import (
     RequestLocalPredicate,
     RequestLocalPaginationUnsupportedError,
@@ -170,6 +171,28 @@ class RequestBucket(Bucket[GeneralManagerType]):
             )
         return tuple(item.identification for item in self._ensure_items()) == tuple(
             item.identification for item in other._ensure_items()
+        )
+
+    def _bucket_index_source_signature(self) -> Hashable:
+        if self.request_plan is not None:
+            restore_func, restore_args = self.request_plan.__reduce__()
+            return (
+                "request",
+                self._manager_class,
+                self._interface_cls,
+                self._operation_name,
+                restore_func,
+                freeze_bucket_index_value(restore_args),
+                freeze_bucket_index_value(self.filters),
+                freeze_bucket_index_value(self.excludes),
+            )
+        return (
+            "request-items",
+            self._manager_class,
+            tuple(
+                freeze_bucket_index_value(item.identification)
+                for item in self._ensure_items()
+            ),
         )
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:

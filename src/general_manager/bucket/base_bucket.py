@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from collections.abc import Hashable
 from typing import (
     Type,
     Generator,
@@ -10,6 +11,15 @@ from typing import (
     Generic,
     TypeVar,
 )
+
+from general_manager.bucket.indexing import (
+    BucketIndexKeySpec,
+    build_multi_bucket_index,
+    build_unique_bucket_index,
+    normalize_bucket_index_key_spec,
+)
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.run_context import ensure_calculation_run_context
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 
@@ -238,6 +248,80 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         from general_manager.bucket.group_bucket import GroupBucket
 
         return GroupBucket(self._manager_class, group_by_keys, self)
+
+    def _bucket_index_source_signature(self) -> Hashable:
+        """Return the conservative run-local source signature for bucket indexes."""
+        return (
+            self.__class__,
+            self._manager_class,
+            id(self),
+        )
+
+    def index_by(
+        self,
+        key_spec: BucketIndexKeySpec,
+        *,
+        max_rows: int | None = 1000,
+    ) -> dict[Hashable, GeneralManagerType]:
+        """Build or reuse a unique run-scoped index over this bucket."""
+        normalized_key_spec = normalize_bucket_index_key_spec(key_spec)
+        source_signature = self._bucket_index_source_signature()
+        with ensure_calculation_run_context() as context:
+            cached = context.get_bucket_index_result(
+                source_signature,
+                normalized_key_spec,
+                False,
+            )
+            if cached is not None:
+                return cached  # type: ignore[return-value]
+
+            with DependencyTracker() as dependencies:
+                index = build_unique_bucket_index(
+                    self,
+                    key_spec,
+                    max_rows=max_rows,
+                )
+            context.set_bucket_index_result(
+                source_signature,
+                normalized_key_spec,
+                False,
+                index,
+                dependencies,
+            )
+            return index
+
+    def index_many(
+        self,
+        key_spec: BucketIndexKeySpec,
+        *,
+        max_rows: int | None = 1000,
+    ) -> dict[Hashable, tuple[GeneralManagerType, ...]]:
+        """Build or reuse a multi-value run-scoped index over this bucket."""
+        normalized_key_spec = normalize_bucket_index_key_spec(key_spec)
+        source_signature = self._bucket_index_source_signature()
+        with ensure_calculation_run_context() as context:
+            cached = context.get_bucket_index_result(
+                source_signature,
+                normalized_key_spec,
+                True,
+            )
+            if cached is not None:
+                return cached  # type: ignore[return-value]
+
+            with DependencyTracker() as dependencies:
+                index = build_multi_bucket_index(
+                    self,
+                    key_spec,
+                    max_rows=max_rows,
+                )
+            context.set_bucket_index_result(
+                source_signature,
+                normalized_key_spec,
+                True,
+                index,
+                dependencies,
+            )
+            return index
 
     def none(self) -> Bucket[GeneralManagerType]:
         """

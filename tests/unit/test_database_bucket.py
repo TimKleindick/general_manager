@@ -248,6 +248,28 @@ class DatabaseBucketTestCase(TestCase):
                 [self.u1.id, self.u2.id],
             )
 
+    def test_equivalent_database_buckets_share_index_inside_run_context(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            first_index = first_bucket.index_by("identification")
+            second_index = second_bucket.index_by("identification")
+
+        self.assertIs(first_index, second_index)
+        self.assertEqual(
+            sorted(manager.identification["id"] for manager in first_index.values()),
+            [self.u1.id, self.u2.id],
+        )
+
     def test_different_ordering_does_not_share_iter_sql_inside_run_context(self):
         ascending = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
