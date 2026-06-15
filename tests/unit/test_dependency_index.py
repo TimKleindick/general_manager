@@ -147,6 +147,20 @@ class TestDependencyGenerationAndBarrier(TestCase):
         self.assertTrue(is_dependency_data_change_active())
         self.assertEqual(cache.get(DATA_CHANGE_LOCK_KEY), "1")
 
+    @patch(
+        "general_manager.cache.dependency_index._discard_active_context_dependency_cache_state",
+        side_effect=RuntimeError("run-context cleanup"),
+    )
+    def test_begin_data_change_releases_barrier_when_context_cleanup_fails(
+        self, mock_discard_active_context_state
+    ):
+        with self.assertRaisesRegex(RuntimeError, "^run-context cleanup$"):
+            begin_dependency_data_change()
+
+        mock_discard_active_context_state.assert_called_once_with()
+        self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
+
     def test_end_data_change_releases_barrier_without_changing_generation(self):
         begin_dependency_data_change()
 

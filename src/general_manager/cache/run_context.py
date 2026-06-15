@@ -105,7 +105,13 @@ class CalculationRunContext:
     ) -> None:
         """Buffer a dependency-cache miss for guarded batch publication."""
         from general_manager.cache.dependency_cache import DependencyCacheHit
+        from general_manager.cache.dependency_publish import release_compute_lease
 
+        previous_entry = self._dependency_cache_pending_publications.get(
+            entry.cache_key
+        )
+        if previous_entry is not None and previous_entry.lease != entry.lease:
+            release_compute_lease(previous_entry.lease)
         self._dependency_cache_pending_publications[entry.cache_key] = entry
         self._dependency_cache_hits[entry.cache_key] = DependencyCacheHit(
             value=entry.result,

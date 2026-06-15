@@ -111,6 +111,7 @@ Dependency-scoped cache entries are published through a guarded write path:
 - a mutation generation is read before computation starts
 - data-changing operations raise the generation and hold a publish barrier while invalidation runs
 - inside a `CalculationRunContext`, computed misses are buffered and exposed to later calls in the same run
+- custom dependency `record_fn` callbacks preserve immediate publication instead of using the run buffer
 - buffered entries publish at run exit or at a controlled guardrail flush point
 - the dependency index and combined value/dependency payloads are written under the dependency-index lock
 - dependency metadata is stored before cached values become visible, so a visible value is already reachable by later invalidation
