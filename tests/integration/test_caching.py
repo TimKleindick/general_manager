@@ -1509,6 +1509,23 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             refreshed_bucket = self.TestProject.filter(name="Another Project")
             self.assertEqual(list(refreshed_bucket), [])
 
+    def test_run_scoped_bucket_indexes_clear_after_mutation_inside_run(self):
+        with CalculationRunContext():
+            bucket = self.TestProject.filter(name="Another Project")
+            index = bucket.index_by("identification")
+            self.assertEqual(
+                sorted(project.identification["id"] for project in index.values()),
+                [self.project2.identification["id"]],
+            )
+
+            self.project2 = self.project2.update(
+                name="Renamed Project",
+                ignore_permission=True,
+            )
+
+            refreshed_bucket = self.TestProject.filter(name="Another Project")
+            self.assertEqual(refreshed_bucket.index_by("identification"), {})
+
     def test_grouped_filtered_bucket_count_invalidates_on_create(self):
         """
         Ensure grouped calculations built from chained buckets invalidate on matching creates.
