@@ -198,17 +198,21 @@ class CalculationRunContext:
         source_signature: Hashable,
         key_spec: Hashable,
         many: bool,
+        max_rows: int | None,
     ) -> tuple[Hashable, ...]:
-        return (BUCKET_INDEX_PREFIX, source_signature, key_spec, many)
+        return (BUCKET_INDEX_PREFIX, source_signature, key_spec, many, max_rows)
 
     def get_bucket_index_result(
         self,
         source_signature: Hashable,
         key_spec: Hashable,
         many: bool,
+        max_rows: int | None,
     ) -> object:
         """Return a cached bucket index and replay its source dependencies."""
-        entry = self.get(self._bucket_index_cache_key(source_signature, key_spec, many))
+        entry = self.get(
+            self._bucket_index_cache_key(source_signature, key_spec, many, max_rows)
+        )
         if not isinstance(entry, BucketIndexRunCacheEntry):
             return None
 
@@ -225,10 +229,11 @@ class CalculationRunContext:
         many: bool,
         value: object,
         dependencies: Iterable["Dependency"],
+        max_rows: int | None,
     ) -> None:
         """Store a bucket index and the dependencies touched while building it."""
         self.set(
-            self._bucket_index_cache_key(source_signature, key_spec, many),
+            self._bucket_index_cache_key(source_signature, key_spec, many, max_rows),
             BucketIndexRunCacheEntry(
                 value=value,
                 dependencies=frozenset(dependencies),

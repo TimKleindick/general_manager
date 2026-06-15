@@ -271,6 +271,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
                 source_signature,
                 normalized_key_spec,
                 False,
+                max_rows,
             )
             if cached is not None:
                 return cached  # type: ignore[return-value]
@@ -287,6 +288,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
                 False,
                 index,
                 dependencies,
+                max_rows,
             )
             return index
 
@@ -304,6 +306,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
                 source_signature,
                 normalized_key_spec,
                 True,
+                max_rows,
             )
             if cached is not None:
                 return cached  # type: ignore[return-value]
@@ -320,6 +323,7 @@ class Bucket(ABC, Generic[GeneralManagerType]):
                 True,
                 index,
                 dependencies,
+                max_rows,
             )
             return index
 

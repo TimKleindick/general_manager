@@ -518,3 +518,18 @@ class BucketTests(SimpleTestCase):
         index = bucket.index_by("code", max_rows=None)
 
         self.assertEqual(sorted(index), ["A", "B"])
+
+    def test_index_by_rechecks_max_rows_after_unbounded_cache_hit(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("B", "x", 2),
+            ],
+        )
+
+        with CalculationRunContext():
+            bucket.index_by("code", max_rows=None)
+
+            with self.assertRaises(BucketIndexTooLargeError):
+                bucket.index_by("code", max_rows=1)

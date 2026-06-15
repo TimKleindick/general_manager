@@ -278,6 +278,7 @@ def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
             False,
             {"A": "project-a"},
             dependencies,
+            1000,
         )
 
         with DependencyTracker() as tracked_dependencies:
@@ -285,6 +286,7 @@ def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
                 ("source", "projects"),
                 ("field", ("code",), False),
                 False,
+                1000,
             )
 
         assert result == {"A": "project-a"}
@@ -297,6 +299,7 @@ def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
                 ("source", "projects"),
                 ("field", ("code",), False),
                 False,
+                1000,
             )
             is None
         )
@@ -312,6 +315,7 @@ def test_bucket_index_helpers_distinguish_unique_and_many_indexes() -> None:
             False,
             {"A": "project-a"},
             set(),
+            1000,
         )
         ctx.set_bucket_index_result(
             ("source", "projects"),
@@ -319,17 +323,20 @@ def test_bucket_index_helpers_distinguish_unique_and_many_indexes() -> None:
             True,
             {"A": ("project-a", "project-b")},
             set(),
+            1000,
         )
 
         assert ctx.get_bucket_index_result(
             ("source", "projects"),
             key_spec,
             False,
+            1000,
         ) == {"A": "project-a"}
         assert ctx.get_bucket_index_result(
             ("source", "projects"),
             key_spec,
             True,
+            1000,
         ) == {"A": ("project-a", "project-b")}
 
 
