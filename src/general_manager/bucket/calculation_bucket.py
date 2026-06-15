@@ -463,6 +463,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return self.sort_key
 
     def _bucket_index_source_signature(self) -> Hashable:
+        """Return a stable signature for equivalent calculation bucket plans."""
         return (
             "calculation",
             self._manager_class,

@@ -28,6 +28,7 @@ class DummyManager:
 
 class DummyRow:
     def __init__(self, code: str | None, group: str, value: int) -> None:
+        """Create a simple row carrying fields used by bucket index tests."""
         self.code = code
         self.group = group
         self.value = value
@@ -402,6 +403,7 @@ class BucketTests(SimpleTestCase):
             self.bucket.group_by("x")
 
     def test_index_by_builds_unique_index_by_field_name(self):
+        """Index rows by one field name and expose each matching row by key."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -416,6 +418,7 @@ class BucketTests(SimpleTestCase):
         self.assertEqual(index["B"].value, 2)
 
     def test_index_many_preserves_duplicate_key_order(self):
+        """Group duplicate keys while preserving each row's source order."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -431,6 +434,7 @@ class BucketTests(SimpleTestCase):
         self.assertEqual([row.value for row in index["B"]], [3])
 
     def test_index_by_reuses_same_bucket_object_inside_run_context(self):
+        """Reuse an index for the same bucket object within one run context."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -445,6 +449,7 @@ class BucketTests(SimpleTestCase):
         self.assertIs(first, second)
 
     def test_index_by_raises_for_duplicate_keys(self):
+        """Raise when a unique index key matches more than one row."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -457,6 +462,7 @@ class BucketTests(SimpleTestCase):
             bucket.index_by("code")
 
     def test_index_by_supports_composite_keys(self):
+        """Index rows by an ordered tuple of field values."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -471,6 +477,7 @@ class BucketTests(SimpleTestCase):
         self.assertEqual(index[("A", "y")].value, 2)
 
     def test_index_by_allows_null_key(self):
+        """Allow None to be used as a unique bucket index key."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -483,18 +490,21 @@ class BucketTests(SimpleTestCase):
         self.assertEqual(index[None].value, 1)
 
     def test_index_by_raises_for_missing_key_field(self):
+        """Raise a clear error when the requested key field is absent."""
         bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
 
         with self.assertRaises(MissingBucketIndexKeyError):
             bucket.index_by("missing")
 
     def test_index_by_raises_for_unsupported_key_spec(self):
+        """Reject key specs outside the supported string and tuple forms."""
         bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
 
         with self.assertRaises(UnsupportedBucketIndexKeySpecError):
             bucket.index_by(["code"])  # type: ignore[arg-type]
 
     def test_index_by_respects_max_rows_guardrail(self):
+        """Stop building an index when the configured row limit is exceeded."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -507,6 +517,7 @@ class BucketTests(SimpleTestCase):
             bucket.index_by("code", max_rows=1)
 
     def test_index_by_allows_explicit_unbounded_index(self):
+        """Build an index with no row guardrail when max_rows is None."""
         bucket = DummyBucket(
             self.manager_class,
             [
@@ -520,6 +531,7 @@ class BucketTests(SimpleTestCase):
         self.assertEqual(sorted(index), ["A", "B"])
 
     def test_index_by_rechecks_max_rows_after_unbounded_cache_hit(self):
+        """Keep bounded and unbounded index lookups separated in the run cache."""
         bucket = DummyBucket(
             self.manager_class,
             [

@@ -174,6 +174,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
         )
 
     def _bucket_index_source_signature(self) -> Hashable:
+        """Return a stable request signature, or object identity for materialized data."""
         if self.request_plan is not None:
             restore_func, restore_args = self.request_plan.__reduce__()
             return (

@@ -33,6 +33,8 @@ logger = get_logger("cache.run_context")
 
 @dataclass(frozen=True)
 class BucketIndexRunCacheEntry:
+    """Run-cache payload for a bucket index plus dependencies to replay on hits."""
+
     value: object
     dependencies: frozenset["Dependency"]
 
@@ -200,6 +202,7 @@ class CalculationRunContext:
         many: bool,
         max_rows: int | None,
     ) -> tuple[Hashable, ...]:
+        """Return the full run-cache key for one bucket index variant."""
         return (BUCKET_INDEX_PREFIX, source_signature, key_spec, many, max_rows)
 
     def get_bucket_index_result(

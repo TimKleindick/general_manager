@@ -263,7 +263,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         *,
         max_rows: int | None = 1000,
     ) -> dict[Hashable, GeneralManagerType]:
-        """Build or reuse a unique run-scoped index over this bucket."""
+        """Build or reuse a unique run-scoped index over this bucket.
+
+        Duplicate frozen keys raise an error because each key must identify one
+        row. The result is cached only for the active calculation run.
+        """
         normalized_key_spec = normalize_bucket_index_key_spec(key_spec)
         source_signature = self._bucket_index_source_signature()
         with ensure_calculation_run_context() as context:
@@ -298,7 +302,11 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         *,
         max_rows: int | None = 1000,
     ) -> dict[Hashable, tuple[GeneralManagerType, ...]]:
-        """Build or reuse a multi-value run-scoped index over this bucket."""
+        """Build or reuse a run-scoped index that groups rows by key.
+
+        Values are tuples preserving source iteration order, and the cached
+        result is scoped to the active calculation run.
+        """
         normalized_key_spec = normalize_bucket_index_key_spec(key_spec)
         source_signature = self._bucket_index_source_signature()
         with ensure_calculation_run_context() as context:

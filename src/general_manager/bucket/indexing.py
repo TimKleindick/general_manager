@@ -12,6 +12,7 @@ NormalizedBucketIndexKeySpec = tuple[str, tuple[str, ...], bool]
 
 
 def _frozen_pair_sort_key(pair: tuple[Hashable, Hashable]) -> tuple[str, str]:
+    """Return a string-only sort key for frozen mapping pairs."""
     return (str(pair[0]), str(pair[1]))
 
 
@@ -19,6 +20,7 @@ class UnsupportedBucketIndexKeySpecError(TypeError):
     """Raised when a bucket index key spec cannot produce a stable run key."""
 
     def __init__(self, key_spec: object) -> None:
+        """Build an error that names the unsupported key specification."""
         super().__init__(
             "Bucket index key specs must be a field name or a non-empty tuple "
             f"of field names; got {key_spec!r}."
@@ -29,6 +31,7 @@ class MissingBucketIndexKeyError(AttributeError):
     """Raised when an indexed row does not expose a requested key field."""
 
     def __init__(self, field_name: str, row: object) -> None:
+        """Build an error that identifies the missing row field."""
         super().__init__(
             f"Cannot build bucket index: {row!r} is missing key field {field_name!r}."
         )
@@ -38,6 +41,7 @@ class DuplicateBucketIndexKeyError(ValueError):
     """Raised when a unique bucket index sees more than one row for a key."""
 
     def __init__(self, key: Hashable) -> None:
+        """Build an error that identifies the duplicated frozen index key."""
         super().__init__(f"Bucket index key {key!r} matched more than one row.")
 
 
@@ -45,6 +49,7 @@ class BucketIndexTooLargeError(ValueError):
     """Raised when index construction exceeds the configured row guardrail."""
 
     def __init__(self, max_rows: int) -> None:
+        """Build an error that reports the row guardrail that was exceeded."""
         super().__init__(
             f"Bucket index construction exceeded the configured limit of {max_rows} rows."
         )
@@ -54,6 +59,7 @@ class UnhashableBucketIndexKeyError(TypeError):
     """Raised when a key value cannot be converted to a hashable identity."""
 
     def __init__(self, key: object) -> None:
+        """Build an error that reports the unfreezable key value."""
         super().__init__(f"Bucket index key {key!r} is not hashable.")
 
 
@@ -73,7 +79,11 @@ def normalize_bucket_index_key_spec(
 
 
 def freeze_bucket_index_value(value: object) -> Hashable:
-    """Return a hashable identity for values used as bucket index keys."""
+    """Return a stable hashable identity for values used as index keys.
+
+    Manager instances are represented by their class and identification, and
+    containers are recursively frozen so equivalent values share a run-cache key.
+    """
     from general_manager.manager.general_manager import GeneralManager
 
     if isinstance(value, GeneralManager):
@@ -120,7 +130,7 @@ def resolve_bucket_index_key(
     row: object,
     key_spec: BucketIndexKeySpec,
 ) -> Hashable:
-    """Resolve and freeze the index key for one row."""
+    """Resolve the requested field value or composite key for one row."""
     _, field_names, composite = normalize_bucket_index_key_spec(key_spec)
     values: list[Hashable] = []
     for field_name in field_names:
@@ -138,6 +148,7 @@ def _iter_guarded_rows(
     rows: Iterable[T],
     max_rows: int | None,
 ) -> Iterable[T]:
+    """Yield rows until max_rows is exceeded, then raise a guardrail error."""
     for index, row in enumerate(rows):
         if max_rows is not None and index >= max_rows:
             raise BucketIndexTooLargeError(max_rows)
@@ -150,7 +161,7 @@ def build_unique_bucket_index(
     *,
     max_rows: int | None,
 ) -> dict[Hashable, T]:
-    """Build a unique index and fail when duplicate keys are found."""
+    """Build a unique index and fail when duplicate frozen keys are found."""
     indexed: dict[Hashable, T] = {}
     for row in _iter_guarded_rows(rows, max_rows):
         key = resolve_bucket_index_key(row, key_spec)
@@ -166,7 +177,7 @@ def build_multi_bucket_index(
     *,
     max_rows: int | None,
 ) -> dict[Hashable, tuple[T, ...]]:
-    """Build an index that preserves all rows for duplicate keys."""
+    """Build a grouped index that preserves row order for duplicate keys."""
     grouped: defaultdict[Hashable, list[T]] = defaultdict(list)
     for row in _iter_guarded_rows(rows, max_rows):
         grouped[resolve_bucket_index_key(row, key_spec)].append(row)

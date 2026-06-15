@@ -249,6 +249,7 @@ class DatabaseBucketTestCase(TestCase):
             )
 
     def test_equivalent_database_buckets_share_index_inside_run_context(self):
+        """Share a bucket index for equivalent querysets in one run context."""
         first_bucket = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
             UserManager,
@@ -271,6 +272,7 @@ class DatabaseBucketTestCase(TestCase):
         )
 
     def test_repeated_equivalent_index_lookups_reduce_sql_work(self):
+        """Avoid a second SQL query for equivalent index lookups in one run."""
         first_bucket = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
             UserManager,
@@ -345,6 +347,7 @@ class DatabaseBucketTestCase(TestCase):
             self.assertNotIn(unsaved, self.bucket)
 
     def test_bucket_result_cache_hit_still_tracks_dependencies(self):
+        """Replay queryset dependencies when a database bucket result is cached."""
         bucket = DatabaseBucket(
             User.objects.filter(username="alice"),
             UserManager,
@@ -366,6 +369,7 @@ class DatabaseBucketTestCase(TestCase):
         )
 
     def test_database_bucket_index_hit_replays_source_dependencies(self):
+        """Replay queryset dependencies when a database bucket index is cached."""
         bucket = DatabaseBucket(
             User.objects.filter(username="alice"),
             UserManager,

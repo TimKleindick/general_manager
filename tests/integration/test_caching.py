@@ -1510,6 +1510,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             self.assertEqual(list(refreshed_bucket), [])
 
     def test_run_scoped_bucket_indexes_clear_after_mutation_inside_run(self):
+        """Clear cached bucket indexes after a mutation inside the same run."""
         with CalculationRunContext():
             bucket = self.TestProject.filter(name="Another Project")
             index = bucket.index_by("identification")
