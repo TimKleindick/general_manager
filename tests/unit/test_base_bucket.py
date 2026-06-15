@@ -3,6 +3,7 @@ from django.test import SimpleTestCase
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
+from general_manager.cache.run_context import CalculationRunContext
 
 
 # DummyBucket concrete implementation for testing
@@ -17,6 +18,13 @@ class DummyManager:
                 attributes (dict): A dictionary with keys 'a', 'b', and 'c', each mapped to None.
             """
             return {"a": None, "b": None, "c": None}
+
+
+class DummyRow:
+    def __init__(self, code: str | None, group: str, value: int) -> None:
+        self.code = code
+        self.group = group
+        self.value = value
 
 
 # DummyBucket concrete implementation for testing
@@ -386,3 +394,46 @@ class BucketTests(SimpleTestCase):
             bucket.group_by("x")(self)
         with self.assertRaises(ValueError):
             self.bucket.group_by("x")
+
+    def test_index_by_builds_unique_index_by_field_name(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("B", "x", 2),
+            ],
+        )
+
+        index = bucket.index_by("code")
+
+        self.assertEqual(index["A"].value, 1)
+        self.assertEqual(index["B"].value, 2)
+
+    def test_index_many_preserves_duplicate_key_order(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("A", "x", 2),
+                DummyRow("B", "y", 3),
+            ],
+        )
+
+        index = bucket.index_many("code")
+
+        self.assertEqual([row.value for row in index["A"]], [1, 2])
+        self.assertEqual([row.value for row in index["B"]], [3])
+
+    def test_index_by_reuses_same_bucket_object_inside_run_context(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+            ],
+        )
+
+        with CalculationRunContext():
+            first = bucket.index_by("code")
+            second = bucket.index_by("code")
+
+        self.assertIs(first, second)

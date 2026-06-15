@@ -1,7 +1,7 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
-from collections.abc import Iterable
+from collections.abc import Hashable, Iterable
 from types import UnionType
 from typing import (
     Any,
@@ -22,6 +22,7 @@ from general_manager.interface.base_interface import (
     GeneralManagerType,
 )
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.manager.input import Input, InputDomain
 from general_manager.utils.filter_parser import parse_filters
 
@@ -460,6 +461,16 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if isinstance(self.sort_key, str):
             return (self.sort_key,)
         return self.sort_key
+
+    def _bucket_index_source_signature(self) -> Hashable:
+        return (
+            "calculation",
+            self._manager_class,
+            freeze_bucket_index_value(self.filter_definitions),
+            freeze_bucket_index_value(self.exclude_definitions),
+            self._normalized_sort_key(),
+            self.reverse,
+        )
 
     def _sort_uses_only_inputs(self, sort_key: tuple[str, ...] | None) -> bool:
         """Return whether a sort can be applied to raw input dictionaries."""

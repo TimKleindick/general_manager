@@ -329,6 +329,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self._sort_reverse,
         )
 
+    def _bucket_index_source_signature(self) -> Hashable:
+        query_signature = self._query_signature()
+        if query_signature is None:
+            return super()._bucket_index_source_signature()
+        return ("database", query_signature)
+
     def _get_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
         """
         Load or reuse a bounded primary-key snapshot for this bucket.
