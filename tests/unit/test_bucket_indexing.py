@@ -20,6 +20,14 @@ class RelatedManager(GeneralManager):
         self._manager_state_reason = None
 
 
+class MixedIdentificationManager(GeneralManager):
+    def __init__(self) -> None:
+        self._interface = object()
+        self._GeneralManager__id = {"id": 10, 2: "external"}
+        self._manager_state_valid = True
+        self._manager_state_reason = None
+
+
 class Row:
     def __init__(self, day: str | None, related: object = None) -> None:
         self.day = day
@@ -79,4 +87,27 @@ def test_freeze_bucket_index_value_normalizes_nested_containers() -> None:
     assert freeze_bucket_index_value(value) == (
         ("flags", frozenset({False, True})),
         ("ids", (2, 1)),
+    )
+
+
+def test_freeze_bucket_index_value_normalizes_mixed_type_dict_keys() -> None:
+    value = {"ids": [2, 1], 2: "external"}
+
+    assert freeze_bucket_index_value(value) == (
+        (2, "external"),
+        ("ids", (2, 1)),
+    )
+
+
+def test_freeze_bucket_index_value_normalizes_mixed_type_manager_identity_keys() -> (
+    None
+):
+    related = MixedIdentificationManager()
+
+    assert freeze_bucket_index_value(related) == (
+        MixedIdentificationManager,
+        (
+            (2, "external"),
+            ("id", 10),
+        ),
     )

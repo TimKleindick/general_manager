@@ -11,6 +11,10 @@ BucketIndexKeySpec = str | tuple[str, ...]
 NormalizedBucketIndexKeySpec = tuple[str, tuple[str, ...], bool]
 
 
+def _frozen_pair_sort_key(pair: tuple[Hashable, Hashable]) -> tuple[str, str]:
+    return (str(pair[0]), str(pair[1]))
+
+
 class UnsupportedBucketIndexKeySpecError(TypeError):
     """Raised when a bucket index key spec cannot produce a stable run key."""
 
@@ -78,10 +82,13 @@ def freeze_bucket_index_value(value: object) -> Hashable:
             tuple(
                 sorted(
                     (
-                        cast(Hashable, freeze_bucket_index_value(key)),
-                        freeze_bucket_index_value(identifier),
-                    )
-                    for key, identifier in value.identification.items()
+                        (
+                            cast(Hashable, freeze_bucket_index_value(key)),
+                            freeze_bucket_index_value(identifier),
+                        )
+                        for key, identifier in value.identification.items()
+                    ),
+                    key=_frozen_pair_sort_key,
                 )
             ),
         )
@@ -89,10 +96,13 @@ def freeze_bucket_index_value(value: object) -> Hashable:
         return tuple(
             sorted(
                 (
-                    cast(Hashable, freeze_bucket_index_value(key)),
-                    freeze_bucket_index_value(item),
-                )
-                for key, item in value.items()
+                    (
+                        cast(Hashable, freeze_bucket_index_value(key)),
+                        freeze_bucket_index_value(item),
+                    )
+                    for key, item in value.items()
+                ),
+                key=_frozen_pair_sort_key,
             )
         )
     if isinstance(value, (list, tuple)):
