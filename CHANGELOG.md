@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.49.0 (2026-06-15)
+
+### Bug Fixes
+
+- Clear run dependency cache on data changes
+  ([`f676aaf`](https://github.com/TimKleindick/general_manager/commit/f676aaf21d3265fc4d0f694fb965906c4eed2805))
+
+- Harden dependency cache publication guards
+  ([`6f2fd82`](https://github.com/TimKleindick/general_manager/commit/6f2fd825bf286167ce7a52331c25952d830e83b1))
+
+### Features
+
+- Add batch dependency cache publication primitive
+  ([`fadee30`](https://github.com/TimKleindick/general_manager/commit/fadee30552851b785acab7683ee3b92b6b3ad47d))
+
+- Buffer dependency cache publications per run
+  ([`f0e642a`](https://github.com/TimKleindick/general_manager/commit/f0e642a89c8a0d105611d7726d945a53386b2603))
+
+- Defer dependency cache publication inside calculation runs
+  ([`aabb241`](https://github.com/TimKleindick/general_manager/commit/aabb241d9531bd9f51ec7d47911c4ee59b6517bd))
+
+### Testing
+
+- Cover batched dependency cache publication
+  ([`56d6f5c`](https://github.com/TimKleindick/general_manager/commit/56d6f5c7829a33ec13a68f2693ad6cfa1538093e))
+
+
 ## v0.48.0 (2026-06-15)
 
 ### Bug Fixes
