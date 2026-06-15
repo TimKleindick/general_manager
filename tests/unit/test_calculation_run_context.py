@@ -267,6 +267,7 @@ def test_orm_bucket_result_helpers_distinguish_empty_tuple_from_missing() -> Non
 
 
 def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
+    """Store a bucket index, replay its dependencies on hit, then clear it."""
     dependencies: set[Dependency] = {
         ("Project", "filter", '{"status": "active"}'),
     }
@@ -306,6 +307,7 @@ def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
 
 
 def test_bucket_index_helpers_distinguish_unique_and_many_indexes() -> None:
+    """Keep unique and multi-value bucket indexes in separate cache entries."""
     key_spec = ("field", ("code",), False)
 
     with CalculationRunContext() as ctx:

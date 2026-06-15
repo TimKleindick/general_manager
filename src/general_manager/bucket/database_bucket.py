@@ -330,6 +330,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
     def _bucket_index_source_signature(self) -> Hashable:
+        """Return a queryset signature when safe, otherwise use object identity."""
         query_signature = self._query_signature()
         if query_signature is None:
             return super()._bucket_index_source_signature()
