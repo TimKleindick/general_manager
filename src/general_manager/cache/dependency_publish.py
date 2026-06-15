@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, TypeGuard
 
 from django.core.cache import cache as coordination_cache
 
 from general_manager.cache.dependency_cache import (
     DependencyCacheBackend,
+    DependencyCacheSetManyBackend,
     make_dependency_cache_entry,
     read_dependency_cache_hit,
 )
@@ -37,6 +39,19 @@ class CacheComputeLease:
 
     key: str
     token: str
+
+
+@dataclass(frozen=True)
+class PendingDependencyCachePublication:
+    """A dependency-cache miss waiting for guarded publication."""
+
+    cache_key: str
+    result: Any
+    dependencies: frozenset[Dependency]
+    cache_backend: DependencyCacheBackend
+    timeout: int | None
+    started_generation: int
+    lease: CacheComputeLease
 
 
 RecordManyDependenciesFn = Callable[[Iterable[tuple[str, Iterable[Dependency]]]], None]
@@ -109,6 +124,78 @@ def _ensure_publish_current(started_generation: int) -> None:
         raise CachePublishAborted()
     if get_dependency_generation() != started_generation:
         raise CachePublishAborted()
+
+
+def _supports_set_many(
+    cache_backend: DependencyCacheBackend,
+) -> TypeGuard[DependencyCacheSetManyBackend]:
+    return callable(getattr(cache_backend, "set_many", None))
+
+
+def _set_dependency_cache_entries(
+    entries: Iterable[PendingDependencyCachePublication],
+) -> None:
+    grouped: dict[
+        tuple[int, int | None],
+        list[PendingDependencyCachePublication],
+    ] = defaultdict(list)
+    for entry in entries:
+        grouped[(id(entry.cache_backend), entry.timeout)].append(entry)
+
+    for group_entries in grouped.values():
+        cache_backend = group_entries[0].cache_backend
+        timeout = group_entries[0].timeout
+        payloads = {
+            entry.cache_key: make_dependency_cache_entry(
+                entry.result,
+                entry.dependencies,
+            )
+            for entry in group_entries
+        }
+        if _supports_set_many(cache_backend):
+            cache_backend.set_many(payloads, timeout)
+            continue
+        for key, payload in payloads.items():
+            cache_backend.set(key, payload, timeout)
+
+
+def publish_dependency_cache_entries(
+    entries: Iterable[PendingDependencyCachePublication],
+) -> None:
+    """Publish dependency metadata and values for current entries in one batch."""
+    pending_entries = tuple(entries)
+    if not pending_entries:
+        return
+
+    acquire_lock_with_retry("publish_dependency_cache_entries")
+    try:
+        if is_dependency_data_change_active():
+            raise CachePublishAborted()
+
+        current_generation = get_dependency_generation()
+        publishable_entries = tuple(
+            entry
+            for entry in pending_entries
+            if entry.started_generation == current_generation
+        )
+        if not publishable_entries:
+            return
+
+        idx = get_full_index()
+        for entry in publishable_entries:
+            if entry.dependencies:
+                _record_dependencies_locked(
+                    idx,
+                    entry.cache_key,
+                    entry.dependencies,
+                )
+
+        _ensure_publish_current(current_generation)
+        set_full_index(idx)
+        _ensure_publish_current(current_generation)
+        _set_dependency_cache_entries(publishable_entries)
+    finally:
+        release_lock()
 
 
 def publish_dependency_cache_entry(

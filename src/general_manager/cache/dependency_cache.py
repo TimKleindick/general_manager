@@ -45,6 +45,16 @@ class DependencyCacheGetManyBackend(DependencyCacheBackend, Protocol):
         ...
 
 
+class DependencyCacheSetManyBackend(DependencyCacheBackend, Protocol):
+    def set_many(
+        self,
+        data: Mapping[str, Any],
+        timeout: int | None = None,
+    ) -> Any:
+        """Store cached values for many keys."""
+        ...
+
+
 def make_dependency_cache_entry(
     value: Any,
     dependencies: Iterable[Dependency],
