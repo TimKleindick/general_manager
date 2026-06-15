@@ -64,32 +64,52 @@ Enable Django cache logging or use Redis monitoring tools to ensure cache hits i
 
 ## Working-set reuse
 
-For bulk-style calculations, prefer loading related rows once and indexing them in the active run context:
+For bulk-style calculations, build a run-scoped index directly from the source
+bucket. The framework derives a stable run-local key from the bucket and key
+spec, so repeated lookups in the same `CalculationRunContext` reuse the same
+index without application-specific cache keys.
 
 ```python
-from general_manager.cache import current_calculation_run_context
-
 @graph_ql_property
 def volume(self) -> int:
-    ctx = current_calculation_run_context()
-    if ctx is None:
-        rows = DerivativeVolume.filter(
-            derivative=self.derivative,
-            revision=self.revision,
-            search_date=self.search_date,
-        )
-        return rows.get(volume_date=self.target_date).quantity
-
-    rows_by_date = ctx.index(
-        key=("volume_rows", self.derivative.id, self.revision.id, self.search_date),
-        loader=lambda: DerivativeVolume.filter(
-            derivative=self.derivative,
-            revision=self.revision,
-            search_date=self.search_date,
-        ),
-        index_by=lambda row: row.volume_date,
+    rows = DerivativeVolume.filter(
+        derivative=self.derivative,
+        revision=self.revision,
+        search_date=self.search_date,
     )
+    rows_by_date = rows.index_by("volume_date")
     return rows_by_date[self.target_date].quantity
 ```
 
-Use `ensure_calculation_run_context` around custom bulk jobs or background tasks that should share the same run cache but may already execute inside a GraphQL request context.
+Use `index_many("field_name")` when more than one row can share a key:
+
+```python
+@graph_ql_property
+def daily_quantities(self) -> dict[date, int]:
+    rows = DerivativeVolume.filter(
+        derivative=self.derivative,
+        revision=self.revision,
+        search_date=self.search_date,
+    )
+    rows_by_date = rows.index_many("volume_date")
+    return {
+        volume_date: sum(row.quantity for row in volume_rows)
+        for volume_date, volume_rows in rows_by_date.items()
+    }
+```
+
+`index_by(...)` raises `DuplicateBucketIndexKeyError` when duplicate keys are
+found. Composite keys use tuples of field names, for example
+`rows.index_by(("project", "date"))`. `None` is a valid key value; missing fields
+raise `MissingBucketIndexKeyError`, unsupported key specs raise
+`UnsupportedBucketIndexKeySpecError`, unhashable keys raise
+`UnhashableBucketIndexKeyError`, and indexes that exceed their row guardrail
+raise `BucketIndexTooLargeError`.
+
+Use `ensure_calculation_run_context` around custom bulk jobs or background tasks
+that should share the same run cache but may already execute inside a GraphQL
+request context.
+
+Most application code should use the bucket methods directly. Lower-level
+helpers can inspect `current_calculation_run_context` when they need to adapt
+to an already active run.
