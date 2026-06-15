@@ -3,6 +3,12 @@ from django.test import SimpleTestCase
 
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
+from general_manager.bucket.indexing import (
+    BucketIndexTooLargeError,
+    DuplicateBucketIndexKeyError,
+    MissingBucketIndexKeyError,
+    UnsupportedBucketIndexKeySpecError,
+)
 from general_manager.cache.run_context import CalculationRunContext
 
 
@@ -437,3 +443,78 @@ class BucketTests(SimpleTestCase):
             second = bucket.index_by("code")
 
         self.assertIs(first, second)
+
+    def test_index_by_raises_for_duplicate_keys(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("A", "y", 2),
+            ],
+        )
+
+        with self.assertRaises(DuplicateBucketIndexKeyError):
+            bucket.index_by("code")
+
+    def test_index_by_supports_composite_keys(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("A", "y", 2),
+            ],
+        )
+
+        index = bucket.index_by(("code", "group"))
+
+        self.assertEqual(index[("A", "x")].value, 1)
+        self.assertEqual(index[("A", "y")].value, 2)
+
+    def test_index_by_allows_null_key(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow(None, "x", 1),
+            ],
+        )
+
+        index = bucket.index_by("code")
+
+        self.assertEqual(index[None].value, 1)
+
+    def test_index_by_raises_for_missing_key_field(self):
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with self.assertRaises(MissingBucketIndexKeyError):
+            bucket.index_by("missing")
+
+    def test_index_by_raises_for_unsupported_key_spec(self):
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with self.assertRaises(UnsupportedBucketIndexKeySpecError):
+            bucket.index_by(["code"])  # type: ignore[arg-type]
+
+    def test_index_by_respects_max_rows_guardrail(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("B", "x", 2),
+            ],
+        )
+
+        with self.assertRaises(BucketIndexTooLargeError):
+            bucket.index_by("code", max_rows=1)
+
+    def test_index_by_allows_explicit_unbounded_index(self):
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("B", "x", 2),
+            ],
+        )
+
+        index = bucket.index_by("code", max_rows=None)
+
+        self.assertEqual(sorted(index), ["A", "B"])
