@@ -8,8 +8,13 @@ from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import TYPE_CHECKING, Optional, TypeVar
 
+from general_manager.logging import get_logger
+
 if TYPE_CHECKING:
     from general_manager.cache.dependency_cache import DependencyCacheHit
+    from general_manager.cache.dependency_publish import (
+        PendingDependencyCachePublication,
+    )
 
 K = TypeVar("K", bound=Hashable)
 T = TypeVar("T")
@@ -19,14 +24,27 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
     default=None,
 )
 ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
+DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
+logger = get_logger("cache.run_context")
 
 
 class CalculationRunContext:
     """Cache calculation work for one request, graph, bulk operation, or task."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        dependency_cache_publish_batch_size: int = (
+            DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE
+        ),
+    ) -> None:
         self._values: dict[Hashable, object] = {}
         self._dependency_cache_hits: dict[str, DependencyCacheHit] = {}
+        self._dependency_cache_pending_publications: dict[
+            str,
+            PendingDependencyCachePublication,
+        ] = {}
+        self._dependency_cache_publish_batch_size = dependency_cache_publish_batch_size
         self._token: Token[CalculationRunContext | None] | None = None
 
     def __enter__(self) -> "CalculationRunContext":
@@ -39,11 +57,18 @@ class CalculationRunContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._token is not None:
-            _active_context.reset(self._token)
-            self._token = None
-        self._values.clear()
-        self._dependency_cache_hits.clear()
+        try:
+            if exc_type is None:
+                self.flush_dependency_cache_publications()
+            else:
+                self.discard_dependency_cache_publications()
+        finally:
+            if self._token is not None:
+                _active_context.reset(self._token)
+                self._token = None
+            self._values.clear()
+            self._dependency_cache_hits.clear()
+            self._dependency_cache_pending_publications.clear()
 
     def get_or_set(self, key: Hashable, loader: Callable[[], T]) -> T:
         """Return a cached value for key, loading it once per active context."""
@@ -73,6 +98,60 @@ class CalculationRunContext:
     ) -> DependencyCacheHit | object:
         """Return a prefetched dependency-cache hit, or default when absent."""
         return self._dependency_cache_hits.get(key, default)
+
+    def buffer_dependency_cache_publication(
+        self,
+        entry: PendingDependencyCachePublication,
+    ) -> None:
+        """Buffer a dependency-cache miss for guarded batch publication."""
+        from general_manager.cache.dependency_cache import DependencyCacheHit
+
+        self._dependency_cache_pending_publications[entry.cache_key] = entry
+        self._dependency_cache_hits[entry.cache_key] = DependencyCacheHit(
+            value=entry.result,
+            dependencies=entry.dependencies,
+        )
+        if (
+            len(self._dependency_cache_pending_publications)
+            >= self._dependency_cache_publish_batch_size
+        ):
+            self.flush_dependency_cache_publications()
+
+    def flush_dependency_cache_publications(self) -> None:
+        """Publish buffered dependency-cache misses and release their leases."""
+        entries = tuple(self._dependency_cache_pending_publications.values())
+        if not entries:
+            return
+        self._dependency_cache_pending_publications.clear()
+
+        from general_manager.cache.dependency_publish import (
+            CachePublishAborted,
+            publish_dependency_cache_entries,
+            release_compute_lease,
+        )
+
+        try:
+            publish_dependency_cache_entries(entries)
+        except CachePublishAborted:
+            logger.debug(
+                "dependency cache batch publish aborted",
+                context={"entry_count": len(entries)},
+            )
+        finally:
+            for entry in entries:
+                release_compute_lease(entry.lease)
+
+    def discard_dependency_cache_publications(self) -> None:
+        """Drop buffered dependency-cache misses and release their leases."""
+        entries = tuple(self._dependency_cache_pending_publications.values())
+        if not entries:
+            return
+        self._dependency_cache_pending_publications.clear()
+
+        from general_manager.cache.dependency_publish import release_compute_lease
+
+        for entry in entries:
+            release_compute_lease(entry.lease)
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
         """Discard tuple keys that start with the supplied prefix."""

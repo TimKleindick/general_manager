@@ -1,8 +1,51 @@
+from unittest import mock
+
+import pytest
+
 from general_manager.cache.dependency_cache import DependencyCacheHit
+from general_manager.cache.dependency_publish import (
+    CacheComputeLease,
+    PendingDependencyCachePublication,
+)
 from general_manager.cache.run_context import (
     CalculationRunContext,
     current_calculation_run_context,
 )
+
+
+class DummyDependencyCacheBackend:
+    def get(self, key: str, default: object = None) -> object:
+        return default
+
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
+        return None
+
+
+def make_pending_publication(cache_key: str) -> PendingDependencyCachePublication:
+    return PendingDependencyCachePublication(
+        cache_key=cache_key,
+        result=f"value:{cache_key}",
+        dependencies=frozenset({("Project", "identification", cache_key)}),
+        cache_backend=DummyDependencyCacheBackend(),
+        timeout=None,
+        started_generation=0,
+        lease=CacheComputeLease(
+            key=f"dependency_cache_compute_lock:{cache_key}",
+            token=f"token:{cache_key}",
+        ),
+    )
+
+
+class CalculationFailed(RuntimeError):
+    """Test exception used to exercise context cleanup."""
+
+
+def raise_after_buffering(
+    context: CalculationRunContext,
+    entry: PendingDependencyCachePublication,
+) -> None:
+    context.buffer_dependency_cache_publication(entry)
+    raise CalculationFailed
 
 
 def test_context_is_active_only_inside_with_block() -> None:
@@ -65,6 +108,89 @@ def test_dependency_cache_prefetch_hits_are_cleared_on_exit() -> None:
         assert context.get_dependency_cache_hit("cache-key") == hit
 
     assert context.get_dependency_cache_hit("cache-key", None) is None
+
+
+def test_buffered_dependency_cache_publication_is_visible_as_run_hit() -> None:
+    entry = make_pending_publication("cache-a")
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ),
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        CalculationRunContext() as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+
+        hit = context.get_dependency_cache_hit("cache-a")
+
+    assert isinstance(hit, DependencyCacheHit)
+    assert hit.value == "value:cache-a"
+    assert hit.dependencies == frozenset({("Project", "identification", "cache-a")})
+
+
+def test_dependency_cache_publications_flush_on_clean_exit() -> None:
+    entry = make_pending_publication("cache-a")
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+    ):
+        with CalculationRunContext() as context:
+            context.buffer_dependency_cache_publication(entry)
+
+    publish_batch.assert_called_once_with((entry,))
+    release_lease.assert_called_once_with(entry.lease)
+
+
+def test_dependency_cache_publications_discard_on_exception_and_release_leases() -> (
+    None
+):
+    entry = make_pending_publication("cache-a")
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+    ):
+        with pytest.raises(CalculationFailed):
+            with CalculationRunContext() as context:
+                raise_after_buffering(context, entry)
+
+    publish_batch.assert_not_called()
+    release_lease.assert_called_once_with(entry.lease)
+
+
+def test_dependency_cache_publication_guardrail_flushes_when_limit_is_reached() -> None:
+    first = make_pending_publication("cache-a")
+    second = make_pending_publication("cache-b")
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ) as publish_batch,
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+    ):
+        with CalculationRunContext(dependency_cache_publish_batch_size=2) as context:
+            context.buffer_dependency_cache_publication(first)
+            publish_batch.assert_not_called()
+
+            context.buffer_dependency_cache_publication(second)
+
+            publish_batch.assert_called_once_with((first, second))
+            assert release_lease.call_args_list == [
+                mock.call(first.lease),
+                mock.call(second.lease),
+            ]
 
 
 def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
