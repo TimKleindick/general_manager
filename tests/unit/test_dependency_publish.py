@@ -73,6 +73,25 @@ class FakeDependencyCacheSetManyBackend(FakeDependencyCacheBackend):
             self.set(key, value, timeout)
 
 
+class FakeDependencyCachePartialSetManyBackend(FakeDependencyCacheBackend):
+    def __init__(self, failed_keys: set[str]) -> None:
+        super().__init__()
+        self.failed_keys = failed_keys
+        self.set_many_calls: list[tuple[dict[str, Any], int | None]] = []
+
+    def set_many(
+        self,
+        data: Mapping[str, Any],
+        timeout: int | None = None,
+    ) -> list[str]:
+        payloads = dict(data)
+        self.set_many_calls.append((payloads, timeout))
+        for key, value in payloads.items():
+            if key not in self.failed_keys:
+                self.set(key, value, timeout)
+        return sorted(self.failed_keys & payloads.keys())
+
+
 @override_settings(CACHES=TEST_CACHES)
 class TestDependencyPublish(SimpleTestCase):
     def setUp(self) -> None:
@@ -258,6 +277,31 @@ class TestDependencyPublish(SimpleTestCase):
             ]
         )
 
+        self.assertEqual(cache_backend.set_order, ["cache-a", "cache-b"])
+        self.assertEqual(cache_backend.get("cache-a").value, "alpha")
+        self.assertEqual(cache_backend.get("cache-b").value, "bravo")
+
+    def test_batch_publish_retries_set_many_failures_individually(self) -> None:
+        cache_backend = FakeDependencyCachePartialSetManyBackend({"cache-b"})
+
+        publish_dependency_cache_entries(
+            [
+                self.make_pending_publication(
+                    cache_key="cache-a",
+                    result="alpha",
+                    dependencies={("Project", "identification", "1")},
+                    cache_backend=cache_backend,
+                ),
+                self.make_pending_publication(
+                    cache_key="cache-b",
+                    result="bravo",
+                    dependencies={("Project", "identification", "2")},
+                    cache_backend=cache_backend,
+                ),
+            ]
+        )
+
+        self.assertEqual(len(cache_backend.set_many_calls), 1)
         self.assertEqual(cache_backend.set_order, ["cache-a", "cache-b"])
         self.assertEqual(cache_backend.get("cache-a").value, "alpha")
         self.assertEqual(cache_backend.get("cache-b").value, "bravo")

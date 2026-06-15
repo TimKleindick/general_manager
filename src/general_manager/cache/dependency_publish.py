@@ -153,7 +153,10 @@ def _set_dependency_cache_entries(
             for entry in group_entries
         }
         if _supports_set_many(cache_backend):
-            cache_backend.set_many(payloads, timeout)
+            failed_keys = cache_backend.set_many(payloads, timeout) or ()
+            for key in failed_keys:
+                if key in payloads:
+                    cache_backend.set(key, payloads[key], timeout)
             continue
         for key, payload in payloads.items():
             cache_backend.set(key, payload, timeout)

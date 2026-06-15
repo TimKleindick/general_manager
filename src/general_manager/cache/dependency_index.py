@@ -146,7 +146,14 @@ def begin_dependency_data_change() -> int:
         cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
     finally:
         release_lock()
-    _discard_active_context_dependency_cache_state()
+    try:
+        _discard_active_context_dependency_cache_state()
+    except Exception:
+        try:
+            end_dependency_data_change()
+        except Exception:
+            logger.exception("dependency data-change cleanup rollback failed")
+        raise
     return generation
 
 

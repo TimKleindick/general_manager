@@ -168,6 +168,41 @@ def test_dependency_cache_publications_discard_on_exception_and_release_leases()
     release_lease.assert_called_once_with(entry.lease)
 
 
+def test_replacing_buffered_dependency_cache_publication_releases_prior_lease() -> None:
+    first = make_pending_publication("cache-a")
+    second = PendingDependencyCachePublication(
+        cache_key=first.cache_key,
+        result="value:cache-a:second",
+        dependencies=first.dependencies,
+        cache_backend=first.cache_backend,
+        timeout=first.timeout,
+        started_generation=first.started_generation,
+        lease=CacheComputeLease(
+            key=first.lease.key,
+            token=f"lease:{first.cache_key}:second",
+        ),
+    )
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ),
+        mock.patch(
+            "general_manager.cache.dependency_publish.release_compute_lease"
+        ) as release_lease,
+    ):
+        with CalculationRunContext() as context:
+            context.buffer_dependency_cache_publication(first)
+            context.buffer_dependency_cache_publication(second)
+
+            release_lease.assert_called_once_with(first.lease)
+
+    assert release_lease.call_args_list == [
+        mock.call(first.lease),
+        mock.call(second.lease),
+    ]
+
+
 def test_dependency_cache_publication_guardrail_flushes_when_limit_is_reached() -> None:
     first = make_pending_publication("cache-a")
     second = make_pending_publication("cache-b")
