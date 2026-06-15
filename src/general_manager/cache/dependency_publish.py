@@ -19,13 +19,13 @@ from general_manager.cache.dependency_cache import (
 from general_manager.cache.dependency_index import (
     LOCK_TIMEOUT,
     Dependency,
-    _record_dependencies_locked,
     acquire_lock_with_retry,
     get_dependency_generation,
-    get_full_index,
     is_dependency_data_change_active,
     release_lock,
-    set_full_index,
+)
+from general_manager.cache.dependency_shards import (
+    record_many_cache_dependencies,
 )
 
 
@@ -184,17 +184,12 @@ def publish_dependency_cache_entries(
         if not publishable_entries:
             return
 
-        idx = get_full_index()
-        for entry in publishable_entries:
-            if entry.dependencies:
-                _record_dependencies_locked(
-                    idx,
-                    entry.cache_key,
-                    entry.dependencies,
-                )
+        record_many_cache_dependencies(
+            (entry.cache_key, entry.dependencies)
+            for entry in publishable_entries
+            if entry.dependencies
+        )
 
-        _ensure_publish_current(current_generation)
-        set_full_index(idx)
         _ensure_publish_current(current_generation)
         _set_dependency_cache_entries(publishable_entries)
     finally:
@@ -230,11 +225,9 @@ def publish_dependency_cache_entry(
                 record_many_fn([(cache_key, dependency_set)])
             _ensure_publish_current(started_generation)
         else:
-            idx = get_full_index()
             if dependency_set:
-                _record_dependencies_locked(idx, cache_key, dependency_set)
+                record_many_cache_dependencies([(cache_key, dependency_set)])
             _ensure_publish_current(started_generation)
-            set_full_index(idx)
 
         cache_backend.set(
             cache_key,

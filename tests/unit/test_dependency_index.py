@@ -386,11 +386,9 @@ class TestRecordDependencies(TestCase):
                 "filter": {
                     "project": {
                         "name": {
-                            "123": {"abc123"},
                             "456": {"abc123"},
                         },
                         "identification": {
-                            '{"id": 1}': {"abc123"},
                             '{"id": 2}': {"abc123"},
                         },
                     },

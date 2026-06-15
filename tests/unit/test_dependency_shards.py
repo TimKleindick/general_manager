@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+from django.test import TestCase, override_settings
+
+from general_manager.cache.dependency_matching import stable_value_hash
+from general_manager.cache.dependency_shards import (
+    ALL_RECORDS_VALUE,
+    DEPENDENCY_SHARD_PREFIX,
+    ReverseDependencyMembership,
+    all_records_shard_key,
+    cache_set_members,
+    candidate_cache_keys_for_lookup,
+    exact_lookup_shard_key,
+    record_cache_dependencies,
+    remove_cache_key_from_shards,
+    request_query_shard_key,
+    reverse_membership_key,
+    scan_lookup_shard_key,
+)
+from general_manager.cache.dependency_index import cache
+from general_manager.cache.dependency_index import (
+    capture_old_values,
+    generic_cache_invalidation,
+    record_dependencies,
+)
+
+
+TEST_CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "test-dependency-shards",
+    }
+}
+
+
+@override_settings(CACHES=TEST_CACHES)
+class DependencyShardKeyTests(TestCase):
+    def setUp(self) -> None:
+        cache.clear()
+
+    def test_shard_keys_are_deterministic_and_namespaced(self) -> None:
+        value_hash = stable_value_hash("open")
+
+        assert exact_lookup_shard_key("Project", "filter", "status", "eq", "open") == (
+            f"{DEPENDENCY_SHARD_PREFIX}:lookup:Project:filter:status:eq:{value_hash}"
+        )
+        assert scan_lookup_shard_key("Project", "filter", "status__in", "in") == (
+            f"{DEPENDENCY_SHARD_PREFIX}:scan:Project:filter:status__in:in"
+        )
+        assert all_records_shard_key("Project") == (
+            f"{DEPENDENCY_SHARD_PREFIX}:all:Project"
+        )
+        assert request_query_shard_key("RemoteProject") == (
+            f"{DEPENDENCY_SHARD_PREFIX}:request_query:RemoteProject"
+        )
+
+    def test_record_cache_dependencies_writes_shards_and_reverse_membership(
+        self,
+    ) -> None:
+        record_cache_dependencies(
+            "cache-a",
+            [
+                ("Project", "filter", json.dumps({"status": "open"})),
+                ("Project", "filter", json.dumps({"priority__gte": 3})),
+                ("RemoteProject", "request_query", json.dumps({"operation": "list"})),
+                ("Project", "all", ""),
+            ],
+        )
+
+        exact_key = exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+        scan_key = scan_lookup_shard_key("Project", "filter", "priority__gte", "gte")
+        request_key = request_query_shard_key("RemoteProject")
+        all_key = all_records_shard_key("Project")
+
+        assert cache_set_members(exact_key) == {"cache-a"}
+        assert cache_set_members(scan_key) == {"cache-a"}
+        assert cache_set_members(request_key) == {"cache-a"}
+        assert cache_set_members(all_key) == {"cache-a"}
+
+        reverse = cache.get(reverse_membership_key("cache-a"))
+        assert reverse == ReverseDependencyMembership(
+            cache_key="cache-a",
+            shard_keys=frozenset({exact_key, scan_key, request_key, all_key}),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(
+                {
+                    ("Project", "filter", json.dumps({"status": "open"})),
+                    ("Project", "filter", json.dumps({"priority__gte": 3})),
+                    (
+                        "RemoteProject",
+                        "request_query",
+                        json.dumps({"operation": "list"}),
+                    ),
+                    ("Project", "all", ""),
+                }
+            ),
+        )
+
+    def test_record_composite_dependencies_use_candidate_shards(self) -> None:
+        identifier = json.dumps({"status": "open", "priority__gte": 3})
+
+        record_cache_dependencies("cache-combo", [("Project", "filter", identifier)])
+
+        candidate_keys = candidate_cache_keys_for_lookup("Project", "filter", "status")
+
+        assert candidate_keys == {"cache-combo"}
+        reverse = cache.get(reverse_membership_key("cache-combo"))
+        assert reverse.composite_dependencies == frozenset(
+            {("Project", "filter", identifier)}
+        )
+
+    def test_remove_cache_key_uses_reverse_membership_without_scanning(self) -> None:
+        record_cache_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        shard_key = exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+
+        remove_cache_key_from_shards("cache-a")
+
+        assert cache_set_members(shard_key) == set()
+        assert cache.get(reverse_membership_key("cache-a")) is None
+
+    def test_empty_filter_dependency_tracks_all_records_shard(self) -> None:
+        record_cache_dependencies("cache-all-filter", [("Project", "filter", "{}")])
+
+        assert cache_set_members(all_records_shard_key("Project")) == {
+            "cache-all-filter"
+        }
+
+    def test_candidate_lookup_combines_exact_scan_and_composite_shards(self) -> None:
+        record_cache_dependencies(
+            "cache-exact",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        record_cache_dependencies(
+            "cache-scan",
+            [("Project", "filter", json.dumps({"status__in": ["open", "closed"]}))],
+        )
+        record_cache_dependencies(
+            "cache-combo",
+            [("Project", "filter", json.dumps({"status": "open", "priority": 3}))],
+        )
+
+        assert candidate_cache_keys_for_lookup(
+            "Project",
+            "filter",
+            "status",
+            old_value="closed",
+            new_value="open",
+        ) == {"cache-exact", "cache-scan", "cache-combo"}
+
+    def test_unknown_cache_key_cleanup_is_noop(self) -> None:
+        remove_cache_key_from_shards("missing")
+
+        assert cache.get(reverse_membership_key("missing")) is None
+
+    def test_all_records_value_constant_is_compatible_with_existing_index_name(
+        self,
+    ) -> None:
+        assert ALL_RECORDS_VALUE == "__all__"
+
+
+@override_settings(CACHES=TEST_CACHES)
+class DependencyIndexShardFacadeTests(TestCase):
+    def setUp(self) -> None:
+        cache.clear()
+
+    def test_record_dependencies_does_not_create_full_dependency_index(self) -> None:
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+
+        assert cache.get("dependency_index") is None
+        assert cache_set_members(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+        ) == {"cache-a"}
+
+    def test_capture_old_values_uses_sharded_lookup_registry(self) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        instance = SimpleNamespace(status="open", identification=1)
+
+        capture_old_values(sender=Project, instance=instance)
+
+        assert instance._old_values == {"status": "open"}
+
+    def test_generic_cache_invalidation_uses_sharded_candidates(self) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get("cache-a") is None
+        assert (
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+            )
+            == set()
+        )

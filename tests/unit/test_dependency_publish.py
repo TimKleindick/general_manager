@@ -14,8 +14,13 @@ from general_manager.cache.dependency_cache import (
 )
 from general_manager.cache.dependency_index import (
     begin_dependency_data_change,
+    cache,
     end_dependency_data_change,
     get_dependency_generation,
+)
+from general_manager.cache.dependency_shards import (
+    cache_set_members,
+    exact_lookup_shard_key,
 )
 from general_manager.cache.dependency_publish import (
     CacheComputeLease,
@@ -202,14 +207,14 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertEqual(cache_backend.timeouts[cache_key], 30)
         self.assertNotIn(f"{cache_key}:deps", cache_backend.store)
 
-    def test_batch_publish_records_index_once_before_bulk_value_write(self) -> None:
+    def test_batch_publish_records_shards_once_before_bulk_value_write(self) -> None:
         cache_backend = FakeDependencyCacheSetManyBackend()
         events: list[str] = []
-        original_set_full_index = dependency_publish.set_full_index
+        original_record_many = dependency_publish.record_many_cache_dependencies
 
-        def record_set_full_index(idx: Any) -> None:
-            events.append("index")
-            original_set_full_index(idx)
+        def record_many_shards(entries: Any) -> None:
+            events.append("shards")
+            original_record_many(entries)
 
         original_set_many = cache_backend.set_many
 
@@ -223,8 +228,8 @@ class TestDependencyPublish(SimpleTestCase):
         cache_backend.set_many = record_set_many  # type: ignore[method-assign]
 
         with mock.patch(
-            "general_manager.cache.dependency_publish.set_full_index",
-            side_effect=record_set_full_index,
+            "general_manager.cache.dependency_publish.record_many_cache_dependencies",
+            side_effect=record_many_shards,
         ):
             publish_dependency_cache_entries(
                 [
@@ -243,7 +248,20 @@ class TestDependencyPublish(SimpleTestCase):
                 ]
             )
 
-        self.assertEqual(events, ["index", "set_many"])
+        self.assertEqual(events, ["shards", "set_many"])
+        self.assertIsNone(cache.get("dependency_index"))
+        self.assertEqual(
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "identification", "eq", "1")
+            ),
+            {"cache-a"},
+        )
+        self.assertEqual(
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "identification", "eq", "2")
+            ),
+            {"cache-b"},
+        )
         self.assertEqual(len(cache_backend.set_many_calls), 1)
         self.assertEqual(
             set(cache_backend.set_many_calls[0][0]), {"cache-a", "cache-b"}

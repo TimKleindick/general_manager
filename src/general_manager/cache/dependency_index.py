@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import random
-import re
 import time
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Tuple, Type, cast
@@ -12,6 +11,26 @@ from typing import TYPE_CHECKING, Any, Iterable, Literal, Tuple, Type, cast
 from django.core.cache import cache
 from django.dispatch import receiver
 
+from general_manager.cache.dependency_matching import (
+    current_value_for_path as resolve_current_value_for_path,
+    lookup_spec_from_key,
+    matches_lookup_value,
+    normalize_dependency_value,
+    parse_dependency_identifier,
+    serialize_normalized_value,
+)
+from general_manager.cache.dependency_shards import (
+    ReverseDependencyMembership,
+    all_records_cache_keys,
+    candidate_cache_keys_for_lookup,
+    record_cache_dependencies,
+    record_many_cache_dependencies,
+    remove_cache_key_from_shards,
+    request_query_cache_keys,
+    reverse_membership_key,
+    reverse_memberships,
+    tracked_lookup_names,
+)
 from general_manager.cache.signals import post_data_change, pre_data_change
 from general_manager.logging import get_logger
 
@@ -222,7 +241,10 @@ def get_full_index() -> dependency_index:
             "request_query": {},
             "all": {},
         }
-        cache.set(INDEX_KEY, idx, None)
+        for reverse in reverse_memberships():
+            dependencies: set[Dependency] = set(reverse.simple_dependencies)
+            dependencies.update(reverse.composite_dependencies)
+            _record_dependencies_locked(idx, reverse.cache_key, dependencies)
         return idx
     idx = cast(dependency_index, cached_index)
     changed = False
@@ -253,37 +275,12 @@ def set_full_index(idx: dependency_index) -> None:
 
 def _normalize_dependency_identifier(value: Any) -> Any:
     """Return a JSON-serializable representation for dependency tracking."""
-    if isinstance(value, dict):
-        return {
-            str(key): _normalize_dependency_identifier(val)
-            for key, val in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_normalize_dependency_identifier(item) for item in value]
-    if isinstance(value, set):
-        return [
-            _normalize_dependency_identifier(item) for item in sorted(value, key=str)
-        ]
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return {"__repr__": repr(value)}
+    return normalize_dependency_value(value)
 
 
 def serialize_dependency_identifier(value: Any) -> str:
     """Serialize dependency payloads using a deterministic literal-safe format."""
-    return json.dumps(_normalize_dependency_identifier(value), sort_keys=True)
-
-
-def parse_dependency_identifier(identifier: str) -> Any:
-    """Parse a JSON-serialized dependency identifier, returning None on failure."""
-    try:
-        return json.loads(identifier)
-    except (json.JSONDecodeError, ValueError):
-        return None
+    return serialize_normalized_value(value)
 
 
 # -----------------------------------------------------------------------------
@@ -364,9 +361,7 @@ def record_dependencies(
     """
     acquire_lock_with_retry("record_dependencies")
     try:
-        idx = get_full_index()
-        _record_dependencies_locked(idx, cache_key, dependencies)
-        set_full_index(idx)
+        record_cache_dependencies(cache_key, dependencies)
     finally:
         release_lock()
 
@@ -387,10 +382,7 @@ def record_many_dependencies(
 
     acquire_lock_with_retry("record_many_dependencies")
     try:
-        idx = get_full_index()
-        for cache_key, dependencies in normalized.items():
-            _record_dependencies_locked(idx, cache_key, dependencies)
-        set_full_index(idx)
+        record_many_cache_dependencies(normalized.items())
     finally:
         release_lock()
 
@@ -412,50 +404,12 @@ def remove_cache_key_from_index(cache_key: str) -> None:
     """
     acquire_lock_with_retry("remove_cache_key_from_index")
     try:
-        idx = get_full_index()
-        all_section = cast(dict[str, set[str]], idx.get("all", {}))
-        for mname, key_set in list(all_section.items()):
-            if cache_key in key_set:
-                key_set.remove(cache_key)
-                if not key_set:
-                    del all_section[mname]
-        for action in ACTIONS:
-            action_section = cast(
-                dict[general_manager_name, manager_dependency_section],
-                idx[action],
-            )
-            for mname, model_section in list(action_section.items()):
-                cache_dependencies = model_section.get("__cache_dependencies__", {})
-                for lookup, lookup_map in list(model_section.items()):
-                    if lookup == "__cache_dependencies__":
-                        continue
-                    lookup_map = cast(lookup_dependency_map, lookup_map)
-                    for val_key, key_set in list(lookup_map.items()):
-                        if cache_key in key_set:
-                            key_set.remove(cache_key)
-                            if not key_set:
-                                del lookup_map[val_key]
-                    if not lookup_map:
-                        del model_section[lookup]
-                if cache_dependencies:
-                    cache_dependencies.pop(cache_key, None)
-                    if not cache_dependencies:
-                        model_section.pop("__cache_dependencies__", None)
-                if not model_section:
-                    del action_section[mname]
-        request_query_section = cast(
-            dict[str, dict[str, set[str]]],
-            idx.get("request_query", {}),
-        )
-        for mname, query_section in list(request_query_section.items()):
-            for identifier, key_set in list(query_section.items()):
-                if cache_key in key_set:
-                    key_set.remove(cache_key)
-                    if not key_set:
-                        del query_section[identifier]
-            if not query_section:
-                del request_query_section[mname]
-        set_full_index(idx)
+        if cache.get(INDEX_KEY, None) is not None and not reverse_memberships():
+            idx = get_full_index()
+            _remove_cache_keys_from_index_locked(idx, (cache_key,))
+            set_full_index(idx)
+            return
+        remove_cache_key_from_shards(cache_key)
     finally:
         release_lock()
 
@@ -541,11 +495,16 @@ def invalidate_and_remove_cache_keys(cache_keys: Iterable[str]) -> None:
         return
     acquire_lock_with_retry("invalidate_and_remove_cache_keys")
     try:
-        idx = get_full_index()
+        if cache.get(INDEX_KEY, None) is not None and not reverse_memberships():
+            idx = get_full_index()
+            for cache_key in keys:
+                cache.delete(cache_key)
+            _remove_cache_keys_from_index_locked(idx, keys)
+            set_full_index(idx)
+            return
         for cache_key in keys:
             cache.delete(cache_key)
-        _remove_cache_keys_from_index_locked(idx, keys)
-        set_full_index(idx)
+            remove_cache_key_from_shards(cache_key)
     finally:
         release_lock()
 
@@ -578,12 +537,19 @@ def invalidate_request_query_dependencies(manager_name: str) -> tuple[str, ...]:
     """
     acquire_lock_with_retry("invalidate_request_query_dependencies")
     try:
-        idx = get_full_index()
-        invalidated_keys = _invalidate_request_query_dependencies_locked(
-            idx, manager_name
-        )
-        if invalidated_keys:
-            set_full_index(idx)
+        if cache.get(INDEX_KEY, None) is not None and not reverse_memberships():
+            idx = get_full_index()
+            invalidated_keys = _invalidate_request_query_dependencies_locked(
+                idx,
+                manager_name,
+            )
+            if invalidated_keys:
+                set_full_index(idx)
+            return invalidated_keys
+        invalidated_keys = tuple(dict.fromkeys(request_query_cache_keys(manager_name)))
+        for cache_key in invalidated_keys:
+            cache.delete(cache_key)
+            remove_cache_key_from_shards(cache_key)
         return invalidated_keys
     finally:
         release_lock()
@@ -604,23 +570,23 @@ def capture_old_values(
     if instance is None:
         return
     manager_name = sender.__name__
-    idx = get_full_index()
-    # get all lookups for this model
-    lookups = set()
-    for action in ACTIONS:
-        model_section = idx[action].get(manager_name)
-        if isinstance(model_section, dict):
-            for lookup in model_section.keys():
-                if not isinstance(lookup, str):
-                    continue
-                if lookup.startswith("__sort__"):
-                    lookups.add(lookup.removeprefix("__sort__"))
-                    continue
-                if lookup.startswith("__"):
-                    continue
-                lookups.add(lookup)
-        elif isinstance(model_section, list):
-            lookups |= set(model_section)
+    lookups = tracked_lookup_names(manager_name)
+    if not lookups and not reverse_memberships():
+        idx = get_full_index()
+        for action in ACTIONS:
+            model_section = idx[action].get(manager_name)
+            if isinstance(model_section, dict):
+                for lookup in model_section.keys():
+                    if not isinstance(lookup, str):
+                        continue
+                    if lookup.startswith("__sort__"):
+                        lookups.add(lookup.removeprefix("__sort__"))
+                        continue
+                    if lookup.startswith("__"):
+                        continue
+                    lookups.add(lookup)
+            elif isinstance(model_section, list):
+                lookups |= set(model_section)
     if lookups and instance.identification:
         # save old values for later comparison
         vals: dict[str, object] = {}
@@ -764,116 +730,8 @@ def _generic_cache_invalidation_locked(
             return None
 
     def matches(op: str, value: Any, val_key: Any) -> bool:
-        """
-        Evaluate whether a given value satisfies a lookup operation described by `op` and `val_key`.
-
-        Supports operators:
-        - "eq": equality; attempts to interpret `val_key` as a literal and coerce it to `value`'s type before comparing.
-        - "in": membership; expects `val_key` to be a literal iterable and checks if any coerced element equals `value`.
-        - "gt", "gte", "lt", "lte": numeric/date comparisons; `val_key` is interpreted as a literal and coerced to `value`'s type.
-        - "contains", "startswith", "endswith": string containment/prefix/suffix checks; both sides are compared as strings.
-        - "regex": treats `val_key` as a regular expression pattern and tests it against the string form of `value`.
-
-        Behavior notes:
-        - If `value` is None the function only matches explicit null equality
-          or membership checks.
-        - ``val_key`` is a JSON-serialised string produced by
-          :func:`json.dumps`.  Parsing is done with :func:`json.loads`; if
-          JSON parsing or type coercion fails, the function falls back to
-          conservative comparisons or returns ``False`` where appropriate.
-        - Regex patterns that fail to compile are treated as non-matching.
-
-        Parameters:
-            op (str): The lookup operator name (one of the supported operators above).
-            value (Any): The runtime value to test.
-            val_key (Any): The stored comparison key (often a string representation) to interpret for the comparison.
-
-        Returns:
-            bool: `True` if the comparison defined by `op` and `val_key` matches `value`, `False` otherwise.
-        """
-        # eq
-        if op == "eq":
-            literal_val = _json_loads_val_key(val_key)
-            if literal_val is None:
-                return value is None
-            repr_marker = _repr_marker(literal_val)
-            if repr_marker is not None:
-                return repr(value) == repr_marker
-            comparable = _coerce_to_type(value, literal_val)
-            if comparable is None:
-                return repr(value) == val_key
-            return value == comparable
-
-        # in
-        if op == "in":
-            try:
-                seq = json.loads(val_key)
-            except (json.JSONDecodeError, ValueError):
-                return False
-            for item in seq:
-                if item is None:
-                    if value is None:
-                        return True
-                    continue
-                repr_marker = _repr_marker(item)
-                if repr_marker is not None:
-                    if repr(value) == repr_marker:
-                        return True
-                    continue
-                comparable = _coerce_to_type(value, item)
-                if comparable is not None:
-                    if value == comparable:
-                        return True
-                elif repr(value) == repr(item):
-                    return True
-            return False
-
-        # range comparisons
-        if op in ("gt", "gte", "lt", "lte"):
-            if value is None:
-                return False
-            literal_val = _json_loads_val_key(val_key)
-            thr = _coerce_to_type(value, literal_val)
-            if thr is None:
-                return False
-            if op == "gt":
-                return value > thr
-            if op == "gte":
-                return value >= thr
-            if op == "lt":
-                return value < thr
-            if op == "lte":
-                return value <= thr
-
-        # wildcard / regex comparisons
-        if op in ("contains", "startswith", "endswith", "regex"):
-            if value is None:
-                return False
-            try:
-                literal = json.loads(val_key)
-            except (json.JSONDecodeError, ValueError):
-                literal = val_key
-
-            # ensure we always work with strings to avoid TypeErrors
-            text = "" if value is None else str(value)
-            if op == "contains":
-                return literal in text
-            if op == "startswith":
-                return text.startswith(literal)
-            if op == "endswith":
-                return text.endswith(literal)
-            # regex: treat the stored key as the regex pattern
-            if op == "regex":
-                try:
-                    pattern_source = (
-                        literal if isinstance(literal, str) else str(literal)
-                    )
-                    pattern = re.compile(pattern_source)
-                except re.error:
-                    return False
-                return bool(pattern.search(text))
-
-        return False
+        """Evaluate whether a runtime value matches a stored lookup value."""
+        return matches_lookup_value(op, value, val_key)
 
     def current_value_for_path(path: list[str]) -> Any:
         """
@@ -1184,6 +1042,157 @@ def _generic_cache_invalidation_locked(
                             _remove_cache_keys_from_index_locked(idx, (ck,))
 
 
+def _generic_cache_invalidation_from_shards(
+    manager_name: str,
+    instance: GeneralManager,
+    old_relevant_values: dict[str, Any],
+) -> None:
+    def value_for_lookup(lookup: str, *, use_old_values: bool) -> Any:
+        spec = lookup_spec_from_key(lookup)
+        lookup_name = "__".join(spec.attr_path)
+        if use_old_values:
+            return old_relevant_values.get(lookup_name)
+        return resolve_current_value_for_path(instance, spec.attr_path)
+
+    def params_match(params: dict[str, Any], *, use_old_values: bool) -> bool:
+        for lookup, expected in params.items():
+            spec = lookup_spec_from_key(str(lookup))
+            expected_key = serialize_dependency_identifier(expected)
+            if not matches_lookup_value(
+                spec.operator,
+                value_for_lookup(spec.lookup, use_old_values=use_old_values),
+                expected_key,
+            ):
+                return False
+        return True
+
+    def dependency_matches(
+        action: str,
+        identifier: str,
+        *,
+        changed_lookup: str | None,
+    ) -> bool:
+        if action in {"all", "request_query"}:
+            return True
+        if action == "identification":
+            identification = getattr(instance, "identification", None)
+            return bool(
+                identification
+                and serialize_dependency_identifier(identification) == identifier
+            )
+        if action not in ACTIONS:
+            return False
+        params = parse_dependency_identifier(identifier)
+        if not isinstance(params, dict):
+            return False
+        if not params:
+            return True
+
+        sort_payloads = [
+            payload
+            for lookup, payload in params.items()
+            if str(lookup).startswith("__sort__")
+            and (
+                changed_lookup is None
+                or str(lookup).removeprefix("__sort__") == changed_lookup
+            )
+        ]
+        if sort_payloads:
+            for payload in sort_payloads:
+                if not isinstance(payload, dict):
+                    continue
+                filters = payload.get("filters", {})
+                excludes = payload.get("excludes", {})
+                if not isinstance(filters, dict) or not isinstance(excludes, dict):
+                    continue
+                old_in_bucket = params_match(filters, use_old_values=True) and not (
+                    params_match(excludes, use_old_values=True) if excludes else False
+                )
+                new_in_bucket = params_match(filters, use_old_values=False) and not (
+                    params_match(excludes, use_old_values=False) if excludes else False
+                )
+                if old_in_bucket or new_in_bucket:
+                    return True
+            return False
+
+        old_match = params_match(params, use_old_values=True)
+        new_match = params_match(params, use_old_values=False)
+        if action == "filter":
+            return old_match or new_match
+        return old_match != new_match
+
+    def candidate_should_invalidate(
+        cache_key: str,
+        action: str,
+        changed_lookup: str | None,
+    ) -> bool:
+        reverse = cache.get(reverse_membership_key(cache_key))
+        if not isinstance(reverse, ReverseDependencyMembership):
+            return True
+        for manager, dependency_action, identifier in reverse.simple_dependencies:
+            if manager == manager_name and dependency_matches(
+                dependency_action,
+                identifier,
+                changed_lookup=changed_lookup,
+            ):
+                return True
+        for manager, dependency_action, identifier in reverse.composite_dependencies:
+            if (
+                manager == manager_name
+                and dependency_action == action
+                and dependency_matches(
+                    dependency_action,
+                    identifier,
+                    changed_lookup=changed_lookup,
+                )
+            ):
+                return True
+        return False
+
+    invalidation_candidates: set[str] = set()
+
+    invalidation_candidates.update(request_query_cache_keys(manager_name))
+    invalidation_candidates.update(all_records_cache_keys(manager_name))
+    identification = getattr(instance, "identification", None)
+    if identification:
+        invalidation_candidates.update(
+            candidate_cache_keys_for_lookup(
+                manager_name,
+                "filter",
+                "identification",
+                old_value=serialize_dependency_identifier(identification),
+                new_value=serialize_dependency_identifier(identification),
+            )
+        )
+
+    for lookup in tracked_lookup_names(manager_name):
+        old_value = old_relevant_values.get(lookup)
+        new_value = resolve_current_value_for_path(instance, tuple(lookup.split("__")))
+        if old_value == new_value:
+            continue
+        for action in ACTIONS:
+            for cache_key in candidate_cache_keys_for_lookup(
+                manager_name,
+                action,
+                lookup,
+                old_value=old_value,
+                new_value=new_value,
+            ):
+                if candidate_should_invalidate(cache_key, action, lookup):
+                    invalidation_candidates.add(cache_key)
+
+    for cache_key in tuple(dict.fromkeys(invalidation_candidates)):
+        logger.info(
+            "invalidating cache key",
+            context={
+                "manager": manager_name,
+                "key": cache_key,
+            },
+        )
+        cache.delete(cache_key)
+        remove_cache_key_from_shards(cache_key)
+
+
 @receiver(post_data_change)
 def generic_cache_invalidation(
     sender: type[GeneralManager],
@@ -1204,13 +1213,23 @@ def generic_cache_invalidation(
     manager_name = sender.__name__
     acquire_lock_with_retry("generic_cache_invalidation")
     try:
-        idx = get_full_index()
-        _generic_cache_invalidation_locked(
-            idx,
+        if not reverse_memberships():
+            idx = get_full_index()
+            sections: tuple[Literal["filter", "exclude", "all", "request_query"], ...]
+            sections = ("filter", "exclude", "all", "request_query")
+            if any(idx.get(section) for section in sections):
+                _generic_cache_invalidation_locked(
+                    idx,
+                    manager_name,
+                    instance,
+                    old_relevant_values,
+                )
+                set_full_index(idx)
+                return
+        _generic_cache_invalidation_from_shards(
             manager_name,
             instance,
             old_relevant_values,
         )
-        set_full_index(idx)
     finally:
         release_lock()
