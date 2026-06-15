@@ -124,6 +124,14 @@ def _set_dependency_data_change_count(count: int) -> int:
     return count
 
 
+def _discard_active_context_dependency_cache_state() -> None:
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    if context is not None:
+        context.discard_dependency_cache_state()
+
+
 def begin_dependency_data_change() -> int:
     """
     Mark a data change as active and bump the dependency generation.
@@ -136,9 +144,10 @@ def begin_dependency_data_change() -> int:
         generation = _set_dependency_generation(get_dependency_generation() + 1)
         _set_dependency_data_change_count(_get_dependency_data_change_count() + 1)
         cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
-        return generation
     finally:
         release_lock()
+    _discard_active_context_dependency_cache_state()
+    return generation
 
 
 def end_dependency_data_change() -> None:

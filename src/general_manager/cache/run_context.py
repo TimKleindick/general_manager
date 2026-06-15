@@ -153,6 +153,13 @@ class CalculationRunContext:
         for entry in entries:
             release_compute_lease(entry.lease)
 
+    def discard_dependency_cache_state(self) -> None:
+        """Drop dependency-cache hits and buffered publications for this run."""
+        try:
+            self.discard_dependency_cache_publications()
+        finally:
+            self._dependency_cache_hits.clear()
+
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
         """Discard tuple keys that start with the supplied prefix."""
         for key in list(self._values):

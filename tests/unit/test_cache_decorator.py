@@ -450,6 +450,35 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self.assertNotIn(key, self.fake_cache.store)
         self.assertNotIn(f"{key}:deps", self.fake_cache.store)
 
+    def test_dependency_scope_discards_buffered_run_hit_after_data_change(self):
+        calls = 0
+        state = {"value": 3}
+
+        @cached(scope="dependency", cache_backend=self.fake_cache)
+        def fn():
+            nonlocal calls
+            calls += 1
+            DependencyTracker.track("User", "identification", str(state["value"]))
+            return state["value"] * 2
+
+        key = make_cache_key(fn, (), {})
+
+        with CalculationRunContext():
+            self.assertEqual(fn(), 6)
+            begin_dependency_data_change()
+            try:
+                state["value"] = 4
+            finally:
+                end_dependency_data_change()
+
+            with DependencyTracker() as tracked_dependencies:
+                self.assertEqual(fn(), 8)
+
+        expected_dependencies = {("User", "identification", "4")}
+        self.assertEqual(calls, 2)
+        self.assertEqual(tracked_dependencies, expected_dependencies)
+        self.assert_dependency_cache_hit(key, 8, expected_dependencies)
+
     def test_dependency_scope_custom_record_fn_uses_immediate_publication(self):
         calls = 0
 

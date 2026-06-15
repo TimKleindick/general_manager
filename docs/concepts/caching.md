@@ -119,7 +119,7 @@ Dependency-scoped cache entries are published through a guarded write path:
 This means a dependency-scoped value is only shared after GeneralManager can
 prove that no data mutation overlapped the computation and publish step. Values
 computed during the current run remain available to that run even when guarded
-publication is skipped.
+publication is skipped, until a data change begins in that run.
 
 Concurrent workers for the same dependency-scoped cache key coordinate with a
 short-lived compute lease. The worker that acquires the lease performs the
