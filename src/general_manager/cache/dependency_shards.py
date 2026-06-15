@@ -16,8 +16,10 @@ from general_manager.cache.dependency_matching import (
 )
 
 DEPENDENCY_SHARD_PREFIX = "general_manager:dependency:v1"
+LEGACY_DEPENDENCY_INDEX_KEY = "dependency_index"
 ALL_RECORDS_VALUE = "__all__"
 REVERSE_MEMBERSHIP_REGISTRY_KEY = f"{DEPENDENCY_SHARD_PREFIX}:reverse_keys"
+VALUE_NOT_PROVIDED = object()
 
 DependencyAction = Literal[
     "filter", "exclude", "identification", "request_query", "all"
@@ -126,6 +128,64 @@ def _register_lookup(manager_name: str, action: str, lookup: str) -> None:
     _cache_set_add(lookup_registry_key(manager_name, action), lookup)
 
 
+def _cache_keys_from_member_collection(value: Any) -> set[str]:
+    if not isinstance(value, (set, frozenset, list, tuple)):
+        return set()
+    return {member for member in value if isinstance(member, str)}
+
+
+def _legacy_dependency_cache_keys(legacy_index: Any) -> set[str]:
+    if not isinstance(legacy_index, dict):
+        return set()
+
+    cache_keys: set[str] = set()
+    all_section = legacy_index.get("all", {})
+    if isinstance(all_section, dict):
+        for key_set in all_section.values():
+            cache_keys.update(_cache_keys_from_member_collection(key_set))
+
+    request_query_section = legacy_index.get("request_query", {})
+    if isinstance(request_query_section, dict):
+        for query_section in request_query_section.values():
+            if not isinstance(query_section, dict):
+                continue
+            for key_set in query_section.values():
+                cache_keys.update(_cache_keys_from_member_collection(key_set))
+
+    for action in ("filter", "exclude"):
+        action_section = legacy_index.get(action, {})
+        if not isinstance(action_section, dict):
+            continue
+        for model_section in action_section.values():
+            if not isinstance(model_section, dict):
+                continue
+            cache_dependencies = model_section.get("__cache_dependencies__", {})
+            if isinstance(cache_dependencies, dict):
+                cache_keys.update(
+                    key for key in cache_dependencies if isinstance(key, str)
+                )
+            for lookup, lookup_map in model_section.items():
+                if lookup == "__cache_dependencies__" or not isinstance(
+                    lookup_map, dict
+                ):
+                    continue
+                for key_set in lookup_map.values():
+                    cache_keys.update(_cache_keys_from_member_collection(key_set))
+    return cache_keys
+
+
+def clear_legacy_dependency_index() -> set[str]:
+    """Delete legacy full-index metadata and cache values referenced by it."""
+    legacy_index = cache.get(LEGACY_DEPENDENCY_INDEX_KEY, None)
+    if legacy_index is None:
+        return set()
+    cache_keys = _legacy_dependency_cache_keys(legacy_index)
+    for cache_key in cache_keys:
+        cache.delete(cache_key)
+    cache.delete(LEGACY_DEPENDENCY_INDEX_KEY)
+    return cache_keys
+
+
 def _shard_keys_for_dependency(
     manager_name: str,
     action: DependencyAction,
@@ -225,6 +285,7 @@ def record_cache_dependencies(
     if not dependency_set:
         return
 
+    clear_legacy_dependency_index()
     remove_cache_key_from_shards(cache_key)
 
     shard_keys: set[str] = set()
@@ -283,15 +344,15 @@ def candidate_cache_keys_for_lookup(
     action: Literal["filter", "exclude"],
     lookup: str,
     *,
-    old_value: Any = None,
-    new_value: Any = None,
+    old_value: Any = VALUE_NOT_PROVIDED,
+    new_value: Any = VALUE_NOT_PROVIDED,
 ) -> set[str]:
     """Return cache keys stored in shards that may be affected by a lookup change."""
     candidates = set()
     candidate_lookup = _lookup_name_for_candidate(lookup)
 
     for value in (old_value, new_value):
-        if value is not None:
+        if value is not VALUE_NOT_PROVIDED:
             candidates.update(
                 cache_set_members(
                     exact_lookup_shard_key(
