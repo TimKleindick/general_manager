@@ -217,3 +217,77 @@ class DependencyIndexShardFacadeTests(TestCase):
             )
             == set()
         )
+
+    def test_generic_cache_invalidation_invalidates_matching_filter_when_lookup_unchanged(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="open", title="renamed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get("cache-a") is None
+        assert (
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+            )
+            == set()
+        )
+
+    def test_generic_cache_invalidation_invalidates_exact_none_lookup(self) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": None}))],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="open"),
+            old_relevant_values={"status": None},
+        )
+
+        assert cache.get("cache-a") is None
+        assert (
+            cache_set_members(
+                exact_lookup_shard_key("Project", "filter", "status", "eq", None)
+            )
+            == set()
+        )
+
+    def test_record_dependencies_clears_legacy_index_and_cached_values(self) -> None:
+        cache.set(
+            "dependency_index",
+            {
+                "filter": {"Project": {"status": {'"open"': {"legacy-cache"}}}},
+                "exclude": {},
+                "request_query": {},
+                "all": {},
+            },
+            None,
+        )
+        cache.set("legacy-cache", "legacy-value", None)
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+
+        assert cache.get("dependency_index") is None
+        assert cache.get("legacy-cache") is None
+        assert cache_set_members(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
+        ) == {"cache-a"}

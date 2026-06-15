@@ -1168,8 +1168,6 @@ def _generic_cache_invalidation_from_shards(
     for lookup in tracked_lookup_names(manager_name):
         old_value = old_relevant_values.get(lookup)
         new_value = resolve_current_value_for_path(instance, tuple(lookup.split("__")))
-        if old_value == new_value:
-            continue
         for action in ACTIONS:
             for cache_key in candidate_cache_keys_for_lookup(
                 manager_name,
