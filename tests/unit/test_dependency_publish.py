@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import pickle
 from typing import Any
 from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
+from general_manager.cache import dependency_publish
 from general_manager.cache.dependency_cache import (
     DependencyCacheEntry,
     DependencyCacheHit,
@@ -18,8 +20,10 @@ from general_manager.cache.dependency_index import (
 from general_manager.cache.dependency_publish import (
     CacheComputeLease,
     CachePublishAborted,
+    PendingDependencyCachePublication,
     acquire_compute_lease,
     coordination_cache,
+    publish_dependency_cache_entries,
     publish_dependency_cache_entry,
     release_compute_lease,
     wait_for_cached_dependency_hit,
@@ -53,6 +57,22 @@ class FakeDependencyCacheBackend:
         self.set_order.append(key)
 
 
+class FakeDependencyCacheSetManyBackend(FakeDependencyCacheBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.set_many_calls: list[tuple[dict[str, Any], int | None]] = []
+
+    def set_many(
+        self,
+        data: Mapping[str, Any],
+        timeout: int | None = None,
+    ) -> None:
+        payloads = dict(data)
+        self.set_many_calls.append((payloads, timeout))
+        for key, value in payloads.items():
+            self.set(key, value, timeout)
+
+
 @override_settings(CACHES=TEST_CACHES)
 class TestDependencyPublish(SimpleTestCase):
     def setUp(self) -> None:
@@ -60,6 +80,32 @@ class TestDependencyPublish(SimpleTestCase):
 
     def tearDown(self) -> None:
         coordination_cache.clear()
+
+    def make_pending_publication(
+        self,
+        *,
+        cache_key: str,
+        result: Any,
+        dependencies: set[tuple[str, str, str]],
+        cache_backend: FakeDependencyCacheBackend,
+        started_generation: int | None = None,
+    ) -> PendingDependencyCachePublication:
+        return PendingDependencyCachePublication(
+            cache_key=cache_key,
+            result=result,
+            dependencies=frozenset(dependencies),
+            cache_backend=cache_backend,
+            timeout=None,
+            started_generation=(
+                get_dependency_generation()
+                if started_generation is None
+                else started_generation
+            ),
+            lease=CacheComputeLease(
+                key=_compute_lock_key(cache_key),
+                token=f"lease-{cache_key}",
+            ),
+        )
 
     def test_acquire_compute_lease_allows_one_active_lease_per_key(self) -> None:
         lease = acquire_compute_lease("cache-a")
@@ -136,6 +182,135 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertEqual(payload.dependencies, frozenset(dependencies))
         self.assertEqual(cache_backend.timeouts[cache_key], 30)
         self.assertNotIn(f"{cache_key}:deps", cache_backend.store)
+
+    def test_batch_publish_records_index_once_before_bulk_value_write(self) -> None:
+        cache_backend = FakeDependencyCacheSetManyBackend()
+        events: list[str] = []
+        original_set_full_index = dependency_publish.set_full_index
+
+        def record_set_full_index(idx: Any) -> None:
+            events.append("index")
+            original_set_full_index(idx)
+
+        original_set_many = cache_backend.set_many
+
+        def record_set_many(
+            data: Mapping[str, Any],
+            timeout: int | None = None,
+        ) -> None:
+            events.append("set_many")
+            original_set_many(data, timeout)
+
+        cache_backend.set_many = record_set_many  # type: ignore[method-assign]
+
+        with mock.patch(
+            "general_manager.cache.dependency_publish.set_full_index",
+            side_effect=record_set_full_index,
+        ):
+            publish_dependency_cache_entries(
+                [
+                    self.make_pending_publication(
+                        cache_key="cache-a",
+                        result="alpha",
+                        dependencies={("Project", "identification", "1")},
+                        cache_backend=cache_backend,
+                    ),
+                    self.make_pending_publication(
+                        cache_key="cache-b",
+                        result="bravo",
+                        dependencies={("Project", "identification", "2")},
+                        cache_backend=cache_backend,
+                    ),
+                ]
+            )
+
+        self.assertEqual(events, ["index", "set_many"])
+        self.assertEqual(len(cache_backend.set_many_calls), 1)
+        self.assertEqual(
+            set(cache_backend.set_many_calls[0][0]), {"cache-a", "cache-b"}
+        )
+        self.assertEqual(
+            cache_backend.get("cache-a").value,
+            "alpha",
+        )
+        self.assertEqual(
+            cache_backend.get("cache-b").dependencies,
+            frozenset({("Project", "identification", "2")}),
+        )
+
+    def test_batch_publish_falls_back_to_per_key_set_without_set_many(self) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+
+        publish_dependency_cache_entries(
+            [
+                self.make_pending_publication(
+                    cache_key="cache-a",
+                    result="alpha",
+                    dependencies={("Project", "identification", "1")},
+                    cache_backend=cache_backend,
+                ),
+                self.make_pending_publication(
+                    cache_key="cache-b",
+                    result="bravo",
+                    dependencies={("Project", "identification", "2")},
+                    cache_backend=cache_backend,
+                ),
+            ]
+        )
+
+        self.assertEqual(cache_backend.set_order, ["cache-a", "cache-b"])
+        self.assertEqual(cache_backend.get("cache-a").value, "alpha")
+        self.assertEqual(cache_backend.get("cache-b").value, "bravo")
+
+    def test_batch_publish_skips_entries_from_stale_generations(self) -> None:
+        cache_backend = FakeDependencyCacheSetManyBackend()
+        stale_generation = get_dependency_generation()
+        begin_dependency_data_change()
+        end_dependency_data_change()
+        current_generation = get_dependency_generation()
+
+        publish_dependency_cache_entries(
+            [
+                self.make_pending_publication(
+                    cache_key="cache-stale",
+                    result="old",
+                    dependencies={("Project", "identification", "1")},
+                    cache_backend=cache_backend,
+                    started_generation=stale_generation,
+                ),
+                self.make_pending_publication(
+                    cache_key="cache-current",
+                    result="new",
+                    dependencies={("Project", "identification", "2")},
+                    cache_backend=cache_backend,
+                    started_generation=current_generation,
+                ),
+            ]
+        )
+
+        self.assertIsNone(cache_backend.get("cache-stale"))
+        self.assertEqual(cache_backend.get("cache-current").value, "new")
+
+    def test_batch_publish_aborts_without_writes_when_data_change_active(self) -> None:
+        cache_backend = FakeDependencyCacheSetManyBackend()
+        begin_dependency_data_change()
+        try:
+            with self.assertRaises(CachePublishAborted):
+                publish_dependency_cache_entries(
+                    [
+                        self.make_pending_publication(
+                            cache_key="cache-a",
+                            result="blocked",
+                            dependencies={("Project", "identification", "1")},
+                            cache_backend=cache_backend,
+                        )
+                    ]
+                )
+        finally:
+            end_dependency_data_change()
+
+        self.assertEqual(cache_backend.store, {})
+        self.assertEqual(cache_backend.set_many_calls, [])
 
     def test_publish_aborts_without_writes_when_generation_changed(self) -> None:
         cache_backend = FakeDependencyCacheBackend()
