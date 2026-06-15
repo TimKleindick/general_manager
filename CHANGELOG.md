@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.50.0 (2026-06-15)
+
+### Features
+
+- Align cached decorator cache option
+  ([`33bd1e6`](https://github.com/TimKleindick/general_manager/commit/33bd1e6f8aaff90cad69cc2b96c463bf69384ad3))
+
+
 ## v0.49.0 (2026-06-15)
 
 ### Bug Fixes
