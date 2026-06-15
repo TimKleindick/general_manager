@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.48.0 (2026-06-15)
+
+### Bug Fixes
+
+- Clear run-scoped bucket results on mutation
+  ([`2fcbd9c`](https://github.com/TimKleindick/general_manager/commit/2fcbd9c41a54670d92f18fc1e6c5d4f903dc591c))
+
+- Preserve cached bucket terminal semantics
+  ([`226c4a4`](https://github.com/TimKleindick/general_manager/commit/226c4a46f8f728108bc27d92cd45d940b47d7ee0))
+
+### Documentation
+
+- Document run-scoped bucket helpers
+  ([`0923e85`](https://github.com/TimKleindick/general_manager/commit/0923e859c0d88dd971dc1503fe658a4b039dfa95))
+
+- Explain run-scoped bucket result reuse
+  ([`a833ed6`](https://github.com/TimKleindick/general_manager/commit/a833ed6f3d44b3a051bcfe6e81e4bc3c7751cda2))
+
+### Features
+
+- Reuse equivalent bucket iteration results per run
+  ([`5307c1c`](https://github.com/TimKleindick/general_manager/commit/5307c1c243843b94a35512be4696a89b8c7ddb47))
+
+- Reuse materialized bucket snapshots for terminals
+  ([`424ed76`](https://github.com/TimKleindick/general_manager/commit/424ed76497486c29624d43df80eab115d901403e))
+
+### Testing
+
+- Cover bucket result reuse guardrails
+  ([`e984f71`](https://github.com/TimKleindick/general_manager/commit/e984f71dc6a317952fcfafb2b2cee71ed9ef3d7d))
+
+- Cover run-scoped bucket reuse edge cases
+  ([`6e40f70`](https://github.com/TimKleindick/general_manager/commit/6e40f70885bd2868b6e3fae5ce1af01f784d717d))
+
+- Cover run-scoped orm bucket storage
+  ([`b19eae9`](https://github.com/TimKleindick/general_manager/commit/b19eae944a5599f930b04eb7786a49048903e41a))
+
+- Preserve bucket dependency replay on run-cache hits
+  ([`c898b6b`](https://github.com/TimKleindick/general_manager/commit/c898b6b54545203b36bbb99c2b85506a4218e342))
+
+
 ## v0.47.0 (2026-06-14)
 
 ### Bug Fixes
