@@ -270,6 +270,22 @@ class DatabaseBucketTestCase(TestCase):
             [self.u1.id, self.u2.id],
         )
 
+    def test_repeated_equivalent_index_lookups_reduce_sql_work(self):
+        first_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+        second_bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+            {"username__in": [["alice", "bob"]]},
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            self.assertEqual(len(first_bucket.index_by("identification")), 2)
+            self.assertEqual(len(second_bucket.index_by("identification")), 2)
+
     def test_different_ordering_does_not_share_iter_sql_inside_run_context(self):
         ascending = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
@@ -339,6 +355,27 @@ class DatabaseBucketTestCase(TestCase):
             list(bucket)
             with DependencyTracker() as dependencies:
                 list(bucket)
+
+        self.assertIn(
+            (
+                "UserManager",
+                "filter",
+                '{"username": "alice"}',
+            ),
+            dependencies,
+        )
+
+    def test_database_bucket_index_hit_replays_source_dependencies(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username="alice"),
+            UserManager,
+            {"username": ["alice"]},
+        )
+
+        with CalculationRunContext():
+            bucket.index_by("identification")
+            with DependencyTracker() as dependencies:
+                bucket.index_by("identification")
 
         self.assertIn(
             (
