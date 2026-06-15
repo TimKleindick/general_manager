@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 from django.test import SimpleTestCase
 
 from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.interface.bundles import REQUEST_CAPABILITIES
 from general_manager.interface import RequestInterface
 from general_manager.interface.requests import (
@@ -536,6 +537,40 @@ class TestRequestInterface(SimpleTestCase):
         assert item is not None
         self.assertEqual(item.name, "Alpha")
         self.assertTrue(bucket._materialized)
+
+    def test_materialized_request_bucket_indexes_keep_distinct_payloads(self) -> None:
+        alpha_payload = {
+            "id": 1,
+            "name": "Alpha",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Alpha Local",
+        }
+        beta_payload = {
+            "id": 1,
+            "name": "Beta",
+            "status": "active",
+            "updated_at": datetime(2026, 3, 11, 9, 0, 0),
+            "local_name": "Beta Local",
+        }
+        alpha_bucket = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            raw_items=(alpha_payload,),
+        )
+        beta_bucket = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            raw_items=(beta_payload,),
+        )
+
+        with CalculationRunContext():
+            alpha_index = alpha_bucket.index_by("name")
+            beta_index = beta_bucket.index_by("name")
+
+        self.assertEqual(sorted(alpha_index), ["Alpha"])
+        self.assertEqual(sorted(beta_index), ["Beta"])
+        self.assertIsNot(alpha_index, beta_index)
 
     def test_all_preserves_existing_request_filters(self) -> None:
         bucket = RemoteProject.filter(status="active")

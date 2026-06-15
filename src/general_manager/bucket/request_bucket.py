@@ -186,14 +186,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
                 freeze_bucket_index_value(self.filters),
                 freeze_bucket_index_value(self.excludes),
             )
-        return (
-            "request-items",
-            self._manager_class,
-            tuple(
-                freeze_bucket_index_value(item.identification)
-                for item in self._ensure_items()
-            ),
-        )
+        return super()._bucket_index_source_signature()
 
     def __iter__(self) -> Generator[GeneralManagerType, None, None]:
         yield from self._ensure_items()
