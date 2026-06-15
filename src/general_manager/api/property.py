@@ -95,7 +95,7 @@ class GraphQLProperty(property):
         selected_cache = self.cache
         if selected_cache == "none":
             return self._raw_fget
-        return cached(scope=cast(Literal["dependency", "run"], selected_cache))(
+        return cached(cache=cast(Literal["dependency", "run"], selected_cache))(
             self._raw_fget
         )
 

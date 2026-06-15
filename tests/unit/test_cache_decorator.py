@@ -156,7 +156,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         Verifies that on the first call, the function result is cached and both cache.get and cache.set are called. On a subsequent call with the same arguments before expiration, only cache.get is called, confirming a cache hit.
         """
 
-        @cached(scope="timeout", timeout=5)
+        @cached(cache="timeout", timeout=5)
         def sample_function(x, y):
             return x + y
 
@@ -188,7 +188,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         `cache.get` and `cache.set` to be called again.
         """
 
-        @cached(scope="timeout", timeout=1)
+        @cached(cache="timeout", timeout=1)
         def sample_function(x, y):
             return x + y
 
@@ -219,7 +219,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
         custom_cache = FakeCacheBackend()
 
-        @cached(scope="timeout", timeout=5, cache_backend=custom_cache)
+        @cached(cache="timeout", timeout=5, cache_backend=custom_cache)
         def sample_function(x, y):
             """
             Returns the sum of two values.
@@ -246,7 +246,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -287,7 +287,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         calls = 0
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -317,7 +317,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         calls = 0
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -359,7 +359,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         calls = 0
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -383,7 +383,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         calls = 0
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -408,7 +408,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
     def test_dependency_scope_reuses_buffered_miss_inside_run_context(self):
         calls = 0
 
-        @cached(scope="dependency", cache_backend=self.fake_cache)
+        @cached(cache="dependency", cache_backend=self.fake_cache)
         def fn(value):
             nonlocal calls
             calls += 1
@@ -430,7 +430,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
     def test_dependency_scope_batch_abort_returns_result_without_cache_write(self):
         calls = 0
 
-        @cached(scope="dependency", cache_backend=self.fake_cache)
+        @cached(cache="dependency", cache_backend=self.fake_cache)
         def fn(value):
             nonlocal calls
             calls += 1
@@ -454,7 +454,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         calls = 0
         state = {"value": 3}
 
-        @cached(scope="dependency", cache_backend=self.fake_cache)
+        @cached(cache="dependency", cache_backend=self.fake_cache)
         def fn():
             nonlocal calls
             calls += 1
@@ -483,7 +483,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         calls = 0
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -506,7 +506,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
     def test_dependency_scope_batches_multiple_run_misses_under_one_index_write(self):
         calls = 0
 
-        @cached(scope="dependency", cache_backend=self.fake_cache)
+        @cached(cache="dependency", cache_backend=self.fake_cache)
         def fn(value):
             nonlocal calls
             calls += 1
@@ -536,7 +536,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self,
     ):
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
         )
         def fn(value):
@@ -555,7 +555,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         self,
     ):
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
         )
         def fn(value):
@@ -582,7 +582,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         errors = []
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -630,7 +630,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
 
         @cached(
-            scope="timeout",
+            cache="timeout",
             timeout=5,
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
@@ -671,7 +671,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -680,7 +680,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             return inner_function(x, y)
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -747,7 +747,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
         """
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -756,7 +756,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
             return inner_function(x, y)
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -822,7 +822,7 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
     def test_dependency_scope_uses_prefetched_hit_before_backend_read(self):
         @cached(
-            scope="dependency",
+            cache="dependency",
             cache_backend=self.fake_cache,
             record_fn=self.record_fn,
         )
@@ -848,20 +848,41 @@ class TestCacheDecoratorBackend(SimpleTestCase):
 
 
 class TestCacheDecoratorScopes(SimpleTestCase):
-    def test_timeout_scope_requires_timeout(self):
-        with self.assertRaisesRegex(ValueError, 'scope="timeout" requires timeout'):
-            cached(scope="timeout")
+    def test_bare_cached_decorator_reuses_value_inside_context_only(self):
+        calls = 0
 
-    def test_set_timeout_is_only_valid_for_timeout_scope(self):
-        for scope in ("run", "dependency", "none"):
+        @cached
+        def sample(value):
+            nonlocal calls
+            calls += 1
+            return value * 2
+
+        with CalculationRunContext():
+            self.assertEqual(sample(3), 6)
+            self.assertEqual(sample(3), 6)
+
+        self.assertEqual(sample(3), 6)
+        self.assertEqual(calls, 2)
+
+    def test_timeout_cache_requires_timeout(self):
+        with self.assertRaisesRegex(ValueError, 'cache="timeout" requires timeout'):
+            cached(cache="timeout")
+
+    def test_set_timeout_is_only_valid_for_timeout_cache(self):
+        for cache_scope in ("run", "dependency", "none"):
             with (
-                self.subTest(scope=scope),
+                self.subTest(cache=cache_scope),
                 self.assertRaisesRegex(
                     ValueError,
-                    'timeout is only supported with scope="timeout"',
+                    'timeout is only supported with cache="timeout"',
                 ),
             ):
-                cached(scope=scope, timeout=5)
+                cached(cache=cache_scope, timeout=5)
+
+    def test_scope_keyword_is_not_supported(self):
+        unsupported_kwargs = {"scope": "run"}
+        with self.assertRaises(TypeError):
+            cached(**unsupported_kwargs)
 
     def test_timeout_scope_uses_backend_without_dependency_recording(self):
         fake_cache = FakeCacheBackend()
@@ -872,7 +893,7 @@ class TestCacheDecoratorScopes(SimpleTestCase):
             record_calls.append((key, set(deps)))
 
         @cached(
-            scope="timeout", timeout=5, cache_backend=fake_cache, record_fn=record_fn
+            cache="timeout", timeout=5, cache_backend=fake_cache, record_fn=record_fn
         )
         def sample(value):
             nonlocal calls
@@ -917,7 +938,7 @@ class TestCacheDecoratorScopes(SimpleTestCase):
     def test_run_scope_reuses_value_inside_context_only(self):
         calls = 0
 
-        @cached(scope="run")
+        @cached(cache="run")
         def sample(value):
             nonlocal calls
             calls += 1
@@ -933,7 +954,7 @@ class TestCacheDecoratorScopes(SimpleTestCase):
     def test_run_scope_creates_context_when_missing_for_single_call(self):
         calls = 0
 
-        @cached(scope="run")
+        @cached(cache="run")
         def sample(value):
             nonlocal calls
             calls += 1
@@ -947,7 +968,7 @@ class TestCacheDecoratorScopes(SimpleTestCase):
         fake_cache = FakeCacheBackend()
         calls = 0
 
-        @cached(scope="none", cache_backend=fake_cache)
+        @cached(cache="none", cache_backend=fake_cache)
         def sample(value):
             nonlocal calls
             calls += 1

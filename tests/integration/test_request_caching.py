@@ -131,11 +131,11 @@ class RequestCachingIntegrationTest(GeneralManagerTransactionTestCase):
         ]
 
     def test_request_query_dependencies_are_recorded_per_operation(self) -> None:
-        @cached(scope="dependency")
+        @cached(cache="dependency")
         def active_count() -> int:
             return self.RemoteProject.filter(status="active").count()
 
-        @cached(scope="dependency")
+        @cached(cache="dependency")
         def search_count() -> int:
             return self.RemoteProject.Interface.query_operation(
                 "search",
@@ -170,7 +170,7 @@ class RequestCachingIntegrationTest(GeneralManagerTransactionTestCase):
     def test_request_query_invalidation_is_safe_and_does_not_trigger_detail_reads(
         self,
     ) -> None:
-        @cached(scope="dependency")
+        @cached(cache="dependency")
         def active_count() -> int:
             return self.RemoteProject.filter(status="active").count()
 
