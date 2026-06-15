@@ -11,6 +11,7 @@ from typing import (
     Set,
     TypeVar,
     cast,
+    overload,
 )
 
 from django.core.cache import cache as django_cache
@@ -88,102 +89,122 @@ class UnsupportedCacheScopeError(ValueError):
 
 
 class CacheTimeoutConfigurationError(ValueError):
-    """Raised when timeout is used with an incompatible cache scope."""
+    """Raised when timeout is used with an incompatible cache setting."""
 
     @classmethod
     def missing_timeout(cls) -> "CacheTimeoutConfigurationError":
-        return cls('scope="timeout" requires timeout')
+        return cls('cache="timeout" requires timeout')
 
     @classmethod
     def unexpected_timeout(cls) -> "CacheTimeoutConfigurationError":
-        return cls('timeout is only supported with scope="timeout"')
+        return cls('timeout is only supported with cache="timeout"')
 
 
+@overload
+def cached(func: FuncT) -> FuncT: ...
+@overload
 def cached(
+    func: None = None,
     timeout: Optional[int] = None,
     cache_backend: CacheBackend = django_cache,
     record_fn: RecordFn = record_dependencies,
     *,
-    scope: CacheScope = "run",
-) -> Callable[[FuncT], FuncT]:
+    cache: CacheScope = "run",
+) -> Callable[[FuncT], FuncT]: ...
+
+
+def cached(
+    func: FuncT | None = None,
+    timeout: Optional[int] = None,
+    cache_backend: CacheBackend = django_cache,
+    record_fn: RecordFn = record_dependencies,
+    *,
+    cache: CacheScope = "run",
+) -> FuncT | Callable[[FuncT], FuncT]:
     """
-    Decorator factory for caching a function call.
+    Decorator for caching a function call.
 
     By default, cached values are scoped to the active
     :class:`~general_manager.cache.run_context.CalculationRunContext` and are
-    discarded when that run ends. Use ``scope="dependency"`` to persist values
+    discarded when that run ends. Use ``cache="dependency"`` to persist values
     in ``cache_backend`` and use ``record_fn`` to persist dependency metadata
-    for invalidation. Use ``scope="timeout"`` with ``timeout`` set for
+    for invalidation. Use ``cache="timeout"`` with ``timeout`` set for
     cache-backend storage with time-based expiry; dependency recording is
-    ignored for timeout-scoped values.
+    ignored for timeout-cached values.
 
     Parameters:
-        timeout (int | None): Expiration in seconds for timeout-scoped cached values.
-            Required when ``scope`` is ``"timeout"`` and invalid with any other
+        func (Callable[..., object] | None): Function being decorated when used
+            as ``@cached``. Leave unset when using ``@cached(...)``.
+        timeout (int | None): Expiration in seconds for timeout-cached values.
+            Required when ``cache`` is ``"timeout"`` and invalid with any other
             ``CacheScope``.
         cache_backend (CacheBackend): Backend used to read and write cached results.
         record_fn (RecordFn): Callback invoked to persist dependency metadata when
-            ``scope`` is ``"dependency"``. Defaults to
+            ``cache`` is ``"dependency"``. Defaults to
             :func:`~general_manager.cache.dependency_index.record_dependencies`.
-        scope (CacheScope): Cache storage strategy. ``"run"`` memoizes for the active run,
+        cache (CacheScope): Cache storage strategy. ``"run"`` memoizes for the active run,
             ``"dependency"`` stores in ``cache_backend`` with dependency tracking,
             ``"timeout"`` stores in ``cache_backend`` with time-based expiry, and
             ``"none"`` disables caching.
 
     Returns:
-        Callable: Decorator that wraps the target function with caching behaviour.
+        Callable: Decorated function or decorator that wraps the target function
+            with caching behaviour.
 
     Raises:
-        ValueError: Raised for invalid ``scope``/``timeout`` combinations, including
+        ValueError: Raised for invalid ``cache``/``timeout`` combinations, including
             unsupported ``CacheScope`` values, missing ``timeout`` for
-            ``scope="timeout"``, and ``timeout`` supplied for non-timeout scopes.
+            ``cache="timeout"``, and ``timeout`` supplied for non-timeout cache modes.
         DependencyLockTimeoutError: Propagated from ``record_fn`` (i.e.
             :func:`~general_manager.cache.dependency_index.record_dependencies`) when the
-            dependency-index lock cannot be acquired within the configured timeout.  The cached
+            dependency-index lock cannot be acquired within the configured timeout. The cached
             value has already been stored at that point; only the dependency metadata is lost.
     """
-    if scope not in {"dependency", "run", "timeout", "none"}:
-        raise UnsupportedCacheScopeError(scope)
-    if scope == "timeout" and timeout is None:
+    if cache not in {"dependency", "run", "timeout", "none"}:
+        raise UnsupportedCacheScopeError(cache)
+    if cache == "timeout" and timeout is None:
         raise CacheTimeoutConfigurationError.missing_timeout()
-    if timeout is not None and scope != "timeout":
+    if timeout is not None and cache != "timeout":
         raise CacheTimeoutConfigurationError.unexpected_timeout()
 
-    def decorator(func: FuncT) -> FuncT:
-        @wraps(func)
+    def decorator(decorated_func: FuncT) -> FuncT:
+        @wraps(decorated_func)
         def wrapper(*args: object, **kwargs: object) -> object:
-            if scope == "none":
-                return func(*args, **kwargs)
+            if cache == "none":
+                return decorated_func(*args, **kwargs)
 
-            if scope == "run":
-                key = make_cache_key(func, args, kwargs)
+            if cache == "run":
+                key = make_cache_key(decorated_func, args, kwargs)
                 with ensure_calculation_run_context() as context:
-                    return context.get_or_set(key, lambda: func(*args, **kwargs))
+                    return context.get_or_set(
+                        key,
+                        lambda: decorated_func(*args, **kwargs),
+                    )
 
-            key = make_cache_key(func, args, kwargs)
+            key = make_cache_key(decorated_func, args, kwargs)
 
-            if scope == "timeout":
+            if cache == "timeout":
                 cached_result = cache_backend.get(key, _SENTINEL)
                 if cached_result is not _SENTINEL:
                     logger.debug(
                         "cache hit",
                         context={
-                            "function": func.__qualname__,
+                            "function": decorated_func.__qualname__,
                             "key": key,
-                            "scope": scope,
+                            "cache": cache,
                         },
                     )
                     return cached_result
 
-                result = func(*args, **kwargs)
+                result = decorated_func(*args, **kwargs)
                 cache_backend.set(key, result, timeout)
                 logger.debug(
                     "cache miss stored",
                     context={
-                        "function": func.__qualname__,
+                        "function": decorated_func.__qualname__,
                         "key": key,
                         "timeout": timeout,
-                        "scope": scope,
+                        "cache": cache,
                     },
                 )
                 return result
@@ -193,9 +214,9 @@ def cached(
                 logger.debug(
                     message,
                     context={
-                        "function": func.__qualname__,
+                        "function": decorated_func.__qualname__,
                         "key": key,
-                        "scope": scope,
+                        "cache": cache,
                     },
                 )
                 return hit.value
@@ -245,7 +266,7 @@ def cached(
 
                 started_generation = get_dependency_generation()
                 with DependencyTracker() as dependencies:
-                    result = func(*args, **kwargs)
+                    result = decorated_func(*args, **kwargs)
                     ModelDependencyCollector.add_args(dependencies, args, kwargs)
 
                 def record_many(
@@ -287,9 +308,9 @@ def cached(
                         logger.debug(
                             "dependency cache publish aborted",
                             context={
-                                "function": func.__qualname__,
+                                "function": decorated_func.__qualname__,
                                 "key": key,
-                                "scope": scope,
+                                "cache": cache,
                             },
                         )
             finally:
@@ -299,7 +320,7 @@ def cached(
             logger.debug(
                 "cache miss recorded",
                 context={
-                    "function": func.__qualname__,
+                    "function": decorated_func.__qualname__,
                     "key": key,
                     "dependency_count": len(dependencies),
                     "timeout": timeout,
@@ -308,8 +329,10 @@ def cached(
             return result
 
         # fix for python 3.14:
-        wrapper.__annotations__ = func.__annotations__
+        wrapper.__annotations__ = decorated_func.__annotations__
 
         return cast(FuncT, wrapper)
 
-    return decorator
+    if func is None:
+        return decorator
+    return decorator(func)

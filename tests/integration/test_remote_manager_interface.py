@@ -388,7 +388,7 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(cause.request_id, "gm-detail-999")
 
     def test_websocket_event_can_invalidate_cached_remote_queries(self) -> None:
-        @cached(scope="dependency")
+        @cached(cache="dependency")
         def active_count() -> int:
             return self.RemoteProject.filter(status="active").count()
 
@@ -476,7 +476,7 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
     def test_remote_invalidation_client_can_invalidate_cached_remote_queries(
         self,
     ) -> None:
-        @cached(scope="dependency")
+        @cached(cache="dependency")
         def active_count() -> int:
             return self.RemoteProject.filter(status="active").count()
 

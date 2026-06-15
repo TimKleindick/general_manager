@@ -197,7 +197,7 @@ def test_cached_decorator_logs_cache_hit_and_miss() -> None:
     with patch("general_manager.cache.cache_decorator.logger") as mock_logger:
 
         @cached(
-            scope="dependency",
+            cache="dependency",
             timeout=None,
             cache_backend=fake_cache,
             record_fn=lambda _k, _d: None,

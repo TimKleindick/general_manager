@@ -81,7 +81,7 @@ background run:
 ```python
 from general_manager.cache.cache_decorator import cached
 
-@cached()
+@cached
 def project_forecast(project_id: int) -> dict[str, float]:
     project = Project(id=project_id)
     return {
@@ -90,14 +90,14 @@ def project_forecast(project_id: int) -> dict[str, float]:
     }
 ```
 
-The default `scope="run"` stores values in `CalculationRunContext`. Values are
+The default `cache="run"` stores values in `CalculationRunContext`. Values are
 discarded when the run ends and do not participate in dependency invalidation.
 
-Use dependency scope when a value should be reused across runs and invalidated
+Use dependency caching when a value should be reused across runs and invalidated
 when tracked managers change:
 
 ```python
-@cached(scope="dependency")
+@cached(cache="dependency")
 def project_forecast(project_id: int) -> dict[str, float]:
     ...
 ```
@@ -129,17 +129,17 @@ appear and then reuse it instead of repeating the same CPU work. If the
 computing worker fails before publishing, the lease expires and a later worker
 can retry the computation.
 
-Use timeout scope when a value should be cached in the configured cache backend
+Use timeout caching when a value should be cached in the configured cache backend
 for a fixed duration without dependency tracking:
 
 ```python
-@cached(scope="timeout", timeout=300)  # Cache for 5 minutes
+@cached(cache="timeout", timeout=300)  # Cache for 5 minutes
 def project_forecast(project_id: int) -> dict[str, float]:
     ...
 ```
 
-`timeout` is required for `scope="timeout"` and is not accepted on the other
-scopes. The cache entry expires after the given duration and is not invalidated
+`timeout` is required for `cache="timeout"` and is not accepted on the other
+cache modes. The cache entry expires after the given duration and is not invalidated
 through the dependency index.
 
 ## Run context storage
