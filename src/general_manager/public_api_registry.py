@@ -388,13 +388,33 @@ CACHE_EXPORTS: LazyExportMap = {
 
 BUCKET_EXPORTS: LazyExportMap = {
     "Bucket": ("general_manager.bucket.base_bucket", "Bucket"),
-    "DatabaseBucket": ("general_manager.bucket.database_bucket", "DatabaseBucket"),
+    "BucketIndexTooLargeError": (
+        "general_manager.bucket.indexing",
+        "BucketIndexTooLargeError",
+    ),
     "CalculationBucket": (
         "general_manager.bucket.calculation_bucket",
         "CalculationBucket",
     ),
+    "DatabaseBucket": ("general_manager.bucket.database_bucket", "DatabaseBucket"),
+    "DuplicateBucketIndexKeyError": (
+        "general_manager.bucket.indexing",
+        "DuplicateBucketIndexKeyError",
+    ),
     "GroupBucket": ("general_manager.bucket.group_bucket", "GroupBucket"),
+    "MissingBucketIndexKeyError": (
+        "general_manager.bucket.indexing",
+        "MissingBucketIndexKeyError",
+    ),
     "RequestBucket": ("general_manager.bucket.request_bucket", "RequestBucket"),
+    "UnhashableBucketIndexKeyError": (
+        "general_manager.bucket.indexing",
+        "UnhashableBucketIndexKeyError",
+    ),
+    "UnsupportedBucketIndexKeySpecError": (
+        "general_manager.bucket.indexing",
+        "UnsupportedBucketIndexKeySpecError",
+    ),
 }
 
 
