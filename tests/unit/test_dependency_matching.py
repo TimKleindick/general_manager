@@ -16,6 +16,16 @@ from general_manager.cache.dependency_matching import (
 from general_manager.measurement.measurement import Measurement
 
 
+class ReprOnly:
+    def __repr__(self) -> str:
+        return "ReprOnly(token)"
+
+
+class BadStateValue:
+    def __init__(self) -> None:
+        pass
+
+
 def test_lookup_spec_from_key_splits_operator_and_attribute_path() -> None:
     assert lookup_spec_from_key("status") == LookupSpec(
         lookup="status",
@@ -52,7 +62,14 @@ def test_operator_sets_classify_exact_and_scan_lookups() -> None:
 
 
 def test_normalize_dependency_value_and_hash_are_stable() -> None:
-    payload = {"day": date(2024, 7, 24), "members": {"b", "a"}, "active": True}
+    moment = datetime(2024, 7, 24, 12, 0, tzinfo=timezone.utc)
+    payload = {
+        "day": date(2024, 7, 24),
+        "members": {"b", "a"},
+        "active": True,
+        "moment": moment,
+        "opaque": ReprOnly(),
+    }
 
     normalized = normalize_dependency_value(payload)
 
@@ -60,9 +77,17 @@ def test_normalize_dependency_value_and_hash_are_stable() -> None:
         "active": True,
         "day": "2024-07-24",
         "members": ["a", "b"],
+        "moment": moment.isoformat(),
+        "opaque": {"__repr__": "ReprOnly(token)"},
     }
     assert stable_value_hash(payload) == stable_value_hash(
-        {"members": {"a", "b"}, "active": True, "day": date(2024, 7, 24)}
+        {
+            "members": {"a", "b"},
+            "active": True,
+            "day": date(2024, 7, 24),
+            "moment": moment,
+            "opaque": ReprOnly(),
+        }
     )
 
 
@@ -80,6 +105,27 @@ def test_matches_lookup_value_covers_supported_scalar_types() -> None:
     assert matches_lookup_value("regex", "alpha-123", '"^[a-z]+-[0-9]+$"')
     assert matches_lookup_value("eq", aware, '"2024-07-24T12:00:00Z"')
     assert matches_lookup_value("eq", True, '"true"')
+
+
+def test_matches_lookup_value_covers_coercion_and_fallback_edges() -> None:
+    aware = datetime(2024, 7, 24, 12, 0, tzinfo=timezone.utc)
+
+    assert matches_lookup_value("eq", aware, aware)
+    assert not matches_lookup_value("eq", aware, "42")
+    assert not matches_lookup_value("gt", date(2024, 7, 24), "42")
+    assert matches_lookup_value("eq", False, "false")
+    assert matches_lookup_value("eq", True, "1")
+    assert matches_lookup_value("eq", False, '"FALSE"')
+    assert not matches_lookup_value("eq", True, '"maybe"')
+    assert matches_lookup_value("eq", ReprOnly(), '{"__repr__": "ReprOnly(token)"}')
+    assert matches_lookup_value("in", ReprOnly(), '[{"__repr__": "ReprOnly(token)"}]')
+    assert not matches_lookup_value(
+        "eq",
+        BadStateValue(),
+        '{"__state__": {"magnitude": 1, "unit": "EUR"}}',
+    )
+    assert not matches_lookup_value("eq", BadStateValue(), '{"__state__": "bad"}')
+    assert not matches_lookup_value("unknown", "value", '"value"')
 
 
 def test_current_value_for_path_returns_none_for_missing_attributes() -> None:
