@@ -1168,6 +1168,81 @@ class TestGrapQlMutation(TestCase):
         with self.assertRaises(GraphQLError):
             mutation_result = mutation_class.mutate(None, info, field1="test_value")
 
+    def test_create_and_update_mutations_exclude_raw_relation_id_aliases(self):
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "relation": {
+                            "type": GeneralManager,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                            "relation_kind": "direct",
+                            "filter_lookup": "relation",
+                        },
+                        "relation_id": {
+                            "type": int,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                            "filter_lookup": "relation_id",
+                        },
+                        "external_id": {
+                            "type": int,
+                            "is_required": True,
+                            "is_editable": True,
+                            "is_derived": False,
+                            "default": None,
+                        },
+                    }
+
+        default_return_values = {"success": graphene.Boolean()}
+
+        create_mutation = GraphQL.generate_create_mutation_class(
+            DummyManager, default_return_values
+        )
+        update_mutation = GraphQL.generate_update_mutation_class(
+            DummyManager, default_return_values
+        )
+
+        self.assertIn("relation", create_mutation._meta.arguments)
+        self.assertNotIn("relation_id", create_mutation._meta.arguments)
+        self.assertIn("external_id", create_mutation._meta.arguments)
+        self.assertIn("relation", update_mutation._meta.arguments)
+        self.assertNotIn("relation_id", update_mutation._meta.arguments)
+        self.assertIn("external_id", update_mutation._meta.arguments)
+
+    def test_create_mutation_excludes_non_editable_canonical_relation(self):
+        class DummyManager:
+            class Interface(InterfaceBase):
+                input_fields: ClassVar[dict] = {}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "relation": {
+                            "type": GeneralManager,
+                            "is_required": True,
+                            "is_editable": False,
+                            "is_derived": False,
+                            "default": None,
+                            "relation_kind": "direct",
+                            "filter_lookup": "relation",
+                        },
+                    }
+
+        mutation_class = GraphQL.generate_create_mutation_class(
+            DummyManager, {"success": graphene.Boolean()}
+        )
+
+        self.assertNotIn("relation", mutation_class._meta.arguments)
+
     def test_generate_update_mutation_class(self):
         """
         Test that the generated update mutation class defines correct arguments, applies default values, and enforces mutation behavior.
