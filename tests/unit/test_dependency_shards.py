@@ -13,6 +13,8 @@ from general_manager.cache.dependency_shards import (
     all_records_shard_key,
     cache_set_members,
     candidate_cache_keys_for_lookup,
+    clear_legacy_dependency_index,
+    composite_lookup_shard_key,
     exact_lookup_shard_key,
     record_cache_dependencies,
     remove_cache_key_from_shards,
@@ -163,6 +165,95 @@ class DependencyShardKeyTests(TestCase):
     ) -> None:
         assert ALL_RECORDS_VALUE == "__all__"
 
+    def test_cache_set_members_treats_none_as_empty_set(self) -> None:
+        cache.set("empty-set-key", None, None)
+
+        assert cache_set_members("empty-set-key") == set()
+
+    def test_clear_legacy_dependency_index_removes_known_legacy_cache_keys(
+        self,
+    ) -> None:
+        legacy_index = {
+            "all": {"Project": {"all-cache", 123}},
+            "request_query": {
+                "BadRemote": "not-a-query-section",
+                "RemoteProject": {"query": {"request-cache"}},
+            },
+            "filter": {
+                "Project": {
+                    "__cache_dependencies__": {"composite-cache": {"identifier"}},
+                    "status": {"not-a-cache-set": "not-a-member-collection"},
+                }
+            },
+            "exclude": {
+                "BadProject": "not-a-model-section",
+            },
+        }
+        cache.set("dependency_index", legacy_index, None)
+        for cache_key in ("all-cache", "request-cache", "composite-cache"):
+            cache.set(cache_key, "cached-value", None)
+
+        assert clear_legacy_dependency_index() == {
+            "all-cache",
+            "request-cache",
+            "composite-cache",
+        }
+        assert cache.get("dependency_index") is None
+        assert cache.get("all-cache") is None
+        assert cache.get("request-cache") is None
+        assert cache.get("composite-cache") is None
+
+    def test_clear_legacy_dependency_index_deletes_malformed_index(self) -> None:
+        cache.set("dependency_index", "not-an-index", None)
+
+        assert clear_legacy_dependency_index() == set()
+        assert cache.get("dependency_index") is None
+
+        cache.set("dependency_index", {"filter": "not-an-action-section"}, None)
+
+        assert clear_legacy_dependency_index() == set()
+        assert cache.get("dependency_index") is None
+
+    def test_invalid_dependencies_write_empty_reverse_membership(self) -> None:
+        record_cache_dependencies(
+            "cache-invalid",
+            [
+                ("Project", "unknown", ""),  # type: ignore[list-item]
+                ("Project", "filter", "{bad"),
+            ],
+        )
+
+        reverse = cache.get(reverse_membership_key("cache-invalid"))
+        assert reverse == ReverseDependencyMembership(
+            cache_key="cache-invalid",
+            shard_keys=frozenset(),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(),
+        )
+
+    def test_sort_dependencies_use_composite_lookup_shards(self) -> None:
+        identifier = json.dumps(
+            {
+                "__sort__rank": {
+                    "filters": {"status": "open"},
+                    "excludes": {},
+                    "reverse": False,
+                }
+            }
+        )
+
+        record_cache_dependencies("cache-sort", [("Project", "filter", identifier)])
+
+        sort_shard_key = composite_lookup_shard_key("Project", "filter", "rank")
+        assert cache_set_members(sort_shard_key) == {"cache-sort"}
+        assert candidate_cache_keys_for_lookup("Project", "filter", "rank") == {
+            "cache-sort"
+        }
+        reverse = cache.get(reverse_membership_key("cache-sort"))
+        assert reverse.composite_dependencies == frozenset(
+            {("Project", "filter", identifier)}
+        )
+
 
 @override_settings(CACHES=TEST_CACHES)
 class DependencyIndexShardFacadeTests(TestCase):
@@ -291,3 +382,404 @@ class DependencyIndexShardFacadeTests(TestCase):
         assert cache_set_members(
             exact_lookup_shard_key("Project", "filter", "status", "eq", "open")
         ) == {"cache-a"}
+
+    def test_generic_cache_invalidation_invalidates_identification_dependency(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "identification", json.dumps({"id": 1}))],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(identification={"id": 1}),
+            old_relevant_values={},
+        )
+
+        assert cache.get("cache-a") is None
+
+    def test_generic_cache_invalidation_ignores_identification_mismatch(self) -> None:
+        class Project:
+            pass
+
+        cache_key = "cache-a"
+        identification = {"id": 2}
+        record_dependencies(
+            cache_key,
+            [("Project", "filter", json.dumps({"status": "open"}))],
+        )
+        cache.set(
+            reverse_membership_key(cache_key),
+            ReverseDependencyMembership(
+                cache_key=cache_key,
+                shard_keys=frozenset(),
+                composite_dependencies=frozenset(),
+                simple_dependencies=frozenset(
+                    {("Project", "identification", json.dumps({"id": 1}))}
+                ),
+            ),
+            None,
+        )
+        cache.set(cache_key, "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(identification=identification, status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get(cache_key) == "cached-value"
+
+    def test_generic_cache_invalidation_uses_request_query_match_when_candidate(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [
+                ("Project", "request_query", json.dumps({"operation": "list"})),
+                ("Project", "filter", json.dumps({"status": "open"})),
+            ],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get("cache-a") is None
+
+    def test_generic_cache_invalidation_accepts_request_query_reverse_match(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        cache_key = "cache-a"
+        record_dependencies(
+            "registry-seed",
+            [("Project", "filter", json.dumps({"status": "seed"}))],
+        )
+        cache.set(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            {cache_key},
+            None,
+        )
+        cache.set(
+            reverse_membership_key(cache_key),
+            ReverseDependencyMembership(
+                cache_key=cache_key,
+                shard_keys=frozenset(),
+                composite_dependencies=frozenset(),
+                simple_dependencies=frozenset(
+                    {("Project", "request_query", json.dumps({"operation": "list"}))}
+                ),
+            ),
+            None,
+        )
+        cache.set(cache_key, "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get(cache_key) is None
+
+    def test_generic_cache_invalidation_invalidates_candidate_without_reverse_metadata(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "registry-seed",
+            [("Project", "filter", json.dumps({"status": "seed"}))],
+        )
+        cache.set(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            {"cache-a"},
+            None,
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get("cache-a") is None
+
+    def test_generic_cache_invalidation_ignores_malformed_reverse_identifier(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        cache_key = "cache-a"
+        record_dependencies(
+            "registry-seed",
+            [("Project", "filter", json.dumps({"status": "seed"}))],
+        )
+        cache.set(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            {cache_key},
+            None,
+        )
+        cache.set(
+            reverse_membership_key(cache_key),
+            ReverseDependencyMembership(
+                cache_key=cache_key,
+                shard_keys=frozenset(),
+                composite_dependencies=frozenset(),
+                simple_dependencies=frozenset({("Project", "filter", "{bad")}),
+            ),
+            None,
+        )
+        cache.set(cache_key, "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get(cache_key) == "cached-value"
+
+    def test_generic_cache_invalidation_ignores_invalid_reverse_dependencies(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        cache_key = "cache-a"
+        record_dependencies(
+            "registry-seed",
+            [("Project", "filter", json.dumps({"status": "seed"}))],
+        )
+        cache.set(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            {cache_key},
+            None,
+        )
+        cache.set(
+            reverse_membership_key(cache_key),
+            ReverseDependencyMembership(
+                cache_key=cache_key,
+                shard_keys=frozenset(),
+                composite_dependencies=frozenset(),
+                simple_dependencies=frozenset(
+                    {
+                        ("Project", "unknown", ""),  # type: ignore[arg-type]
+                        ("Project", "filter", "{bad"),
+                        ("Project", "filter", "{}"),
+                    }
+                ),
+            ),
+            None,
+        )
+        cache.set(cache_key, "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get(cache_key) is None
+
+    def test_generic_cache_invalidation_ignores_unknown_reverse_action(self) -> None:
+        class Project:
+            pass
+
+        cache_key = "cache-a"
+        record_dependencies(
+            "registry-seed",
+            [("Project", "filter", json.dumps({"status": "seed"}))],
+        )
+        cache.set(
+            exact_lookup_shard_key("Project", "filter", "status", "eq", "open"),
+            {cache_key},
+            None,
+        )
+        cache.set(
+            reverse_membership_key(cache_key),
+            ReverseDependencyMembership(
+                cache_key=cache_key,
+                shard_keys=frozenset(),
+                composite_dependencies=frozenset(),
+                simple_dependencies=frozenset(
+                    {("Project", "unknown", "")}  # type: ignore[arg-type]
+                ),
+            ),
+            None,
+        )
+        cache.set(cache_key, "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed"),
+            old_relevant_values={"status": "open"},
+        )
+
+        assert cache.get(cache_key) == "cached-value"
+
+    def test_generic_cache_invalidation_respects_unchanged_exclude_dependency(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [("Project", "exclude", json.dumps({"status": "archived"}))],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="archived"),
+            old_relevant_values={"status": "archived"},
+        )
+
+        assert cache.get("cache-a") == "cached-value"
+
+    def test_generic_cache_invalidation_evaluates_composite_dependencies(self) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [
+                (
+                    "Project",
+                    "filter",
+                    json.dumps({"status": "open", "priority__gte": 3}),
+                )
+            ],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="open", priority=3),
+            old_relevant_values={"status": "closed", "priority": 3},
+        )
+
+        assert cache.get("cache-a") is None
+
+    def test_generic_cache_invalidation_skips_non_matching_composite_dependency(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [
+                (
+                    "Project",
+                    "filter",
+                    json.dumps({"status": "open", "priority__gte": 3}),
+                )
+            ],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="closed", priority=3),
+            old_relevant_values={"status": "closed", "priority": 3},
+        )
+
+        assert cache.get("cache-a") == "cached-value"
+
+    def test_generic_cache_invalidation_evaluates_sort_bucket_dependencies(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [
+                (
+                    "Project",
+                    "filter",
+                    json.dumps(
+                        {
+                            "__sort__rank": {
+                                "filters": {"status": "open"},
+                                "excludes": {"priority__lt": 0},
+                                "reverse": False,
+                            }
+                        }
+                    ),
+                )
+            ],
+        )
+        cache.set("cache-a", "cached-value", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(status="open", priority=2, rank=5),
+            old_relevant_values={"status": "open", "priority": 2, "rank": 10},
+        )
+
+        assert cache.get("cache-a") is None
+
+    def test_generic_cache_invalidation_skips_malformed_sort_bucket_dependencies(
+        self,
+    ) -> None:
+        class Project:
+            pass
+
+        record_dependencies(
+            "cache-a",
+            [
+                (
+                    "Project",
+                    "filter",
+                    json.dumps({"__sort__rank": "not-a-payload"}),
+                )
+            ],
+        )
+        record_dependencies(
+            "cache-b",
+            [
+                (
+                    "Project",
+                    "filter",
+                    json.dumps(
+                        {
+                            "__sort__rank": {
+                                "filters": "not-a-filter-map",
+                                "excludes": {},
+                            }
+                        }
+                    ),
+                )
+            ],
+        )
+        cache.set("cache-a", "cached-value-a", None)
+        cache.set("cache-b", "cached-value-b", None)
+
+        generic_cache_invalidation(
+            sender=Project,
+            instance=SimpleNamespace(rank=2),
+            old_relevant_values={"rank": 1},
+        )
+
+        assert cache.get("cache-a") == "cached-value-a"
+        assert cache.get("cache-b") == "cached-value-b"
