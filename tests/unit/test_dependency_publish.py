@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import pickle
 from typing import Any
 from unittest import mock
@@ -585,19 +585,15 @@ class TestDependencyPublish(SimpleTestCase):
     ) -> None:
         cache_backend = FakeDependencyCacheSetManyBackend()
         recorded_cache_keys: list[str] = []
-        original_record_locked = dependency_publish._record_dependencies_locked
 
-        def capture_record_locked(
-            idx: Any,
-            cache_key: str,
-            dependencies: Any,
+        def capture_record_many(
+            entries: Iterable[tuple[str, Iterable[dependency_publish.Dependency]]],
         ) -> None:
-            recorded_cache_keys.append(cache_key)
-            original_record_locked(idx, cache_key, dependencies)
+            recorded_cache_keys.extend(cache_key for cache_key, _ in entries)
 
         with mock.patch(
-            "general_manager.cache.dependency_publish._record_dependencies_locked",
-            side_effect=capture_record_locked,
+            "general_manager.cache.dependency_publish.record_many_cache_dependencies",
+            side_effect=capture_record_many,
         ):
             publish_dependency_cache_entries(
                 [
