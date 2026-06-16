@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.52.0 (2026-06-16)
+
+### Bug Fixes
+
+- Harden sharded dependency invalidation
+  ([`395676e`](https://github.com/TimKleindick/general_manager/commit/395676e16cb0b4db45c9f5baea5f9fa87a2b06c4))
+
+### Features
+
+- Shard dependency cache index
+  ([`ccdeb58`](https://github.com/TimKleindick/general_manager/commit/ccdeb5859ddeb62c646d68e513ddcca3a687cd2b))
+
+### Testing
+
+- Cover dependency publish edge cases
+  ([`be201a1`](https://github.com/TimKleindick/general_manager/commit/be201a192aca62d21b2e8a166bb84320b935936c))
+
+- Cover dependency shard edge cases
+  ([`78b2de1`](https://github.com/TimKleindick/general_manager/commit/78b2de1e7cead58ea8468c384fc304c830312152))
+
+- Update publish dependency recorder patch
+  ([`cadcde8`](https://github.com/TimKleindick/general_manager/commit/cadcde8b47673aa4f1f19b68b9a77df6fa088dfe))
+
+
 ## v0.51.0 (2026-06-16)
 
 ### Bug Fixes
