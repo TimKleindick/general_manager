@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v0.51.0 (2026-06-16)
+
+### Bug Fixes
+
+- Harden bucket index run-cache keys
+  ([`0d3cbbe`](https://github.com/TimKleindick/general_manager/commit/0d3cbbee4b2fd38c130a3db4e1abb8e09f5883e0))
+
+- Stabilize bucket index key freezing
+  ([`7045ba1`](https://github.com/TimKleindick/general_manager/commit/7045ba145de88b1ef187906226f39de788aa9794))
+
+### Documentation
+
+- Add bucket index docstrings
+  ([`f74774a`](https://github.com/TimKleindick/general_manager/commit/f74774aa4aac45437368dcdf6640a6c532f7fb7e))
+
+- Document run-scoped bucket indexes
+  ([`48e875d`](https://github.com/TimKleindick/general_manager/commit/48e875dc7204b07ba761ad3ce088a22105acee09))
+
+### Features
+
+- Add bucket index API
+  ([`cbad361`](https://github.com/TimKleindick/general_manager/commit/cbad361920bb5d47acd9ef259c25943f270b4fa0))
+
+- Add bucket index key helpers
+  ([`5237f3b`](https://github.com/TimKleindick/general_manager/commit/5237f3b85c7f48c9ca39f215ec030523ad9537a4))
+
+- Cache bucket indexes in calculation runs
+  ([`5293dea`](https://github.com/TimKleindick/general_manager/commit/5293deab07cfc9ff82ce9741cbaf70f39b9dc343))
+
+### Testing
+
+- Cover bucket index edge cases
+  ([`ada1ae7`](https://github.com/TimKleindick/general_manager/commit/ada1ae74f56a075576a6c5e93229afb868c3b013))
+
+- Verify bucket index dependency semantics
+  ([`d883c5c`](https://github.com/TimKleindick/general_manager/commit/d883c5c230a8154aa7e3c715f642daf3337edeef))
+
+
 ## v0.50.0 (2026-06-15)
 
 ### Features
