@@ -561,3 +561,82 @@ class TestDependencyPublish(SimpleTestCase):
         self.assertIsInstance(hit, DependencyCacheHit)
         assert isinstance(hit, DependencyCacheHit)
         self.assertEqual(hit.value, "ready")
+
+    def test_batch_publish_skips_empty_dependency_sets_when_recording_index(
+        self,
+    ) -> None:
+        cache_backend = FakeDependencyCacheSetManyBackend()
+        recorded_cache_keys: list[str] = []
+        original_record_locked = dependency_publish._record_dependencies_locked
+
+        def capture_record_locked(
+            idx: Any,
+            cache_key: str,
+            dependencies: Any,
+        ) -> None:
+            recorded_cache_keys.append(cache_key)
+            original_record_locked(idx, cache_key, dependencies)
+
+        with mock.patch(
+            "general_manager.cache.dependency_publish._record_dependencies_locked",
+            side_effect=capture_record_locked,
+        ):
+            publish_dependency_cache_entries(
+                [
+                    self.make_pending_publication(
+                        cache_key="cache-nodeps",
+                        result="no-deps",
+                        dependencies=set(),
+                        cache_backend=cache_backend,
+                    ),
+                    self.make_pending_publication(
+                        cache_key="cache-hasdeps",
+                        result="has-deps",
+                        dependencies={("Project", "identification", "1")},
+                        cache_backend=cache_backend,
+                    ),
+                ]
+            )
+
+        self.assertEqual(recorded_cache_keys, ["cache-hasdeps"])
+
+    def test_publish_single_entry_uses_custom_record_many_callback(self) -> None:
+        cache_backend = FakeDependencyCacheBackend()
+        recorded: list[tuple] = []
+
+        def fake_record_many(entries: Any) -> None:
+            recorded.extend(entries)
+
+        publish_dependency_cache_entry(
+            cache_key="cache-single",
+            result="value",
+            dependencies={("Project", "filter", '{"status": "open"}')},
+            cache_backend=cache_backend,
+            timeout=None,
+            started_generation=get_dependency_generation(),
+            record_many_fn=fake_record_many,
+        )
+
+        self.assertEqual(len(recorded), 1)
+        recorded_key, recorded_deps = recorded[0]
+        self.assertEqual(recorded_key, "cache-single")
+        self.assertIn(("Project", "filter", '{"status": "open"}'), recorded_deps)
+
+    def test_publish_single_entry_skips_record_when_dependencies_empty(self) -> None:
+        """publish_dependency_cache_entry does not call record_many_fn for empty deps."""
+        cache_backend = FakeDependencyCacheBackend()
+        recorded: list[Any] = []
+
+        publish_dependency_cache_entry(
+            cache_key="cache-nodeps",
+            result="nodeps-value",
+            dependencies=set(),
+            cache_backend=cache_backend,
+            timeout=None,
+            started_generation=get_dependency_generation(),
+            record_many_fn=recorded.extend,
+        )
+
+        self.assertEqual(recorded, [])
+        payload = cache_backend.get("cache-nodeps")
+        self.assertIsInstance(payload, DependencyCacheEntry)
