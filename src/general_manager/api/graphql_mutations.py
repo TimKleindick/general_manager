@@ -66,6 +66,24 @@ def _normalize_mutation_kwargs_for_manager(
 # ---------------------------------------------------------------------------
 
 
+def _is_direct_relation_raw_id_alias(
+    name: str,
+    attribute_types: dict[str, Any],
+) -> bool:
+    """Return true when ``name`` is the raw ``*_id`` alias for a direct relation."""
+    if not name.endswith("_id"):
+        return False
+
+    relation_name = name.removesuffix("_id")
+    relation_info = attribute_types.get(relation_name)
+    if relation_info is None:
+        return False
+
+    return relation_info.get("relation_kind") == "direct" and not relation_info.get(
+        "is_derived", False
+    )
+
+
 def create_write_fields(
     interface_cls: InterfaceBase,
     *,
@@ -74,8 +92,10 @@ def create_write_fields(
     """
     Create Graphene input fields for writable attributes defined by an Interface.
 
-    Skips system fields (``changed_by``, ``created_at``, ``updated_at``) and
-    attributes marked as derived.  For attributes whose type is a
+    Skips system fields (``changed_by``, ``created_at``, ``updated_at``),
+    attributes marked as derived, and raw ``*_id`` aliases for direct
+    relations already exposed by their canonical relation field.  For
+    attributes whose type is a
     ``GeneralManager``, produces an ID field or a list of ID fields for names
     ending with ``"_list"``.  Always includes an optional ``history_comment``
     string field.
@@ -91,10 +111,13 @@ def create_write_fields(
         Mapping from attribute name to a Graphene input field instance.
     """
     fields: dict[str, Any] = {}
-    for name, info in interface_cls.get_attribute_types().items():
+    attribute_types = interface_cls.get_attribute_types()
+    for name, info in attribute_types.items():
         if name in ["changed_by", "created_at", "updated_at"]:
             continue
         if info["is_derived"]:
+            continue
+        if _is_direct_relation_raw_id_alias(name, attribute_types):
             continue
 
         typ = info["type"]
@@ -184,6 +207,7 @@ def generate_create_mutation_class(
                     field_name: field
                     for field_name, field in create_write_fields(interface_cls).items()
                     if field_name not in generalManagerClass.Interface.input_fields
+                    and field.editable
                 },
             ),
             "mutate": create_mutation,
