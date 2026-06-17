@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, Mapping
 
 from django.core.cache import cache
 
@@ -35,6 +36,14 @@ class ReverseDependencyMembership:
     shard_keys: frozenset[str]
     composite_dependencies: frozenset[CompositeDependency]
     simple_dependencies: frozenset[SimpleDependency] = field(default_factory=frozenset)
+
+
+@dataclass(frozen=True, slots=True)
+class _DependencyShardPlan:
+    shard_keys: frozenset[str]
+    composite_dependencies: frozenset[CompositeDependency]
+    simple_dependencies: frozenset[SimpleDependency]
+    lookup_registrations: frozenset[tuple[str, str, str]]
 
 
 def _hash_text(value: str) -> str:
@@ -104,19 +113,78 @@ def cache_set_members(key: str) -> set[str]:
     return set(members)
 
 
+def _cache_get_many(keys: Iterable[str]) -> dict[str, Any]:
+    key_tuple = tuple(dict.fromkeys(keys))
+    if not key_tuple:
+        return {}
+    return dict(cache.get_many(key_tuple))
+
+
+def _cache_set_many(payloads: Mapping[str, Any]) -> None:
+    if payloads:
+        cache.set_many(dict(payloads), None)
+
+
+def _cache_delete_many(keys: Iterable[str]) -> None:
+    key_tuple = tuple(dict.fromkeys(keys))
+    if not key_tuple:
+        return
+    delete_many = getattr(cache, "delete_many", None)
+    if callable(delete_many):
+        delete_many(key_tuple)
+        return
+    for key in key_tuple:
+        cache.delete(key)
+
+
+def _cache_member_set(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, (set, frozenset, list, tuple)):
+        return {member for member in value if isinstance(member, str)}
+    return set()
+
+
+def _cache_set_add_many(additions: Mapping[str, set[str]]) -> None:
+    pending = {key: set(members) for key, members in additions.items() if members}
+    if not pending:
+        return
+
+    existing_sets = _cache_get_many(pending)
+    payloads: dict[str, set[str]] = {}
+    for key, members in pending.items():
+        current = _cache_member_set(existing_sets.get(key, set()))
+        current.update(members)
+        payloads[key] = current
+    _cache_set_many(payloads)
+
+
+def _cache_set_discard_many(removals: Mapping[str, set[str]]) -> None:
+    pending = {key: set(members) for key, members in removals.items() if members}
+    if not pending:
+        return
+
+    existing_sets = _cache_get_many(pending)
+    payloads: dict[str, set[str]] = {}
+    delete_keys: list[str] = []
+    for key, members in pending.items():
+        current = _cache_member_set(existing_sets.get(key, set()))
+        current.difference_update(members)
+        if current:
+            payloads[key] = current
+        else:
+            delete_keys.append(key)
+
+    _cache_set_many(payloads)
+    _cache_delete_many(delete_keys)
+
+
 def _cache_set_add(key: str, member: str) -> None:
-    members = cache_set_members(key)
-    members.add(member)
-    cache.set(key, members, None)
+    _cache_set_add_many({key: {member}})
 
 
 def _cache_set_discard(key: str, member: str) -> None:
-    members = cache_set_members(key)
-    members.discard(member)
-    if members:
-        cache.set(key, members, None)
-    else:
-        cache.delete(key)
+    _cache_set_discard_many({key: {member}})
 
 
 def _lookup_name_for_candidate(lookup: str) -> str:
@@ -190,20 +258,31 @@ def _shard_keys_for_dependency(
     manager_name: str,
     action: DependencyAction,
     identifier: str,
-) -> tuple[set[str], set[CompositeDependency], set[SimpleDependency]]:
+) -> _DependencyShardPlan:
     shard_keys: set[str] = set()
     composites: set[CompositeDependency] = set()
     simple_dependencies: set[SimpleDependency] = set()
+    lookup_registrations: set[tuple[str, str, str]] = set()
 
     if action == "all":
         shard_keys.add(all_records_shard_key(manager_name))
         simple_dependencies.add((manager_name, action, identifier))
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(shard_keys),
+            frozenset(composites),
+            frozenset(simple_dependencies),
+            frozenset(lookup_registrations),
+        )
 
     if action == "request_query":
         shard_keys.add(request_query_shard_key(manager_name))
         simple_dependencies.add((manager_name, action, identifier))
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(shard_keys),
+            frozenset(composites),
+            frozenset(simple_dependencies),
+            frozenset(lookup_registrations),
+        )
 
     if action == "identification":
         shard_keys.add(
@@ -216,19 +295,39 @@ def _shard_keys_for_dependency(
             )
         )
         simple_dependencies.add((manager_name, action, identifier))
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(shard_keys),
+            frozenset(composites),
+            frozenset(simple_dependencies),
+            frozenset(lookup_registrations),
+        )
 
     if action not in {"filter", "exclude"}:
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(),
+            frozenset(),
+            frozenset(),
+            frozenset(),
+        )
 
     params = parse_dependency_identifier(identifier)
     if not isinstance(params, dict):
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(),
+            frozenset(),
+            frozenset(),
+            frozenset(),
+        )
 
     if not params:
         shard_keys.add(all_records_shard_key(manager_name))
         simple_dependencies.add((manager_name, action, identifier))
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(shard_keys),
+            frozenset(composites),
+            frozenset(simple_dependencies),
+            frozenset(lookup_registrations),
+        )
 
     sort_lookups = [
         str(lookup).removeprefix("__sort__")
@@ -239,18 +338,23 @@ def _shard_keys_for_dependency(
         composite = (manager_name, action, identifier)
         composites.add(composite)
         for sort_lookup in sort_lookups:
-            _register_lookup(manager_name, action, sort_lookup)
+            lookup_registrations.add((manager_name, action, sort_lookup))
             shard_keys.add(
                 composite_lookup_shard_key(manager_name, action, sort_lookup)
             )
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(shard_keys),
+            frozenset(composites),
+            frozenset(simple_dependencies),
+            frozenset(lookup_registrations),
+        )
 
     if len(params) > 1:
         composite = (manager_name, action, identifier)
         composites.add(composite)
         for lookup in params:
             candidate_lookup = _lookup_name_for_candidate(str(lookup))
-            _register_lookup(manager_name, action, candidate_lookup)
+            lookup_registrations.add((manager_name, action, candidate_lookup))
             shard_keys.add(
                 composite_lookup_shard_key(
                     manager_name,
@@ -258,12 +362,17 @@ def _shard_keys_for_dependency(
                     candidate_lookup,
                 )
             )
-        return shard_keys, composites, simple_dependencies
+        return _DependencyShardPlan(
+            frozenset(shard_keys),
+            frozenset(composites),
+            frozenset(simple_dependencies),
+            frozenset(lookup_registrations),
+        )
 
     lookup, value = next(iter(params.items()))
     spec = lookup_spec_from_key(str(lookup))
     candidate_lookup = "__".join(spec.attr_path)
-    _register_lookup(manager_name, action, candidate_lookup)
+    lookup_registrations.add((manager_name, action, candidate_lookup))
     if spec.operator == "eq":
         shard_keys.add(
             exact_lookup_shard_key(manager_name, action, spec.lookup, "eq", value)
@@ -273,7 +382,39 @@ def _shard_keys_for_dependency(
             scan_lookup_shard_key(manager_name, action, spec.lookup, spec.operator)
         )
     simple_dependencies.add((manager_name, action, identifier))
-    return shard_keys, composites, simple_dependencies
+    return _DependencyShardPlan(
+        frozenset(shard_keys),
+        frozenset(composites),
+        frozenset(simple_dependencies),
+        frozenset(lookup_registrations),
+    )
+
+
+def _reverse_membership_for_dependencies(
+    cache_key: str,
+    dependency_set: set[Dependency],
+) -> tuple[ReverseDependencyMembership, set[tuple[str, str, str]]]:
+    shard_keys: set[str] = set()
+    composites: set[CompositeDependency] = set()
+    simple_dependencies: set[SimpleDependency] = set()
+    lookup_registrations: set[tuple[str, str, str]] = set()
+
+    for manager_name, action, identifier in dependency_set:
+        plan = _shard_keys_for_dependency(manager_name, action, identifier)
+        shard_keys.update(plan.shard_keys)
+        composites.update(plan.composite_dependencies)
+        simple_dependencies.update(plan.simple_dependencies)
+        lookup_registrations.update(plan.lookup_registrations)
+
+    return (
+        ReverseDependencyMembership(
+            cache_key=cache_key,
+            shard_keys=frozenset(shard_keys),
+            composite_dependencies=frozenset(composites),
+            simple_dependencies=frozenset(simple_dependencies),
+        ),
+        lookup_registrations,
+    )
 
 
 def record_cache_dependencies(
@@ -281,48 +422,56 @@ def record_cache_dependencies(
     dependencies: Iterable[Dependency],
 ) -> None:
     """Record dependency metadata for one cache key in deterministic shards."""
-    dependency_set = set(dependencies)
-    if not dependency_set:
-        return
-
-    clear_legacy_dependency_index()
-    remove_cache_key_from_shards(cache_key)
-
-    shard_keys: set[str] = set()
-    composites: set[CompositeDependency] = set()
-    simple_dependencies: set[SimpleDependency] = set()
-    for manager_name, action, identifier in dependency_set:
-        new_shards, new_composites, new_simple = _shard_keys_for_dependency(
-            manager_name,
-            action,
-            identifier,
-        )
-        shard_keys.update(new_shards)
-        composites.update(new_composites)
-        simple_dependencies.update(new_simple)
-
-    for shard_key in shard_keys:
-        _cache_set_add(shard_key, cache_key)
-
-    cache.set(
-        reverse_membership_key(cache_key),
-        ReverseDependencyMembership(
-            cache_key=cache_key,
-            shard_keys=frozenset(shard_keys),
-            composite_dependencies=frozenset(composites),
-            simple_dependencies=frozenset(simple_dependencies),
-        ),
-        None,
-    )
-    _cache_set_add(REVERSE_MEMBERSHIP_REGISTRY_KEY, reverse_membership_key(cache_key))
+    record_many_cache_dependencies(((cache_key, dependencies),))
 
 
 def record_many_cache_dependencies(
     entries: Iterable[tuple[str, Iterable[Dependency]]],
 ) -> None:
     """Record dependency metadata for many cache keys."""
+    normalized: dict[str, set[Dependency]] = {}
     for cache_key, dependencies in entries:
-        record_cache_dependencies(cache_key, dependencies)
+        dependency_set = set(dependencies)
+        if dependency_set:
+            normalized.setdefault(cache_key, set()).update(dependency_set)
+    if not normalized:
+        return
+
+    clear_legacy_dependency_index()
+
+    reverse_keys = {
+        cache_key: reverse_membership_key(cache_key) for cache_key in normalized
+    }
+    existing_reverses = _cache_get_many(reverse_keys.values())
+
+    shard_removals: dict[str, set[str]] = defaultdict(set)
+    for cache_key, reverse_key in reverse_keys.items():
+        reverse = existing_reverses.get(reverse_key)
+        if isinstance(reverse, ReverseDependencyMembership):
+            for shard_key in reverse.shard_keys:
+                shard_removals[shard_key].add(cache_key)
+
+    _cache_set_discard_many(shard_removals)
+
+    set_additions: dict[str, set[str]] = defaultdict(set)
+    reverse_payloads: dict[str, ReverseDependencyMembership] = {}
+
+    for cache_key, dependency_set in normalized.items():
+        reverse, lookup_registrations = _reverse_membership_for_dependencies(
+            cache_key,
+            dependency_set,
+        )
+        for shard_key in reverse.shard_keys:
+            set_additions[shard_key].add(cache_key)
+        for manager_name, action, lookup in lookup_registrations:
+            set_additions[lookup_registry_key(manager_name, action)].add(lookup)
+
+        reverse_key = reverse_keys[cache_key]
+        reverse_payloads[reverse_key] = reverse
+        set_additions[REVERSE_MEMBERSHIP_REGISTRY_KEY].add(reverse_key)
+
+    _cache_set_add_many(set_additions)
+    _cache_set_many(reverse_payloads)
 
 
 def remove_cache_key_from_shards(cache_key: str) -> None:

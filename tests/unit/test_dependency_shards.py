@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Any
+from unittest import mock
 
 from django.test import TestCase, override_settings
 
@@ -9,6 +12,7 @@ from general_manager.cache.dependency_matching import stable_value_hash
 from general_manager.cache.dependency_shards import (
     ALL_RECORDS_VALUE,
     DEPENDENCY_SHARD_PREFIX,
+    REVERSE_MEMBERSHIP_REGISTRY_KEY,
     ReverseDependencyMembership,
     all_records_shard_key,
     cache_set_members,
@@ -17,6 +21,7 @@ from general_manager.cache.dependency_shards import (
     composite_lookup_shard_key,
     exact_lookup_shard_key,
     record_cache_dependencies,
+    record_many_cache_dependencies,
     remove_cache_key_from_shards,
     request_query_shard_key,
     reverse_membership_key,
@@ -36,6 +41,62 @@ TEST_CACHES = {
         "LOCATION": "test-dependency-shards",
     }
 }
+
+
+class CountingShardCache:
+    def __init__(self) -> None:
+        self.store: dict[str, Any] = {}
+        self.get_calls: list[str] = []
+        self.get_many_calls: list[tuple[str, ...]] = []
+        self.set_calls: list[str] = []
+        self.set_many_calls: list[tuple[str, ...]] = []
+        self.delete_calls: list[str] = []
+        self.delete_many_calls: list[tuple[str, ...]] = []
+
+    def _clone(self, value: Any) -> Any:
+        if isinstance(value, set):
+            return set(value)
+        if isinstance(value, frozenset):
+            return frozenset(value)
+        return value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self.get_calls.append(key)
+        if key in self.store:
+            return self._clone(self.store[key])
+        return default
+
+    def get_many(self, keys: Any) -> dict[str, Any]:
+        key_tuple = tuple(keys)
+        self.get_many_calls.append(key_tuple)
+        return {
+            key: self._clone(self.store[key]) for key in key_tuple if key in self.store
+        }
+
+    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
+        self.set_calls.append(key)
+        self.store[key] = self._clone(value)
+
+    def set_many(
+        self,
+        data: Mapping[str, Any],
+        timeout: int | None = None,
+    ) -> list[str]:
+        payload = dict(data)
+        self.set_many_calls.append(tuple(payload))
+        for key, value in payload.items():
+            self.store[key] = self._clone(value)
+        return []
+
+    def delete(self, key: str) -> None:
+        self.delete_calls.append(key)
+        self.store.pop(key, None)
+
+    def delete_many(self, keys: Any) -> None:
+        key_tuple = tuple(keys)
+        self.delete_many_calls.append(key_tuple)
+        for key in key_tuple:
+            self.store.pop(key, None)
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -253,6 +314,58 @@ class DependencyShardKeyTests(TestCase):
         assert reverse.composite_dependencies == frozenset(
             {("Project", "filter", identifier)}
         )
+
+    def test_record_many_cache_dependencies_batches_shared_shard_writes(
+        self,
+    ) -> None:
+        counting_cache = CountingShardCache()
+        dependencies = {
+            ("Project", "filter", json.dumps({"status": "open"})),
+            ("Project", "filter", json.dumps({"priority": 3})),
+            ("Project", "filter", json.dumps({"owner": "team-a"})),
+            ("Project", "filter", json.dumps({"region": "emea"})),
+            ("Project", "filter", json.dumps({"stage": "draft"})),
+        }
+        entries = [(f"cache-{index}", dependencies) for index in range(25)]
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            record_many_cache_dependencies(entries)
+
+        cache_keys = {f"cache-{index}" for index in range(25)}
+        status_shard = exact_lookup_shard_key(
+            "Project",
+            "filter",
+            "status",
+            "eq",
+            "open",
+        )
+        priority_shard = exact_lookup_shard_key(
+            "Project",
+            "filter",
+            "priority",
+            "eq",
+            3,
+        )
+
+        assert counting_cache.store[status_shard] == cache_keys
+        assert counting_cache.store[priority_shard] == cache_keys
+
+        reverse = counting_cache.store[reverse_membership_key("cache-0")]
+        assert isinstance(reverse, ReverseDependencyMembership)
+        assert reverse.cache_key == "cache-0"
+        assert status_shard in reverse.shard_keys
+        assert priority_shard in reverse.shard_keys
+
+        assert counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] == {
+            reverse_membership_key(f"cache-{index}") for index in range(25)
+        }
+        assert counting_cache.get_calls == ["dependency_index"]
+        assert counting_cache.set_calls == []
+        assert len(counting_cache.get_many_calls) <= 2
+        assert len(counting_cache.set_many_calls) <= 2
 
 
 @override_settings(CACHES=TEST_CACHES)
