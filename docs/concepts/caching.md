@@ -162,6 +162,12 @@ one-row-per-key lookups, and `group_by(...)` or `index_many(...)` when multiple
 rows share the same key. Use `discard_prefix(prefix)` when code that owns a
 structured key namespace needs to invalidate a group of run-scoped values.
 
+Callable `Input.possible_values` providers are also cached automatically inside
+an active `CalculationRunContext` when the caller can identify the owning manager
+class and input name. The cache key uses the manager class, the input name, and
+only the input's declared `depends_on` values. Static domains and static
+iterables are returned directly and are not copied into the run cache.
+
 ORM-backed managers use this explicit run context to deduplicate repeated row
 materialization for the same manager identity. The optimization is active only
 inside an existing `CalculationRunContext`; constructing managers outside a run
