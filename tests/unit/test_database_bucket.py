@@ -396,19 +396,16 @@ class DatabaseBucketTestCase(TestCase):
                 [self.u1.id, self.u2.id],
             )
 
-    def test_unordered_bucket_queries_do_not_share_iter_sql_inside_run_context(self):
+    def test_unordered_bucket_queries_share_loaded_rows_inside_run_context(self):
         first_bucket = DatabaseBucket(User.objects.all(), UserManager)
         second_bucket = DatabaseBucket(User.objects.all(), UserManager)
 
-        with CalculationRunContext(), self.assertNumQueries(2):
-            self.assertEqual(
-                sorted(manager.identification["id"] for manager in first_bucket),
-                [self.u1.id, self.u2.id, self.u3.id],
-            )
-            self.assertEqual(
-                sorted(manager.identification["id"] for manager in second_bucket),
-                [self.u1.id, self.u2.id, self.u3.id],
-            )
+        with CalculationRunContext(), self.assertNumQueries(1):
+            first_ids = [manager.identification["id"] for manager in first_bucket]
+            second_ids = [manager.identification["id"] for manager in second_bucket]
+
+        self.assertEqual(second_ids, first_ids)
+        self.assertEqual(sorted(first_ids), [self.u1.id, self.u2.id, self.u3.id])
 
     def test_equivalent_database_buckets_share_index_inside_run_context(self):
         """Share a bucket index for equivalent querysets in one run context."""
