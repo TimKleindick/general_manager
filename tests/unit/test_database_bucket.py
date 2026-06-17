@@ -304,6 +304,38 @@ class DatabaseBucketTestCase(TestCase):
                     [self.u1.id, self.u2.id],
                 )
 
+    def test_ordered_primary_key_snapshot_materializes_primary_keys(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            primary_keys = bucket._get_run_scoped_primary_keys()
+
+        self.assertEqual(primary_keys, (self.u1.id, self.u2.id))
+
+    def test_unordered_primary_key_snapshot_preserves_queryset_iteration_order(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]),
+            UserManager,
+        )
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            primary_keys = bucket._get_run_scoped_primary_keys()
+
+        self.assertEqual(set(primary_keys), {self.u1.id, self.u2.id})
+
+        with CalculationRunContext() as context:
+            context.set_orm_bucket_result(bucket._query_signature(), primary_keys)
+            with patch.object(bucket._data, "values_list") as values_list:
+                self.assertEqual(
+                    bucket._get_run_scoped_primary_keys(),
+                    primary_keys,
+                )
+
+        values_list.assert_not_called()
+
     def test_trusted_hydration_preserves_custom_manager_initializer(self):
         search_date = datetime(2024, 1, 1)
         bucket = DatabaseBucket(
