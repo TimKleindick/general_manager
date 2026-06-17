@@ -161,6 +161,41 @@ class TestInput(TestCase):
         self.assertEqual(second, [1])
         self.assertEqual(calls, 1)
 
+    def test_callable_possible_values_cache_key_uses_declared_dependencies_only(self):
+        calls: list[dict[str, list[int]]] = []
+
+        class Owner:
+            pass
+
+        def possible_values(filters):
+            calls.append(filters)
+            return [sum(filters["ids"])]
+
+        input_obj = Input(
+            int,
+            possible_values=possible_values,
+            depends_on=["filters"],
+        )
+
+        with CalculationRunContext():
+            first = input_obj.resolve_possible_values(
+                {"filters": {"ids": [1, 2]}, "unrelated": "a"},
+                cache_context=(Owner, "total"),
+            )
+            second = input_obj.resolve_possible_values(
+                {"filters": {"ids": [1, 2]}, "unrelated": "b"},
+                cache_context=(Owner, "total"),
+            )
+            third = input_obj.resolve_possible_values(
+                {"filters": {"ids": [3]}, "unrelated": "b"},
+                cache_context=(Owner, "total"),
+            )
+
+        self.assertEqual(first, [3])
+        self.assertEqual(second, [3])
+        self.assertEqual(third, [3])
+        self.assertEqual(calls, [{"ids": [1, 2]}, {"ids": [3]}])
+
     def test_simple_input_casting(self):
         """
         Test that the Input class casts values to integers and preserves `None`.

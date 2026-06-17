@@ -635,6 +635,29 @@ class Input(Generic[INPUT_TYPE]):
             return cast(date, _invoke_callable(value, **dependency_values))
         return value
 
+    def _possible_values_run_cache_key(
+        self,
+        cache_context: PossibleValuesCacheContext,
+        dependency_values: dict[str, Any],
+    ) -> tuple[Hashable, ...]:
+        from general_manager.bucket.indexing import freeze_bucket_index_value
+
+        return cast(
+            tuple[Hashable, ...],
+            (
+                "input_possible_values",
+                cache_context[0],
+                cache_context[1],
+                tuple(
+                    (
+                        dependency_name,
+                        freeze_bucket_index_value(dependency_values[dependency_name]),
+                    )
+                    for dependency_name in self.depends_on
+                ),
+            ),
+        )
+
     def resolve_possible_values(
         self,
         identification: dict[str, Any] | None = None,
@@ -670,15 +693,13 @@ class Input(Generic[INPUT_TYPE]):
             if context is None:
                 return invoke_possible_values()
 
-            cache_key = cast(
-                tuple[Hashable, ...],
-                (
-                    "input_possible_values",
-                    cache_context[0],
-                    cache_context[1],
-                    (),
-                ),
-            )
+            try:
+                cache_key = self._possible_values_run_cache_key(
+                    cache_context,
+                    dependency_values,
+                )
+            except TypeError:
+                return invoke_possible_values()
             return context.get_or_set(cache_key, invoke_possible_values)
         return cast(Any, self.possible_values)
 
