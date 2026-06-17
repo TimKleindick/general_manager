@@ -521,21 +521,21 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if self._data is None:
             from general_manager.cache.run_context import ensure_calculation_run_context
 
-            sorted_inputs = self.topological_sort_inputs()
-            sorted_filters = self._sort_filters(sorted_inputs)
-            current_combinations = self._generate_input_combinations(
-                sorted_inputs,
-                sorted_filters["input_filters"],
-                sorted_filters["input_excludes"],
-            )
-            sort_key = self._normalized_sort_key()
-            needs_manager_access = (
-                bool(sorted_filters["prop_filters"])
-                or bool(sorted_filters["prop_excludes"])
-                or not self._sort_uses_only_inputs(sort_key)
-            )
-
             with ensure_calculation_run_context():
+                sorted_inputs = self.topological_sort_inputs()
+                sorted_filters = self._sort_filters(sorted_inputs)
+                current_combinations = self._generate_input_combinations(
+                    sorted_inputs,
+                    sorted_filters["input_filters"],
+                    sorted_filters["input_excludes"],
+                )
+                sort_key = self._normalized_sort_key()
+                needs_manager_access = (
+                    bool(sorted_filters["prop_filters"])
+                    or bool(sorted_filters["prop_excludes"])
+                    or not self._sort_uses_only_inputs(sort_key)
+                )
+
                 if needs_manager_access:
                     manager_combinations = self._manager_combinations(
                         current_combinations
@@ -564,9 +564,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                             sort_key,
                         )
 
-            if self.reverse:
-                identifications.reverse()
-            self._data = identifications
+                if self.reverse:
+                    identifications.reverse()
+                self._data = identifications
 
         return self._data
 

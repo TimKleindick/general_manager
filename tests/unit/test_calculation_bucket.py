@@ -3,6 +3,7 @@ from django.test import TestCase
 from datetime import date
 from unittest.mock import patch
 from general_manager.bucket.calculation_bucket import CalculationBucket
+from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.interface import CalculationInterface
 from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager import GeneralManager
@@ -382,6 +383,51 @@ class TestGenerateCombinations(TestCase):
         self.assertEqual(
             calls,
             [{"num": 1}, {"num": 2}, {"num": 3}],
+        )
+
+    def test_generate_combinations_uses_one_run_context_for_bulk_work(
+        self, _mock_parse
+    ):
+        possible_value_contexts = []
+        property_contexts = []
+
+        def possible_values():
+            possible_value_contexts.append(current_calculation_run_context())
+            return [1, 2, 3]
+
+        class DynInterface(CalculationInterface):
+            input_fields: ClassVar[dict] = {
+                "num": Input(type=int, possible_values=possible_values),
+            }
+
+        class DynManager:
+            Interface = DynInterface
+
+            def __init__(self, **kwargs):
+                self.identification = dict(kwargs)
+                self.num = kwargs["num"]
+
+            @property
+            def doubled(self):
+                property_contexts.append(current_calculation_run_context())
+                return self.num * 2
+
+        DynInterface._parent_class = DynManager
+
+        bucket = CalculationBucket(DynManager)
+        bucket._filters = {"doubled": {"filter_funcs": [lambda value: value >= 4]}}
+
+        combos = bucket.generate_combinations()
+
+        self.assertEqual(combos, [{"num": 2}, {"num": 3}])
+        self.assertIsNone(current_calculation_run_context())
+        self.assertEqual(len(possible_value_contexts), 1)
+        self.assertEqual(len(property_contexts), 3)
+        all_contexts = [*possible_value_contexts, *property_contexts]
+        self.assertTrue(all_contexts)
+        self.assertTrue(all(context is not None for context in all_contexts))
+        self.assertEqual(
+            {id(context) for context in all_contexts}, {id(all_contexts[0])}
         )
 
     def test_property_exclude_still_instantiates_managers_for_property_access(
