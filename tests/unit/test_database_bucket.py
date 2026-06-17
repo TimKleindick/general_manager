@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Group
-from django.db.models import functions
+from django.db.models import Prefetch, functions
 from django.db.models.query import QuerySet
 from django.test import TestCase
 
@@ -150,6 +150,17 @@ class DummyInterface(InterfaceBase):
         return pre_creation, post_creation
 
 
+class TrustedDummyInterface(DummyInterface):
+    @classmethod
+    def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+        interface = cls.__new__(cls)
+        interface.identification = {"id": instance.pk}
+        interface.pk = instance.pk
+        interface._search_date = search_date
+        interface._instance = instance
+        return interface
+
+
 class UserManager(GeneralManager):
     """
     Simple GeneralManager subclass for wrapping User PKs.
@@ -194,6 +205,17 @@ class SearchDateManager(GeneralManager):
         super().__init__(pk, **kwargs)
 
 
+class TrustedUserManager(GeneralManager):
+    pass
+
+
+class InitTrackingTrustedManager(GeneralManager):
+    def __init__(self, pk, **kwargs):
+        self.initialized_by_constructor = True
+        self.received_search_date = kwargs.get("search_date")
+        super().__init__(pk, **kwargs)
+
+
 class DatabaseBucketTestCase(TestCase):
     def setUp(self):
         """
@@ -204,7 +226,10 @@ class DatabaseBucketTestCase(TestCase):
         UserManager.Interface = DummyInterface  # Set the interface for UserManager
         AnotherManager.Interface = DummyInterface
         SearchDateManager.Interface = DummyInterface
+        TrustedUserManager.Interface = TrustedDummyInterface
+        InitTrackingTrustedManager.Interface = TrustedDummyInterface
         DummyInterface._parent_class = UserManager
+        TrustedDummyInterface._parent_class = TrustedUserManager
         # Create some test users
         self.u1 = User.objects.create(username="alice")
         self.u2 = User.objects.create(username="bob")
@@ -269,6 +294,65 @@ class DatabaseBucketTestCase(TestCase):
                     [manager.identification["id"] for manager in bucket],
                     [self.u1.id, self.u2.id],
                 )
+
+    def test_trusted_hydration_preserves_custom_manager_initializer(self):
+        search_date = datetime(2024, 1, 1)
+        bucket = DatabaseBucket(
+            User.objects.filter(pk=self.u1.pk),
+            InitTrackingTrustedManager,
+            search_date=search_date,
+        )
+
+        manager = next(iter(bucket))
+
+        self.assertTrue(manager.initialized_by_constructor)
+        self.assertEqual(manager.received_search_date, search_date)
+        self.assertEqual(manager.identification["id"], self.u1.pk)
+
+    def test_prefetched_querysets_do_not_share_trusted_row_snapshots(self):
+        allowed = Group.objects.create(name="allowed")
+        blocked = Group.objects.create(name="blocked")
+        self.u1.groups.add(allowed, blocked)
+
+        allowed_bucket = DatabaseBucket(
+            User.objects.filter(pk=self.u1.pk).prefetch_related(
+                Prefetch(
+                    "groups",
+                    queryset=Group.objects.filter(pk=allowed.pk),
+                    to_attr="filtered_groups",
+                )
+            ),
+            TrustedUserManager,
+        )
+        blocked_bucket = DatabaseBucket(
+            User.objects.filter(pk=self.u1.pk).prefetch_related(
+                Prefetch(
+                    "groups",
+                    queryset=Group.objects.filter(pk=blocked.pk),
+                    to_attr="filtered_groups",
+                )
+            ),
+            TrustedUserManager,
+        )
+
+        with CalculationRunContext():
+            allowed_manager = next(iter(allowed_bucket))
+            blocked_manager = next(iter(blocked_bucket))
+
+        self.assertEqual(
+            [
+                group.pk
+                for group in allowed_manager._interface._instance.filtered_groups
+            ],
+            [allowed.pk],
+        )
+        self.assertEqual(
+            [
+                group.pk
+                for group in blocked_manager._interface._instance.filtered_groups
+            ],
+            [blocked.pk],
+        )
 
     def test_equivalent_bucket_queries_share_iter_sql_inside_run_context(self):
         first_bucket = DatabaseBucket(

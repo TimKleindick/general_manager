@@ -90,6 +90,12 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         if not callable(hydrate):
             raise TrustedOrmHydrationNotSupportedError(cls.Interface.__name__)
 
+        if cls.__init__ is not GeneralManager.__init__:
+            pk = instance.pk
+            if search_date is None:
+                return cls(pk)
+            return cls(pk, search_date=search_date)
+
         manager = cls.__new__(cls)
         manager._interface = hydrate(instance, search_date=search_date)
         manager.__id = manager._interface.identification
