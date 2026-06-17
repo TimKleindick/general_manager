@@ -26,7 +26,7 @@ freight_eur = Measurement(100, "USD/t").to("EUR/t", exchange_rate=0.92)
 - Comparisons compare magnitudes after converting to a common unit.
 
 ```python
-width = Measurement("50 cm")
+width = Measurement.from_string("50 cm")
 area = length * width           # 2.5 m ** 2
 is_longer = length > width       # True
 ```
