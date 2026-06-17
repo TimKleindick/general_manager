@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.53.1 (2026-06-17)
+
+### Bug Fixes
+
+- Reuse trusted row snapshots after rebase
+  ([`b0bea88`](https://github.com/TimKleindick/general_manager/commit/b0bea88812c47b1190a0d3fc80b944cfd1e74880))
+
+- Share calculation run context during bulk enumeration
+  ([`2d789bc`](https://github.com/TimKleindick/general_manager/commit/2d789bc2f3d67bb6b72f16cbe2320f230cd761ac))
+
+### Testing
+
+- Cover database bucket primary key snapshots
+  ([`a495945`](https://github.com/TimKleindick/general_manager/commit/a49594514a454cf9c844df97e5e9c92b7a585d6a))
+
+
 ## v0.53.0 (2026-06-17)
 
 ### Bug Fixes
