@@ -356,6 +356,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             sql, params = self._data.query.sql_with_params()
         except (EmptyResultSet, FieldError, TypeError, ValueError):
             return None
+        # Unordered SQL can produce different row order across equivalent querysets.
+        # Keep same-bucket snapshot reuse, but do not share it across bucket objects.
+        unordered_identity = None if self._data.ordered else id(self)
         return (
             self._manager_class,
             self._data.model,
@@ -365,6 +368,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self._search_date,
             self._sort_keys,
             self._sort_reverse,
+            unordered_identity,
         )
 
     def _bucket_index_source_signature(self) -> Hashable:
@@ -398,11 +402,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if cached is not None:
             return cached  # type: ignore[return-value]
 
-        primary_keys = tuple(
-            self._data.values_list("pk", flat=True)[
-                : MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1
-            ]
-        )
+        if self._data.ordered:
+            primary_keys = tuple(
+                self._data.values_list("pk", flat=True)[
+                    : MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1
+                ]
+            )
+        else:
+            # Preserve the order normal queryset iteration would expose.
+            primary_keys = tuple(
+                row.pk for row in self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1]
+            )
         if len(primary_keys) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
             return None
         context.set_orm_bucket_result(signature, primary_keys)
