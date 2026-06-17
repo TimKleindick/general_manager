@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import builtins
 import inspect
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,7 +15,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement import Measurement
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
 
     from general_manager.bucket.base_bucket import Bucket
 
@@ -29,6 +29,7 @@ type PossibleValues = (
     | "Bucket[Any]"
     | "Callable[..., InputDomain[Any] | Iterable[Any] | Bucket[Any]]"
 )
+type PossibleValuesCacheContext = tuple[type[Any], str]
 type ScalarConstraint = date | datetime | int | float | Decimal
 type Validator = Callable[..., bool | None]
 type Normalizer = Callable[..., Any]
@@ -637,6 +638,8 @@ class Input(Generic[INPUT_TYPE]):
     def resolve_possible_values(
         self,
         identification: dict[str, Any] | None = None,
+        *,
+        cache_context: PossibleValuesCacheContext | None = None,
     ) -> Any:
         """Resolve the configured possible values for the current dependency context."""
 
