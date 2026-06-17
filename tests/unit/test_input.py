@@ -196,6 +196,36 @@ class TestInput(TestCase):
         self.assertEqual(third, [3])
         self.assertEqual(calls, [{"ids": [1, 2]}, {"ids": [3]}])
 
+    def test_callable_possible_values_materializes_one_shot_iterators_before_caching(
+        self,
+    ):
+        calls = 0
+
+        class Owner:
+            pass
+
+        def possible_values():
+            nonlocal calls
+            calls += 1
+            return (value for value in [1, 2])
+
+        input_obj = Input(int, possible_values=possible_values)
+
+        with CalculationRunContext():
+            first = input_obj.resolve_possible_values(
+                {},
+                cache_context=(Owner, "number"),
+            )
+            second = input_obj.resolve_possible_values(
+                {},
+                cache_context=(Owner, "number"),
+            )
+
+            self.assertEqual(list(first), [1, 2])
+            self.assertEqual(list(second), [1, 2])
+
+        self.assertEqual(calls, 1)
+
     def test_simple_input_casting(self):
         """
         Test that the Input class casts values to integers and preserves `None`.
