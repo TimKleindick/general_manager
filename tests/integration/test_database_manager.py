@@ -11,6 +11,7 @@ from typing import ClassVar
 from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface, ReadOnlyInterface
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.cache.run_context import CalculationRunContext
 
@@ -148,6 +149,16 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
                     related_name="change_request_reviews",
                 )
 
+        class CustomInitRecord(GeneralManager):
+            name: str
+
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50)
+
+                def __init__(self, *args, **kwargs):
+                    self.initialized_by_interface = True
+                    super().__init__(*args, **kwargs)
+
         cls.TestCountry = TestCountry
         cls.TestHuman = TestHuman
         cls.TestFamily = TestFamily
@@ -157,6 +168,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         cls.ChangeRequestApproval = ChangeRequestApproval
         cls.ChangeRequestFeasibility = ChangeRequestFeasibility
         cls.ChangeRequestReview = ChangeRequestReview
+        cls.CustomInitRecord = CustomInitRecord
         cls.general_manager_classes = [
             TestCountry,
             TestHuman,
@@ -167,6 +179,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
             ChangeRequestApproval,
             ChangeRequestFeasibility,
             ChangeRequestReview,
+            CustomInitRecord,
         ]
 
     def setUp(self):
@@ -242,6 +255,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         self.ChangeRequestApproval.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestFeasibility.Interface._model._meta.model.objects.all().delete()
         self.ChangeRequestReview.Interface._model._meta.model.objects.all().delete()
+        self.CustomInitRecord.Interface._model._meta.model.objects.all().delete()
         super().tearDown()
 
     def test_iter(self):
@@ -329,6 +343,61 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         self.assertEqual(first_names, ["Alice", "Bob", "Charlie"])
         self.assertEqual(second_names, ["Alice", "Bob", "Charlie"])
+
+    def test_live_queryset_with_search_date_uses_historical_lookup(self):
+        old_buffer_seconds = self.TestHuman.Interface.historical_lookup_buffer_seconds
+        self.TestHuman.Interface.historical_lookup_buffer_seconds = 0
+        self.addCleanup(
+            setattr,
+            self.TestHuman.Interface,
+            "historical_lookup_buffer_seconds",
+            old_buffer_seconds,
+        )
+
+        human_id = self.test_human1.identification["id"]
+        created_history = (
+            self.TestHuman.Interface._model.history.filter(id=human_id)
+            .order_by("history_date")
+            .last()
+        )
+        self.assertIsNotNone(created_history)
+
+        self.test_human1.update(name="Alice Updated", ignore_permission=True)
+        live_queryset = self.TestHuman.Interface._model.objects.filter(pk=human_id)
+        bucket = DatabaseBucket(
+            live_queryset,
+            self.TestHuman,
+            search_date=created_history.history_date,
+        )
+
+        historical_manager = next(iter(bucket))
+
+        self.assertEqual(historical_manager.name, "Alice")
+        self.assertEqual(self.TestHuman(id=human_id).name, "Alice Updated")
+
+    def test_trusted_hydration_preserves_custom_interface_initializer(self):
+        self.CustomInitRecord.create(
+            creator_id=None,
+            name="Custom",
+            ignore_permission=True,
+        )
+
+        manager = next(iter(self.CustomInitRecord.all()))
+
+        self.assertTrue(manager._interface.initialized_by_interface)
+        self.assertEqual(manager.name, "Custom")
+
+    def test_deferred_queryset_rows_use_full_interface_load(self):
+        model = self.TestHuman.Interface._model
+        bucket = DatabaseBucket(
+            model.objects.only("id").filter(pk=self.test_human1.identification["id"]),
+            self.TestHuman,
+        )
+
+        manager = next(iter(bucket))
+
+        self.assertEqual(manager._interface._instance.get_deferred_fields(), set())
+        self.assertEqual(manager.name, "Alice")
 
     def test_soft_delete_behavior(self):
         """
