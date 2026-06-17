@@ -367,6 +367,125 @@ class DependencyShardKeyTests(TestCase):
         assert len(counting_cache.get_many_calls) <= 2
         assert len(counting_cache.set_many_calls) <= 2
 
+    def test_record_many_cache_dependencies_replaces_existing_memberships_in_bulk(
+        self,
+    ) -> None:
+        counting_cache = CountingShardCache()
+        old_shard = exact_lookup_shard_key(
+            "Project",
+            "filter",
+            "status",
+            "eq",
+            "old",
+        )
+        new_shard = exact_lookup_shard_key(
+            "Project",
+            "filter",
+            "status",
+            "eq",
+            "new",
+        )
+        reverse_a = reverse_membership_key("cache-a")
+        reverse_b = reverse_membership_key("cache-b")
+        counting_cache.store[old_shard] = {"cache-a", "cache-b", "untouched"}
+        counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] = {
+            reverse_a,
+            reverse_b,
+        }
+        counting_cache.store[reverse_a] = ReverseDependencyMembership(
+            cache_key="cache-a",
+            shard_keys=frozenset({old_shard}),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(
+                {("Project", "filter", json.dumps({"status": "old"}))}
+            ),
+        )
+        counting_cache.store[reverse_b] = ReverseDependencyMembership(
+            cache_key="cache-b",
+            shard_keys=frozenset({old_shard}),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(
+                {("Project", "filter", json.dumps({"status": "old"}))}
+            ),
+        )
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            record_many_cache_dependencies(
+                [
+                    (
+                        "cache-a",
+                        {("Project", "filter", json.dumps({"status": "new"}))},
+                    ),
+                    (
+                        "cache-b",
+                        {("Project", "filter", json.dumps({"status": "new"}))},
+                    ),
+                ]
+            )
+
+        assert counting_cache.store[old_shard] == {"untouched"}
+        assert counting_cache.store[new_shard] == {"cache-a", "cache-b"}
+        assert counting_cache.store[REVERSE_MEMBERSHIP_REGISTRY_KEY] == {
+            reverse_a,
+            reverse_b,
+        }
+        assert counting_cache.store[reverse_a] == ReverseDependencyMembership(
+            cache_key="cache-a",
+            shard_keys=frozenset({new_shard}),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(
+                {("Project", "filter", json.dumps({"status": "new"}))}
+            ),
+        )
+        assert counting_cache.store[reverse_b] == ReverseDependencyMembership(
+            cache_key="cache-b",
+            shard_keys=frozenset({new_shard}),
+            composite_dependencies=frozenset(),
+            simple_dependencies=frozenset(
+                {("Project", "filter", json.dumps({"status": "new"}))}
+            ),
+        )
+        assert counting_cache.get_calls == ["dependency_index"]
+        assert counting_cache.set_calls == []
+        assert len(counting_cache.get_many_calls) <= 4
+        assert len(counting_cache.set_many_calls) <= 4
+
+    def test_record_many_cache_dependencies_clears_legacy_index_once_per_batch(
+        self,
+    ) -> None:
+        counting_cache = CountingShardCache()
+        counting_cache.store["dependency_index"] = {
+            "filter": {
+                "Project": {
+                    "status": {'"legacy"': {"legacy-cache"}},
+                },
+            },
+            "exclude": {},
+            "request_query": {},
+            "all": {},
+        }
+        counting_cache.store["legacy-cache"] = "legacy-value"
+        entries = [
+            (
+                f"cache-{index}",
+                {("Project", "filter", json.dumps({"status": "open"}))},
+            )
+            for index in range(5)
+        ]
+
+        with mock.patch(
+            "general_manager.cache.dependency_shards.cache",
+            counting_cache,
+        ):
+            record_many_cache_dependencies(entries)
+
+        assert "dependency_index" not in counting_cache.store
+        assert "legacy-cache" not in counting_cache.store
+        assert counting_cache.get_calls.count("dependency_index") == 1
+
 
 @override_settings(CACHES=TEST_CACHES)
 class DependencyIndexShardFacadeTests(TestCase):
