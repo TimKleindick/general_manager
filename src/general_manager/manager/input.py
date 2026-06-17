@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import builtins
 import inspect
-from collections.abc import Iterable, Iterator
+from collections.abc import Hashable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -646,15 +646,40 @@ class Input(Generic[INPUT_TYPE]):
         if self.possible_values is None:
             return None
         if callable(self.possible_values):
+            possible_values_provider = cast(Any, self.possible_values)
             dependency_values = self._build_dependency_values(identification)
-            return cast(
-                Any,
-                _invoke_callable(
-                    self.possible_values,
-                    *dependency_values.values(),
-                    **dependency_values,
+
+            def invoke_possible_values() -> Any:
+                return cast(
+                    Any,
+                    _invoke_callable(
+                        possible_values_provider,
+                        *dependency_values.values(),
+                        **dependency_values,
+                    ),
+                )
+
+            if cache_context is None:
+                return invoke_possible_values()
+
+            from general_manager.cache.run_context import (
+                current_calculation_run_context,
+            )
+
+            context = current_calculation_run_context()
+            if context is None:
+                return invoke_possible_values()
+
+            cache_key = cast(
+                tuple[Hashable, ...],
+                (
+                    "input_possible_values",
+                    cache_context[0],
+                    cache_context[1],
+                    (),
                 ),
             )
+            return context.get_or_set(cache_key, invoke_possible_values)
         return cast(Any, self.possible_values)
 
     def normalize(
