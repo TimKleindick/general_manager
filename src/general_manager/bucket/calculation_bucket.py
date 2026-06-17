@@ -640,7 +640,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         Raises:
             InvalidPossibleValuesError: If the input field's `possible_values` is neither callable nor an iterable/Bucket.
         """
-        possible_values = input_field.resolve_possible_values(current_combo)
+        possible_values = input_field.resolve_possible_values(
+            current_combo,
+            cache_context=(self._manager_class, key_name),
+        )
         if possible_values is None:
             if input_field.required:
                 raise InvalidPossibleValuesError(key_name)
