@@ -226,6 +226,50 @@ class DatabaseBucketTestCase(TestCase):
         self.assertEqual(len(self.bucket), 3)
         self.assertEqual(self.bucket.count(), 3)
 
+    def test_build_manager_dispatches_model_instances_and_primary_keys(self):
+        with (
+            patch.object(
+                self.bucket,
+                "_build_manager_from_instance",
+                wraps=self.bucket._build_manager_from_instance,
+            ) as from_instance,
+            patch.object(
+                self.bucket,
+                "_build_manager_from_primary_key",
+                wraps=self.bucket._build_manager_from_primary_key,
+            ) as from_primary_key,
+        ):
+            self.assertEqual(
+                self.bucket._build_manager(self.u1).identification["id"],
+                self.u1.id,
+            )
+            self.assertEqual(
+                self.bucket._build_manager(self.u2.pk).identification["id"],
+                self.u2.id,
+            )
+
+        from_instance.assert_called_once_with(self.u1)
+        self.assertEqual(
+            [call.args[0] for call in from_primary_key.call_args_list],
+            [self.u1.pk, self.u2.pk],
+        )
+
+    def test_primary_key_snapshot_iteration_fallback_when_rows_are_absent(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+
+        with CalculationRunContext() as context:
+            signature = bucket._query_signature()
+            context.set_orm_bucket_result(signature, (self.u1.id, self.u2.id))
+
+            with patch.object(bucket, "_get_run_scoped_rows", return_value=None):
+                self.assertEqual(
+                    [manager.identification["id"] for manager in bucket],
+                    [self.u1.id, self.u2.id],
+                )
+
     def test_equivalent_bucket_queries_share_iter_sql_inside_run_context(self):
         first_bucket = DatabaseBucket(
             User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
@@ -333,6 +377,55 @@ class DatabaseBucketTestCase(TestCase):
             self.assertEqual(bucket.get(pk=self.u1.pk).identification["id"], self.u1.id)
             self.assertEqual(bucket[1].identification["id"], self.u2.id)
             self.assertIn(self.u1, bucket)
+
+    def test_primary_key_snapshot_terminal_operations_without_row_snapshot(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(username__in=["alice", "bob"]).order_by("username"),
+            UserManager,
+        )
+
+        with CalculationRunContext() as context:
+            signature = bucket._query_signature()
+            context.set_orm_bucket_result(signature, (self.u1.id, self.u2.id))
+
+            self.assertEqual(bucket.first().identification["id"], self.u1.id)
+            self.assertEqual(bucket.last().identification["id"], self.u2.id)
+            self.assertEqual(bucket.get(pk=self.u1.pk).identification["id"], self.u1.id)
+            self.assertEqual(bucket[1].identification["id"], self.u2.id)
+
+            with self.assertRaises(ValueError):
+                bucket[-1]
+
+    def test_empty_primary_key_snapshot_first_and_last_return_none(self):
+        bucket = DatabaseBucket(User.objects.filter(username="nobody"), UserManager)
+
+        with CalculationRunContext() as context:
+            context.set_orm_bucket_result(bucket._query_signature(), ())
+
+            self.assertIsNone(bucket.first())
+            self.assertIsNone(bucket.last())
+
+    def test_primary_key_snapshot_get_missing_and_duplicate_raise(self):
+        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+
+        with CalculationRunContext() as context:
+            signature = bucket._query_signature()
+            context.set_orm_bucket_result(signature, (self.u1.id,))
+            with self.assertRaises(User.DoesNotExist):
+                bucket.get(pk=self.u2.pk)
+
+            context.set_orm_bucket_result(signature, (self.u1.id, self.u1.id))
+            with self.assertRaises(User.MultipleObjectsReturned):
+                bucket.get(pk=self.u1.pk)
+
+    def test_peek_run_scoped_rows_returns_none_without_cached_rows(self):
+        bucket = DatabaseBucket(User.objects.filter(username="alice"), UserManager)
+
+        self.assertIsNone(bucket._peek_run_scoped_rows())
+        with CalculationRunContext():
+            self.assertIsNone(bucket._peek_run_scoped_rows())
+            with patch.object(bucket, "_query_signature", return_value=None):
+                self.assertIsNone(bucket._peek_run_scoped_rows())
 
     def test_contains_does_not_materialize_uncached_bucket(self):
         bucket = DatabaseBucket(User.objects.all(), UserManager)

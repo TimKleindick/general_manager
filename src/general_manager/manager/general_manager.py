@@ -1,6 +1,6 @@
 from __future__ import annotations
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Iterator, Self, Type
+from typing import TYPE_CHECKING, Any, Iterator, Self, Type, cast
 
 from general_manager.api.property import GraphQLProperty
 from general_manager.bucket.base_bucket import Bucket
@@ -22,6 +22,13 @@ class UnsupportedUnionOperandError(TypeError):
             operand_type (type): The operand type that is not supported for the union; its representation is included in the exception message.
         """
         super().__init__(f"Unsupported type for union: {operand_type}.")
+
+
+class TrustedOrmHydrationNotSupportedError(TypeError):
+    """Raised when trusted ORM hydration is requested for a non-ORM interface."""
+
+    def __init__(self, interface_name: str) -> None:
+        super().__init__(f"{interface_name} does not support trusted ORM hydration.")
 
 
 if TYPE_CHECKING:
@@ -64,6 +71,43 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 "identification": self.__id,
             },
         )
+
+    @classmethod
+    def _from_trusted_orm_instance(
+        cls,
+        instance: Any,
+        *,
+        search_date: Any = None,
+    ) -> Self:
+        """
+        Build a manager around an ORM-loaded row without public input validation.
+
+        This private path is only for framework-owned Django ORM rows. It must
+        not be used for GraphQL, mutation, import, factory, or other external
+        payloads because it bypasses Interface input validation.
+        """
+        hydrate = getattr(cls.Interface, "_from_trusted_orm_instance", None)
+        if not callable(hydrate):
+            raise TrustedOrmHydrationNotSupportedError(cls.Interface.__name__)
+
+        manager = cls.__new__(cls)
+        manager._interface = hydrate(instance, search_date=search_date)
+        manager.__id = manager._interface.identification
+        manager._manager_state_valid = True
+        manager._manager_state_reason = None
+        DependencyTracker.track(
+            cls.__name__,
+            "identification",
+            serialize_dependency_identifier(manager.__id),
+        )
+        logger.debug(
+            "trusted orm manager hydrated",
+            context={
+                "manager": cls.__name__,
+                "identification": manager.__id,
+            },
+        )
+        return cast(Self, manager)
 
     def __str__(self) -> str:
         """Return a user-friendly representation showing the identification."""

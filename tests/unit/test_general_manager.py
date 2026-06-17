@@ -4,7 +4,10 @@ from general_manager.bootstrap import (
     check_permission_class,
 )
 from general_manager.interface.capabilities.orm import HistoryNotSupportedError
-from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.general_manager import (
+    GeneralManager,
+    TrustedOrmHydrationNotSupportedError,
+)
 from general_manager.manager.meta import InvalidManagerStateError
 from general_manager.permission.manager_based_permission import (
     AdditiveManagerPermission,
@@ -415,3 +418,10 @@ class GeneralManagerTestCase(TestCase):
         ):
             manager_obj.delete(creator_id=1)
         mock_delete.assert_not_called()
+
+    def test_trusted_orm_hydration_requires_orm_interface(self):
+        with self.assertRaisesRegex(
+            TrustedOrmHydrationNotSupportedError,
+            "DummyInterface does not support trusted ORM hydration",
+        ):
+            self.manager._from_trusted_orm_instance(object())

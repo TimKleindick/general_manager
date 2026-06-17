@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import ClassVar, Generic, Type, TypeVar, cast
+from typing import Any, ClassVar, Generic, Type, TypeVar, cast
 
 from django.db import models
 from django.utils import timezone
@@ -59,6 +59,29 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         self.pk = self.identification["id"]
         self._search_date = self.normalize_search_date(search_date)
         self._instance: HistoryModelT = self.get_data()
+
+    @classmethod
+    def _from_trusted_orm_instance(
+        cls,
+        instance: HistoryModelT,
+        *,
+        search_date: datetime | None = None,
+    ) -> "OrmInterfaceBase[HistoryModelT]":
+        """
+        Build an interface from an ORM-loaded row without public input validation.
+
+        This is an internal trusted path. Callers must only pass model or
+        historical rows that came from Django ORM querysets owned by this
+        interface. External/API/user payloads must continue through __init__.
+        """
+        interface = cls.__new__(cls)
+        pk = cast(Any, instance).pk
+        identification = {"id": pk}
+        interface.identification = identification
+        interface.pk = pk
+        interface._search_date = cls.normalize_search_date(search_date)
+        interface._instance = instance
+        return interface
 
     @staticmethod
     def normalize_search_date(search_date: datetime | None) -> datetime | None:

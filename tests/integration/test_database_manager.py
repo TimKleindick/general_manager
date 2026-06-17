@@ -1,7 +1,7 @@
 # type: ignore
 
 from __future__ import annotations
-from datetime import timedelta
+from datetime import datetime, timedelta
 from django.db import models
 from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
@@ -255,6 +255,80 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         for human in humans:
             self.assertEqual(human.name, dict(human)["name"])
             self.assertEqual(human.country, dict(human)["country"])
+
+    def test_trusted_orm_hydration_uses_loaded_row_without_query(self):
+        row = self.TestHuman.Interface._model.objects.get(
+            pk=self.test_human1.identification["id"]
+        )
+
+        with self.assertNumQueries(0):
+            manager = self.TestHuman._from_trusted_orm_instance(row)
+            self.assertEqual(manager.identification, {"id": row.pk})
+            self.assertEqual(manager.name, "Alice")
+
+        self.assertIs(manager._interface._instance, row)
+        self.assertTrue(manager._manager_state_valid)
+
+    def test_trusted_orm_hydration_normalizes_search_date(self):
+        row = self.TestHuman.Interface._model.objects.get(
+            pk=self.test_human1.identification["id"]
+        )
+        naive_search_date = datetime(2026, 1, 1, 12, 30)
+
+        manager = self.TestHuman._from_trusted_orm_instance(
+            row,
+            search_date=naive_search_date,
+        )
+
+        self.assertEqual(manager.identification, {"id": row.pk})
+        self.assertIsNotNone(manager._interface._search_date.tzinfo)
+
+    def test_public_constructor_still_rejects_invalid_external_input(self):
+        with self.assertRaises(ValueError):
+            self.TestHuman(id="not-an-integer")
+
+    def test_create_path_does_not_use_trusted_hydration(self):
+        with patch.object(
+            self.TestHuman,
+            "_from_trusted_orm_instance",
+            wraps=self.TestHuman._from_trusted_orm_instance,
+        ) as trusted_hydrate:
+            created = self.TestHuman.create(
+                creator_id=None,
+                name="Charlie",
+                ignore_permission=True,
+            )
+
+        self.assertEqual(created.name, "Charlie")
+        trusted_hydrate.assert_not_called()
+
+    def test_bucket_iteration_hydrates_loaded_rows_without_per_row_queries(self):
+        self.TestHuman.create(
+            creator_id=None,
+            name="Charlie",
+            ignore_permission=True,
+        )
+
+        with self.assertNumQueries(1):
+            names = sorted(human.name for human in self.TestHuman.all())
+
+        self.assertEqual(names, ["Alice", "Bob", "Charlie"])
+
+    def test_run_context_reuses_trusted_bucket_rows_without_per_row_queries(self):
+        self.TestHuman.create(
+            creator_id=None,
+            name="Charlie",
+            ignore_permission=True,
+        )
+        first_bucket = self.TestHuman.filter(name__in=["Alice", "Bob", "Charlie"])
+        second_bucket = self.TestHuman.filter(name__in=["Alice", "Bob", "Charlie"])
+
+        with CalculationRunContext(), self.assertNumQueries(1):
+            first_names = sorted(human.name for human in first_bucket)
+            second_names = sorted(human.name for human in second_bucket)
+
+        self.assertEqual(first_names, ["Alice", "Bob", "Charlie"])
+        self.assertEqual(second_names, ["Alice", "Bob", "Charlie"])
 
     def test_soft_delete_behavior(self):
         """

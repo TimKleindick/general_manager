@@ -170,14 +170,22 @@ cached, and ORM update/delete paths clear affected row entries in the active run
 context after successful mutations.
 
 ORM-backed `DatabaseBucket` terminal operations also reuse conservative
-run-scoped primary-key snapshots inside the active context. Equivalent bounded
-bucket evaluations can share the materialized result for iteration, length,
-`count()`, `first()`, `last()`, scalar indexing, primary-key `get()`, and
-membership checks after a snapshot exists. The cache is intentionally
-conservative: unsupported query shapes and large buckets bypass reuse, count-only
-paths do not force full materialization, dependencies are still tracked on every
-terminal operation, and any framework mutation clears bucket snapshots in the
-active run before the data changes.
+run-scoped snapshots inside the active context. Iteration materializes a bounded
+row snapshot and hydrates managers through GeneralManager's private trusted ORM
+path, so rows that were already loaded by the queryset are not fetched again by
+primary key. The same evaluation stores primary keys for length, `count()`,
+`first()`, `last()`, scalar indexing, primary-key `get()`, and membership checks
+after a snapshot exists. The cache is intentionally conservative: unsupported
+query shapes and large buckets bypass reuse, count-only paths do not force full
+materialization, dependencies are still tracked on every terminal operation, and
+any framework mutation clears bucket snapshots in the active run before the data
+changes.
+
+The trusted ORM hydration path is private framework infrastructure. It is safe
+only for Django model or historical rows returned by GeneralManager-owned ORM
+querysets. Public construction, GraphQL mutations, imports, factories, and other
+user-controlled payloads still use the regular manager constructor and full
+interface input validation.
 
 ## Manual dependency-index helpers
 

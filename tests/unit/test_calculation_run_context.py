@@ -266,6 +266,30 @@ def test_orm_bucket_result_helpers_distinguish_empty_tuple_from_missing() -> Non
         assert ctx.get_orm_bucket_result(("query", "missing")) is None
 
 
+def test_orm_bucket_row_results_are_stored_and_cleared() -> None:
+    rows = (object(), object())
+
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_rows(("query", "rows"), rows)
+
+        assert ctx.get_orm_bucket_rows(("query", "rows")) == rows
+
+        ctx.clear_orm_bucket_results()
+
+        assert ctx.get_orm_bucket_rows(("query", "rows")) is None
+
+
+def test_clear_orm_bucket_results_clears_primary_keys_and_rows() -> None:
+    with CalculationRunContext() as ctx:
+        ctx.set_orm_bucket_result(("query", "a"), ("pk1", "pk2"))
+        ctx.set_orm_bucket_rows(("query", "a"), ("row1", "row2"))
+
+        ctx.clear_orm_bucket_results()
+
+        assert ctx.get_orm_bucket_result(("query", "a")) is None
+        assert ctx.get_orm_bucket_rows(("query", "a")) is None
+
+
 def test_bucket_index_helpers_store_replay_and_clear_dependencies() -> None:
     """Store a bucket index, replay its dependencies on hit, then clear it."""
     dependencies: set[Dependency] = {
