@@ -2,6 +2,7 @@ from django.test import TestCase
 from decimal import Decimal
 from datetime import timedelta
 from unittest.mock import patch
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.input import (
     DateRangeDomain,
     Input,
@@ -132,6 +133,33 @@ class TestInput(TestCase):
         self.assertEqual(first, [1])
         self.assertEqual(second, [2])
         self.assertEqual(calls, 2)
+
+    def test_callable_possible_values_are_cached_inside_run_context(self):
+        calls = 0
+
+        class Owner:
+            pass
+
+        def possible_values():
+            nonlocal calls
+            calls += 1
+            return [calls]
+
+        input_obj = Input(int, possible_values=possible_values)
+
+        with CalculationRunContext():
+            first = input_obj.resolve_possible_values(
+                {},
+                cache_context=(Owner, "number"),
+            )
+            second = input_obj.resolve_possible_values(
+                {},
+                cache_context=(Owner, "number"),
+            )
+
+        self.assertEqual(first, [1])
+        self.assertEqual(second, [1])
+        self.assertEqual(calls, 1)
 
     def test_simple_input_casting(self):
         """
