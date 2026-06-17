@@ -62,6 +62,7 @@ Because calculation managers do not persist data, `create`, `update`, and `delet
 - Use `required=False` for optional inputs. Calculation metadata and parsing now treat those fields as nullable and default them to `None` when omitted.
 - Use `possible_values` to restrict input choices or provide a callable for dynamic options.
 - Callable or bucket-backed `possible_values` are not resolved during ordinary input casting unless a custom normalizer needs them. They are still resolved when enumerating calculation combinations or validating allowed values.
+- When `possible_values` is callable and resolution happens inside a managed run, GeneralManager caches the provider result for that run. Providers should be pure for a given set of declared dependency input values. If a provider returns a one-shot iterator or generator, GeneralManager materializes it before caching so later reads in the same run see the same values.
 - Use `min_value`, `max_value`, and `validator` for scalar constraints without eagerly enumerating every allowed value.
 - Employ `Input.date_range(...)`, `Input.monthly_date(...)`, and `Input.yearly_date(...)` for structured date domains such as month-end or year-start inputs.
 - Prefer domain objects such as `DateRangeDomain` and `NumericRangeDomain` when you need structured range metadata rather than an eager list.
