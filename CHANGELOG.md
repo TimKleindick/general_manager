@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.52.2 (2026-06-17)
+
+### Bug Fixes
+
+- Batch dependency shard recording
+  ([`54d11a4`](https://github.com/TimKleindick/general_manager/commit/54d11a4c571d97be87989f49d7f5a36229d024a8))
+
+### Testing
+
+- Cover dependency shard batching edge cases
+  ([`acf54bd`](https://github.com/TimKleindick/general_manager/commit/acf54bd4e753e9a1f76891d633f6360926c0a6a9))
+
+
 ## v0.52.1 (2026-06-17)
 
 ### Bug Fixes
