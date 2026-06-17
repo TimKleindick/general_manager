@@ -257,10 +257,27 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             ),
         )
 
-    def _build_manager(self, pk: Any) -> GeneralManagerType:
+    def _build_manager_from_primary_key(self, pk: Any) -> GeneralManagerType:
         if self._search_date is None:
             return self._manager_class(pk)
         return self._manager_class(pk, search_date=self._search_date)
+
+    def _build_manager_from_instance(
+        self,
+        instance: models.Model,
+    ) -> GeneralManagerType:
+        interface_hydrate = getattr(
+            self._manager_class.Interface, "_from_trusted_orm_instance", None
+        )
+        manager_hydrate = self._manager_class._from_trusted_orm_instance
+        if callable(interface_hydrate):
+            return manager_hydrate(instance, search_date=self._search_date)
+        return self._build_manager_from_primary_key(instance.pk)
+
+    def _build_manager(self, value: Any) -> GeneralManagerType:
+        if isinstance(value, models.Model):
+            return self._build_manager_from_instance(value)
+        return self._build_manager_from_primary_key(value)
 
     @staticmethod
     def _copy_filter_definitions(
@@ -370,6 +387,28 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context.set_orm_bucket_result(signature, primary_keys)
         return primary_keys
 
+    def _get_run_scoped_rows(self) -> tuple[models.Model, ...] | None:
+        """
+        Load or reuse a bounded model-row snapshot for trusted hydration.
+        """
+        context = current_calculation_run_context()
+        if context is None:
+            return None
+        signature = self._query_signature()
+        if signature is None:
+            return None
+        cached = context.get_orm_bucket_rows(signature)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        rows = tuple(self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1])
+        if len(rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
+            return None
+        primary_keys = tuple(row.pk for row in rows)
+        context.set_orm_bucket_rows(signature, rows)
+        context.set_orm_bucket_result(signature, primary_keys)
+        return rows
+
     def _peek_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
         """
         Return an already cached primary-key snapshot without evaluating the ORM.
@@ -389,6 +428,19 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if signature is None:
             return None
         cached = context.get_orm_bucket_result(signature)
+        if cached is None:
+            return None
+        return cached  # type: ignore[return-value]
+
+    def _peek_run_scoped_rows(self) -> tuple[models.Model, ...] | None:
+        """Return cached model rows without evaluating the ORM."""
+        context = current_calculation_run_context()
+        if context is None:
+            return None
+        signature = self._query_signature()
+        if signature is None:
+            return None
+        cached = context.get_orm_bucket_rows(signature)
         if cached is None:
             return None
         return cached  # type: ignore[return-value]
@@ -458,13 +510,18 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
         self._track_effective_dependencies()
-        primary_keys = self._get_run_scoped_primary_keys()
+        rows = self._get_run_scoped_rows()
+        if rows is not None:
+            for row in rows:
+                yield self._build_manager_from_instance(row)
+            return
+        primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             for primary_key in primary_keys:
-                yield self._build_manager(primary_key)
+                yield self._build_manager_from_primary_key(primary_key)
             return
         for item in self._data:
-            yield self._build_manager(item.pk)
+            yield self._build_manager_from_instance(item)
 
     def __or__(
         self,
@@ -585,7 +642,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         ids: list[int] = []
         for obj in query_set:
-            inst = self._build_manager(obj.pk)
+            inst = self._build_manager_from_instance(obj)
             keep = True
             for k, val, root in python_filters:
                 lookup = k.split("__", 1)[1] if "__" in k else ""
@@ -704,15 +761,20 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | None: First manager instance if available.
         """
         self._track_effective_dependencies()
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            if not rows:
+                return None
+            return self._build_manager_from_instance(rows[0])
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             if not primary_keys:
                 return None
-            return self._build_manager(primary_keys[0])
+            return self._build_manager_from_primary_key(primary_keys[0])
         first_element = self._data.first()
         if first_element is None:
             return None
-        return self._build_manager(first_element.pk)
+        return self._build_manager_from_instance(first_element)
 
     def last(self) -> GeneralManagerType | None:
         """
@@ -722,15 +784,20 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             GeneralManagerType | None: Last manager instance if available.
         """
         self._track_effective_dependencies()
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            if not rows:
+                return None
+            return self._build_manager_from_instance(rows[-1])
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             if not primary_keys:
                 return None
-            return self._build_manager(primary_keys[-1])
+            return self._build_manager_from_primary_key(primary_keys[-1])
         first_element = self._data.last()
         if first_element is None:
             return None
-        return self._build_manager(first_element.pk)
+        return self._build_manager_from_instance(first_element)
 
     def count(self) -> int:
         """
@@ -778,18 +845,28 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             models.MultipleObjectsReturned: Propagated when multiple rows satisfy the lookup.
         """
         self._track_effective_dependencies()
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            requested_primary_key = self._snapshot_get_primary_key(kwargs)
+            if requested_primary_key is not None:
+                matches = [row for row in rows if row.pk == requested_primary_key]
+                if len(matches) == 1:
+                    return self._build_manager_from_instance(matches[0])
+                if len(matches) > 1:
+                    raise self._data.model.MultipleObjectsReturned
+                raise self._data.model.DoesNotExist
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             requested_primary_key = self._snapshot_get_primary_key(kwargs)
             if requested_primary_key is not None:
                 match_count = primary_keys.count(requested_primary_key)
                 if match_count == 1:
-                    return self._build_manager(requested_primary_key)
+                    return self._build_manager_from_primary_key(requested_primary_key)
                 if match_count > 1:
                     raise self._data.model.MultipleObjectsReturned
                 raise self._data.model.DoesNotExist
         element = self._data.get(**kwargs)
-        return self._build_manager(element.pk)
+        return self._build_manager_from_instance(element)
 
     def __getitem__(
         self, item: int | slice
@@ -815,12 +892,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 run_scoped_cacheable=self._run_scoped_cacheable,
             )
         self._track_effective_dependencies()
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            if item < 0:
+                raise ValueError
+            return self._build_manager_from_instance(rows[item])
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             if item < 0:
                 raise ValueError
-            return self._build_manager(primary_keys[item])
-        return self._build_manager(self._data[item].pk)
+            return self._build_manager_from_primary_key(primary_keys[item])
+        return self._build_manager_from_instance(self._data[item])
 
     def __len__(self) -> int:
         """
@@ -926,7 +1008,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             objs = list(qs)
 
             def key_func(obj: models.Model) -> tuple[object, ...]:
-                inst = self._build_manager(obj.pk)
+                inst = self._build_manager_from_instance(obj)
                 values = []
                 for k in key:
                     if k in properties:

@@ -26,6 +26,7 @@ _active_context: ContextVar["CalculationRunContext | None"] = ContextVar(
     default=None,
 )
 ORM_BUCKET_RESULT_PREFIX = "orm_bucket_result"
+ORM_BUCKET_ROW_RESULT_PREFIX = "orm_bucket_row_result"
 BUCKET_INDEX_PREFIX = "bucket_index"
 DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE = 1000
 logger = get_logger("cache.run_context")
@@ -191,9 +192,18 @@ class CalculationRunContext:
         """Store an ORM bucket result for the active run."""
         self.set((ORM_BUCKET_RESULT_PREFIX, key), value)
 
+    def get_orm_bucket_rows(self, key: Hashable) -> object:
+        """Return cached ORM bucket rows for key, or None when absent."""
+        return self.get((ORM_BUCKET_ROW_RESULT_PREFIX, key))
+
+    def set_orm_bucket_rows(self, key: Hashable, value: object) -> None:
+        """Store ORM bucket rows for the active run."""
+        self.set((ORM_BUCKET_ROW_RESULT_PREFIX, key), value)
+
     def clear_orm_bucket_results(self) -> None:
         """Discard all run-scoped ORM bucket result entries."""
         self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
+        self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
 
     def _bucket_index_cache_key(
         self,
