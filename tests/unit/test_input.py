@@ -107,6 +107,32 @@ class TestInput(TestCase):
         input_obj = Input(int, possible_values=possible_values_func)
         self.assertEqual(input_obj.depends_on, ["a", "b"])
 
+    def test_callable_possible_values_are_not_cached_outside_run_context(self):
+        calls = 0
+
+        class Owner:
+            pass
+
+        def possible_values():
+            nonlocal calls
+            calls += 1
+            return [calls]
+
+        input_obj = Input(int, possible_values=possible_values)
+
+        first = input_obj.resolve_possible_values(
+            {},
+            cache_context=(Owner, "number"),
+        )
+        second = input_obj.resolve_possible_values(
+            {},
+            cache_context=(Owner, "number"),
+        )
+
+        self.assertEqual(first, [1])
+        self.assertEqual(second, [2])
+        self.assertEqual(calls, 2)
+
     def test_simple_input_casting(self):
         """
         Test that the Input class casts values to integers and preserves `None`.
