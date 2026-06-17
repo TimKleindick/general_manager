@@ -185,10 +185,14 @@ The trusted ORM hydration path is private framework infrastructure. It is safe
 only for Django model or historical rows returned by GeneralManager-owned ORM
 querysets. Public construction, GraphQL mutations, imports, factories, and other
 user-controlled payloads still use the regular manager constructor and full
-interface input validation. Managers that override `__init__` also use the
-regular constructor so manager-local initialization is preserved. Querysets with
-`prefetch_related()` bypass run-scoped bucket snapshots because prefetch plans
-can change loaded row state without changing the main SQL signature.
+interface input validation. Managers or ORM interfaces that override `__init__`
+also use the regular constructor so local initialization is preserved. Trusted
+hydration falls back to primary-key construction when a row comes from a
+different model, when a `search_date` bucket is holding a live row instead of a
+historical/as-of row, or when the instance has deferred fields. Querysets with
+`prefetch_related()` or deferred fields bypass run-scoped bucket snapshots
+because those query plans can change loaded row state without changing the main
+SQL signature.
 
 ## Manual dependency-index helpers
 

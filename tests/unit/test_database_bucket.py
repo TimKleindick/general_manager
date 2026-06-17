@@ -209,6 +209,14 @@ class TrustedUserManager(GeneralManager):
     pass
 
 
+class GroupBackedTrustedInterface(TrustedDummyInterface):
+    _model = Group
+
+
+class GroupBackedTrustedUserManager(GeneralManager):
+    pass
+
+
 class InitTrackingTrustedManager(GeneralManager):
     def __init__(self, pk, **kwargs):
         self.initialized_by_constructor = True
@@ -227,6 +235,7 @@ class DatabaseBucketTestCase(TestCase):
         AnotherManager.Interface = DummyInterface
         SearchDateManager.Interface = DummyInterface
         TrustedUserManager.Interface = TrustedDummyInterface
+        GroupBackedTrustedUserManager.Interface = GroupBackedTrustedInterface
         InitTrackingTrustedManager.Interface = TrustedDummyInterface
         DummyInterface._parent_class = UserManager
         TrustedDummyInterface._parent_class = TrustedUserManager
@@ -353,6 +362,17 @@ class DatabaseBucketTestCase(TestCase):
             ],
             [blocked.pk],
         )
+
+    def test_model_mismatch_falls_back_to_primary_key_hydration(self):
+        bucket = DatabaseBucket(
+            User.objects.filter(pk=self.u1.pk),
+            GroupBackedTrustedUserManager,
+        )
+
+        manager = next(iter(bucket))
+
+        self.assertEqual(manager.identification["id"], self.u1.pk)
+        self.assertFalse(hasattr(manager._interface, "_instance"))
 
     def test_equivalent_bucket_queries_share_iter_sql_inside_run_context(self):
         first_bucket = DatabaseBucket(

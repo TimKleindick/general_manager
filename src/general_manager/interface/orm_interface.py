@@ -74,8 +74,13 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         historical rows that came from Django ORM querysets owned by this
         interface. External/API/user payloads must continue through __init__.
         """
-        interface = cls.__new__(cls)
         pk = cast(Any, instance).pk
+        if cls.__init__ is not OrmInterfaceBase.__init__:
+            if search_date is None:
+                return cls(pk)
+            return cls(pk, search_date=search_date)
+
+        interface = cls.__new__(cls)
         identification = {"id": pk}
         interface.identification = identification
         interface.pk = pk

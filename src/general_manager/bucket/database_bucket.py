@@ -262,6 +262,22 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return self._manager_class(pk)
         return self._manager_class(pk, search_date=self._search_date)
 
+    def _can_trust_orm_instance(self, instance: models.Model) -> bool:
+        interface_model = getattr(self._manager_class.Interface, "_model", None)
+        if isinstance(interface_model, type) and issubclass(
+            interface_model, models.Model
+        ):
+            if not isinstance(instance, interface_model):
+                return False
+        get_deferred_fields = getattr(instance, "get_deferred_fields", None)
+        if callable(get_deferred_fields) and get_deferred_fields():
+            return False
+        if self._search_date is not None and not (
+            hasattr(instance, "_history") or hasattr(instance, "history_date")
+        ):
+            return False
+        return True
+
     def _build_manager_from_instance(
         self,
         instance: models.Model,
@@ -270,7 +286,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             self._manager_class.Interface, "_from_trusted_orm_instance", None
         )
         manager_hydrate = self._manager_class._from_trusted_orm_instance
-        if callable(interface_hydrate):
+        if callable(interface_hydrate) and self._can_trust_orm_instance(instance):
             return manager_hydrate(instance, search_date=self._search_date)
         return self._build_manager_from_primary_key(instance.pk)
 
@@ -332,6 +348,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if query.distinct:
             return None
         if getattr(self._data, "_prefetch_related_lookups", ()):
+            return None
+        deferred_loading = getattr(query, "deferred_loading", None)
+        if isinstance(deferred_loading, tuple) and deferred_loading[0]:
             return None
         try:
             sql, params = self._data.query.sql_with_params()
