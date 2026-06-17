@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.53.0 (2026-06-17)
+
+### Bug Fixes
+
+- Address trusted orm hydration edge cases
+  ([`921f61e`](https://github.com/TimKleindick/general_manager/commit/921f61ee039e2a2d903d19de4199fea8761ed8e4))
+
+- Harden trusted orm hydration fallbacks
+  ([`42fe791`](https://github.com/TimKleindick/general_manager/commit/42fe7916da054a2a7ae3171d58661a8cf51ac319))
+
+### Features
+
+- Hydrate orm managers from trusted rows
+  ([`3834a1e`](https://github.com/TimKleindick/general_manager/commit/3834a1e51b26db1b897b85a32d8f9c2fda6ce219))
+
+
 ## v0.52.2 (2026-06-17)
 
 ### Bug Fixes
