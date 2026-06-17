@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v0.54.0 (2026-06-17)
+
+### Documentation
+
+- Explain possible values run caching
+  ([`a8e821f`](https://github.com/TimKleindick/general_manager/commit/a8e821fa7d2ea58d20f10219ef5a442cb528029d))
+
+### Features
+
+- Cache calculation possible values by run
+  ([`33e994a`](https://github.com/TimKleindick/general_manager/commit/33e994aa72c952f6350cbf608ea7499838210909))
+
+- Cache callable possible values in run context
+  ([`003cca0`](https://github.com/TimKleindick/general_manager/commit/003cca0d85dd38970ad6879618efc24f61c8ca39))
+
+- Key possible values cache by dependencies
+  ([`7b8950e`](https://github.com/TimKleindick/general_manager/commit/7b8950e1713795d50265b122e24371cbc27f14d8))
+
+- Materialize cached possible value iterators
+  ([`9f868a3`](https://github.com/TimKleindick/general_manager/commit/9f868a34fb9051a3c4ea71ecb70730d0d1c34c53))
+
+- Reuse possible values cache in interfaces
+  ([`acca949`](https://github.com/TimKleindick/general_manager/commit/acca9492ba87b46c447e6364ced926b0c389e14e))
+
+### Testing
+
+- Define possible values cache context api
+  ([`b7370ae`](https://github.com/TimKleindick/general_manager/commit/b7370ae770c35c9b40b1ffb1d298705a4c35f0a0))
+
+
 ## v0.53.1 (2026-06-17)
 
 ### Bug Fixes
