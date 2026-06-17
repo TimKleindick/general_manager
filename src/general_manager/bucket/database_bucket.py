@@ -331,6 +331,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return None
         if query.distinct:
             return None
+        if getattr(self._data, "_prefetch_related_lookups", ()):
+            return None
         try:
             sql, params = self._data.query.sql_with_params()
         except (EmptyResultSet, FieldError, TypeError, ValueError):
