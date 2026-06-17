@@ -629,8 +629,13 @@ class InterfaceBase(ABC):
                     continue
                 depends_on = input_field.depends_on
                 if all(dep in processed for dep in depends_on):
+                    cache_context = type(self)._input_possible_values_cache_context(
+                        name
+                    )
                     value = self.input_fields[name].cast(
-                        kwargs.get(name), identification
+                        kwargs.get(name),
+                        identification,
+                        cache_context=cache_context,
                     )
                     self._process_input(name, value, identification)
                     identification[name] = value
@@ -641,6 +646,16 @@ class InterfaceBase(ABC):
                 unresolved = set(self.input_fields.keys()) - processed
                 raise CircularInputDependencyError(unresolved)
         return identification
+
+    @classmethod
+    def _input_possible_values_cache_context(
+        cls,
+        input_name: str,
+    ) -> tuple[type[Any], str] | None:
+        parent_class = getattr(cls, "_parent_class", None)
+        if parent_class is None:
+            return None
+        return (parent_class, input_name)
 
     @staticmethod
     def format_identification(identification: dict[str, Any]) -> dict[str, Any]:
@@ -713,7 +728,10 @@ class InterfaceBase(ABC):
         if not _should_validate_possible_values():
             return
 
-        allowed_values = input_field.resolve_possible_values(identification)
+        allowed_values = input_field.resolve_possible_values(
+            identification,
+            cache_context=type(self)._input_possible_values_cache_context(name),
+        )
         if allowed_values is None:
             return
         contains = getattr(allowed_values, "contains", None)

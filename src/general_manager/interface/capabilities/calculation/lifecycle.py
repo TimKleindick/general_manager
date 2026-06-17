@@ -113,6 +113,7 @@ class CalculationReadCapability(BaseCapability):
             value = input_field.cast(
                 interface_instance.identification.get(field_name),
                 dependency_values,
+                cache_context=(interface_cls._parent_class, field_name),
             )
             resolved_values[field_name] = value
             return value

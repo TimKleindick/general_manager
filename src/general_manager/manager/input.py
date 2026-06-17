@@ -715,7 +715,11 @@ class Input(Generic[INPUT_TYPE]):
         return cast(Any, self.possible_values)
 
     def normalize(
-        self, value: Any, identification: dict[str, Any] | None = None
+        self,
+        value: Any,
+        identification: dict[str, Any] | None = None,
+        *,
+        cache_context: PossibleValuesCacheContext | None = None,
     ) -> Any:
         """Canonicalize a cast value using domain or explicit normalization rules."""
 
@@ -730,7 +734,10 @@ class Input(Generic[INPUT_TYPE]):
             value = possible_values.normalize(value)
         if self.normalizer is not None:
             if possible_values is None:
-                possible_values = self.resolve_possible_values(identification)
+                possible_values = self.resolve_possible_values(
+                    identification,
+                    cache_context=cache_context,
+                )
                 if isinstance(possible_values, InputDomain):
                     value = possible_values.normalize(value)
             dependency_values = self._build_dependency_values(identification)
@@ -785,7 +792,13 @@ class Input(Generic[INPUT_TYPE]):
             dependency_values[dependency_name] = identification[dependency_name]
         return dependency_values
 
-    def cast(self, value: Any, identification: dict[str, Any] | None = None) -> Any:
+    def cast(
+        self,
+        value: Any,
+        identification: dict[str, Any] | None = None,
+        *,
+        cache_context: PossibleValuesCacheContext | None = None,
+    ) -> Any:
         """
         Convert a raw value to the configured input type.
 
@@ -808,7 +821,11 @@ class Input(Generic[INPUT_TYPE]):
                 cast_value = value
             else:
                 cast_value = date.fromisoformat(value)
-            return self.normalize(cast_value, identification)
+            return self.normalize(
+                cast_value,
+                identification,
+                cache_context=cache_context,
+            )
         if self.type == datetime:
             if isinstance(value, datetime):
                 cast_value = value
@@ -816,13 +833,33 @@ class Input(Generic[INPUT_TYPE]):
                 cast_value = datetime.combine(value, datetime.min.time())
             else:
                 cast_value = datetime.fromisoformat(value)
-            return self.normalize(cast_value, identification)
+            return self.normalize(
+                cast_value,
+                identification,
+                cache_context=cache_context,
+            )
         if isinstance(value, self.type):
-            return self.normalize(value, identification)
+            return self.normalize(value, identification, cache_context=cache_context)
         if issubclass(self.type, GeneralManager):
             if isinstance(value, dict):
-                return self.normalize(self.type(**value), identification)  # type: ignore[misc]
-            return self.normalize(self.type(id=value), identification)  # type: ignore[misc]
+                return self.normalize(
+                    self.type(**value),  # type: ignore[misc]
+                    identification,
+                    cache_context=cache_context,
+                )
+            return self.normalize(
+                self.type(id=value),  # type: ignore[misc]
+                identification,
+                cache_context=cache_context,
+            )
         if self.type == Measurement and isinstance(value, str):
-            return self.normalize(Measurement.from_string(value), identification)
-        return self.normalize(self.type(value), identification)
+            return self.normalize(
+                Measurement.from_string(value),
+                identification,
+                cache_context=cache_context,
+            )
+        return self.normalize(
+            self.type(value),
+            identification,
+            cache_context=cache_context,
+        )
