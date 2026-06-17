@@ -5,7 +5,9 @@ from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.configuration import (
     InterfaceCapabilityConfig,
 )
+from general_manager.cache.run_context import CalculationRunContext
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.input import Input
 from typing import Callable, ClassVar, Type
 
 
@@ -38,7 +40,7 @@ class DummyInput:
         self.max_value = max_value
         self.validator = validator
 
-    def cast(self, value, _identification=None):
+    def cast(self, value, _identification=None, *, cache_context=None):
         """
         Returns the input value unchanged.
 
@@ -48,9 +50,11 @@ class DummyInput:
         Returns:
             The same value that was provided as input.
         """
+        del cache_context
         return value
 
-    def resolve_possible_values(self, identification=None):
+    def resolve_possible_values(self, identification=None, *, cache_context=None):
+        del cache_context
         if callable(self.possible_values):
             identification = identification or {}
             dependency_values = {
@@ -442,6 +446,43 @@ class InterfaceBaseTests(SimpleTestCase):
     def test_possible_values_toggle_accepts_falsey_string(self):
         inst = DummyInterface(a=1, b="foo", gm=DummyGM({"id": 8}), vals=99, c=1)
         self.assertEqual(inst.identification["vals"], 99)
+
+    def test_input_possible_values_cache_context_is_reused_during_cast_and_validation(
+        self,
+    ):
+        calls = 0
+
+        def possible_values():
+            nonlocal calls
+            calls += 1
+            return ["ABC"]
+
+        def normalize_code(value, domain):
+            del domain
+            return value.upper()
+
+        class ParentManager:
+            pass
+
+        class CachedInputInterface(InterfaceBase):
+            _parent_class = ParentManager
+            input_fields: ClassVar[dict] = {
+                "code": Input(
+                    str,
+                    possible_values=possible_values,
+                    normalizer=normalize_code,
+                )
+            }
+
+            def get_data(self, _search_date=None):
+                return self.identification
+
+        with override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=True):
+            with CalculationRunContext():
+                interface = CachedInputInterface(code="abc")
+
+        self.assertEqual(interface.identification, {"code": "ABC"})
+        self.assertEqual(calls, 1)
 
     def test_dummy_input_validator_none_return_is_allowed(self):
         input_field = DummyInput(int, validator=lambda _value: None)
