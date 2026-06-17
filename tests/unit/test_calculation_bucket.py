@@ -670,6 +670,40 @@ class TestGenerateCombinations(TestCase):
         ]
         self.assertCountEqual(combos, expected)
 
+    def test_generate_combinations_caches_callable_possible_values_by_dependencies(
+        self,
+        _mock_parse,
+    ):
+        calls: list[str] = []
+
+        def possible_cities(country):
+            calls.append(country)
+            return [f"{country}-city"]
+
+        fields = {
+            "country": Input(type=str, possible_values=["FR", "DE"]),
+            "segment": Input(type=str, possible_values=["retail", "enterprise"]),
+            "city": Input(
+                type=str,
+                possible_values=possible_cities,
+                depends_on=["country"],
+            ),
+        }
+        bucket = self._make_bucket_with_fields(fields)
+
+        combos = bucket.generate_combinations()
+
+        self.assertCountEqual(
+            combos,
+            [
+                {"country": "FR", "segment": "retail", "city": "FR-city"},
+                {"country": "FR", "segment": "enterprise", "city": "FR-city"},
+                {"country": "DE", "segment": "retail", "city": "DE-city"},
+                {"country": "DE", "segment": "enterprise", "city": "DE-city"},
+            ],
+        )
+        self.assertEqual(calls, ["FR", "DE"])
+
     def test_optional_field_does_not_expand_none(self, _mock_parse):
         fields = {
             "a": Input(type=int, possible_values=[1, 2]),
