@@ -105,6 +105,14 @@ def _invoke_callable(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> 
     return func(*bound_args, **bound_kwargs)
 
 
+def _materialize_cached_possible_values(possible_values: Any) -> Any:
+    """Store one-shot iterators as reusable values in the run cache."""
+
+    if isinstance(possible_values, Iterator):
+        return list(possible_values)
+    return possible_values
+
+
 def _month_start(value: date) -> date:
     return value.replace(day=1)
 
@@ -700,7 +708,10 @@ class Input(Generic[INPUT_TYPE]):
                 )
             except TypeError:
                 return invoke_possible_values()
-            return context.get_or_set(cache_key, invoke_possible_values)
+            return context.get_or_set(
+                cache_key,
+                lambda: _materialize_cached_possible_values(invoke_possible_values()),
+            )
         return cast(Any, self.possible_values)
 
     def normalize(
