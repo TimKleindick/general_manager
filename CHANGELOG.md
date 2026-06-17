@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.52.1 (2026-06-17)
+
+### Bug Fixes
+
+- Drop duplicate graphql relation id inputs
+  ([`6279983`](https://github.com/TimKleindick/general_manager/commit/6279983e5954d91e54b572550eaf5046af91c7e2))
+
+### Documentation
+
+- Fix measurement string parsing example
+  ([`1ea880d`](https://github.com/TimKleindick/general_manager/commit/1ea880d7be7da25cb78c098726f486067c438c3f))
+
+
 ## v0.52.0 (2026-06-16)
 
 ### Bug Fixes
