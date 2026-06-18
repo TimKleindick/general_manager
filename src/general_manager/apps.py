@@ -97,6 +97,17 @@ def _autoload_app_managers_modules(
     return imported_modules
 
 
+def configure_search_reconcile_beat_schedule_from_settings(
+    django_settings: Any,
+) -> bool:
+    """Configure search reconciliation Beat schedule after apps are ready."""
+    from general_manager.search.tasks import (
+        configure_search_reconcile_beat_schedule_from_settings as _configure,
+    )
+
+    return _configure(django_settings)
+
+
 # ---------------------------------------------------------------------------
 # Search auto-reindex helpers (kept here to stay coupled to _SEARCH_REINDEXED)
 # ---------------------------------------------------------------------------
@@ -188,6 +199,7 @@ class GeneralmanagerConfig(AppConfig):
         configure_event_registry_from_settings(settings)
         configure_workflow_signal_bridge_from_settings(settings)
         configure_workflow_beat_schedule_from_settings(settings)
+        configure_search_reconcile_beat_schedule_from_settings(settings)
         from general_manager.search import indexer as _search_indexer  # noqa: F401
 
         self.install_search_auto_reindex()
