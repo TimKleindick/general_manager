@@ -25,6 +25,17 @@ class SearchIndexStateModelTests(TestCase):
                 schema_fingerprint="def",
             )
 
+    def test_search_index_state_does_not_define_duplicate_unique_lookup_index(
+        self,
+    ) -> None:
+        duplicate_indexes = [
+            index
+            for index in SearchIndexState._meta.indexes
+            if list(index.fields) == ["manager_path", "index_name"]
+        ]
+
+        assert duplicate_indexes == []
+
     def test_mark_dirty_records_reason_without_clearing_existing_timestamp(
         self,
     ) -> None:

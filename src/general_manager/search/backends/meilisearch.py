@@ -113,6 +113,48 @@ class MeilisearchBackend:
             task = index.delete_documents(normalized_ids)
             self._wait_for_task(task)
 
+    def list_document_ids(
+        self,
+        index_name: str,
+        *,
+        types: Sequence[str] | None = None,
+    ) -> set[str]:
+        """Return stored GeneralManager document IDs from a Meilisearch index."""
+        index = self._get_or_create_index(index_name)
+        document_ids: set[str] = set()
+        type_filter = set(types or ())
+        limit = 1000
+        offset = 0
+
+        while True:
+            response = index.get_documents(
+                {
+                    "limit": limit,
+                    "offset": offset,
+                    "fields": ["id", "gm_document_id", "type"],
+                }
+            )
+            documents = self._extract_documents_results(response)
+            for document in documents:
+                document_type = self._read_document_field(document, "type")
+                if type_filter and document_type not in type_filter:
+                    continue
+                document_id = self._read_document_field(
+                    document, "gm_document_id"
+                ) or self._read_document_field(document, "id")
+                if document_id is not None:
+                    document_ids.add(str(document_id))
+
+            count = len(documents)
+            if count == 0:
+                break
+            offset += count
+            total = self._extract_documents_total(response)
+            if count < limit or (total is not None and offset >= total):
+                break
+
+        return document_ids
+
     def search(
         self,
         index_name: str,
@@ -401,6 +443,34 @@ class MeilisearchBackend:
         normalized_status = str(status).lower() if status is not None else ""
         if normalized_status in {"failed", "canceled"}:
             raise MeilisearchTaskFailedError(status, error)
+
+    @staticmethod
+    def _extract_documents_results(response: Any) -> list[Any]:
+        if response is None:
+            return []
+        if isinstance(response, Mapping):
+            results = response.get("results")
+        else:
+            results = getattr(response, "results", None)
+        if results is None:
+            return []
+        return list(results)
+
+    @staticmethod
+    def _extract_documents_total(response: Any) -> int | None:
+        if response is None:
+            return None
+        if isinstance(response, Mapping):
+            total = response.get("total")
+        else:
+            total = getattr(response, "total", None)
+        return total if isinstance(total, int) else None
+
+    @staticmethod
+    def _read_document_field(document: Any, field: str) -> Any:
+        if isinstance(document, Mapping):
+            return document.get(field)
+        return getattr(document, field, None)
 
     @staticmethod
     def _normalize_document_id(raw_id: Any) -> str:

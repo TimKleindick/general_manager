@@ -53,7 +53,6 @@ class SearchIndexState(models.Model):
             models.Index(fields=["dirty_since", "index_name"]),
             models.Index(fields=["claim_token"]),
             models.Index(fields=["claim_expires_at"]),
-            models.Index(fields=["manager_path", "index_name"]),
             models.Index(fields=["last_reconciled_at"]),
         )
 

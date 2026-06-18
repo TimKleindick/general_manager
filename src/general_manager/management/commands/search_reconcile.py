@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import time
 from typing import Any
 
@@ -11,6 +12,21 @@ from general_manager.search.reconciliation import reconcile_search_indexes
 class InvalidSearchReconcileModeError(CommandError):
     def __init__(self) -> None:
         super().__init__("Pass exactly one of --once or --watch.")
+
+
+class PositiveIntegerArgumentError(argparse.ArgumentTypeError):
+    def __init__(self) -> None:
+        super().__init__("must be a positive integer")
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise PositiveIntegerArgumentError from exc
+    if parsed <= 0:
+        raise PositiveIntegerArgumentError
+    return parsed
 
 
 class Command(BaseCommand):
@@ -34,7 +50,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--max-states",
-            type=int,
+            type=positive_int,
             default=None,
             help="Maximum dirty states to reconcile per sweep.",
         )

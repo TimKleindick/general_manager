@@ -201,7 +201,7 @@ GeneralManager keeps search fresh in two layers:
 The reconciler stores one state row per searchable manager/index pair. Missing
 state means the pair has not been initialized. A changed schema fingerprint
 means the configured fields, filters, sorts, boosts, type label, document id, or
-document serializer changed.
+document serializer, or update strategy changed.
 
 Production deployments should enable
 `GENERAL_MANAGER["SEARCH_RECONCILE_ENABLED"] = True` and run Celery Beat.
@@ -215,7 +215,11 @@ handling.
 
 ### Backend contract and result models
 
-`SearchBackend` is the extension point for adapters. Backends receive index names, queries, filters, sorting, and pagination options, then return a `SearchResult`.
+`SearchBackend` is the extension point for adapters. Backends receive index
+names, queries, filters, sorting, and pagination options, then return a
+`SearchResult`. Adapters must also expose stored document IDs through
+`list_document_ids()` so reconciliation can remove stale documents after a
+manager/index reindex.
 
 Search result models have stable responsibilities:
 

@@ -63,35 +63,28 @@ class Migration(migrations.Migration):
             model_name="searchindexstate",
             index=models.Index(
                 fields=["dirty_since", "index_name"],
-                name="general_man_dirty__61cc37_idx",
-            ),
-        ),
-        migrations.AddIndex(
-            model_name="searchindexstate",
-            index=models.Index(
-                fields=["manager_path", "index_name"],
-                name="general_man_manager_9982f5_idx",
+                name="general_man_dirty_s_71fc00_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="searchindexstate",
             index=models.Index(
                 fields=["claim_token"],
-                name="general_man_claim_t_8dc8c8_idx",
+                name="general_man_claim_t_3aaacc_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="searchindexstate",
             index=models.Index(
                 fields=["claim_expires_at"],
-                name="general_man_claim_e_b9800f_idx",
+                name="general_man_claim_e_1fa228_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="searchindexstate",
             index=models.Index(
                 fields=["last_reconciled_at"],
-                name="general_man_last_re_829c4b_idx",
+                name="general_man_last_re_81038c_idx",
             ),
         ),
     ]

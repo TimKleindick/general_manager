@@ -62,6 +62,20 @@ class TypesenseBackend:
         """
         raise SearchBackendNotImplementedError("Typesense")
 
+    def list_document_ids(
+        self,
+        index_name: str,
+        *,
+        types: Sequence[str] | None = None,
+    ) -> set[str]:
+        """
+        List stored document IDs in the specified index.
+
+        Raises:
+            SearchBackendNotImplementedError: Always raised because the Typesense backend is not implemented.
+        """
+        raise SearchBackendNotImplementedError("Typesense")
+
     def search(
         self,
         index_name: str,

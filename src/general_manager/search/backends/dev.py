@@ -67,6 +67,21 @@ class DevSearchBackend:
             store.documents.pop(doc_id, None)
             store.token_index.pop(doc_id, None)
 
+    def list_document_ids(
+        self,
+        index_name: str,
+        *,
+        types: Sequence[str] | None = None,
+    ) -> set[str]:
+        """Return stored document IDs, optionally restricted by document type."""
+        store = self._indexes.setdefault(index_name, _IndexStore())
+        type_filter = set(types or ())
+        return {
+            document.id
+            for document in store.documents.values()
+            if not type_filter or document.type in type_filter
+        }
+
     def search(
         self,
         index_name: str,
