@@ -15,5 +15,6 @@ These tutorials walk you through common development tasks when working with Gene
 11. [Handle database migrations](migrations_gotchas.md)
 12. [Build workflow event triggers](workflow_events.md)
 13. [Operate workflow outbox/dead letters](workflow_ops.md)
+14. [Run search reconciliation](search_reconciliation.md)
 
 Follow them in order when you start a new project, or jump to the topic relevant to your current task.

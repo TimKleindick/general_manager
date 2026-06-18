@@ -189,19 +189,27 @@ dispatch index updates through Celery. When disabled, updates run inline.
 
 Celery is required for production async indexing; development can remain sync.
 
-## Development auto-reindex (optional)
+## Search reconciliation
 
-To avoid manual reindexing when using the in-memory dev backend, enable:
+GeneralManager keeps search fresh in two layers:
 
-```python
-GENERAL_MANAGER = {
-    "SEARCH_AUTO_REINDEX": True,
-}
-```
+1. Manager create/update/delete operations update the affected search document.
+2. The search reconciler periodically checks durable index state and rebuilds
+   manager/index pairs that need initialization, schema updates, or recovery
+   after missed writes.
 
-When enabled (and `DEBUG=True`), GeneralManager reindexes once on the first
-request in the runserver process. This keeps dev search results available
-without running `search_index --reindex` manually.
+The reconciler stores one state row per searchable manager/index pair. Missing
+state means the pair has not been initialized. A changed schema fingerprint
+means the configured fields, filters, sorts, boosts, type label, document id, or
+document serializer changed.
+
+Production deployments should enable
+`GENERAL_MANAGER["SEARCH_RECONCILE_ENABLED"] = True` and run Celery Beat.
+Development can either run the same Celery Beat path or use
+`python manage.py search_reconcile --watch`.
+
+Search initialization is not coupled to GraphQL traffic or WSGI/ASGI request
+handling.
 
 ## Backends
 

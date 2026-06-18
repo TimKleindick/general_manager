@@ -108,19 +108,10 @@ GENERAL_MANAGER = {
 Run a Celery worker so index updates can be dispatched. When async is disabled,
 updates run inline.
 
-## Step 6: Auto-reindex in development (optional)
+## Step 6: Keep indexes initialized and reconciled
 
-The dev search backend is in-memory, so indexes are empty on every process
-start. To automatically reindex once per runserver process, enable:
-
-```python
-GENERAL_MANAGER = {
-    **GENERAL_MANAGER,
-    "SEARCH_AUTO_REINDEX": True,
-}
-```
-
-This runs `search_index --reindex` on the first request when `DEBUG=True`.
+For production and development reconciliation setup, see
+[Run search reconciliation](search_reconciliation.md).
 
 ## Step 7: Non-GraphQL usage
 
