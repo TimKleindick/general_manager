@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from typing import ClassVar
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
 
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+from general_manager.search.backend import SearchDocument
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.config import IndexConfig
 from general_manager.search.indexer import SearchIndexer
@@ -14,6 +16,7 @@ from general_manager.search.models import (
     SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
     SearchIndexState,
 )
+from general_manager.search.utils import build_document_id
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
 
@@ -175,6 +178,45 @@ class SearchIndexerTests(SimpleTestCase):
         result = backend.search("global", "Alpha", filters={"status": "public"})
         assert result.total == 1
 
+    def test_indexer_reindex_manager_index_deletes_stale_same_type_documents(
+        self,
+    ) -> None:
+        backend = DevSearchBackend()
+        indexer = SearchIndexer(backend)
+        backend.ensure_index("global", {})
+        stale_project_id = build_document_id("Project", {"id": 999})
+        other_type_id = build_document_id("OtherProject", {"id": 1})
+        backend.upsert(
+            "global",
+            [
+                SearchDocument(
+                    id=stale_project_id,
+                    type="Project",
+                    identification={"id": 999},
+                    index="global",
+                    data={"name": "Stale Project", "status": "public"},
+                    field_boosts={},
+                ),
+                SearchDocument(
+                    id=other_type_id,
+                    type="OtherProject",
+                    identification={"id": 1},
+                    index="global",
+                    data={"name": "Other Project", "status": "public"},
+                    field_boosts={},
+                ),
+            ],
+        )
+
+        indexed = indexer.reindex_manager_index(Project, "global")
+
+        assert indexed == 2
+        existing_ids = backend.list_document_ids("global")
+        assert stale_project_id not in existing_ids
+        assert build_document_id("Project", {"id": 1}) in existing_ids
+        assert build_document_id("Project", {"id": 2}) in existing_ids
+        assert other_type_id in existing_ids
+
 
 def test_indexer_reindex_manager_index_limits_backend_writes() -> None:
     GeneralmanagerConfig.initialize_general_manager_classes(
@@ -212,3 +254,35 @@ class SearchIndexerSignalStateTests(TestCase):
 
         state = SearchIndexState.objects.get(index_name="global")
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+
+    def test_post_change_dispatches_when_dirty_marker_fails(self) -> None:
+        from general_manager.search.indexer import _handle_search_post_change
+
+        with (
+            patch(
+                "general_manager.search.indexer.mark_search_indexes_dirty",
+                side_effect=RuntimeError("state store unavailable"),
+            ),
+            patch("general_manager.search.indexer.dispatch_index_update") as dispatch,
+        ):
+            _handle_search_post_change(
+                sender=Project, instance=Project(id=1), action="update"
+            )
+
+        dispatch.assert_called_once()
+
+    def test_pre_delete_dispatches_when_dirty_marker_fails(self) -> None:
+        from general_manager.search.indexer import _handle_search_pre_delete
+
+        with (
+            patch(
+                "general_manager.search.indexer.mark_search_indexes_dirty",
+                side_effect=RuntimeError("state store unavailable"),
+            ),
+            patch("general_manager.search.indexer.dispatch_index_update") as dispatch,
+        ):
+            _handle_search_pre_delete(
+                sender=Project, instance=Project(id=1), action="delete"
+            )
+
+        dispatch.assert_called_once()

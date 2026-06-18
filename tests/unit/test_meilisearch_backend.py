@@ -27,6 +27,7 @@ class _FakeIndex:
         self.added: list[dict[str, object]] = []
         self.deleted: list[list[str]] = []
         self.settings: list[dict[str, object]] = []
+        self.documents: list[dict[str, object]] = []
 
     def update_settings(self, payload: dict[str, object]) -> dict[str, int]:
         """
@@ -82,6 +83,14 @@ class _FakeIndex:
                 - "processingTimeMs": 0.
         """
         return {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 0}
+
+    def get_documents(self, payload: dict[str, object]) -> dict[str, object]:
+        limit = int(payload["limit"])
+        offset = int(payload["offset"])
+        return {
+            "results": self.documents[offset : offset + limit],
+            "total": len(self.documents),
+        }
 
 
 class _FakeClient:
@@ -314,6 +323,29 @@ def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
     backend = MeilisearchBackend(client=_FakeClient(_SearchIndex()))
     result = backend.search("index", "Alpha")
     assert result.hits[0].id == 'Project:{"id": 9}'
+
+
+def test_meilisearch_backend_lists_original_document_ids_by_type() -> None:
+    index = _FakeIndex()
+    index.documents = [
+        {
+            "id": "gm_hash_a",
+            "gm_document_id": 'Project:{"id": 1}',
+            "type": "Project",
+        },
+        {
+            "id": "gm_hash_b",
+            "gm_document_id": 'Other:{"id": 1}',
+            "type": "Other",
+        },
+        {"id": "legacy_id", "type": "Project"},
+    ]
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    assert backend.list_document_ids("index", types=["Project"]) == {
+        'Project:{"id": 1}',
+        "legacy_id",
+    }
 
 
 def test_meilisearch_backend_document_payload_reserved_keys() -> None:

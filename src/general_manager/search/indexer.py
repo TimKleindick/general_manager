@@ -258,8 +258,16 @@ class SearchIndexer:
             )
             documents.append(document)
 
+        current_ids = {document.id for document in documents}
         if documents:
             self.backend.upsert(index_config.name, documents)
+        existing_ids = self.backend.list_document_ids(
+            index_config.name,
+            types=[get_type_label(manager_class)],
+        )
+        stale_ids = sorted(existing_ids - current_ids)
+        if stale_ids:
+            self.backend.delete(index_config.name, stale_ids)
         return len(documents)
 
 
@@ -288,6 +296,13 @@ def _handle_search_post_change(
             instance.__class__,
             reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
         )
+    except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
+        logger.warning(
+            "search dirty marker failed",
+            context={"manager": instance.__class__.__name__, "action": action},
+            exc_info=exc,
+        )
+    try:
         dispatch_index_update(
             action="index",
             manager_path=manager_path,
@@ -327,6 +342,13 @@ def _handle_search_pre_delete(
             instance.__class__,
             reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
         )
+    except (SearchBackendError, RuntimeError, ValueError, TypeError) as exc:
+        logger.warning(
+            "search delete dirty marker failed",
+            context={"manager": instance.__class__.__name__, "action": action},
+            exc_info=exc,
+        )
+    try:
         dispatch_index_update(
             action="delete",
             manager_path=manager_path,

@@ -29,6 +29,14 @@ class SearchReconcileSettingsTests(SimpleTestCase):
     def test_search_reconcile_interval_seconds_falls_back_to_default(self) -> None:
         assert search_reconcile_interval_seconds() == 60
 
+    @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": 0})
+    def test_search_reconcile_interval_seconds_uses_minimum_for_zero(self) -> None:
+        assert search_reconcile_interval_seconds() == 1
+
+    @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": -10})
+    def test_search_reconcile_interval_seconds_uses_minimum_for_negative(self) -> None:
+        assert search_reconcile_interval_seconds() == 1
+
 
 class SearchReconcileTaskTests(SimpleTestCase):
     def test_reconcile_search_indexes_task_calls_service(self) -> None:

@@ -55,3 +55,10 @@ class DevSearchBackendTests(SimpleTestCase):
     def test_search_sorting(self) -> None:
         result = self.backend.search("global", "", sort_by="name", sort_desc=True)
         assert result.hits[0].data["name"] == "Beta Project"
+
+    def test_list_document_ids_filters_by_type(self) -> None:
+        assert self.backend.list_document_ids("global", types=["Project"]) == {
+            "Project:1",
+            "Project:2",
+        }
+        assert self.backend.list_document_ids("global", types=["OtherProject"]) == set()

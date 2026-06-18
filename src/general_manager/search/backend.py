@@ -71,6 +71,23 @@ class SearchBackend(Protocol):
             ids (Sequence[str]): Sequence of document IDs to delete.
         """
 
+    def list_document_ids(
+        self,
+        index_name: str,
+        *,
+        types: Sequence[str] | None = None,
+    ) -> set[str]:
+        """
+        Return all document IDs currently stored in an index.
+
+        Parameters:
+            index_name (str): Name of the index to inspect.
+            types (Sequence[str] | None): Optional document type labels to include.
+
+        Returns:
+            set[str]: Backend document IDs in their original GeneralManager form.
+        """
+
     def search(
         self,
         index_name: str,

@@ -20,6 +20,8 @@ class SearchBackendStubTests(SimpleTestCase):
         with pytest.raises(SearchBackendNotImplementedError):
             backend.delete("index", [])
         with pytest.raises(SearchBackendNotImplementedError):
+            backend.list_document_ids("index")
+        with pytest.raises(SearchBackendNotImplementedError):
             backend.search("index", "query")
 
     def test_typesense_backend_methods_raise(self) -> None:
@@ -37,5 +39,7 @@ class SearchBackendStubTests(SimpleTestCase):
             backend.upsert("index", [])
         with pytest.raises(SearchBackendNotImplementedError):
             backend.delete("index", [])
+        with pytest.raises(SearchBackendNotImplementedError):
+            backend.list_document_ids("index")
         with pytest.raises(SearchBackendNotImplementedError):
             backend.search("index", "query")

@@ -4,6 +4,7 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 
 
@@ -45,6 +46,31 @@ class SearchReconcileCommandTests(SimpleTestCase):
             call_command("search_reconcile", "--once", "--max-states", "2")
 
         reconcile.assert_called_once_with(force=False, max_states=2)
+
+    def test_search_reconcile_rejects_non_positive_max_states(self) -> None:
+        for max_states in ("0", "-1"):
+            with (
+                self.subTest(max_states=max_states),
+                patch(
+                    "general_manager.management.commands.search_reconcile.reconcile_search_indexes"
+                ) as reconcile,
+                self.assertRaises(CommandError),
+            ):
+                call_command(
+                    "search_reconcile",
+                    "--once",
+                    "--max-states",
+                    max_states,
+                )
+            reconcile.assert_not_called()
+
+    def test_search_reconcile_rejects_conflicting_modes(self) -> None:
+        with self.assertRaises(CommandError):
+            call_command("search_reconcile", "--once", "--watch")
+
+    def test_search_reconcile_rejects_missing_mode(self) -> None:
+        with self.assertRaises(CommandError):
+            call_command("search_reconcile")
 
     def test_search_reconcile_watch_repeats_until_interrupted(self) -> None:
         calls = []
