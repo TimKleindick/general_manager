@@ -6,7 +6,7 @@ from general_manager import apps as gm_apps
 
 
 class SearchAutoReindexRemovedTests(SimpleTestCase):
-    def test_request_started_auto_reindex_helpers_are_removed(self) -> None:
+    def test_legacy_auto_reindex_helpers_are_removed(self) -> None:
         assert not hasattr(gm_apps, "_SEARCH_REINDEXED")
         assert not hasattr(gm_apps, "_auto_reindex_search")
         assert not hasattr(gm_apps, "install_search_auto_reindex")
