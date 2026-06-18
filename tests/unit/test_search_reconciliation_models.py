@@ -12,6 +12,7 @@ from general_manager.search.models import (
 
 class SearchIndexStateModelTests(TestCase):
     def test_search_index_state_is_unique_per_manager_and_index(self) -> None:
+        """Enforce one state row per manager and index pair."""
         SearchIndexState.objects.create(
             manager_path="tests.Project",
             index_name="global",
@@ -28,6 +29,7 @@ class SearchIndexStateModelTests(TestCase):
     def test_search_index_state_does_not_define_duplicate_unique_lookup_index(
         self,
     ) -> None:
+        """Avoid a redundant explicit index for the unique lookup fields."""
         duplicate_indexes = [
             index
             for index in SearchIndexState._meta.indexes
@@ -39,6 +41,7 @@ class SearchIndexStateModelTests(TestCase):
     def test_mark_dirty_records_reason_without_clearing_existing_timestamp(
         self,
     ) -> None:
+        """Preserve the first dirty timestamp when marking dirty again."""
         first_dirty = timezone.now()
         state = SearchIndexState.objects.create(
             manager_path="tests.Project",
@@ -55,6 +58,7 @@ class SearchIndexStateModelTests(TestCase):
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
 
     def test_clear_dirty_records_success(self) -> None:
+        """Clear dirty/error fields and record reconciliation success."""
         state = SearchIndexState.objects.create(
             manager_path="tests.Project",
             index_name="global",

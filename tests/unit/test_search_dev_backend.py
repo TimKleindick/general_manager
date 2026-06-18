@@ -53,10 +53,12 @@ class DevSearchBackendTests(SimpleTestCase):
         assert result.total == 2
 
     def test_search_sorting(self) -> None:
+        """Sort search results by a stored document field."""
         result = self.backend.search("global", "", sort_by="name", sort_desc=True)
         assert result.hits[0].data["name"] == "Beta Project"
 
     def test_list_document_ids_filters_by_type(self) -> None:
+        """Return indexed document IDs restricted to requested type labels."""
         assert self.backend.list_document_ids("global", types=["Project"]) == {
             "Project:1",
             "Project:2",

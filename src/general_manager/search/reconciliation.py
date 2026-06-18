@@ -67,6 +67,7 @@ def manager_import_path(manager_class: type[GeneralManager]) -> str:
 
 
 def _callable_path(value: Any) -> str | None:
+    """Return a stable import-like path for a callable when one is available."""
     if value is None:
         return None
     module = getattr(value, "__module__", "")
@@ -75,6 +76,7 @@ def _callable_path(value: Any) -> str | None:
 
 
 def _index_payload(index_config: IndexConfig) -> dict[str, Any]:
+    """Serialize index configuration into the schema fingerprint payload."""
     return {
         "name": index_config.name,
         "fields": [
@@ -192,6 +194,7 @@ def mark_search_indexes_dirty(
 
 
 def _resolve_manager_path(manager_path: str) -> type[GeneralManager]:
+    """Import and return the manager class for a stored manager path."""
     return import_string(manager_path)
 
 
@@ -200,6 +203,7 @@ def _claim_dirty_states(
     max_states: int | None = None,
     claim_ttl_seconds: int = 300,
 ) -> list[SearchIndexState]:
+    """Atomically claim dirty states that are unclaimed or expired."""
     now = timezone.now()
     claim_token = uuid.uuid4().hex
     claim_expires_at = now + timedelta(seconds=claim_ttl_seconds)
@@ -231,6 +235,7 @@ def _claim_dirty_states(
 
 
 def _release_claim_with_error(state: SearchIndexState, error: str) -> None:
+    """Release a state claim and persist the reconciliation error message."""
     state.claim_token = ""
     state.claimed_at = None
     state.claim_expires_at = None

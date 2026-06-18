@@ -20,7 +20,10 @@ except ImportError:  # pragma: no cover - optional dependency boundary
     current_app = cast(Any | None, None)  # type: ignore[assignment, no-redef]
 
     def shared_task(func: Any | None = None, **_kwargs: Any):  # type: ignore[no-redef]
+        """Return a no-op task decorator when Celery is not installed."""
+
         def decorator(inner):
+            """Return the wrapped callable unchanged."""
             return inner
 
         if func is None:
@@ -32,6 +35,7 @@ SEARCH_RECONCILE_BEAT_SCHEDULE_KEY = "general_manager.search.reconcile"
 
 
 def _config(django_settings: Any = settings) -> Mapping[str, Any]:
+    """Return the GENERAL_MANAGER settings mapping when configured."""
     value = getattr(django_settings, "GENERAL_MANAGER", {})
     if isinstance(value, Mapping):
         return value

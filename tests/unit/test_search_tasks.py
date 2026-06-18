@@ -17,29 +17,35 @@ from general_manager.search.tasks import (
 class SearchReconcileSettingsTests(SimpleTestCase):
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_ENABLED": True})
     def test_search_reconcile_enabled_reads_general_manager_setting(self) -> None:
+        """Read the reconciliation enabled flag from GENERAL_MANAGER settings."""
         assert search_reconcile_enabled() is True
 
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": 30})
     def test_search_reconcile_interval_seconds_reads_general_manager_setting(
         self,
     ) -> None:
+        """Read the reconciliation interval from GENERAL_MANAGER settings."""
         assert search_reconcile_interval_seconds() == 30
 
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": "bad"})
     def test_search_reconcile_interval_seconds_falls_back_to_default(self) -> None:
+        """Fall back to the default interval when the setting is invalid."""
         assert search_reconcile_interval_seconds() == 60
 
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": 0})
     def test_search_reconcile_interval_seconds_uses_minimum_for_zero(self) -> None:
+        """Clamp a zero reconciliation interval to one second."""
         assert search_reconcile_interval_seconds() == 1
 
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": -10})
     def test_search_reconcile_interval_seconds_uses_minimum_for_negative(self) -> None:
+        """Clamp a negative reconciliation interval to one second."""
         assert search_reconcile_interval_seconds() == 1
 
 
 class SearchReconcileTaskTests(SimpleTestCase):
     def test_reconcile_search_indexes_task_calls_service(self) -> None:
+        """Return reconciliation counts from the Celery task wrapper."""
         with patch(
             "general_manager.search.tasks.reconcile_search_indexes"
         ) as reconcile:
@@ -57,6 +63,7 @@ class SearchReconcileTaskTests(SimpleTestCase):
         }
     )
     def test_configure_search_reconcile_beat_schedule_registers_task(self) -> None:
+        """Register the configured reconciliation task in Celery Beat."""
         fake_conf = SimpleNamespace(beat_schedule={})
         fake_app = SimpleNamespace(conf=fake_conf)
         with (
@@ -76,6 +83,7 @@ class SearchReconcileTaskTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_ENABLED": False})
     def test_configure_search_reconcile_beat_schedule_skips_when_disabled(self) -> None:
+        """Skip Celery Beat registration when reconciliation is disabled."""
         configured = configure_search_reconcile_beat_schedule_from_settings()
 
         assert configured is False

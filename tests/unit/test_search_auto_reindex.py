@@ -7,6 +7,7 @@ from general_manager import apps as gm_apps
 
 class SearchAutoReindexRemovedTests(SimpleTestCase):
     def test_legacy_auto_reindex_helpers_are_removed(self) -> None:
+        """Keep removed request-triggered auto-reindex helpers unavailable."""
         assert not hasattr(gm_apps, "_SEARCH_REINDEXED")
         assert not hasattr(gm_apps, "_auto_reindex_search")
         assert not hasattr(gm_apps, "install_search_auto_reindex")
@@ -15,6 +16,7 @@ class SearchAutoReindexRemovedTests(SimpleTestCase):
 
 class DevSearchPrefixTests(TestCase):
     def test_dev_search_prefix_match(self) -> None:
+        """Match documents when the query is a prefix of an indexed token."""
         from general_manager.search.backends.dev import DevSearchBackend
         from general_manager.search.backend import SearchDocument
 

@@ -171,6 +171,7 @@ class SearchIndexerTests(SimpleTestCase):
         assert result.total == 0
 
     def test_indexer_reindex_manager(self) -> None:
+        """Reindex all configured documents for a manager class."""
         backend = DevSearchBackend()
         indexer = SearchIndexer(backend)
 
@@ -181,6 +182,7 @@ class SearchIndexerTests(SimpleTestCase):
     def test_indexer_reindex_manager_index_deletes_stale_same_type_documents(
         self,
     ) -> None:
+        """Delete stale same-type documents during manager/index reindexing."""
         backend = DevSearchBackend()
         indexer = SearchIndexer(backend)
         backend.ensure_index("global", {})
@@ -219,6 +221,7 @@ class SearchIndexerTests(SimpleTestCase):
 
 
 def test_indexer_reindex_manager_index_limits_backend_writes() -> None:
+    """Reindex only the requested index for multi-index managers."""
     GeneralmanagerConfig.initialize_general_manager_classes(
         [MultiIndexProject], [MultiIndexProject]
     )
@@ -233,9 +236,11 @@ def test_indexer_reindex_manager_index_limits_backend_writes() -> None:
 
 class SearchIndexerSignalStateTests(TestCase):
     def setUp(self) -> None:
+        """Initialize manager classes for signal state tests."""
         GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
 
     def test_post_change_marks_search_state_dirty(self) -> None:
+        """Mark search state dirty after create or update signals."""
         from general_manager.search.indexer import _handle_search_post_change
 
         _handle_search_post_change(
@@ -246,6 +251,7 @@ class SearchIndexerSignalStateTests(TestCase):
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
 
     def test_pre_delete_marks_search_state_dirty(self) -> None:
+        """Mark search state dirty before delete signals."""
         from general_manager.search.indexer import _handle_search_pre_delete
 
         _handle_search_pre_delete(
@@ -256,6 +262,7 @@ class SearchIndexerSignalStateTests(TestCase):
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
 
     def test_post_change_dispatches_when_dirty_marker_fails(self) -> None:
+        """Dispatch immediate indexing even when dirty marking fails."""
         from general_manager.search.indexer import _handle_search_post_change
 
         with (
@@ -272,6 +279,7 @@ class SearchIndexerSignalStateTests(TestCase):
         dispatch.assert_called_once()
 
     def test_pre_delete_dispatches_when_dirty_marker_fails(self) -> None:
+        """Dispatch immediate deletion even when dirty marking fails."""
         from general_manager.search.indexer import _handle_search_pre_delete
 
         with (

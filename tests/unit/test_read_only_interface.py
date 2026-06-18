@@ -60,6 +60,7 @@ class FakeQuerySet:
     """
 
     def __init__(self, items: list[FakeInstance]) -> None:
+        """Store fake queryset items in iteration order."""
         self._items = items
 
     def first(self):
@@ -69,12 +70,15 @@ class FakeQuerySet:
         return self._items[0] if self._items else None
 
     def __iter__(self):
+        """Return an iterator over the stored fake instances."""
         return iter(self._items)
 
     def __len__(self):
+        """Return the number of stored fake instances."""
         return len(self._items)
 
     def __bool__(self):
+        """Return whether the fake queryset contains any instances."""
         return bool(self._items)
 
 
@@ -121,6 +125,7 @@ class FakeManager:
         """
 
         def matches(inst: FakeInstance) -> bool:
+            """Return whether the fake instance matches all lookup values."""
             return all(getattr(inst, key) == value for key, value in kwargs.items())
 
         filtered = [inst for inst in self._instances if matches(inst)]
@@ -133,15 +138,19 @@ class UnsafeJsonValue:
     """
 
     def __init__(self, value: str) -> None:
+        """Store the string value used for comparisons and hashing."""
         self.value = value
 
     def __str__(self) -> str:
+        """Return the wrapped value as a string."""
         return self.value
 
     def __eq__(self, other: object) -> bool:
+        """Compare unsafe JSON values by wrapped value."""
         return isinstance(other, UnsafeJsonValue) and other.value == self.value
 
     def __hash__(self) -> int:
+        """Return the hash of the wrapped string value."""
         return hash(self.value)
 
 
@@ -158,6 +167,7 @@ class FakeField:
         primary_key: bool = False,
         column: str | None = None,
     ) -> None:
+        """Store fake field metadata used by read-only sync tests."""
         self.name = name
         self.editable = editable
         self.primary_key = primary_key
@@ -747,6 +757,7 @@ class SyncDataTests(SimpleTestCase):
         active_query_before_atomic = []
 
         def filter_spy(**kwargs):
+            """Record active-row queries made before the atomic fallback path."""
             if kwargs == {"is_active": True} and not self.atomic_mock.called:
                 active_query_before_atomic.append(kwargs)
             return original_filter(**kwargs)
@@ -812,6 +823,7 @@ class SyncDataTests(SimpleTestCase):
 
                 @staticmethod
                 def get_fields() -> list[object]:
+                    """Return no related fields for the broken query model."""
                     return []
 
         class BrokenQueryManager:
@@ -879,6 +891,8 @@ class SyncDataTests(SimpleTestCase):
 
 class SyncDataMetadataValidationTests(SimpleTestCase):
     def test_missing_binding_raises(self):
+        """Raise when a read-only interface is missing manager/model metadata."""
+
         class IncompleteInterface(ReadOnlyInterface):
             pass
 
@@ -1164,6 +1178,7 @@ class SyncDataRelatedInterfaceTests(SimpleTestCase):
 
 class SystemCheckHookTests(SimpleTestCase):
     def test_get_system_checks_invokes_capability(self):
+        """Build system check hooks that call schema validation."""
         capability = ReadOnlyManagementCapability()
         DummyInterface._parent_class = DummyManager
         hooks = capability.get_system_checks(DummyInterface)
@@ -1241,6 +1256,8 @@ class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
         GeneralManagerMeta.read_only_classes = self._original
 
     def test_pre_create_enforces_soft_delete_and_base_model(self):
+        """Force read-only managers onto soft-delete base model behavior."""
+
         class DummyInterface(ReadOnlyInterface):
             pass
 
@@ -1266,6 +1283,7 @@ class ReadOnlyLifecycleCapabilityTests(SimpleTestCase):
         )
 
     def test_post_create_registers_read_only_class(self):
+        """Register created read-only manager classes in global metadata."""
         from general_manager.manager.meta import GeneralManagerMeta
 
         class DummyManager:

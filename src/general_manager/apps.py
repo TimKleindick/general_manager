@@ -134,10 +134,12 @@ class GeneralmanagerConfig(AppConfig):
 
     @staticmethod
     def install_startup_hook_runner() -> None:
+        """Install the startup hook runner through the bootstrap module."""
         install_startup_hook_runner()
 
     @staticmethod
     def register_system_checks() -> None:
+        """Register GeneralManager system checks through the bootstrap module."""
         register_system_checks()
 
     @staticmethod
@@ -145,30 +147,36 @@ class GeneralmanagerConfig(AppConfig):
         pending_attribute_initialization: list[Type[GeneralManager]],
         all_classes: list[Type[GeneralManager]],
     ) -> None:
+        """Initialize pending manager classes through the bootstrap module."""
         initialize_general_manager_classes(
             pending_attribute_initialization, all_classes
         )
 
     @staticmethod
     def check_permission_class(general_manager_class: Type[GeneralManager]) -> None:
+        """Validate a manager permission class through the bootstrap module."""
         check_permission_class(general_manager_class)
 
     @staticmethod
     def handle_graph_ql(
         pending_graphql_interfaces: list[Type[GeneralManager]],
     ) -> None:
+        """Build GraphQL integration for pending manager interfaces."""
         handle_graph_ql(pending_graphql_interfaces)
 
     @staticmethod
     def handle_remote_api(
         manager_classes: list[Type[GeneralManager]],
     ) -> None:
+        """Register remote API integration for manager classes."""
         handle_remote_api(manager_classes)
 
     @staticmethod
     def add_graphql_url(schema: Any) -> None:
+        """Add the generated GraphQL URL to the configured URLConf."""
         add_graphql_url(schema)
 
     @staticmethod
     def _ensure_asgi_subscription_route(graphql_url: str) -> None:
+        """Ensure the ASGI subscription route exists for the GraphQL URL."""
         _ensure_asgi_subscription_route(graphql_url)

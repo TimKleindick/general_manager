@@ -10,6 +10,7 @@ from django.test import SimpleTestCase
 
 class SearchReconcileCommandTests(SimpleTestCase):
     def test_search_reconcile_once_runs_service(self) -> None:
+        """Run one reconciliation sweep when --once is provided."""
         stdout = StringIO()
         with patch(
             "general_manager.management.commands.search_reconcile.reconcile_search_indexes"
@@ -24,6 +25,7 @@ class SearchReconcileCommandTests(SimpleTestCase):
         assert "Reconciled 1 search index states" in stdout.getvalue()
 
     def test_search_reconcile_force_passes_force(self) -> None:
+        """Pass the force flag through to the reconciliation service."""
         with patch(
             "general_manager.management.commands.search_reconcile.reconcile_search_indexes"
         ) as reconcile:
@@ -36,6 +38,7 @@ class SearchReconcileCommandTests(SimpleTestCase):
         reconcile.assert_called_once_with(force=True, max_states=None)
 
     def test_search_reconcile_max_states_passes_limit(self) -> None:
+        """Pass a positive max-state limit through to the service."""
         with patch(
             "general_manager.management.commands.search_reconcile.reconcile_search_indexes"
         ) as reconcile:
@@ -48,6 +51,7 @@ class SearchReconcileCommandTests(SimpleTestCase):
         reconcile.assert_called_once_with(force=False, max_states=2)
 
     def test_search_reconcile_rejects_non_positive_max_states(self) -> None:
+        """Reject zero and negative max-state limits before service execution."""
         for max_states in ("0", "-1"):
             with (
                 self.subTest(max_states=max_states),
@@ -65,17 +69,21 @@ class SearchReconcileCommandTests(SimpleTestCase):
             reconcile.assert_not_called()
 
     def test_search_reconcile_rejects_conflicting_modes(self) -> None:
+        """Reject mutually exclusive once and watch modes used together."""
         with self.assertRaises(CommandError):
             call_command("search_reconcile", "--once", "--watch")
 
     def test_search_reconcile_rejects_missing_mode(self) -> None:
+        """Reject command execution when no run mode is provided."""
         with self.assertRaises(CommandError):
             call_command("search_reconcile")
 
     def test_search_reconcile_watch_repeats_until_interrupted(self) -> None:
+        """Keep watching until the sleep loop is interrupted."""
         calls = []
 
         def _reconcile(*, force=False, max_states=None):
+            """Return a fake reconciliation result and record the sweep."""
             del force, max_states
             result = type(
                 "Result",
