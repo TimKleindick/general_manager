@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.54.1 (2026-06-18)
+
+### Bug Fixes
+
+- Skip unchanged read-only sync
+  ([`08334eb`](https://github.com/TimKleindick/general_manager/commit/08334eb5b22764b9b485769b6418adaba2093e5a))
+
+
 ## v0.54.0 (2026-06-17)
 
 ### Documentation
