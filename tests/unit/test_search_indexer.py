@@ -106,6 +106,20 @@ class Project(GeneralManager):
             }
 
 
+class MultiIndexProjectInterface(ProjectInterface):
+    pass
+
+
+class MultiIndexProject(GeneralManager):
+    Interface = MultiIndexProjectInterface
+
+    class SearchConfig:
+        indexes: ClassVar[list[IndexConfig]] = [
+            IndexConfig(name="global", fields=["name"], filters=["status"]),
+            IndexConfig(name="private", fields=["status"], filters=["status"]),
+        ]
+
+
 class SearchIndexerTests(SimpleTestCase):
     def setUp(self) -> None:
         """
@@ -156,3 +170,16 @@ class SearchIndexerTests(SimpleTestCase):
         indexer.reindex_manager(Project)
         result = backend.search("global", "Alpha", filters={"status": "public"})
         assert result.total == 1
+
+
+def test_indexer_reindex_manager_index_limits_backend_writes() -> None:
+    GeneralmanagerConfig.initialize_general_manager_classes(
+        [MultiIndexProject], [MultiIndexProject]
+    )
+    backend = DevSearchBackend()
+    indexer = SearchIndexer(backend)
+
+    indexer.reindex_manager_index(MultiIndexProject, "global")
+
+    assert backend.search("global", "Alpha", filters={"status": "public"}).total == 1
+    assert backend.search("private", "public", filters={"status": "public"}).total == 0
