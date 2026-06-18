@@ -150,6 +150,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                                     "configure_beat_schedule"
                                 ),
                             ),
+                            patch(
+                                "general_manager.apps.configure_search_reconcile_beat_schedule_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_search_reconcile_beat_schedule"
+                                ),
+                            ),
                             patch.object(
                                 config,
                                 "install_search_auto_reindex",
@@ -171,5 +177,6 @@ class AppsUtilitiesTests(SimpleTestCase):
             "configure_event_registry",
             "configure_signal_bridge",
             "configure_beat_schedule",
+            "configure_search_reconcile_beat_schedule",
             "install_search_auto_reindex",
         ]
