@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Iterable
 
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
+from django.utils.module_loading import import_string
 
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
@@ -41,6 +46,19 @@ class SearchStateEnsureResult:
     created: int = 0
     updated: int = 0
     unchanged: int = 0
+
+
+@dataclass(frozen=True)
+class SearchReconcileResult:
+    """Counts produced by one search reconciliation sweep."""
+
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    claimed: int = 0
+    reconciled: int = 0
+    failed: int = 0
+    documents: int = 0
 
 
 def manager_import_path(manager_class: type[GeneralManager]) -> str:
@@ -171,3 +189,122 @@ def mark_search_indexes_dirty(
             state.mark_dirty(reason)
         marked += 1
     return marked
+
+
+def _resolve_manager_path(manager_path: str) -> type[GeneralManager]:
+    return import_string(manager_path)
+
+
+def _claim_dirty_states(
+    *,
+    max_states: int | None = None,
+    claim_ttl_seconds: int = 300,
+) -> list[SearchIndexState]:
+    now = timezone.now()
+    claim_token = uuid.uuid4().hex
+    claim_expires_at = now + timedelta(seconds=claim_ttl_seconds)
+    claim_filter = Q(claim_token="") | Q(claim_expires_at__lte=now)
+
+    with transaction.atomic():
+        queryset = (
+            SearchIndexState.objects.select_for_update()
+            .filter(dirty_since__isnull=False)
+            .filter(claim_filter)
+            .order_by("dirty_since", "id")
+        )
+        if max_states is not None:
+            queryset = queryset[:max_states]
+        states = list(queryset)
+        for state in states:
+            state.claim_token = claim_token
+            state.claimed_at = now
+            state.claim_expires_at = claim_expires_at
+            state.save(
+                update_fields=[
+                    "claim_token",
+                    "claimed_at",
+                    "claim_expires_at",
+                    "updated_at",
+                ]
+            )
+    return states
+
+
+def _release_claim_with_error(state: SearchIndexState, error: str) -> None:
+    state.claim_token = ""
+    state.claimed_at = None
+    state.claim_expires_at = None
+    state.last_error = error
+    state.save(
+        update_fields=[
+            "claim_token",
+            "claimed_at",
+            "claim_expires_at",
+            "last_error",
+            "updated_at",
+        ]
+    )
+
+
+def reconcile_search_indexes(
+    *,
+    force: bool = False,
+    max_states: int | None = None,
+) -> SearchReconcileResult:
+    """Reconcile dirty search index states."""
+    ensure_result = ensure_search_index_states(force=force)
+    claimed_states = _claim_dirty_states(max_states=max_states)
+
+    if not claimed_states:
+        skipped = SearchIndexState.objects.filter(dirty_since__isnull=True).count()
+        logger.info(
+            "search reconciliation skipped; no dirty indexes",
+            context={"skipped": skipped},
+        )
+        return SearchReconcileResult(
+            created=ensure_result.created,
+            updated=ensure_result.updated,
+            skipped=skipped,
+        )
+
+    from general_manager.search.backend_registry import get_search_backend
+    from general_manager.search.indexer import SearchIndexer
+
+    indexer = SearchIndexer(get_search_backend())
+    reconciled = 0
+    failed = 0
+    documents = 0
+    for state in claimed_states:
+        try:
+            manager_class = _resolve_manager_path(state.manager_path)
+            document_count = indexer.reindex_manager_index(
+                manager_class,
+                state.index_name,
+            )
+            documents += document_count
+            state.clear_dirty()
+            reconciled += 1
+            logger.info(
+                "search index reconciled",
+                context={
+                    "manager": state.manager_path,
+                    "index": state.index_name,
+                    "documents": document_count,
+                },
+            )
+        except Exception as exc:
+            failed += 1
+            _release_claim_with_error(state, str(exc))
+            logger.exception(
+                "search index reconciliation failed",
+                context={"manager": state.manager_path, "index": state.index_name},
+            )
+
+    return SearchReconcileResult(
+        created=ensure_result.created,
+        updated=ensure_result.updated,
+        claimed=len(claimed_states),
+        reconciled=reconciled,
+        failed=failed,
+        documents=documents,
+    )

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import uuid
+from datetime import timedelta
 from typing import ClassVar
+from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
@@ -169,3 +173,116 @@ class SearchDirtyMarkerTests(TestCase):
         state.refresh_from_db()
 
         assert state.dirty_since == original_dirty_since
+
+
+class SearchReconcileEngineTests(TestCase):
+    def setUp(self) -> None:
+        self._original_all_classes = list(GeneralManagerMeta.all_classes)
+        GeneralManagerMeta.all_classes = [ReconcileProject]
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [ReconcileProject], [ReconcileProject]
+        )
+
+    def tearDown(self) -> None:
+        GeneralManagerMeta.all_classes = self._original_all_classes
+        super().tearDown()
+
+    def test_reconcile_skips_when_nothing_dirty(self) -> None:
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        state.clear_dirty()
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            result = reconcile_search_indexes()
+
+        assert result.reconciled == 0
+        assert result.skipped == 1
+        indexer.assert_not_called()
+
+    def test_reconcile_reindexes_dirty_state_and_clears_it(self) -> None:
+        ensure_search_index_states()
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.return_value = 2
+
+            result = reconcile_search_indexes()
+
+        assert result.reconciled == 1
+        assert result.documents == 2
+        state = SearchIndexState.objects.get()
+        assert state.dirty_since is None
+        assert state.last_reconciled_at is not None
+        assert state.claim_token == ""
+        indexer.return_value.reindex_manager_index.assert_called_once_with(
+            ReconcileProject,
+            "global",
+        )
+
+    def test_reconcile_keeps_state_dirty_after_failure(self) -> None:
+        ensure_search_index_states()
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.side_effect = RuntimeError(
+                "backend down"
+            )
+
+            result = reconcile_search_indexes()
+
+        assert result.failed == 1
+        state = SearchIndexState.objects.get()
+        assert state.dirty_since is not None
+        assert state.claim_token == ""
+        assert "backend down" in state.last_error
+
+    def test_force_reconcile_marks_clean_state_dirty_and_reindexes(self) -> None:
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        state.clear_dirty()
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.return_value = 1
+
+            result = reconcile_search_indexes(force=True)
+
+        assert result.reconciled == 1
+
+    def test_reconcile_skips_actively_claimed_dirty_state(self) -> None:
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        state.claim_token = uuid.uuid4().hex
+        state.claim_expires_at = timezone.now() + timedelta(minutes=5)
+        state.save(update_fields=["claim_token", "claim_expires_at", "updated_at"])
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            result = reconcile_search_indexes()
+
+        assert result.claimed == 0
+        assert result.reconciled == 0
+        indexer.assert_not_called()
+
+    def test_reconcile_reclaims_expired_dirty_state(self) -> None:
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        state.claim_token = uuid.uuid4().hex
+        state.claim_expires_at = timezone.now() - timedelta(seconds=1)
+        state.save(update_fields=["claim_token", "claim_expires_at", "updated_at"])
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            indexer.return_value.reindex_manager_index.return_value = 1
+
+            result = reconcile_search_indexes()
+
+        assert result.claimed == 1
+        assert result.reconciled == 1

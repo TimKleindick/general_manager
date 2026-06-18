@@ -41,6 +41,12 @@ class Migration(migrations.Migration):
                         max_length=32,
                     ),
                 ),
+                (
+                    "claim_token",
+                    models.CharField(blank=True, default="", max_length=64),
+                ),
+                ("claimed_at", models.DateTimeField(blank=True, null=True)),
+                ("claim_expires_at", models.DateTimeField(blank=True, null=True)),
                 ("last_error", models.TextField(blank=True, default="")),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
@@ -65,6 +71,20 @@ class Migration(migrations.Migration):
             index=models.Index(
                 fields=["manager_path", "index_name"],
                 name="general_man_manager_9982f5_idx",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="searchindexstate",
+            index=models.Index(
+                fields=["claim_token"],
+                name="general_man_claim_t_8dc8c8_idx",
+            ),
+        ),
+        migrations.AddIndex(
+            model_name="searchindexstate",
+            index=models.Index(
+                fields=["claim_expires_at"],
+                name="general_man_claim_e_b9800f_idx",
             ),
         ),
         migrations.AddIndex(
