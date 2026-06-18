@@ -228,6 +228,38 @@ class SearchIndexer:
             if documents:
                 self.backend.upsert(index_name, documents)
 
+    def reindex_manager_index(
+        self,
+        manager_class: type[GeneralManager],
+        index_name: str,
+    ) -> int:
+        """
+        Rebuild one manager's documents for one configured search index.
+
+        Returns the number of documents upserted.
+        """
+        config = get_search_config(manager_class)
+        if config is None:
+            return 0
+        index_config = get_index_config(manager_class, index_name)
+        if index_config is None:
+            raise MissingIndexConfigurationError(manager_class.__name__, index_name)
+
+        _ensure_index(self.backend, index_config.name)
+        documents: list[SearchDocument] = []
+        for instance in manager_class.all():
+            manager_instance = cast(GeneralManager, instance)
+            document = _serialize_document(
+                manager_instance,
+                index_name=index_config.name,
+                config=config,
+            )
+            documents.append(document)
+
+        if documents:
+            self.backend.upsert(index_config.name, documents)
+        return len(documents)
+
 
 @receiver(post_data_change)
 def _handle_search_post_change(
