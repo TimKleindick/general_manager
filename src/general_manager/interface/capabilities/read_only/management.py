@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Type, cast
 
 from django.core.checks import Warning
@@ -441,6 +442,9 @@ class ReadOnlyManagementCapability(BaseCapability):
 
             model_opts = getattr(model, "_meta", None)
             local_fields = getattr(model_opts, "local_fields", []) or []
+            local_field_names = {
+                getattr(f, "name", "") for f in local_fields if getattr(f, "name", None)
+            }
             editable_fields = {
                 getattr(f, "name", "")
                 for f in local_fields
@@ -460,6 +464,11 @@ class ReadOnlyManagementCapability(BaseCapability):
                 for f in getattr(model_opts, "get_fields", lambda: [])()
                 if getattr(f, "is_relation", False)
                 and not getattr(f, "auto_created", False)
+            }
+            measurement_field_names = {
+                name
+                for name, field in vars(model).items()
+                if isinstance(field, MeasurementField)
             }
 
             related_interfaces: list[type["OrmInterfaceBase[Any]"]] = []
@@ -499,6 +508,151 @@ class ReadOnlyManagementCapability(BaseCapability):
                     unique_fields=None,
                     schema_validated=schema_validated,
                 )
+
+            def _fingerprint(rows: list[dict[str, Any]]) -> str | None:
+                """
+                Return a deterministic fingerprint for comparable row snapshots.
+                """
+                try:
+                    payload = json.dumps(
+                        rows,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                except TypeError:
+                    return None
+                return sha256(
+                    payload.encode("utf-8"), usedforsecurity=False
+                ).hexdigest()
+
+            def _row_sort_key(row: dict[str, Any]) -> str | None:
+                """
+                Build a stable sort key for a comparable row snapshot.
+                """
+                try:
+                    return json.dumps(
+                        row["key"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                except TypeError:
+                    return None
+
+            def _sort_rows(
+                rows: list[dict[str, Any]],
+            ) -> list[dict[str, Any]] | None:
+                """
+                Sort comparable row snapshots or return None when keys are unsafe.
+                """
+                keyed_rows: list[tuple[str, dict[str, Any]]] = []
+                for row in rows:
+                    sort_key = _row_sort_key(row)
+                    if sort_key is None:
+                        return None
+                    keyed_rows.append((sort_key, row))
+                return [row for _, row in sorted(keyed_rows, key=lambda item: item[0])]
+
+            def _active_database_matches_payload() -> bool:
+                """
+                Check whether active DB rows already match the read-only payload.
+
+                The fast path is intentionally conservative. Payloads that use
+                relation fields, non-concrete measurement descriptors, duplicate
+                unique identifiers, or fields we cannot compare directly fall back
+                to the full synchronization path.
+                """
+                unique_field_set = set(unique_field_order)
+                if not unique_field_set.issubset(local_field_names):
+                    return False
+                if unique_field_set.intersection(relation_fields):
+                    return False
+                if unique_field_set.intersection(measurement_field_names):
+                    return False
+
+                comparable_fields = unique_field_set | editable_fields
+                payload_rows: list[dict[str, Any]] = []
+                expected_fields_by_key: dict[tuple[Any, ...], tuple[str, ...]] = {}
+
+                for data in data_list:
+                    if not isinstance(data, dict):
+                        return False
+                    if any(field_name in data for field_name in relation_fields):
+                        return False
+                    if any(
+                        field_name in data for field_name in measurement_field_names
+                    ):
+                        return False
+                    try:
+                        key = tuple(data[field] for field in unique_field_order)
+                    except KeyError:
+                        return False
+                    try:
+                        if key in expected_fields_by_key:
+                            return False
+                    except TypeError:
+                        return False
+
+                    field_names = tuple(
+                        sorted(
+                            field
+                            for field in comparable_fields
+                            if field in data and field in local_field_names
+                        )
+                    )
+                    expected_fields_by_key[key] = field_names
+                    payload_rows.append(
+                        {
+                            "key": list(key),
+                            "fields": {field: data[field] for field in field_names},
+                        }
+                    )
+
+                try:
+                    active_instances = list(model.objects.filter(is_active=True))
+                except (AttributeError, TypeError, ValueError):
+                    return False
+
+                if len(active_instances) != len(payload_rows):
+                    return False
+
+                active_rows: list[dict[str, Any]] = []
+                seen_keys: set[tuple[Any, ...]] = set()
+                for instance in active_instances:
+                    try:
+                        key = tuple(
+                            getattr(instance, field) for field in unique_field_order
+                        )
+                    except (AttributeError, TypeError, ValueError):
+                        return False
+                    try:
+                        db_field_names = expected_fields_by_key.get(key)
+                        if db_field_names is None or key in seen_keys:
+                            return False
+                        seen_keys.add(key)
+                    except TypeError:
+                        return False
+
+                    try:
+                        fields = {
+                            field: getattr(instance, field) for field in db_field_names
+                        }
+                    except (AttributeError, TypeError, ValueError):
+                        return False
+                    active_rows.append({"key": list(key), "fields": fields})
+
+                sorted_payload_rows = _sort_rows(payload_rows)
+                sorted_active_rows = _sort_rows(active_rows)
+                if sorted_payload_rows is None or sorted_active_rows is None:
+                    return False
+
+                payload_fingerprint = _fingerprint(sorted_payload_rows)
+                active_fingerprint = _fingerprint(sorted_active_rows)
+                if payload_fingerprint is None or active_fingerprint is None:
+                    return False
+                return payload_fingerprint == active_fingerprint
+
+            if _active_database_matches_payload():
+                return
 
             def _resolve_to_instance(
                 field_name: str,

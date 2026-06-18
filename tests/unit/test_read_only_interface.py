@@ -127,6 +127,24 @@ class FakeManager:
         return FakeQuerySet(filtered)
 
 
+class UnsafeJsonValue:
+    """
+    Hashable value object that is intentionally not JSON serializable.
+    """
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        return self.value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, UnsafeJsonValue) and other.value == self.value
+
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+
 class FakeField:
     """
     Minimal stand-in for a Django model field that exposes the attributes required in tests.
@@ -556,7 +574,7 @@ class SyncDataTests(SimpleTestCase):
             "general_manager.interface.capabilities.read_only.management.django_transaction.atomic",
             return_value=mock.MagicMock(__enter__=_atomic_enter, __exit__=_atomic_exit),
         )
-        self.atomic_patch.start()
+        self.atomic_mock = self.atomic_patch.start()
         # Stub get_unique_fields to return {'name'}
         self.gu_patch = mock.patch.object(
             ReadOnlyManagementCapability, "get_unique_fields", return_value={"name"}
@@ -680,6 +698,183 @@ class SyncDataTests(SimpleTestCase):
         self.assertEqual(msg["created"], 1)
         self.assertEqual(msg["updated"], 1)
         self.assertEqual(msg["deactivated"], 0)
+
+    def test_sync_skips_full_reconcile_when_database_matches_payload(self):
+        """
+        Ensure an already-synchronized read-only payload avoids the expensive write path.
+        """
+        DummyManager._data = [{"name": "a", "other": 2}, {"name": "b", "other": 3}]
+        self.capability.sync_data(DummyInterface)
+        self.atomic_mock.reset_mock()
+        self.logger.info.reset_mock()
+
+        self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_not_called()
+        self.logger.info.assert_not_called()
+
+    def test_sync_falls_back_when_payload_item_is_not_mapping(self):
+        """
+        Ensure non-mapping payload entries do not use the fingerprint fast path.
+        """
+        DummyManager._data = [[]]
+
+        with self.assertRaises(InvalidReadOnlyDataFormatError):
+            self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_payload_missing_unique_field(self):
+        """
+        Ensure malformed payload rows still go through the existing validation path.
+        """
+        DummyManager._data = [{"other": 2}]
+
+        with self.assertRaises(InvalidReadOnlyDataFormatError):
+            self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_payload_has_duplicate_unique_values(self):
+        """
+        Ensure duplicate unique identifiers are handled by the existing sync logic.
+        """
+        DummyModel.objects._instances = [
+            FakeInstance(name="a", other=2),
+            FakeInstance(name="b", other=3),
+        ]
+        original_filter = DummyModel.objects.filter
+        active_query_before_atomic = []
+
+        def filter_spy(**kwargs):
+            if kwargs == {"is_active": True} and not self.atomic_mock.called:
+                active_query_before_atomic.append(kwargs)
+            return original_filter(**kwargs)
+
+        DummyModel.objects.filter = filter_spy
+        DummyManager._data = [{"name": "a", "other": 2}, {"name": "a", "other": 2}]
+
+        self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+        self.assertEqual(active_query_before_atomic, [])
+
+    def test_sync_falls_back_when_payload_unique_value_is_unhashable(self):
+        """
+        Ensure unhashable unique identifiers bypass the fingerprint fast path.
+        """
+        DummyManager._data = [{"name": ["a"], "other": 2}]
+
+        with self.assertRaises(TypeError):
+            self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_payload_value_is_not_json_serializable(self):
+        """
+        Ensure unsafe value serialization does not produce a fingerprint match.
+        """
+        existing = FakeInstance(name="a", other=UnsafeJsonValue("same"))
+        DummyModel.objects._instances = [existing]
+        DummyManager._data = [{"name": "a", "other": UnsafeJsonValue("same")}]
+
+        self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_sort_key_is_not_json_serializable(self):
+        """
+        Ensure unsafe unique-key serialization does not produce a fingerprint match.
+        """
+        key = UnsafeJsonValue("key")
+        DummyModel.objects._instances = [FakeInstance(name=key, other=2)]
+        DummyManager._data = [{"name": key, "other": 2}]
+
+        self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_active_query_is_unavailable(self):
+        """
+        Ensure incompatible model managers bypass the fingerprint fast path.
+        """
+
+        class BrokenQueryModel:
+            objects = object()
+
+            class _meta:
+                db_table = "broken_query_table"
+                local_fields = (
+                    FakeField("id", editable=False, primary_key=True),
+                    FakeField("name"),
+                    FakeField("is_active", editable=False),
+                )
+
+                @staticmethod
+                def get_fields() -> list[object]:
+                    return []
+
+        class BrokenQueryManager:
+            _data: ClassVar[list[dict[str, str]]] = [{"name": "a"}]
+
+        class BrokenQueryInterface(ReadOnlyInterface):
+            _model = BrokenQueryModel
+            _parent_class = BrokenQueryManager
+
+        with self.assertRaises(AttributeError):
+            self.capability.sync_data(BrokenQueryInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_active_row_lacks_unique_field(self):
+        """
+        Ensure rows that cannot expose the unique key use the full sync path.
+        """
+        DummyModel.objects._instances = [FakeInstance(other=1)]
+        DummyManager._data = [{"name": "a", "other": 2}]
+
+        with self.assertRaises(AttributeError):
+            self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_active_database_key_differs_from_payload(self):
+        """
+        Ensure database drift is repaired when active keys do not match the payload.
+        """
+        stale = FakeInstance(name="b", other=1)
+        DummyModel.objects._instances = [stale]
+        DummyManager._data = [{"name": "a", "other": 2}]
+
+        self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+        self.assertFalse(stale.is_active)
+
+    def test_sync_falls_back_when_active_database_key_is_unhashable(self):
+        """
+        Ensure unhashable persisted unique values bypass the fingerprint fast path.
+        """
+        DummyModel.objects._instances = [FakeInstance(name=["b"], other=1)]
+        DummyManager._data = [{"name": "a", "other": 2}]
+
+        with self.assertRaises(TypeError):
+            self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+
+    def test_sync_falls_back_when_active_row_lacks_payload_field(self):
+        """
+        Ensure partial active rows are updated by the existing sync path.
+        """
+        existing = FakeInstance(name="a")
+        DummyModel.objects._instances = [existing]
+        DummyManager._data = [{"name": "a", "other": 2}]
+
+        self.capability.sync_data(DummyInterface)
+
+        self.atomic_mock.assert_called_once()
+        self.assertEqual(existing.other, 2)
 
 
 class SyncDataMetadataValidationTests(SimpleTestCase):
