@@ -12,6 +12,7 @@ from general_manager import apps as gm_apps
 
 class AppsUtilitiesTests(SimpleTestCase):
     def test_import_optional_managers_module_imports_existing_module(self) -> None:
+        """Import an app managers module when Django can find it."""
         app_config = SimpleNamespace(
             name="tests.custom_user_app",
             label="custom_user_app",
@@ -22,6 +23,7 @@ class AppsUtilitiesTests(SimpleTestCase):
         import_mod.assert_called_once_with("tests.custom_user_app.managers")
 
     def test_import_optional_managers_module_skips_missing_module(self) -> None:
+        """Skip importing managers when the optional module is absent."""
         app_config = SimpleNamespace(name="tests.no_managers_app", label="no_managers")
         with patch("general_manager.apps.util.find_spec", return_value=None):
             with patch("general_manager.apps.import_module") as import_mod:
@@ -31,6 +33,7 @@ class AppsUtilitiesTests(SimpleTestCase):
     def test_import_optional_managers_module_propagates_real_import_errors(
         self,
     ) -> None:
+        """Propagate errors raised while importing an existing managers module."""
         app_config = SimpleNamespace(
             name="tests.custom_user_app",
             label="custom_user_app",
@@ -52,6 +55,7 @@ class AppsUtilitiesTests(SimpleTestCase):
 
     @override_settings(AUTOCREATE_GRAPHQL=False)
     def test_ready_autoloads_managers_before_initialization(self) -> None:
+        """Autoload app managers before initializing manager classes."""
         config = gm_apps.GeneralmanagerConfig(
             "general_manager", import_module("general_manager")
         )

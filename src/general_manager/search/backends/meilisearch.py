@@ -410,6 +410,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _extract_task_status(result: Any) -> str | None:
+        """Read a normalized task status from a Meilisearch task response."""
         if result is None:
             return None
         if isinstance(result, Mapping):
@@ -446,6 +447,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _extract_documents_results(response: Any) -> list[Any]:
+        """Read document result entries from a Meilisearch documents response."""
         if response is None:
             return []
         if isinstance(response, Mapping):
@@ -458,6 +460,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _extract_documents_total(response: Any) -> int | None:
+        """Read the total document count from a Meilisearch documents response."""
         if response is None:
             return None
         if isinstance(response, Mapping):
@@ -468,6 +471,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _read_document_field(document: Any, field: str) -> Any:
+        """Read a field from a mapping or object document payload."""
         if isinstance(document, Mapping):
             return document.get(field)
         return getattr(document, field, None)
@@ -491,6 +495,7 @@ class MeilisearchBackend:
 
 
 def _meilisearch_error_code(error: Exception) -> str:
+    """Extract a normalized Meilisearch error code from known error shapes."""
     for attr in ("error_code", "code", "errorCode"):
         value = getattr(error, attr, None)
         if value:
@@ -499,6 +504,7 @@ def _meilisearch_error_code(error: Exception) -> str:
 
 
 def _meilisearch_status_code(error: Exception) -> int | None:
+    """Extract an HTTP status code from known Meilisearch error shapes."""
     for attr in ("status_code", "statusCode", "http_status", "status"):
         value = getattr(error, attr, None)
         if isinstance(value, int):
@@ -507,12 +513,14 @@ def _meilisearch_status_code(error: Exception) -> int | None:
 
 
 def _is_meilisearch_not_found(error: Exception) -> bool:
+    """Return whether a Meilisearch error represents a missing resource."""
     code = _meilisearch_error_code(error)
     status = _meilisearch_status_code(error)
     return status == 404 or "not_found" in code
 
 
 def _is_meilisearch_already_exists(error: Exception) -> bool:
+    """Return whether a Meilisearch error represents an existing resource."""
     code = _meilisearch_error_code(error)
     status = _meilisearch_status_code(error)
     return status == 409 or "already_exists" in code

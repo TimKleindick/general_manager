@@ -34,10 +34,12 @@ class ReconcileProjectInterface(BaseTestInterface):
 
     @classmethod
     def get_attribute_types(cls):
+        """Return search-visible attribute type metadata."""
         return {"name": {"type": str}, "status": {"type": str}}
 
     @classmethod
     def get_attributes(cls):
+        """Return static attribute extractors for reconciliation tests."""
         return {
             "name": lambda _interface: "Alpha",
             "status": lambda _interface: "public",
@@ -62,6 +64,7 @@ class ReconcileProject(GeneralManager):
 
 class SearchReconciliationDiscoveryTests(TestCase):
     def setUp(self) -> None:
+        """Register the searchable manager class for discovery tests."""
         self._original_all_classes = list(GeneralManagerMeta.all_classes)
         GeneralManagerMeta.all_classes = [ReconcileProject]
         GeneralmanagerConfig.initialize_general_manager_classes(
@@ -69,13 +72,16 @@ class SearchReconciliationDiscoveryTests(TestCase):
         )
 
     def tearDown(self) -> None:
+        """Restore the global manager class registry after each test."""
         GeneralManagerMeta.all_classes = self._original_all_classes
         super().tearDown()
 
     def test_manager_import_path_is_stable(self) -> None:
+        """Build a stable import path for a manager class."""
         assert manager_import_path(ReconcileProject).endswith(".ReconcileProject")
 
     def test_iter_search_index_targets_includes_fingerprint(self) -> None:
+        """Discover search targets with their schema fingerprints."""
         targets = list(iter_search_index_targets())
 
         assert len(targets) == 1
@@ -86,6 +92,7 @@ class SearchReconciliationDiscoveryTests(TestCase):
         assert len(target.schema_fingerprint) == 64
 
     def test_fingerprint_changes_when_index_config_changes(self) -> None:
+        """Change schema fingerprints when index configuration changes."""
         original = build_search_schema_fingerprint(
             ReconcileProject,
             ReconcileProject.SearchConfig.indexes[0],
@@ -101,6 +108,7 @@ class SearchReconciliationDiscoveryTests(TestCase):
         assert original != changed
 
     def test_ensure_states_marks_missing_targets_dirty_for_initialization(self) -> None:
+        """Create missing state rows as dirty initialization work."""
         result = ensure_search_index_states()
 
         assert result.created == 1
@@ -109,6 +117,7 @@ class SearchReconciliationDiscoveryTests(TestCase):
         assert state.dirty_since is not None
 
     def test_ensure_states_marks_schema_changes_dirty(self) -> None:
+        """Mark existing state dirty when the stored fingerprint changes."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
         state.schema_fingerprint = "outdated"
@@ -134,6 +143,7 @@ class SearchReconciliationDiscoveryTests(TestCase):
 
 class SearchDirtyMarkerTests(TestCase):
     def setUp(self) -> None:
+        """Register the searchable manager class for dirty marker tests."""
         self._original_all_classes = list(GeneralManagerMeta.all_classes)
         GeneralManagerMeta.all_classes = [ReconcileProject]
         GeneralmanagerConfig.initialize_general_manager_classes(
@@ -141,10 +151,12 @@ class SearchDirtyMarkerTests(TestCase):
         )
 
     def tearDown(self) -> None:
+        """Restore the global manager class registry after each test."""
         GeneralManagerMeta.all_classes = self._original_all_classes
         super().tearDown()
 
     def test_mark_dirty_creates_state_for_all_manager_indexes(self) -> None:
+        """Create and dirty state rows for all configured manager indexes."""
         marked = mark_search_indexes_dirty(
             ReconcileProject,
             reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
@@ -159,6 +171,7 @@ class SearchDirtyMarkerTests(TestCase):
         assert state.dirty_since is not None
 
     def test_mark_dirty_preserves_existing_dirty_since(self) -> None:
+        """Keep the original dirty timestamp when marking dirty again."""
         mark_search_indexes_dirty(
             ReconcileProject,
             reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
@@ -177,6 +190,7 @@ class SearchDirtyMarkerTests(TestCase):
 
 class SearchReconcileEngineTests(TestCase):
     def setUp(self) -> None:
+        """Register the searchable manager class for reconcile engine tests."""
         self._original_all_classes = list(GeneralManagerMeta.all_classes)
         GeneralManagerMeta.all_classes = [ReconcileProject]
         GeneralmanagerConfig.initialize_general_manager_classes(
@@ -184,10 +198,12 @@ class SearchReconcileEngineTests(TestCase):
         )
 
     def tearDown(self) -> None:
+        """Restore the global manager class registry after each test."""
         GeneralManagerMeta.all_classes = self._original_all_classes
         super().tearDown()
 
     def test_reconcile_skips_when_nothing_dirty(self) -> None:
+        """Skip backend writes when all search states are clean."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
         state.clear_dirty()
@@ -202,6 +218,7 @@ class SearchReconcileEngineTests(TestCase):
         indexer.assert_not_called()
 
     def test_reconcile_reindexes_dirty_state_and_clears_it(self) -> None:
+        """Reindex dirty states and clear their dirty and claim fields."""
         ensure_search_index_states()
 
         from general_manager.search.reconciliation import reconcile_search_indexes
@@ -223,6 +240,7 @@ class SearchReconcileEngineTests(TestCase):
         )
 
     def test_reconcile_keeps_state_dirty_after_failure(self) -> None:
+        """Keep failed states dirty and record the backend error."""
         ensure_search_index_states()
 
         from general_manager.search.reconciliation import reconcile_search_indexes
@@ -241,6 +259,7 @@ class SearchReconcileEngineTests(TestCase):
         assert "backend down" in state.last_error
 
     def test_force_reconcile_marks_clean_state_dirty_and_reindexes(self) -> None:
+        """Force clean states back through reconciliation."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
         state.clear_dirty()
@@ -255,6 +274,7 @@ class SearchReconcileEngineTests(TestCase):
         assert result.reconciled == 1
 
     def test_reconcile_skips_actively_claimed_dirty_state(self) -> None:
+        """Skip dirty states claimed by another active worker."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
         state.claim_token = uuid.uuid4().hex
@@ -271,6 +291,7 @@ class SearchReconcileEngineTests(TestCase):
         indexer.assert_not_called()
 
     def test_reconcile_reclaims_expired_dirty_state(self) -> None:
+        """Reclaim dirty states whose worker claim has expired."""
         ensure_search_index_states()
         state = SearchIndexState.objects.get()
         state.claim_token = uuid.uuid4().hex

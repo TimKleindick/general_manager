@@ -148,6 +148,7 @@ class SearchBackendNotConfiguredError(RuntimeError):
 
     @classmethod
     def from_setting(cls, backend_setting: object) -> "SearchBackendNotConfiguredError":
+        """Build an error message from a backend setting with secrets masked."""
         masked_setting = _mask_backend_setting(backend_setting)
         message = (
             f"Search backend could not be resolved from setting: {masked_setting!r}"
@@ -156,6 +157,7 @@ class SearchBackendNotConfiguredError(RuntimeError):
 
 
 def _mask_backend_setting(setting: object) -> object:
+    """Return a backend setting representation with sensitive values removed."""
     secret_keys = {"password", "secret", "api_key", "apikey", "token", "auth"}
     if isinstance(setting, Mapping):
         masked: dict[object, object] = {}

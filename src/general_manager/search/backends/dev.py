@@ -141,6 +141,7 @@ class DevSearchBackend:
             def _value_key(
                 item: tuple[SearchDocument, float],
             ) -> tuple[int, float, str]:
+                """Build a stable sort key for numeric, string, and missing values."""
                 value = item[0].data.get(sort_by)
                 if value is None:
                     return (2, 0.0, "")

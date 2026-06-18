@@ -10,6 +10,7 @@ from general_manager.search.backends.typesense import TypesenseBackend
 
 class SearchBackendStubTests(SimpleTestCase):
     def test_opensearch_backend_methods_raise(self) -> None:
+        """Raise not-implemented errors for every OpenSearch stub method."""
         backend = object.__new__(OpenSearchBackend)
         with pytest.raises(SearchBackendNotImplementedError):
             OpenSearchBackend.__init__(backend)

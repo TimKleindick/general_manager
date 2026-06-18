@@ -11,15 +11,18 @@ from general_manager.search.reconciliation import reconcile_search_indexes
 
 class InvalidSearchReconcileModeError(CommandError):
     def __init__(self) -> None:
+        """Initialize the error raised for missing or conflicting run modes."""
         super().__init__("Pass exactly one of --once or --watch.")
 
 
 class PositiveIntegerArgumentError(argparse.ArgumentTypeError):
     def __init__(self) -> None:
+        """Initialize the parser error raised for non-positive integers."""
         super().__init__("must be a positive integer")
 
 
 def positive_int(value: str) -> int:
+    """Parse a command-line value as an integer greater than zero."""
     try:
         parsed = int(value)
     except ValueError as exc:
@@ -33,6 +36,7 @@ class Command(BaseCommand):
     help = "Reconcile dirty search indexes."
 
     def add_arguments(self, parser) -> None:  # type: ignore[override]
+        """Register command-line options for search reconciliation."""
         parser.add_argument(
             "--once", action="store_true", help="Run one sweep and exit."
         )
@@ -56,6 +60,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *_: Any, **options: Any) -> None:
+        """Run one reconciliation sweep or watch continuously."""
         once = bool(options["once"])
         watch = bool(options["watch"])
         if once == watch:

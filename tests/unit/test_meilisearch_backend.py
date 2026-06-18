@@ -85,6 +85,7 @@ class _FakeIndex:
         return {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 0}
 
     def get_documents(self, payload: dict[str, object]) -> dict[str, object]:
+        """Return a paginated fake documents response."""
         limit = int(payload["limit"])
         offset = int(payload["offset"])
         return {
@@ -111,6 +112,7 @@ class _FakeClient:
     def get_or_create_index(
         self, _name: str, _payload: dict[str, object]
     ) -> _FakeIndex:
+        """Return the configured fake index."""
         return self.index
 
     def get_index(self, _name: str) -> _FakeIndex:
@@ -173,6 +175,7 @@ class _FailingClient(_FakeClient):
 
 
 def test_meilisearch_backend_waits_for_tasks() -> None:
+    """Wait for Meilisearch settings, upsert, and delete tasks."""
     index = _FakeIndex()
     client = _FakeClient(index)
     backend = MeilisearchBackend(client=client)
@@ -201,6 +204,7 @@ def test_meilisearch_backend_waits_for_tasks() -> None:
 
 
 def test_meilisearch_backend_extract_task_uid() -> None:
+    """Extract task UIDs from mapping and object task payloads."""
     backend = MeilisearchBackend(client=_FakeClient(_FakeIndex()))
     assert backend._extract_task_uid({"taskUid": 9}) == 9
 
@@ -211,6 +215,8 @@ def test_meilisearch_backend_extract_task_uid() -> None:
 
 
 def test_meilisearch_backend_get_task_fallback() -> None:
+    """Poll get_task when wait_for_task is not available."""
+
     class _Client:
         def __init__(self, index: _FakeIndex) -> None:
             """
@@ -227,6 +233,7 @@ def test_meilisearch_backend_get_task_fallback() -> None:
         def get_or_create_index(
             self, _name: str, _payload: dict[str, object]
         ) -> _FakeIndex:
+            """Return the configured fake index."""
             return self.index
 
         def get_index(self, _name: str) -> _FakeIndex:
@@ -278,12 +285,15 @@ def test_meilisearch_backend_get_task_fallback() -> None:
 
 
 def test_meilisearch_backend_normalize_document_id() -> None:
+    """Normalize invalid Meilisearch document IDs deterministically."""
     backend = MeilisearchBackend(client=_FakeClient(_FakeIndex()))
     assert backend._normalize_document_id("valid-id_1") == "valid-id_1"
     assert backend._normalize_document_id("invalid:{id}") != "invalid:{id}"
 
 
 def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
+    """Return original GeneralManager document IDs from search hits."""
+
     class _SearchIndex(_FakeIndex):
         def search(self, _query: str, _payload: dict[str, object]) -> dict[str, object]:
             """
@@ -326,6 +336,7 @@ def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
 
 
 def test_meilisearch_backend_lists_original_document_ids_by_type() -> None:
+    """List original document IDs for the requested type labels."""
     index = _FakeIndex()
     index.documents = [
         {
@@ -349,6 +360,7 @@ def test_meilisearch_backend_lists_original_document_ids_by_type() -> None:
 
 
 def test_meilisearch_backend_document_payload_reserved_keys() -> None:
+    """Preserve reserved user data keys under the nested data payload."""
     document = SearchDocument(
         id='Project:{"id": 5}',
         type="Project",
@@ -380,6 +392,7 @@ def test_meilisearch_backend_document_payload_reserved_keys() -> None:
 
 
 def test_meilisearch_backend_build_filter_expression_escapes() -> None:
+    """Escape quotes and backslashes in filter expression values."""
     expr = MeilisearchBackend._build_filter_expression(
         {"status": 'a"b\\c'},
         types=['Type"X'],
@@ -389,30 +402,38 @@ def test_meilisearch_backend_build_filter_expression_escapes() -> None:
 
 
 def test_meilisearch_backend_non_terminal_status() -> None:
+    """Ignore non-terminal task statuses when checking for failures."""
     MeilisearchBackend._raise_for_failed_task({"status": "processing"})
 
 
 def test_meilisearch_backend_wait_for_task_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Raise a timeout error when fallback task polling never completes."""
+
     class _Client:
         def __init__(self) -> None:
+            """Initialize fallback client call counters."""
             self.calls = 0
 
         def get_or_create_index(
             self, _name: str, _payload: dict[str, object]
         ) -> _FakeIndex:
+            """Return a new fake index for creation and settings calls."""
             return _FakeIndex()
 
         def get_index(self, _name: str) -> _FakeIndex:
+            """Return a new fake index for index lookup calls."""
             return _FakeIndex()
 
         def create_index(
             self, _name: str, _payload: dict[str, object]
         ) -> dict[str, int]:
+            """Return a fake create-index task UID."""
             return {"taskUid": 1}
 
         def get_task(self, _task_uid: int) -> dict[str, object]:
+            """Return a non-terminal task status for every poll."""
             self.calls += 1
             return {"status": "processing"}
 
@@ -428,6 +449,7 @@ def test_meilisearch_backend_wait_for_task_timeout(
 
 
 def test_meilisearch_backend_raises_on_failed_task() -> None:
+    """Raise SearchBackendError when a Meilisearch task fails."""
     index = _FakeIndex()
     client = _FailingClient(index)
     backend = MeilisearchBackend(client=client)
@@ -449,6 +471,7 @@ def test_meilisearch_backend_raises_on_failed_task() -> None:
 
 
 def test_meilisearch_backend_build_filter_expression_in_lookup() -> None:
+    """Build filter expressions for __in lookups."""
     expr = MeilisearchBackend._build_filter_expression(
         {"status__in": ["ready", "paused"], "team": "alpha"},
         types=None,
@@ -459,6 +482,7 @@ def test_meilisearch_backend_build_filter_expression_in_lookup() -> None:
 
 
 def test_meilisearch_backend_build_filter_expression_groups() -> None:
+    """Build grouped OR filter expressions with type restrictions."""
     expr = MeilisearchBackend._build_filter_expression(
         [{"status": "ready"}, {"status": "paused"}],
         types=["TypeA", "TypeB"],
@@ -470,12 +494,16 @@ def test_meilisearch_backend_build_filter_expression_groups() -> None:
 
 
 def test_meilisearch_backend_build_filter_expression_empty() -> None:
+    """Return no filter expression when no filters or types are provided."""
     assert MeilisearchBackend._build_filter_expression(None, None) is None
 
 
 def test_meilisearch_error_helpers() -> None:
+    """Classify Meilisearch error helpers by code and HTTP status."""
+
     class _Error(Exception):
         def __init__(self, code: str | None, status: int | None) -> None:
+            """Store fake Meilisearch error code and status values."""
             self.error_code = code
             self.status_code = status
 
