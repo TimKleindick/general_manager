@@ -18,6 +18,8 @@ from general_manager.search.backend import (
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.async_tasks import dispatch_index_update
 from general_manager.search.config import SearchConfigSpec
+from general_manager.search.models import SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+from general_manager.search.reconciliation import mark_search_indexes_dirty
 from general_manager.search.registry import (
     collect_index_settings,
     get_index_config,
@@ -282,6 +284,10 @@ def _handle_search_post_change(
         return
     manager_path = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
     try:
+        mark_search_indexes_dirty(
+            instance.__class__,
+            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+        )
         dispatch_index_update(
             action="index",
             manager_path=manager_path,
@@ -317,6 +323,10 @@ def _handle_search_pre_delete(
         return
     manager_path = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
     try:
+        mark_search_indexes_dirty(
+            instance.__class__,
+            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+        )
         dispatch_index_update(
             action="delete",
             manager_path=manager_path,

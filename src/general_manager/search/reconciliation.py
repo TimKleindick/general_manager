@@ -13,6 +13,7 @@ from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.search.config import IndexConfig
 from general_manager.search.models import (
+    SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
     SEARCH_INDEX_DIRTY_REASON_FORCED,
     SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
     SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED,
@@ -140,3 +141,33 @@ def ensure_search_index_states(*, force: bool = False) -> SearchStateEnsureResul
     return SearchStateEnsureResult(
         created=created, updated=updated, unchanged=unchanged
     )
+
+
+def mark_search_indexes_dirty(
+    manager_class: type[GeneralManager],
+    *,
+    reason: str = SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+) -> int:
+    """Mark all configured search indexes for a manager dirty."""
+    marked = 0
+    config = get_search_config(manager_class)
+    if config is None:
+        return 0
+    for index_config in config.indexes:
+        target_fingerprint = build_search_schema_fingerprint(
+            manager_class, index_config
+        )
+        with transaction.atomic():
+            state, _created = (
+                SearchIndexState.objects.select_for_update().get_or_create(
+                    manager_path=manager_import_path(manager_class),
+                    index_name=index_config.name,
+                    defaults={"schema_fingerprint": target_fingerprint},
+                )
+            )
+            if state.schema_fingerprint != target_fingerprint:
+                state.schema_fingerprint = target_fingerprint
+                state.save(update_fields=["schema_fingerprint", "updated_at"])
+            state.mark_dirty(reason)
+        marked += 1
+    return marked

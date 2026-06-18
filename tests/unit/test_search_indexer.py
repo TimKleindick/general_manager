@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
@@ -10,6 +10,10 @@ from general_manager.manager.input import Input
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.config import IndexConfig
 from general_manager.search.indexer import SearchIndexer
+from general_manager.search.models import (
+    SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+    SearchIndexState,
+)
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
 
@@ -183,3 +187,28 @@ def test_indexer_reindex_manager_index_limits_backend_writes() -> None:
 
     assert backend.search("global", "Alpha", filters={"status": "public"}).total == 1
     assert backend.search("private", "public", filters={"status": "public"}).total == 0
+
+
+class SearchIndexerSignalStateTests(TestCase):
+    def setUp(self) -> None:
+        GeneralmanagerConfig.initialize_general_manager_classes([Project], [Project])
+
+    def test_post_change_marks_search_state_dirty(self) -> None:
+        from general_manager.search.indexer import _handle_search_post_change
+
+        _handle_search_post_change(
+            sender=Project, instance=Project(id=1), action="update"
+        )
+
+        state = SearchIndexState.objects.get(index_name="global")
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+
+    def test_pre_delete_marks_search_state_dirty(self) -> None:
+        from general_manager.search.indexer import _handle_search_pre_delete
+
+        _handle_search_pre_delete(
+            sender=Project, instance=Project(id=1), action="delete"
+        )
+
+        state = SearchIndexState.objects.get(index_name="global")
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED

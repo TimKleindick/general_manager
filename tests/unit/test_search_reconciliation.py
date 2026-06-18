@@ -10,6 +10,7 @@ from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.search.config import FieldConfig, IndexConfig
 from general_manager.search.models import (
+    SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
     SEARCH_INDEX_DIRTY_REASON_INITIALIZATION,
     SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED,
     SearchIndexState,
@@ -18,6 +19,7 @@ from general_manager.search.reconciliation import (
     build_search_schema_fingerprint,
     ensure_search_index_states,
     iter_search_index_targets,
+    mark_search_indexes_dirty,
     manager_import_path,
 )
 from tests.utils.simple_manager_interface import BaseTestInterface
@@ -124,3 +126,46 @@ class SearchReconciliationDiscoveryTests(TestCase):
         assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_SCHEMA_CHANGED
         assert state.dirty_since is not None
         assert state.schema_fingerprint != "outdated"
+
+
+class SearchDirtyMarkerTests(TestCase):
+    def setUp(self) -> None:
+        self._original_all_classes = list(GeneralManagerMeta.all_classes)
+        GeneralManagerMeta.all_classes = [ReconcileProject]
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [ReconcileProject], [ReconcileProject]
+        )
+
+    def tearDown(self) -> None:
+        GeneralManagerMeta.all_classes = self._original_all_classes
+        super().tearDown()
+
+    def test_mark_dirty_creates_state_for_all_manager_indexes(self) -> None:
+        marked = mark_search_indexes_dirty(
+            ReconcileProject,
+            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+        )
+
+        assert marked == 1
+        state = SearchIndexState.objects.get(
+            manager_path=manager_import_path(ReconcileProject),
+            index_name="global",
+        )
+        assert state.dirty_reason == SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED
+        assert state.dirty_since is not None
+
+    def test_mark_dirty_preserves_existing_dirty_since(self) -> None:
+        mark_search_indexes_dirty(
+            ReconcileProject,
+            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+        )
+        state = SearchIndexState.objects.get()
+        original_dirty_since = state.dirty_since
+
+        mark_search_indexes_dirty(
+            ReconcileProject,
+            reason=SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
+        )
+        state.refresh_from_db()
+
+        assert state.dirty_since == original_dirty_since
