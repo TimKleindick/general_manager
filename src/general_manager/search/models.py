@@ -35,6 +35,9 @@ class SearchIndexState(models.Model):
         blank=True,
         default="",
     )
+    claim_token: Any = models.CharField(max_length=64, blank=True, default="")
+    claimed_at: Any = models.DateTimeField(null=True, blank=True)
+    claim_expires_at: Any = models.DateTimeField(null=True, blank=True)
     last_error: Any = models.TextField(blank=True, default="")
     created_at: Any = models.DateTimeField(auto_now_add=True)
     updated_at: Any = models.DateTimeField(auto_now=True)
@@ -48,6 +51,8 @@ class SearchIndexState(models.Model):
         )
         indexes = (
             models.Index(fields=["dirty_since", "index_name"]),
+            models.Index(fields=["claim_token"]),
+            models.Index(fields=["claim_expires_at"]),
             models.Index(fields=["manager_path", "index_name"]),
             models.Index(fields=["last_reconciled_at"]),
         )
@@ -67,6 +72,9 @@ class SearchIndexState(models.Model):
         self.last_reconciled_at = now
         self.dirty_since = None
         self.dirty_reason = ""
+        self.claim_token = ""
+        self.claimed_at = None
+        self.claim_expires_at = None
         self.last_error = ""
         self.save(
             update_fields=[
@@ -74,6 +82,9 @@ class SearchIndexState(models.Model):
                 "last_reconciled_at",
                 "dirty_since",
                 "dirty_reason",
+                "claim_token",
+                "claimed_at",
+                "claim_expires_at",
                 "last_error",
                 "updated_at",
             ]
