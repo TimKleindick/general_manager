@@ -44,6 +44,9 @@ from general_manager.workflow.signal_bridge import (
 from general_manager.workflow.tasks import (
     configure_workflow_beat_schedule_from_settings,
 )
+from general_manager.api.graphql_warmup_tasks import (
+    configure_graphql_warmup_beat_schedule_from_settings,
+)
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
@@ -120,6 +123,7 @@ class GeneralmanagerConfig(AppConfig):
         configure_workflow_signal_bridge_from_settings(settings)
         configure_workflow_beat_schedule_from_settings(settings)
         configure_search_reconcile_beat_schedule_from_settings(settings)
+        configure_graphql_warmup_beat_schedule_from_settings(settings)
         from general_manager.search import indexer as _search_indexer  # noqa: F401
 
         from general_manager.conf import get_setting
