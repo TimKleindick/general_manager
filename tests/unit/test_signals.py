@@ -3,7 +3,9 @@ from django.dispatch import Signal
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from general_manager.cache import dependency_index
 from general_manager.cache.dependency_index import (
+    drain_invalidated_cache_keys_for_graphql_rewarm,
     is_dependency_data_change_active,
     record_invalidated_cache_keys_for_graphql_rewarm,
 )
@@ -63,6 +65,18 @@ class InvalidatingDummy:
         self.identification["id"] = "after"
         self.identification = None
         return None
+
+
+class RaisingDummy:
+    @data_change
+    def update(self):
+        raise ValueError("boom")
+
+
+class ClassMethodWrappedDummy:
+    @staticmethod
+    def build():
+        return ClassMethodWrappedDummy()
 
 
 class DataChangeSignalTests(TestCase):
@@ -183,3 +197,88 @@ class DataChangeSignalTests(TestCase):
 
         self.assertEqual(barrier_states, [True])
         self.assertEqual(enqueued_keys, [("cache-key",)])
+
+    def test_data_change_supports_wrapped_classmethod_object(self):
+        def create(cls):
+            return cls.build()
+
+        wrapped = data_change(classmethod(create))
+
+        with capture_signal(post_data_change) as post_calls:
+            result = wrapped(ClassMethodWrappedDummy)
+
+        self.assertIsInstance(result, ClassMethodWrappedDummy)
+        self.assertIs(post_calls[0]["sender"], ClassMethodWrappedDummy)
+        self.assertEqual(post_calls[0]["action"], "create")
+
+    def test_data_change_clears_barrier_when_wrapped_function_raises(self):
+        with self.assertRaisesRegex(ValueError, "boom"):
+            RaisingDummy().update()
+
+        self.assertFalse(is_dependency_data_change_active())
+        self.assertEqual(drain_invalidated_cache_keys_for_graphql_rewarm(), ())
+
+    def test_cleanup_failure_is_logged_when_wrapped_function_already_failed(self):
+        original_end = dependency_index.end_dependency_data_change
+
+        def cleanup_then_raise():
+            original_end()
+            raise RuntimeError("cleanup")
+
+        with (
+            patch(
+                "general_manager.cache.dependency_index.end_dependency_data_change",
+                side_effect=cleanup_then_raise,
+            ),
+            patch("general_manager.cache.signals.logger.exception") as log,
+            self.assertRaisesRegex(ValueError, "boom"),
+        ):
+            RaisingDummy().update()
+
+        log.assert_called_once()
+        self.assertFalse(is_dependency_data_change_active())
+
+    def test_cleanup_failure_raises_when_wrapped_function_succeeded(self):
+        original_end = dependency_index.end_dependency_data_change
+
+        def cleanup_then_raise():
+            original_end()
+            raise RuntimeError("cleanup")
+
+        with (
+            patch(
+                "general_manager.cache.dependency_index.end_dependency_data_change",
+                side_effect=cleanup_then_raise,
+            ),
+            self.assertRaisesRegex(RuntimeError, "cleanup"),
+        ):
+            Dummy.create("warm")
+
+        self.assertFalse(is_dependency_data_change_active())
+
+    def test_rewarm_enqueue_failure_is_logged(self):
+        def record_rewarm_key(sender, **kwargs):
+            del sender, kwargs
+            record_invalidated_cache_keys_for_graphql_rewarm(("cache-key",))
+
+        post_data_change.connect(record_rewarm_key, weak=False)
+        with (
+            patch(
+                "general_manager.api.graphql_warmup.enqueue_graphql_recipe_warmup",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch("general_manager.cache.signals.logger.exception") as log,
+        ):
+            Dummy.create("warm")
+
+        log.assert_called_once_with("GraphQL warm-up requeue failed.")
+
+    def test_nested_dependency_data_change_keeps_outer_barrier_active(self):
+        dependency_index.begin_dependency_data_change()
+        dependency_index.begin_dependency_data_change()
+
+        dependency_index.end_dependency_data_change()
+        self.assertTrue(is_dependency_data_change_active())
+
+        dependency_index.end_dependency_data_change()
+        self.assertFalse(is_dependency_data_change_active())
