@@ -1,7 +1,12 @@
 from django.test import TestCase
 from django.dispatch import Signal
 from contextlib import contextmanager
+from unittest.mock import patch
 
+from general_manager.cache.dependency_index import (
+    is_dependency_data_change_active,
+    record_invalidated_cache_keys_for_graphql_rewarm,
+)
 from general_manager.cache.signals import data_change, pre_data_change, post_data_change
 
 
@@ -154,3 +159,27 @@ class DataChangeSignalTests(TestCase):
 
         self.assertEqual(len(post_calls), 1)
         self.assertEqual(post_calls[0]["identification"], {"id": "before"})
+
+    def test_rewarm_keys_enqueue_after_dependency_data_change_ends(self):
+        barrier_states: list[bool] = []
+        enqueued_keys: list[tuple[str, ...]] = []
+
+        def record_rewarm_key(sender, **kwargs):
+            del sender, kwargs
+            barrier_states.append(is_dependency_data_change_active())
+            record_invalidated_cache_keys_for_graphql_rewarm(("cache-key",))
+
+        def enqueue_rewarm(cache_keys):
+            enqueued_keys.append(tuple(cache_keys))
+            self.assertFalse(is_dependency_data_change_active())
+            return True
+
+        post_data_change.connect(record_rewarm_key, weak=False)
+        with patch(
+            "general_manager.api.graphql_warmup.enqueue_graphql_recipe_warmup",
+            side_effect=enqueue_rewarm,
+        ):
+            Dummy.create("warm")
+
+        self.assertEqual(barrier_states, [True])
+        self.assertEqual(enqueued_keys, [("cache-key",)])
