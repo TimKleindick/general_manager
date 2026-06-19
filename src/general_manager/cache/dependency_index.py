@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from contextvars import ContextVar
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Tuple, Type, cast
 
@@ -59,6 +60,10 @@ type filter_type = Literal[
 type Dependency = Tuple[general_manager_name, filter_type, str]
 
 logger = get_logger("cache.dependency_index")
+_pending_graphql_rewarm_cache_keys: ContextVar[frozenset[str]] = ContextVar(
+    "general_manager_pending_graphql_rewarm_cache_keys",
+    default=frozenset(),
+)
 
 
 class DependencyLockTimeoutError(TimeoutError):
@@ -194,6 +199,23 @@ def end_dependency_data_change() -> None:
 def is_dependency_data_change_active() -> bool:
     """Return whether dependency-scoped cache publishing should pause."""
     return cache.get(DATA_CHANGE_LOCK_KEY) is not None
+
+
+def record_invalidated_cache_keys_for_graphql_rewarm(
+    cache_keys: Iterable[str],
+) -> None:
+    """Remember invalidated cache keys until the current data-change barrier ends."""
+    existing = _pending_graphql_rewarm_cache_keys.get()
+    _pending_graphql_rewarm_cache_keys.set(
+        existing | frozenset(dict.fromkeys(cache_keys))
+    )
+
+
+def drain_invalidated_cache_keys_for_graphql_rewarm() -> tuple[str, ...]:
+    """Return and clear invalidated cache keys pending GraphQL recipe re-warm."""
+    cache_keys = tuple(sorted(_pending_graphql_rewarm_cache_keys.get()))
+    _pending_graphql_rewarm_cache_keys.set(frozenset())
+    return cache_keys
 
 
 def acquire_lock_with_retry(operation: str) -> None:
@@ -607,7 +629,7 @@ def _generic_cache_invalidation_locked(
     manager_name: str,
     instance: GeneralManager,
     old_relevant_values: dict[str, Any],
-) -> None:
+) -> set[str]:
     """
     Invalidate cache entries affected by a change while the dependency lock is held.
 
@@ -622,6 +644,7 @@ def _generic_cache_invalidation_locked(
     invalidated_request_query_keys = _invalidate_request_query_dependencies_locked(
         idx, manager_name
     )
+    invalidated_cache_keys = set(invalidated_request_query_keys)
     for cache_key in invalidated_request_query_keys:
         logger.info(
             "invalidating request query cache key",
@@ -645,6 +668,7 @@ def _generic_cache_invalidation_locked(
         )
         cache.delete(cache_key)
         _remove_cache_keys_from_index_locked(idx, (cache_key,))
+        invalidated_cache_keys.add(cache_key)
 
     def _json_loads_val_key(val_key: Any) -> Any:
         if isinstance(val_key, str):
@@ -919,6 +943,7 @@ def _generic_cache_invalidation_locked(
                             )
                             cache.delete(ck)
                             _remove_cache_keys_from_index_locked(idx, (ck,))
+                            invalidated_cache_keys.add(ck)
                 elif lookup.startswith("__sort__"):
                     sort_lookup = lookup.removeprefix("__sort__")
                     attr_path = sort_lookup.split("__")
@@ -955,6 +980,7 @@ def _generic_cache_invalidation_locked(
                             )
                             cache.delete(ck)
                             _remove_cache_keys_from_index_locked(idx, (ck,))
+                            invalidated_cache_keys.add(ck)
                 continue
             lookup_map = cast(lookup_dependency_map, lookup_map)
             # 1) get operator and attribute path
@@ -1015,6 +1041,7 @@ def _generic_cache_invalidation_locked(
                             )
                             cache.delete(ck)
                             _remove_cache_keys_from_index_locked(idx, (ck,))
+                            invalidated_cache_keys.add(ck)
 
                 else:  # action == 'exclude'
                     # Excludes: invalidate only if matches changed
@@ -1040,13 +1067,16 @@ def _generic_cache_invalidation_locked(
                             )
                             cache.delete(ck)
                             _remove_cache_keys_from_index_locked(idx, (ck,))
+                            invalidated_cache_keys.add(ck)
+
+    return invalidated_cache_keys
 
 
 def _generic_cache_invalidation_from_shards(
     manager_name: str,
     instance: GeneralManager,
     old_relevant_values: dict[str, Any],
-) -> None:
+) -> set[str]:
     def value_for_lookup(lookup: str, *, use_old_values: bool) -> Any:
         spec = lookup_spec_from_key(lookup)
         lookup_name = "__".join(spec.attr_path)
@@ -1150,6 +1180,7 @@ def _generic_cache_invalidation_from_shards(
         return False
 
     invalidation_candidates: set[str] = set()
+    invalidated_cache_keys: set[str] = set()
 
     invalidation_candidates.update(request_query_cache_keys(manager_name))
     invalidation_candidates.update(all_records_cache_keys(manager_name))
@@ -1189,6 +1220,9 @@ def _generic_cache_invalidation_from_shards(
         )
         cache.delete(cache_key)
         remove_cache_key_from_shards(cache_key)
+        invalidated_cache_keys.add(cache_key)
+
+    return invalidated_cache_keys
 
 
 @receiver(post_data_change)
@@ -1209,6 +1243,7 @@ def generic_cache_invalidation(
         old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
     manager_name = sender.__name__
+    invalidated_cache_keys: set[str] = set()
     acquire_lock_with_retry("generic_cache_invalidation")
     try:
         if not reverse_memberships():
@@ -1216,18 +1251,26 @@ def generic_cache_invalidation(
             sections: tuple[Literal["filter", "exclude", "all", "request_query"], ...]
             sections = ("filter", "exclude", "all", "request_query")
             if any(idx.get(section) for section in sections):
-                _generic_cache_invalidation_locked(
+                invalidated_cache_keys = _generic_cache_invalidation_locked(
                     idx,
                     manager_name,
                     instance,
                     old_relevant_values,
                 )
                 set_full_index(idx)
-                return
-        _generic_cache_invalidation_from_shards(
-            manager_name,
-            instance,
-            old_relevant_values,
-        )
+            else:
+                invalidated_cache_keys = _generic_cache_invalidation_from_shards(
+                    manager_name,
+                    instance,
+                    old_relevant_values,
+                )
+        else:
+            invalidated_cache_keys = _generic_cache_invalidation_from_shards(
+                manager_name,
+                instance,
+                old_relevant_values,
+            )
     finally:
         release_lock()
+    if invalidated_cache_keys:
+        record_invalidated_cache_keys_for_graphql_rewarm(invalidated_cache_keys)

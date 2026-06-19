@@ -45,11 +45,13 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         """
         from general_manager.cache.dependency_index import (
             begin_dependency_data_change,
+            drain_invalidated_cache_keys_for_graphql_rewarm,
             end_dependency_data_change,
         )
         from general_manager.cache.run_context import current_calculation_run_context
 
         primary_exc: BaseException | None = None
+        completed = False
         begin_dependency_data_change()
         context = current_calculation_run_context()
         if context is not None:
@@ -99,6 +101,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
                     delattr(instance_before, "_old_values")
                 except AttributeError:
                     pass
+            completed = True
         except BaseException as error:
             primary_exc = error
             raise
@@ -115,5 +118,16 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
                     )
                 else:
                     raise
+            if completed:
+                cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
+                if cache_keys:
+                    try:
+                        from general_manager.api.graphql_warmup import (
+                            enqueue_graphql_recipe_warmup,
+                        )
+
+                        enqueue_graphql_recipe_warmup(cache_keys)
+                    except Exception:
+                        logger.exception("GraphQL warm-up requeue failed.")
 
     return wrapper

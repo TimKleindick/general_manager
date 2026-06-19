@@ -5,6 +5,7 @@ from django.utils import timezone
 from general_manager.cache.dependency_index import get_full_index
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+from general_manager.utils.make_cache_key import make_cache_key
 from general_manager.manager import GeneralManager, Input
 from django.db.models.fields import CharField, IntegerField, DateField, DateTimeField
 from typing import ClassVar
@@ -511,6 +512,25 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             start_date=date(2023, 12, 1),
             completion_at=timezone.make_aware(datetime(2024, 1, 20, 12, 0)),
         )
+
+    def test_dependency_invalidation_enqueues_graphql_rewarm_cache_key(self):
+        commercials = self.TestCommercials(project=self.project1)
+        prop = self.TestCommercials.Interface.get_graph_ql_properties()["budget_left"]
+        cache_key = make_cache_key(prop._get_cached_fget(), (commercials,), {})
+
+        self.assertEqual(commercials.budget_left, Measurement(800, "EUR"))
+
+        with patch(
+            "general_manager.api.graphql_warmup.enqueue_graphql_recipe_warmup",
+            return_value=True,
+        ) as enqueue:
+            self.project1.update(
+                actual_costs=Measurement(300, "EUR"),
+                ignore_permission=True,
+            )
+
+        enqueue.assert_called_once()
+        self.assertIn(cache_key, enqueue.call_args.args[0])
 
     def test_budget_left(self):
         """
