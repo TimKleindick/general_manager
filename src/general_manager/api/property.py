@@ -5,7 +5,7 @@ import sys
 from typing import Any, Callable, Literal, TypeVar, cast, get_type_hints, overload
 
 T = TypeVar("T", bound=Callable[..., Any])
-GraphQLPropertyCache = Literal["dependency", "run", "none"]
+GraphQLPropertyCache = Literal["dependency", "run", "timeout", "none"]
 
 
 class GraphQLPropertyReturnAnnotationError(TypeError):
@@ -22,12 +22,33 @@ class GraphQLPropertyReturnAnnotationError(TypeError):
         )
 
 
+class GraphQLPropertyWarmUpConfigurationError(ValueError):
+    """Raised when warm-up is configured for an unsupported cache scope."""
+
+    def __init__(self) -> None:
+        super().__init__('warm_up=True requires cache="dependency" or cache="timeout"')
+
+
+class GraphQLPropertyTimeoutConfigurationError(ValueError):
+    """Raised when timeout cache configuration is invalid."""
+
+    @classmethod
+    def missing_timeout(cls) -> "GraphQLPropertyTimeoutConfigurationError":
+        return cls('cache="timeout" requires timeout')
+
+    @classmethod
+    def unexpected_timeout(cls) -> "GraphQLPropertyTimeoutConfigurationError":
+        return cls('timeout is only supported with cache="timeout"')
+
+
 class GraphQLProperty(property):
     """Descriptor that exposes a property with GraphQL metadata and type hints."""
 
     sortable: bool
     filterable: bool
+    warm_up: bool
     query_annotation: Any | None
+    timeout: int | None
 
     def __init__(
         self,
@@ -38,6 +59,8 @@ class GraphQLProperty(property):
         filterable: bool = False,
         query_annotation: Any | None = None,
         cache: GraphQLPropertyCache = "none",
+        timeout: int | None = None,
+        warm_up: bool = False,
     ) -> None:
         """
         Initialize the GraphQLProperty descriptor with GraphQL-specific metadata.
@@ -48,10 +71,20 @@ class GraphQLProperty(property):
             sortable (bool): Whether the property should be considered for sorting.
             filterable (bool): Whether the property should be considered for filtering.
             query_annotation (Any | None): Optional annotation to apply when querying/queryset construction.
+            cache (GraphQLPropertyCache): Cache scope for the resolver.
+            timeout (int | None): Timeout in seconds when ``cache="timeout"``.
+            warm_up (bool): Whether the property participates in proactive warm-up.
 
         Raises:
             GraphQLPropertyReturnAnnotationError: If the underlying resolver function does not declare a return type annotation.
         """
+        if warm_up and cache not in {"dependency", "timeout"}:
+            raise GraphQLPropertyWarmUpConfigurationError()
+        if cache == "timeout" and timeout is None:
+            raise GraphQLPropertyTimeoutConfigurationError.missing_timeout()
+        if timeout is not None and cache != "timeout":
+            raise GraphQLPropertyTimeoutConfigurationError.unexpected_timeout()
+
         self._raw_fget = fget
         self._cached_fget: Callable[..., Any] | None = None
 
@@ -69,6 +102,8 @@ class GraphQLProperty(property):
         self.filterable = filterable
         self.query_annotation = query_annotation
         self.cache = cache
+        self.timeout = timeout
+        self.warm_up = warm_up
 
         orig = getattr(
             fget, "__wrapped__", fget
@@ -95,6 +130,8 @@ class GraphQLProperty(property):
         selected_cache = self.cache
         if selected_cache == "none":
             return self._raw_fget
+        if selected_cache == "timeout":
+            return cached(cache="timeout", timeout=self.timeout)(self._raw_fget)
         return cached(cache=cast(Literal["dependency", "run"], selected_cache))(
             self._raw_fget
         )
@@ -147,6 +184,8 @@ def graph_ql_property(
     filterable: bool = False,
     query_annotation: Any | None = None,
     cache: GraphQLPropertyCache = "run",
+    timeout: int | None = None,
+    warm_up: bool = False,
 ) -> Callable[[T], GraphQLProperty]: ...
 
 
@@ -157,6 +196,8 @@ def graph_ql_property(
     filterable: bool = False,
     query_annotation: Any | None = None,
     cache: GraphQLPropertyCache = "run",
+    timeout: int | None = None,
+    warm_up: bool = False,
 ) -> GraphQLProperty | Callable[[T], GraphQLProperty]:
     """
     Decorate a resolver to return a cached ``GraphQLProperty`` descriptor.
@@ -170,8 +211,11 @@ def graph_ql_property(
             default and memoizes the value only within the active GraphQL request,
             calculation graph, bulk operation, or background run. ``"dependency"``
             persists the value across runs and records accessed managers so later
-            mutations can invalidate the cache entry. ``"none"`` disables caching
-            and evaluates the resolver on every access.
+            mutations can invalidate the cache entry. ``"timeout"`` persists the
+            value for ``timeout`` seconds. ``"none"`` disables caching and evaluates
+            the resolver on every access.
+        timeout (int | None): Timeout in seconds when ``cache="timeout"``.
+        warm_up (bool): Whether the property participates in proactive warm-up.
 
     Returns:
         GraphQLProperty | Callable[[Callable[..., Any]], GraphQLProperty]: Decorated property or decorator factory.
@@ -184,6 +228,8 @@ def graph_ql_property(
             query_annotation=query_annotation,
             filterable=filterable,
             cache=cache,
+            timeout=timeout,
+            warm_up=warm_up,
         )
 
     if func is None:
