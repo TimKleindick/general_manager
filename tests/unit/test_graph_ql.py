@@ -42,8 +42,13 @@ from graphql import (
 
 
 class GraphQLPropertyTests(TestCase):
+    """Verify GraphQLProperty descriptor configuration."""
+
     def test_graphql_property_initialization(self):
+        """GraphQLProperty requires an annotated resolver."""
+
         def mock_getter():
+            """Unannotated resolver used to trigger validation."""
             return "test"
 
         with self.assertRaises(
@@ -53,13 +58,17 @@ class GraphQLPropertyTests(TestCase):
             GraphQLProperty(mock_getter)
 
     def test_graphql_property_with_type_hint(self):
+        """GraphQLProperty stores the resolver return annotation."""
+
         def mock_getter() -> str:
+            """Annotated resolver used to resolve the GraphQL type hint."""
             return "test"
 
         prop = GraphQLProperty(mock_getter)
         self.assertEqual(prop.graphql_type_hint, str)
 
     def test_graphql_property_cache_options_exclude_auto(self):
+        """GraphQL property cache scopes expose only user-selectable values."""
         self.assertEqual(
             set(get_args(GraphQLPropertyCache)),
             {"dependency", "run", "timeout", "none"},
@@ -69,35 +78,50 @@ class GraphQLPropertyTests(TestCase):
         )
 
     def test_graphql_property_rejects_warm_up_for_run_cache(self):
+        """Warm-up is rejected for request-run cache scope."""
+
         def getter() -> int:
+            """Return a value for warm-up validation."""
             return 1
 
         with self.assertRaisesRegex(ValueError, "warm_up=True requires"):
             GraphQLProperty(getter, cache="run", warm_up=True)
 
     def test_graphql_property_rejects_warm_up_for_none_cache(self):
+        """Warm-up is rejected when caching is disabled."""
+
         def getter() -> int:
+            """Return a value for warm-up validation."""
             return 1
 
         with self.assertRaisesRegex(ValueError, "warm_up=True requires"):
             GraphQLProperty(getter, cache="none", warm_up=True)
 
     def test_graphql_property_requires_timeout_for_timeout_cache(self):
+        """Timeout cache declarations must include a timeout value."""
+
         def getter() -> int:
+            """Return a value for timeout validation."""
             return 1
 
         with self.assertRaisesRegex(ValueError, 'cache="timeout" requires timeout'):
             GraphQLProperty(getter, cache="timeout")
 
     def test_graphql_property_rejects_timeout_for_dependency_cache(self):
+        """Non-timeout cache declarations reject timeout values."""
+
         def getter() -> int:
+            """Return a value for timeout validation."""
             return 1
 
         with self.assertRaisesRegex(ValueError, "timeout is only supported"):
             GraphQLProperty(getter, cache="dependency", timeout=60)
 
     def test_graphql_property_accepts_warm_up_for_dependency_and_timeout(self):
+        """Warm-up is accepted for dependency and timeout cache scopes."""
+
         def getter() -> int:
+            """Return a value for accepted warm-up declarations."""
             return 1
 
         dependency_prop = GraphQLProperty(getter, cache="dependency", warm_up=True)

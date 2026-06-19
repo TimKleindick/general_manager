@@ -121,6 +121,12 @@ GENERAL_MANAGER = {
 `GRAPHQL_WARMUP_ENABLED` gates all framework-owned automatic behavior.
 Management commands and public functions will honor it by default, with
 an explicit force option only if a command needs one.
+The block above shows defaults. Applications must set
+`GRAPHQL_WARMUP_ENABLED=True` before startup warm-up, Beat refresh, or
+invalidation re-warm settings can perform framework-owned work.
+`GRAPHQL_WARMUP_TIMEOUT_REFRESH_RATIO` accepts values in the inclusive range
+`[0, 1]`; out-of-range values are clamped so refreshes cannot be scheduled
+before the previous warm time or after the configured timeout window.
 
 ## Warm-Up Execution
 
@@ -218,10 +224,11 @@ refresh_at = warmed_at + timeout * GRAPHQL_WARMUP_TIMEOUT_REFRESH_RATIO
 ```
 
 The ratio defaults to `0.8`, so a 300-second entry is refreshed around 240
-seconds after it was warmed. A periodic refresh task scans due timeout recipes,
-acquires a per-recipe lock, reconstructs the manager instance, executes the
-property, stores the refreshed cache entry through the normal timeout cache
-path, and updates `refresh_at`.
+seconds after it was warmed. Valid values are in the inclusive range `[0, 1]`;
+out-of-range values are clamped for the same reason as the settings parser.
+A periodic refresh task scans due timeout recipes, acquires a per-recipe lock,
+reconstructs the manager instance, executes the property, stores the refreshed
+cache entry through the normal timeout cache path, and updates `refresh_at`.
 
 If refresh fails, the task logs the failure and leaves the previous cache entry
 to expire normally. A later refresh attempt or lazy request-path access can

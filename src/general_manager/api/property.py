@@ -26,6 +26,7 @@ class GraphQLPropertyWarmUpConfigurationError(ValueError):
     """Raised when warm-up is configured for an unsupported cache scope."""
 
     def __init__(self) -> None:
+        """Build the warm-up cache-scope validation error."""
         super().__init__('warm_up=True requires cache="dependency" or cache="timeout"')
 
 
@@ -34,10 +35,12 @@ class GraphQLPropertyTimeoutConfigurationError(ValueError):
 
     @classmethod
     def missing_timeout(cls) -> "GraphQLPropertyTimeoutConfigurationError":
+        """Build the error raised when timeout cache omits a timeout."""
         return cls('cache="timeout" requires timeout')
 
     @classmethod
     def unexpected_timeout(cls) -> "GraphQLPropertyTimeoutConfigurationError":
+        """Build the error raised when non-timeout caches specify a timeout."""
         return cls('timeout is only supported with cache="timeout"')
 
 
@@ -90,6 +93,7 @@ class GraphQLProperty(property):
 
         @wraps(fget)
         def resolver(instance: Any) -> Any:
+            """Resolve the property through the selected cached wrapper."""
             return self._get_cached_fget()(instance)
 
         super().__init__(resolver, doc=doc)
@@ -125,6 +129,7 @@ class GraphQLProperty(property):
         self._cached_fget = self._build_cached_fget(owner)
 
     def _build_cached_fget(self, _owner: type) -> Callable[..., Any]:
+        """Build the resolver wrapper for the configured cache scope."""
         from general_manager.cache.cache_decorator import cached
 
         selected_cache = self.cache
@@ -137,6 +142,7 @@ class GraphQLProperty(property):
         )
 
     def _get_cached_fget(self) -> Callable[..., Any]:
+        """Return the cached resolver wrapper, building it lazily if needed."""
         if self._cached_fget is None:
             if self._owner is None:
                 self._cached_fget = self._raw_fget
@@ -176,7 +182,11 @@ class GraphQLProperty(property):
 
 
 @overload
-def graph_ql_property(func: T) -> GraphQLProperty: ...
+def graph_ql_property(func: T) -> GraphQLProperty:
+    """Type overload for direct ``@graph_ql_property`` usage."""
+    ...
+
+
 @overload
 def graph_ql_property(
     *,
@@ -186,7 +196,9 @@ def graph_ql_property(
     cache: GraphQLPropertyCache = "run",
     timeout: int | None = None,
     warm_up: bool = False,
-) -> Callable[[T], GraphQLProperty]: ...
+) -> Callable[[T], GraphQLProperty]:
+    """Type overload for configured ``@graph_ql_property(...)`` usage."""
+    ...
 
 
 def graph_ql_property(
@@ -222,6 +234,7 @@ def graph_ql_property(
     """
 
     def wrapper(f: Callable[..., Any]) -> GraphQLProperty:
+        """Wrap one resolver function in a GraphQLProperty descriptor."""
         return GraphQLProperty(
             f,
             sortable=sortable,

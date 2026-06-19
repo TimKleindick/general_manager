@@ -103,6 +103,8 @@ def configure_search_reconcile_beat_schedule_from_settings(
 
 
 class GeneralmanagerConfig(AppConfig):
+    """Django application configuration for GeneralManager startup hooks."""
+
     default_auto_field = "django.db.models.BigAutoField"
     name = "general_manager"
 

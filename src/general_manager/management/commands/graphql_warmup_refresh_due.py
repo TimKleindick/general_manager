@@ -15,6 +15,7 @@ class Command(BaseCommand):
     help = "Refresh due timeout-backed GraphQL warm-up recipes."
 
     def add_arguments(self, parser: Any) -> None:
+        """Register command-line arguments for limiting refresh work."""
         parser.add_argument(
             "--limit",
             type=int,
@@ -23,6 +24,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Refresh due timeout recipes and print the number refreshed."""
         del args
         refreshed = refresh_due_graphql_warmup_recipes(limit=options.get("limit"))
         self.stdout.write(

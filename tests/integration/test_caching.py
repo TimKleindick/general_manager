@@ -514,6 +514,7 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
         )
 
     def test_dependency_invalidation_enqueues_graphql_rewarm_cache_key(self):
+        """Dependency invalidation enqueues the warmed GraphQL cache key."""
         commercials = self.TestCommercials(project=self.project1)
         prop = self.TestCommercials.Interface.get_graph_ql_properties()["budget_left"]
         cache_key = make_cache_key(prop._get_cached_fget(), (commercials,), {})
