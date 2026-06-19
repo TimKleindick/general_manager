@@ -61,11 +61,59 @@ class GraphQLPropertyTests(TestCase):
 
     def test_graphql_property_cache_options_exclude_auto(self):
         self.assertEqual(
-            set(get_args(GraphQLPropertyCache)), {"dependency", "run", "none"}
+            set(get_args(GraphQLPropertyCache)),
+            {"dependency", "run", "timeout", "none"},
         )
         self.assertEqual(
             signature(graph_ql_property).parameters["cache"].default, "run"
         )
+
+    def test_graphql_property_rejects_warm_up_for_run_cache(self):
+        def getter() -> int:
+            return 1
+
+        with self.assertRaisesRegex(ValueError, "warm_up=True requires"):
+            GraphQLProperty(getter, cache="run", warm_up=True)
+
+    def test_graphql_property_rejects_warm_up_for_none_cache(self):
+        def getter() -> int:
+            return 1
+
+        with self.assertRaisesRegex(ValueError, "warm_up=True requires"):
+            GraphQLProperty(getter, cache="none", warm_up=True)
+
+    def test_graphql_property_requires_timeout_for_timeout_cache(self):
+        def getter() -> int:
+            return 1
+
+        with self.assertRaisesRegex(ValueError, 'cache="timeout" requires timeout'):
+            GraphQLProperty(getter, cache="timeout")
+
+    def test_graphql_property_rejects_timeout_for_dependency_cache(self):
+        def getter() -> int:
+            return 1
+
+        with self.assertRaisesRegex(ValueError, "timeout is only supported"):
+            GraphQLProperty(getter, cache="dependency", timeout=60)
+
+    def test_graphql_property_accepts_warm_up_for_dependency_and_timeout(self):
+        def getter() -> int:
+            return 1
+
+        dependency_prop = GraphQLProperty(getter, cache="dependency", warm_up=True)
+        timeout_prop = GraphQLProperty(
+            getter,
+            cache="timeout",
+            timeout=60,
+            warm_up=True,
+        )
+
+        self.assertTrue(dependency_prop.warm_up)
+        self.assertEqual(dependency_prop.cache, "dependency")
+        self.assertIsNone(dependency_prop.timeout)
+        self.assertTrue(timeout_prop.warm_up)
+        self.assertEqual(timeout_prop.cache, "timeout")
+        self.assertEqual(timeout_prop.timeout, 60)
 
 
 class MeasurementTypeTests(TestCase):
