@@ -126,6 +126,12 @@ class AppsUtilitiesTests(SimpleTestCase):
                                     "configure_search_reconcile_beat_schedule"
                                 ),
                             ),
+                            patch(
+                                "general_manager.apps.configure_graphql_warmup_beat_schedule_from_settings",
+                                side_effect=lambda *_args, **_kwargs: call_order.append(
+                                    "configure_graphql_warmup_beat_schedule"
+                                ),
+                            ),
                         ):
                             config.ready()
 
@@ -141,4 +147,5 @@ class AppsUtilitiesTests(SimpleTestCase):
             "configure_signal_bridge",
             "configure_beat_schedule",
             "configure_search_reconcile_beat_schedule",
+            "configure_graphql_warmup_beat_schedule",
         ]
