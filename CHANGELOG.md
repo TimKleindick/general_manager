@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v0.56.0 (2026-06-19)
+
+### Bug Fixes
+
+- Address graphql warmup review feedback
+  ([`056f09c`](https://github.com/TimKleindick/general_manager/commit/056f09c2040e61708ee13a762355c9853e3b80e2))
+
+### Documentation
+
+- Design graphql property warmup
+  ([`07826b2`](https://github.com/TimKleindick/general_manager/commit/07826b2bf68dac2077ca76853e85562df015a352))
+
+- Document graphql property warmup
+  ([`5fa4a4b`](https://github.com/TimKleindick/general_manager/commit/5fa4a4ba1b4ca1ba65f4d6527683f650a15bbd12))
+
+### Features
+
+- Add graphql property warmup executor
+  ([`1037501`](https://github.com/TimKleindick/general_manager/commit/10375012fee235aa25ce1b35eced85c93c6316b6))
+
+- Add graphql property warmup metadata
+  ([`7bff2ae`](https://github.com/TimKleindick/general_manager/commit/7bff2ae2fd821f373c9e9fab4b3873783d965908))
+
+- Add graphql warmup recipe registry
+  ([`07a15a3`](https://github.com/TimKleindick/general_manager/commit/07a15a33bd2c609a7545a1086fdc4904ed321af3))
+
+- Enqueue graphql warmup after invalidation
+  ([`c1f2f71`](https://github.com/TimKleindick/general_manager/commit/c1f2f71e66a2135dc86bdbba21814782416ff55c))
+
+- Schedule graphql warmup tasks
+  ([`8ba4f2d`](https://github.com/TimKleindick/general_manager/commit/8ba4f2d049bddc84074a0afb01380efad55ad0c0))
+
+### Testing
+
+- Cover graphql warmup edge cases
+  ([`d16b49d`](https://github.com/TimKleindick/general_manager/commit/d16b49d9cdab0c03233f174f773025c0245535df))
+
+
 ## v0.55.0 (2026-06-19)
 
 ### Bug Fixes
