@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v0.55.0 (2026-06-19)
+
+### Bug Fixes
+
+- Address search reconciliation review feedback
+  ([`494a5f1`](https://github.com/TimKleindick/general_manager/commit/494a5f15fedee2a31cddebf6482bc46056890d9b))
+
+### Documentation
+
+- Add docstrings to search reconciliation functions
+  ([`e704911`](https://github.com/TimKleindick/general_manager/commit/e704911a8e5c68136156fc73b4491832c407ba05))
+
+- Explain search reconciliation setup
+  ([`1625ec3`](https://github.com/TimKleindick/general_manager/commit/1625ec39a74db2b870cc34b109307c464335865d))
+
+### Features
+
+- Add search index reconciliation state
+  ([`95b6be2`](https://github.com/TimKleindick/general_manager/commit/95b6be275f967d30deb770dd7098e5ebec9a77d8))
+
+- Add search reconciliation command
+  ([`24f6eba`](https://github.com/TimKleindick/general_manager/commit/24f6eba425560cbdf5dee7451b12ed82ef565c3d))
+
+- Mark search indexes dirty on data changes
+  ([`70e25e0`](https://github.com/TimKleindick/general_manager/commit/70e25e07d9f77bd2cb1233f788e27466b33a5fd0))
+
+- Reconcile dirty search indexes
+  ([`f55c7c4`](https://github.com/TimKleindick/general_manager/commit/f55c7c4a64877c66ac43059ec78bb31c0c37db7a))
+
+- Reindex individual search manager indexes
+  ([`927b2ba`](https://github.com/TimKleindick/general_manager/commit/927b2baff2e545e054cbd46e7a604558597ae4eb))
+
+- Schedule search reconciliation with celery beat
+  ([`70d9a9a`](https://github.com/TimKleindick/general_manager/commit/70d9a9a02885c103eee36bf9807d6add4fcf349a))
+
+- Track search index reconciliation targets
+  ([`c889ce7`](https://github.com/TimKleindick/general_manager/commit/c889ce7099b77cf06491942586527d45d63c1a47))
+
+### Refactoring
+
+- Remove request-triggered search auto reindex
+  ([`9313c4e`](https://github.com/TimKleindick/general_manager/commit/9313c4e5e3a072fcca61afcd65fd53b68f962f66))
+
+
 ## v0.54.1 (2026-06-18)
 
 ### Bug Fixes
