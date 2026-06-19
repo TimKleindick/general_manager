@@ -108,26 +108,28 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
         else:
             return result
         finally:
+            cache_keys: tuple[str, ...] = ()
             try:
-                end_dependency_data_change()
-            except Exception:
-                if primary_exc is not None:
-                    logger.exception(
-                        "Dependency data-change cleanup failed while handling "
-                        "another exception."
-                    )
-                else:
-                    raise
-            if completed:
-                cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
-                if cache_keys:
-                    try:
-                        from general_manager.api.graphql_warmup import (
-                            enqueue_graphql_recipe_warmup,
+                try:
+                    end_dependency_data_change()
+                except Exception:
+                    if primary_exc is not None:
+                        logger.exception(
+                            "Dependency data-change cleanup failed while handling "
+                            "another exception."
                         )
+                    else:
+                        raise
+            finally:
+                cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
+            if completed and cache_keys:
+                try:
+                    from general_manager.api.graphql_warmup import (
+                        enqueue_graphql_recipe_warmup,
+                    )
 
-                        enqueue_graphql_recipe_warmup(cache_keys)
-                    except Exception:
-                        logger.exception("GraphQL warm-up requeue failed.")
+                    enqueue_graphql_recipe_warmup(cache_keys)
+                except Exception:
+                    logger.exception("GraphQL warm-up requeue failed.")
 
     return wrapper

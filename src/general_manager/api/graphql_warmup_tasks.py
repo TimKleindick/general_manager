@@ -25,7 +25,10 @@ except ImportError:  # pragma: no cover - optional dependency boundary
     current_app = cast(Any | None, None)  # type: ignore[assignment, no-redef]
 
     def shared_task(func: Any | None = None, **_kwargs: Any):  # type: ignore[no-redef]
+        """Return a no-op task decorator when Celery is not installed."""
+
         def decorator(inner):
+            """Return the wrapped function unchanged."""
             return inner
 
         if func is None:
@@ -35,6 +38,8 @@ except ImportError:  # pragma: no cover - optional dependency boundary
 
 GRAPHQL_WARMUP_BEAT_SCHEDULE_KEY = "general_manager.graphql_warmup.refresh_due"
 GRAPHQL_WARMUP_QUEUE = "graphql.warmup"
+FALSE_SETTING_STRINGS = {"", "0", "false", "no", "off", "none", "null"}
+TRUE_SETTING_STRINGS = {"1", "true", "yes", "on"}
 
 
 def configure_graphql_warmup_beat_schedule_from_settings(
@@ -148,16 +153,26 @@ def dispatch_graphql_recipe_warmup(cache_keys: Iterable[str]) -> bool:
 
 
 def _config(django_settings: Any) -> dict[str, Any]:
+    """Return the nested GENERAL_MANAGER settings dictionary."""
     value = getattr(django_settings, "GENERAL_MANAGER", {})
     return dict(value) if isinstance(value, dict) else {}
 
 
 def _bool_setting(django_settings: Any, key: str, default: bool) -> bool:
+    """Read a boolean setting while accepting common string values."""
     config = _config(django_settings)
-    return bool(config.get(key, getattr(django_settings, key, default)))
+    raw = config.get(key, getattr(django_settings, key, default))
+    if isinstance(raw, str):
+        normalized = raw.strip().casefold()
+        if normalized in FALSE_SETTING_STRINGS:
+            return False
+        if normalized in TRUE_SETTING_STRINGS:
+            return True
+    return bool(raw)
 
 
 def _int_setting(django_settings: Any, key: str, default: int) -> int:
+    """Read a positive integer setting with a fallback."""
     config = _config(django_settings)
     raw = config.get(key, getattr(django_settings, key, default))
     try:
@@ -167,6 +182,7 @@ def _int_setting(django_settings: Any, key: str, default: int) -> int:
 
 
 def _manager_path(manager_class: type[Any]) -> str | None:
+    """Return an import path for manager classes that workers can resolve."""
     qualname = getattr(manager_class, "__qualname__", manager_class.__name__)
     if "<locals>" in qualname:
         return None

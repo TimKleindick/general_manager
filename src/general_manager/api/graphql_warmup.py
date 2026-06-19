@@ -201,6 +201,7 @@ def _warm_batch(
     properties: dict[str, GraphQLProperty],
     manager_path: str | None,
 ) -> tuple[int, int, int]:
+    """Evaluate one batch of instances and persist successful recipes."""
     candidates: list[GraphQLWarmUpRecipe] = []
     evaluated = 0
     failed = 0
@@ -237,6 +238,7 @@ def _refresh_timeout_recipe(
     prop: GraphQLProperty,
     recipe: GraphQLWarmUpRecipe,
 ) -> bool:
+    """Refresh one timeout-backed recipe without evicting the old value first."""
     result = prop._raw_fget(instance)
     django_cache.set(recipe.cache_key, result, recipe.timeout)
     register_graphql_warmup_recipe(_recipe_for(instance, prop, recipe.property_name))
@@ -248,6 +250,7 @@ def _recipe_for(
     prop: GraphQLProperty,
     property_name: str,
 ) -> GraphQLWarmUpRecipe:
+    """Build the registry payload for a warmed instance/property pair."""
     cache_key = make_cache_key(prop._get_cached_fget(), (instance,), {})
     timeout = prop.timeout if prop.cache == "timeout" else None
     refresh_at = None
@@ -267,6 +270,7 @@ def _recipe_for(
 
 
 def _manager_path(manager_class: type[Any]) -> str | None:
+    """Return an import path for reconstructable manager classes."""
     qualname = getattr(manager_class, "__qualname__", manager_class.__name__)
     if "<locals>" in qualname:
         return None
@@ -274,12 +278,14 @@ def _manager_path(manager_class: type[Any]) -> str | None:
 
 
 def _all_managers() -> tuple[type[Any], ...]:
+    """Return all manager classes registered with the GraphQL integration."""
     from general_manager.api.graphql import GraphQL
 
     return tuple(GraphQL.manager_registry.values())
 
 
 def _positive_int_setting(key: str, default: int) -> int:
+    """Read a positive integer warm-up setting with a fallback."""
     raw = get_setting(key, default)
     try:
         return max(1, int(raw))
@@ -288,6 +294,7 @@ def _positive_int_setting(key: str, default: int) -> int:
 
 
 def _timeout_refresh_ratio() -> float:
+    """Read and clamp the timeout refresh ratio setting."""
     raw = get_setting("GRAPHQL_WARMUP_TIMEOUT_REFRESH_RATIO", 0.8)
     try:
         return max(0.0, min(1.0, float(raw)))

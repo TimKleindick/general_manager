@@ -1,3 +1,5 @@
+"""Tests for GraphQL property warm-up execution helpers."""
+
 from dataclasses import replace
 from datetime import timedelta
 from unittest.mock import patch
@@ -25,77 +27,107 @@ from general_manager.api.property import GraphQLProperty, graph_ql_property
 
 
 class WarmUpObject:
+    """Timeout-backed warm-up manager used by executor tests."""
+
     calls = 0
 
     def __init__(self, id: int) -> None:
+        """Store identification for recipe reconstruction."""
         self.identification = {"id": id}
         self.id = id
 
     def __str__(self) -> str:
+        """Return a deterministic representation for cache-key generation."""
         return f"WarmUpObject(**{{'id': {self.id}}})"
 
     @classmethod
     def all(cls) -> list["WarmUpObject"]:
+        """Return warm-up candidates for all-entry enumeration."""
         return [cls(1), cls(2)]
 
     @graph_ql_property(cache="timeout", timeout=300, warm_up=True)
     def score(self) -> int:
+        """Return a computed score and count evaluations."""
         type(self).calls += 1
         return self.id * 10
 
     class Interface:
+        """Expose the warmable GraphQL property for tests."""
+
         @staticmethod
         def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
+            """Return GraphQL properties declared on the test manager."""
             return {"score": WarmUpObject.score}
 
 
 class DependencyWarmUpObject:
+    """Dependency-backed warm-up manager used by recipe tests."""
+
     calls = 0
 
     def __init__(self, id: int) -> None:
+        """Store identification for dependency recipe reconstruction."""
         self.identification = {"id": id}
         self.id = id
 
     @classmethod
     def all(cls) -> list["DependencyWarmUpObject"]:
+        """Return one dependency-backed warm-up candidate."""
         return [cls(1)]
 
     @graph_ql_property(cache="dependency", warm_up=True)
     def score(self) -> int:
+        """Return a dependency-backed score and count evaluations."""
         type(self).calls += 1
         return self.id * 100
 
     class Interface:
+        """Expose dependency-backed warmable properties for tests."""
+
         @staticmethod
         def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
+            """Return GraphQL properties declared on the test manager."""
             return {"score": DependencyWarmUpObject.score}
 
 
 class FailingWarmUpObject:
+    """Warm-up manager whose property raises during evaluation."""
+
     def __init__(self, id: int) -> None:
+        """Store identification for failure logging."""
         self.identification = {"id": id}
         self.id = id
 
     @classmethod
     def all(cls) -> list["FailingWarmUpObject"]:
+        """Return one failing warm-up candidate."""
         return [cls(1)]
 
     @graph_ql_property(cache="timeout", timeout=300, warm_up=True)
     def score(self) -> int:
+        """Raise to exercise warm-up failure isolation."""
         raise RuntimeError("boom")
 
     class Interface:
+        """Expose the failing warmable property for tests."""
+
         @staticmethod
         def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
+            """Return GraphQL properties declared on the test manager."""
             return {"score": FailingWarmUpObject.score}
 
 
 class NoInterfaceWarmUpObject:
+    """Manager-like object without a GraphQL Interface."""
+
     pass
 
 
 class GraphQLWarmUpExecutorTests(SimpleTestCase):
+    """Verify all-entry warm-up, recipe warm-up, and enqueue behavior."""
+
     def setUp(self) -> None:
+        """Reset cache state and evaluation counters before each test."""
         cache.clear()
         WarmUpObject.calls = 0
         DependencyWarmUpObject.calls = 0
@@ -104,6 +136,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
     def test_warm_up_executes_property_for_each_all_entry_and_records_recipes(
         self,
     ) -> None:
+        """Warm-up enumerates all candidates and records recipes."""
         summary = warm_up_graphql_properties([WarmUpObject])
 
         self.assertEqual(summary.evaluated, 2)
@@ -112,6 +145,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_recipe_reconstructs_instance_and_executes_property(self) -> None:
+        """Recipe warm-up reconstructs timeout-backed manager instances."""
         warm_up_graphql_properties([WarmUpObject])
         cache_key = graphql_warmup_recipe_keys()[0]
         WarmUpObject.calls = 0
@@ -123,6 +157,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_refresh_due_timeout_recipes_updates_refresh_schedule(self) -> None:
+        """Due timeout recipes refresh once and leave the due index."""
         warm_up_graphql_properties([WarmUpObject])
         cache_key = graphql_warmup_recipe_keys()[0]
         recipe = get_graphql_warmup_recipe(cache_key)
@@ -140,6 +175,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": False})
     def test_disabled_warm_up_entry_points_skip_work(self) -> None:
+        """The global gate disables all framework-owned warm-up entry points."""
         summary = warm_up_graphql_properties([WarmUpObject])
 
         self.assertEqual(summary.evaluated, 0)
@@ -151,6 +187,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warmable_properties_handles_missing_interface_and_filters(self) -> None:
+        """Warmable discovery skips managers and properties that do not qualify."""
         self.assertEqual(warmable_graphql_properties(NoInterfaceWarmUpObject), {})
         self.assertEqual(warmable_graphql_properties(WarmUpObject, ["missing"]), {})
 
@@ -166,6 +203,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         }
     )
     def test_warm_up_discovers_registered_managers_when_none_are_provided(self) -> None:
+        """Warm-up uses the GraphQL registry when manager classes are omitted."""
         with patch.dict(
             GraphQL.manager_registry,
             {"WarmUpObject": WarmUpObject},
@@ -185,6 +223,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         }
     )
     def test_warm_up_batches_and_warns_when_manager_crosses_threshold(self) -> None:
+        """Warm-up batches candidates and logs when enumeration crosses a threshold."""
         with patch("general_manager.api.graphql_warmup.logger.warning") as warning:
             summary = warm_up_graphql_properties([WarmUpObject])
 
@@ -194,25 +233,35 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_records_no_recipe_for_local_manager_path(self) -> None:
+        """Local manager classes are evaluated but not persisted as recipes."""
+
         class LocalWarmUpObject:
+            """Local manager whose import path cannot be reconstructed."""
+
             calls = 0
 
             def __init__(self, id: int) -> None:
+                """Store identification for local warm-up."""
                 self.identification = {"id": id}
                 self.id = id
 
             @classmethod
             def all(cls) -> list["LocalWarmUpObject"]:
+                """Return one local warm-up candidate."""
                 return [cls(1)]
 
             @graph_ql_property(cache="timeout", timeout=300, warm_up=True)
             def score(self) -> int:
+                """Return a score and count local evaluations."""
                 type(self).calls += 1
                 return self.id
 
             class Interface:
+                """Expose the local warmable property for tests."""
+
                 @staticmethod
                 def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
+                    """Return GraphQL properties declared on the local manager."""
                     return {"score": LocalWarmUpObject.score}
 
         summary = warm_up_graphql_properties([LocalWarmUpObject])
@@ -223,6 +272,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_records_failures_and_continues(self) -> None:
+        """Warm-up logs property failures and continues processing."""
         with patch("general_manager.api.graphql_warmup.logger.exception") as log:
             summary = warm_up_graphql_properties([FailingWarmUpObject])
 
@@ -233,6 +283,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_dependency_recipe_reconstructs_and_executes_property(self) -> None:
+        """Dependency recipes re-run the descriptor path when re-warmed."""
         warm_up_graphql_properties([DependencyWarmUpObject])
         cache_key = graphql_warmup_recipe_keys()[0]
         DependencyWarmUpObject.calls = 0
@@ -244,6 +295,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_recipe_returns_false_for_missing_recipe_or_lock(self) -> None:
+        """Recipe warm-up skips missing recipes and lock contention."""
         self.assertFalse(warm_up_graphql_recipe("missing"))
 
         warm_up_graphql_properties([WarmUpObject])
@@ -256,6 +308,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_recipe_logs_and_returns_false_for_bad_recipe(self) -> None:
+        """Recipe warm-up logs reconstruction failures and reports no work."""
         warm_up_graphql_properties([WarmUpObject])
         cache_key = graphql_warmup_recipe_keys()[0]
         recipe = get_graphql_warmup_recipe(cache_key)
@@ -275,6 +328,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         }
     )
     def test_enqueue_recipe_warmup_respects_rewarm_setting_and_empty_keys(self) -> None:
+        """Recipe enqueueing obeys the rewarm setting and ignores empty work."""
         self.assertFalse(enqueue_graphql_recipe_warmup(["cache-key"]))
 
         with override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True}):
@@ -282,6 +336,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_enqueue_entry_points_delegate_to_task_dispatchers(self) -> None:
+        """Warm-up enqueue entry points delegate to task dispatch adapters."""
         with patch(
             "general_manager.api.graphql_warmup_tasks.dispatch_graphql_warmup",
             return_value=True,

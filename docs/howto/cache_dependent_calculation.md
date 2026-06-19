@@ -85,7 +85,8 @@ When enabled in settings, the framework can enumerate `Manager.all()`, execute
 each opted-in property, and record warm-up recipes. Dependency entries can be
 re-warmed after invalidation when a recipe exists. Timeout entries can be
 refreshed before expiry by the built-in Celery Beat task or by a scheduler that
-calls `graphql_warmup_refresh_due`.
+calls `refresh_due_graphql_warmup_recipes` directly. Schedulers that execute
+management commands can run `graphql_warmup_refresh_due` instead.
 
 Warm-up can be expensive because it starts from `.all()`. Keep automatic startup
 warm-up disabled unless the deployment has a worker or startup budget for it,

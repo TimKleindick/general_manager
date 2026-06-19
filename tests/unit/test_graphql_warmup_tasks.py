@@ -1,3 +1,5 @@
+"""Tests for GraphQL warm-up Celery task adapters."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,6 +19,8 @@ from general_manager.api.graphql_warmup_tasks import (
 
 
 class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
+    """Verify optional Celery Beat schedule configuration."""
+
     @override_settings(
         GENERAL_MANAGER={
             "GRAPHQL_WARMUP_BEAT_ENABLED": True,
@@ -24,6 +28,7 @@ class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
         }
     )
     def test_configure_graphql_warmup_beat_schedule_registers_task(self) -> None:
+        """Beat configuration registers the due-timeout refresh task."""
         fake_conf = SimpleNamespace(beat_schedule={})
         fake_app = SimpleNamespace(conf=fake_conf)
         with (
@@ -44,6 +49,23 @@ class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_BEAT_ENABLED": False})
     def test_configure_graphql_warmup_beat_schedule_skips_when_disabled(self) -> None:
+        """Beat configuration is skipped when disabled in settings."""
+        fake_conf = SimpleNamespace(beat_schedule={})
+        fake_app = SimpleNamespace(conf=fake_conf)
+        with (
+            patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", True),
+            patch("general_manager.api.graphql_warmup_tasks.current_app", fake_app),
+        ):
+            configured = configure_graphql_warmup_beat_schedule_from_settings()
+
+        self.assertFalse(configured)
+        self.assertEqual(fake_conf.beat_schedule, {})
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_BEAT_ENABLED": "false"})
+    def test_configure_graphql_warmup_beat_schedule_treats_false_string_as_disabled(
+        self,
+    ) -> None:
+        """String false values are parsed as disabled settings."""
         fake_conf = SimpleNamespace(beat_schedule={})
         fake_app = SimpleNamespace(conf=fake_conf)
         with (
@@ -57,6 +79,7 @@ class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_BEAT_ENABLED": True})
     def test_configure_graphql_warmup_beat_schedule_skips_without_celery(self) -> None:
+        """Beat configuration is skipped when Celery is unavailable."""
         with (
             patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", False),
             patch("general_manager.api.graphql_warmup_tasks.logger.warning") as warning,
@@ -75,6 +98,7 @@ class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
     def test_configure_graphql_warmup_beat_schedule_defaults_invalid_interval(
         self,
     ) -> None:
+        """Invalid interval settings fall back to the default schedule."""
         fake_conf = SimpleNamespace(beat_schedule=None)
         fake_app = SimpleNamespace(conf=fake_conf)
         with (
@@ -91,7 +115,10 @@ class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
 
 
 class GraphQLWarmUpTaskTests(SimpleTestCase):
+    """Verify task wrappers and dispatch helpers for GraphQL warm-up."""
+
     def test_warm_up_graphql_properties_task_delegates_to_executor(self) -> None:
+        """The all-entry task resolves paths and returns executor counts."""
         summary = SimpleNamespace(evaluated=2, failed=0, recipes=2)
         with (
             patch(
@@ -109,6 +136,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
         self.assertEqual(result, {"evaluated": 2, "failed": 0, "recipes": 2})
 
     def test_warm_up_graphql_recipes_task_isolates_recipe_failures(self) -> None:
+        """Recipe task failures are isolated per cache key."""
         with patch(
             "general_manager.api.graphql_warmup_tasks.warm_up_graphql_recipe",
             side_effect=[True, RuntimeError("boom"), False],
@@ -120,6 +148,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
     def test_refresh_due_graphql_warmup_recipes_task_delegates_to_executor(
         self,
     ) -> None:
+        """The due-refresh task delegates its limit to the executor."""
         refresh = Mock(return_value=3)
         with patch(
             "general_manager.api.graphql_warmup_tasks.refresh_due_graphql_warmup_recipes",
@@ -131,11 +160,16 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
         self.assertEqual(refreshed, 3)
 
     def test_dispatch_graphql_warmup_skips_when_celery_unavailable(self) -> None:
+        """All-entry dispatch returns false when Celery is unavailable."""
         with patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", False):
             self.assertFalse(dispatch_graphql_warmup())
 
     def test_dispatch_graphql_warmup_skips_unimportable_local_manager(self) -> None:
+        """All-entry dispatch skips manager classes without import paths."""
+
         class LocalManager:
+            """Local class that cannot be imported by a worker."""
+
             pass
 
         with (
@@ -150,6 +184,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
         delay.assert_not_called()
 
     def test_dispatch_graphql_warmup_enqueues_manager_paths(self) -> None:
+        """All-entry dispatch enqueues importable manager paths."""
         with (
             patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", True),
             patch(
@@ -165,6 +200,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
         )
 
     def test_dispatch_graphql_warmup_returns_false_when_enqueue_fails(self) -> None:
+        """All-entry dispatch logs and returns false on enqueue failure."""
         with (
             patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", True),
             patch(
@@ -179,6 +215,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
         log.assert_called_once()
 
     def test_dispatch_graphql_recipe_warmup_skips_without_celery_or_keys(self) -> None:
+        """Recipe dispatch skips missing Celery and empty work lists."""
         with patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", False):
             self.assertFalse(dispatch_graphql_recipe_warmup(["a"]))
 
@@ -186,6 +223,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
             self.assertFalse(dispatch_graphql_recipe_warmup([]))
 
     def test_dispatch_graphql_recipe_warmup_enqueues_distinct_keys(self) -> None:
+        """Recipe dispatch deduplicates keys before enqueueing."""
         with (
             patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", True),
             patch(
@@ -201,6 +239,7 @@ class GraphQLWarmUpTaskTests(SimpleTestCase):
     def test_dispatch_graphql_recipe_warmup_returns_false_when_enqueue_fails(
         self,
     ) -> None:
+        """Recipe dispatch logs and returns false on enqueue failure."""
         with (
             patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", True),
             patch(

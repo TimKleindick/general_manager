@@ -15,7 +15,16 @@ class UnknownGraphQLWarmUpManagerError(CommandError):
     """Raised when a command manager argument cannot be resolved."""
 
     def __init__(self, manager_name: str) -> None:
+        """Build an error for an unknown GraphQL registry manager name."""
         super().__init__(f"Unknown GraphQL manager: {manager_name}")
+
+
+class InvalidGraphQLWarmUpManagerPathError(CommandError):
+    """Raised when a dotted manager import path cannot be resolved."""
+
+    def __init__(self, manager_path: str) -> None:
+        """Build an error for an invalid dotted manager import path."""
+        super().__init__(f"Invalid GraphQL manager path: {manager_path}")
 
 
 class Command(BaseCommand):
@@ -24,6 +33,7 @@ class Command(BaseCommand):
     help = "Warm opted-in GraphQL property cache entries."
 
     def add_arguments(self, parser: Any) -> None:
+        """Register command-line arguments for selecting managers."""
         parser.add_argument(
             "--manager",
             action="append",
@@ -35,6 +45,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Run warm-up for selected managers and print a summary."""
         del args
         manager_classes = self._manager_classes(options.get("manager"))
         summary = warm_up_graphql_properties(manager_classes)
@@ -48,12 +59,16 @@ class Command(BaseCommand):
         )
 
     def _manager_classes(self, manager_names: list[str] | None) -> list[type] | None:
+        """Resolve manager names or dotted import paths from command options."""
         if not manager_names:
             return None
         manager_classes: list[type] = []
         for manager_name in manager_names:
             if "." in manager_name:
-                manager_classes.append(import_string(manager_name))
+                try:
+                    manager_classes.append(import_string(manager_name))
+                except (AttributeError, ImportError, ModuleNotFoundError) as error:
+                    raise InvalidGraphQLWarmUpManagerPathError(manager_name) from error
                 continue
             manager_class = GraphQL.manager_registry.get(manager_name)
             if manager_class is None:
