@@ -50,6 +50,14 @@ def cheap_label(self) -> str:
     return f"{self.project.name}: {self.date:%Y-%m-%d}"
 ```
 
+Use timeout caching when a value may be reused for a fixed interval:
+
+```python
+@graph_ql_property(cache="timeout", timeout=300)
+def five_minute_summary(self) -> int:
+    return self.project.derivative_list.count()
+```
+
 ## Step 3: Verify invalidation
 
 For dependency-aware properties, update a derivative that contributes to the summary. The dependency tracker captures the relationship and invalidates the cache entry automatically.
@@ -58,7 +66,48 @@ For dependency-aware properties, update a derivative that contributes to the sum
 DerivativeVolume(id=volume_id).update(quantity=42)
 ```
 
-## Step 4: Monitor cache usage
+## Step 4: Warm selected properties proactively
+
+Set `warm_up=True` only on properties that are safe and useful to compute
+outside a user request. Warm-up is valid for dependency and timeout cache scopes:
+
+```python
+@graph_ql_property(cache="dependency", warm_up=True)
+def expensive_summary(self) -> int:
+    return self.project.derivative_list.filter(date=self.date).count()
+
+@graph_ql_property(cache="timeout", timeout=300, warm_up=True)
+def five_minute_summary(self) -> int:
+    return self.project.derivative_list.count()
+```
+
+When enabled in settings, the framework can enumerate `Manager.all()`, execute
+each opted-in property, and record warm-up recipes. Dependency entries can be
+re-warmed after invalidation when a recipe exists. Timeout entries can be
+refreshed before expiry by the built-in Celery Beat task or by a scheduler that
+calls `graphql_warmup_refresh_due`.
+
+Warm-up can be expensive because it starts from `.all()`. Keep automatic startup
+warm-up disabled unless the deployment has a worker or startup budget for it,
+and monitor warning logs for large manager enumerations.
+
+```python
+GENERAL_MANAGER = {
+    "GRAPHQL_WARMUP_ENABLED": True,
+    "GRAPHQL_WARMUP_STARTUP_ENABLED": True,
+    "GRAPHQL_WARMUP_STARTUP_MODE": "enqueue",
+    "GRAPHQL_WARMUP_BEAT_ENABLED": True,
+}
+```
+
+Applications that use another scheduler can keep Beat disabled and run:
+
+```bash
+python manage.py graphql_warmup
+python manage.py graphql_warmup_refresh_due --limit 1000
+```
+
+## Step 5: Monitor cache usage
 
 Enable Django cache logging or use Redis monitoring tools to ensure cache hits increase and invalidations behave as expected.
 
