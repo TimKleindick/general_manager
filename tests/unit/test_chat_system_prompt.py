@@ -139,6 +139,18 @@ class ChatSystemPromptTests(SimpleTestCase):
         assert "Mutation safety" in prompt
         assert "Never call mutate unless the user clearly requests a write." in prompt
 
+    def test_build_system_prompt_includes_no_memory_answer_recovery_rule(self) -> None:
+        prompt = build_system_prompt()
+
+        assert (
+            "If a user asks for application data and no query tool has run in this "
+            "turn, call tools instead of answering from memory."
+        ) in prompt
+        assert (
+            "The tool result JSON is the source of truth even when it conflicts "
+            "with general knowledge or previous assumptions."
+        ) in prompt
+
     def test_build_system_prompt_summarizes_large_manager_registry(self) -> None:
         for index in range(205):
             manager_name = f"BulkManager{index:03d}"

@@ -22,11 +22,25 @@ FIELD_SELECTION_SCHEMA: dict[str, Any] = {
 
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
-    "search_managers": "Search exposed managers by text.",
-    "get_manager_schema": "Inspect one manager's fields, relations, and filters.",
-    "find_path": "Find a relationship traversal path between exposed managers.",
-    "query": "Execute a structured read query via GraphQL.",
-    "mutate": "Execute an allow-listed mutation via GraphQL.",
+    "search_managers": (
+        "Search exposed managers by text. Use when the exact or unknown manager "
+        "must be discovered."
+    ),
+    "get_manager_schema": (
+        "Inspect one manager's fields, relations, and filters before query "
+        "arguments are built."
+    ),
+    "find_path": (
+        "Find a relationship traversal path between exposed managers for "
+        "cross-manager questions."
+    ),
+    "query": (
+        "Execute a structured read query via GraphQL after inspecting schema and "
+        "choosing fields."
+    ),
+    "mutate": (
+        "Execute an allow-listed mutation via GraphQL only after user confirmation."
+    ),
 }
 
 
