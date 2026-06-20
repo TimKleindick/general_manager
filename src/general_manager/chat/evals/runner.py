@@ -323,6 +323,7 @@ def _write_trace(
     case: EvalCase,
     records: list[TurnRecord],
     result: EvalResult,
+    run_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Write a deterministic trace payload when tracing is enabled."""
     if trace_writer is None:
@@ -334,6 +335,7 @@ def _write_trace(
             "description": case.description,
             "conversation": case.conversation,
             "expectations": case.expectations,
+            "run": run_metadata or {},
             "tool_calls": all_tool_calls,
             "tool_results": all_tool_results,
             "answer": full_answer,
@@ -364,6 +366,7 @@ async def run_case(
     tool_defs: list[dict[str, Any]],
     stream: IO[str] | None = None,
     trace_writer: EvalTraceWriter | None = None,
+    run_metadata: dict[str, Any] | None = None,
 ) -> EvalResult:
     """Run a single eval case and return scored results."""
     system_prompt = build_system_prompt()
@@ -390,11 +393,23 @@ async def run_case(
             stream.flush()
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         result = EvalResult(case=case, error=str(exc))
-        _write_trace(trace_writer, case=case, records=records, result=result)
+        _write_trace(
+            trace_writer,
+            case=case,
+            records=records,
+            result=result,
+            run_metadata=run_metadata,
+        )
         return result
 
     result = _score_case(case, records)
-    _write_trace(trace_writer, case=case, records=records, result=result)
+    _write_trace(
+        trace_writer,
+        case=case,
+        records=records,
+        result=result,
+        run_metadata=run_metadata,
+    )
     return result
 
 
@@ -405,6 +420,7 @@ async def run_eval_suite(
     trace_writer: EvalTraceWriter | None = None,
     tier: int | None = None,
     tags: list[str] | None = None,
+    run_metadata: dict[str, Any] | None = None,
 ) -> list[EvalResult]:
     """Run all (or selected) eval datasets and return results."""
     if dataset_names is None:
@@ -422,6 +438,7 @@ async def run_eval_suite(
                 tool_defs,
                 stream=stream,
                 trace_writer=trace_writer,
+                run_metadata=run_metadata,
             )
             results.append(result)
 
@@ -435,6 +452,7 @@ def run_eval_suite_sync(
     trace_writer: EvalTraceWriter | None = None,
     tier: int | None = None,
     tags: list[str] | None = None,
+    run_metadata: dict[str, Any] | None = None,
 ) -> list[EvalResult]:
     """Synchronous wrapper for ``run_eval_suite``."""
     return asyncio.run(
@@ -445,6 +463,7 @@ def run_eval_suite_sync(
             trace_writer=trace_writer,
             tier=tier,
             tags=tags,
+            run_metadata=run_metadata,
         )
     )
 
