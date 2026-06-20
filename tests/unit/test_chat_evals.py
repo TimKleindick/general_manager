@@ -910,6 +910,76 @@ class RunnerIntegrationTests(SimpleTestCase):
 
         assert result.passed is True
 
+    def test_run_case_can_recover_empty_response_after_tool_result(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="find_path",
+                        args={
+                            "from_manager": "ProjectManager",
+                            "to_manager": "PartManager",
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [DoneEvent(usage=TokenUsage())],
+                [
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={"manager": "ProjectManager", "fields": ["name"]},
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo contains cobalt parts."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="recover_empty_after_tool",
+            description="Recover empty response after path lookup",
+            conversation=[{"user": "What projects contain parts with cobalt?"}],
+            expectations={
+                "tool_calls": [{"name": "query"}],
+                "answer_contains": ["Apollo"],
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "find_path":
+                return ["parts"]
+            if name == "query":
+                return {"data": [{"name": "Apollo"}]}
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        recovery_messages = provider.calls[2]["messages"]
+        assert any(
+            message.role == "system"
+            and "previous tool result is not a final answer" in message.content
+            for message in recovery_messages
+        )
+
 
 # ---------------------------------------------------------------------------
 # Reporting tests
