@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from general_manager.chat.evals.baseline import ReadinessSummary
+from general_manager.chat.evals.judges.contract import ProductContractScore
+from general_manager.chat.evals.readiness import (
+    ReadinessConfig,
+    build_summary,
+    write_readiness_artifacts,
+)
+from general_manager.chat.evals.runner import EvalCase, EvalResult
+
+
+def test_build_summary_counts_contract_and_overall_passes() -> None:
+    case = EvalCase(
+        name="demo",
+        description="Demo",
+        conversation=[{"user": "List parts"}],
+        expectations={},
+        tier=1,
+        tags=["demo"],
+    )
+    results = [
+        EvalResult(
+            case=case,
+            contract_score=ProductContractScore(
+                passed=False,
+                category="data_grounding",
+                violations=["Required tool call missing: query"],
+            ),
+        )
+    ]
+
+    summary = build_summary(
+        gate="demo",
+        run_metadata={
+            "run_hash": "hash1",
+            "provider": "OllamaProvider",
+            "model": "glm-4.7-flash:q4_K_M",
+            "fixture": "toy",
+            "datasets": ["demo_readiness"],
+            "tier": 1,
+        },
+        results=results,
+    )
+
+    assert summary == ReadinessSummary(
+        run_hash="hash1",
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        total=1,
+        passed=0,
+        product_contract_total=1,
+        product_contract_passed=0,
+        diagnostics={"prompt": {"missing_required_tool": 1}},
+    )
+
+
+def test_write_readiness_artifacts_writes_summary_and_report(tmp_path: Path) -> None:
+    summary = ReadinessSummary(
+        run_hash="hash1",
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        total=1,
+        passed=1,
+        product_contract_total=1,
+        product_contract_passed=1,
+        diagnostics={},
+    )
+    config = ReadinessConfig(
+        gate="demo",
+        provider="OllamaProvider",
+        model="glm-4.7-flash:q4_K_M",
+        fixture="toy",
+        datasets=["demo_readiness"],
+        tier=1,
+        tags=["demo"],
+        output_dir=tmp_path,
+        baseline_json=None,
+        fail_on_regression=False,
+        live=False,
+    )
+
+    write_readiness_artifacts(
+        config=config,
+        summary=summary,
+        report="Dimension report",
+        comparison=None,
+    )
+
+    assert (tmp_path / "summary.json").exists()
+    assert (tmp_path / "report.md").read_text(encoding="utf-8") == (
+        "Dimension report\n"
+    )
