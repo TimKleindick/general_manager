@@ -11,6 +11,10 @@ from typing import Any
 
 import yaml
 
+from general_manager.chat.evals.diagnostics import (
+    classify_result,
+    summarize_diagnostics,
+)
 from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
@@ -521,6 +525,25 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
                         lines.append(
                             f"    unexpected in answer: {r.answer_score.unexpected}"
                         )
+
+    diagnostics = [diagnostic for r in results if (diagnostic := classify_result(r))]
+    if diagnostics:
+        lines.append("")
+        lines.append("Diagnostics:")
+        for owner, categories in summarize_diagnostics(diagnostics).items():
+            category_text = ", ".join(
+                f"{category}={count}" for category, count in sorted(categories.items())
+            )
+            lines.append(f"  {owner}: {category_text}")
+        if verbose:
+            lines.append("")
+            lines.append("Next actions:")
+            for diagnostic in diagnostics:
+                lines.append(
+                    f"  {diagnostic.case}: "
+                    f"[{diagnostic.owner}/{diagnostic.category}] "
+                    f"{diagnostic.next_action}"
+                )
 
     return "\n".join(lines)
 
