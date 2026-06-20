@@ -101,3 +101,38 @@ Treat failures by category:
 The eval runner should mirror production message shape. In particular, after a
 tool call it resumes with a neutral assistant marker plus the `tool` result, not
 with placeholders such as `[tool:query]`.
+
+## Production-readiness loop
+
+Use the readiness loop when changing the chat system prompt, tool metadata, tool
+schemas, tool-loop harness, or eval contracts.
+
+```bash
+PYTHONPATH=src python scripts/run_chat_readiness_loop.py \
+  --model glm-4.7-flash:q4_K_M \
+  --gate demo \
+  --output-dir /tmp/gm-chat-readiness \
+  --baseline-json .chat-readiness/demo-baseline.json \
+  --fail-on-regression
+```
+
+The loop writes:
+
+- `summary.json`: machine-readable pass rates, selected gate, run hash, and
+  diagnostics.
+- `report.md`: human-readable report with diagnostics and baseline comparison.
+- `trace.jsonl`: per-case conversation, tool calls, tool results, answer text,
+  and run fingerprint.
+
+Treat the loop as an iteration driver:
+
+1. Run the loop.
+2. Fix the largest hard diagnostic class first.
+3. Change one surface per iteration: prompt, tool metadata/schema, harness, or
+   dataset.
+4. Rerun the same gate and compare to the previous accepted baseline.
+5. Commit when deterministic tests pass and the selected gate improves without
+   a new hard diagnostic category.
+
+Do not relax product contracts to make a weaker local model pass. A contract
+change is valid only when the expected behavior was wrong for production.
