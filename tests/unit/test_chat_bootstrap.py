@@ -49,7 +49,12 @@ class ChatBootstrapTests(SimpleTestCase):
             patch(
                 "general_manager.apps.configure_workflow_beat_schedule_from_settings"
             ),
-            patch.object(config, "install_search_auto_reindex"),
+            patch(
+                "general_manager.apps.configure_search_reconcile_beat_schedule_from_settings"
+            ),
+            patch(
+                "general_manager.apps.configure_graphql_warmup_beat_schedule_from_settings"
+            ),
             patch("general_manager.apps.initialize_chat") as initialize_chat,
         ):
             config.ready()

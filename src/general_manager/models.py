@@ -10,12 +10,12 @@ This module defines no public callables, accepts no application inputs, returns
 no application outputs, and wraps no import or Django app-registry errors.
 """
 
-from general_manager.search.models import SearchIndexState
 from general_manager.chat.models import (
     ChatConversation,
     ChatMessage,
     ChatPendingConfirmation,
 )
+from general_manager.search.models import SearchIndexState
 from general_manager.workflow.models import (
     WorkflowDeliveryAttempt,
     WorkflowEventRecord,
@@ -24,10 +24,10 @@ from general_manager.workflow.models import (
 )
 
 __all__: tuple[str, ...] = (
-    "SearchIndexState",
     "ChatConversation",
     "ChatMessage",
     "ChatPendingConfirmation",
+    "SearchIndexState",
     "WorkflowDeliveryAttempt",
     "WorkflowEventRecord",
     "WorkflowExecutionRecord",
