@@ -99,6 +99,27 @@ class _MissingToolRecoveryProvider:
         yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
 
 
+class _EmptyAfterToolRecoveryProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls.append({"messages": messages, "tools": tools})
+        if len(self.calls) == 1:
+            yield ToolCallEvent(
+                id="tool-1",
+                name="find_path",
+                args={"from_manager": "ProjectManager", "to_manager": "PartManager"},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        if len(self.calls) == 2:
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        yield TextChunkEvent(content="Apollo from query results.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+
 def _deny_permission(*_args: object, **_kwargs: object) -> bool:
     return False
 
@@ -410,6 +431,63 @@ class ChatConsumerMessageTests(unittest.TestCase):
             recovery_messages = consumer.provider.calls[1]["messages"]
             assert recovery_messages[-1].role == "system"
             assert "Do not answer from memory" in recovery_messages[-1].content
+
+        asyncio.run(run())
+
+    def test_receive_json_recovers_empty_response_after_tool_result(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _EmptyAfterToolRecoveryProvider()
+        consumer.channel_name = "chat.empty-grounding"
+
+        async def run() -> None:
+            with (
+                override_settings(
+                    GENERAL_MANAGER={
+                        "CHAT": {
+                            "recover_missing_tool_calls": True,
+                        }
+                    }
+                ),
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    return_value=["parts"],
+                ),
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "message",
+                        "text": "What projects contain parts with cobalt?",
+                    }
+                )
+
+            sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
+            assert sent_messages[-2] == {
+                "type": "text_chunk",
+                "content": "Apollo from query results.",
+            }
+            assert sent_messages[-1] == {
+                "type": "done",
+                "usage": {"input_tokens": 2, "output_tokens": 2},
+            }
+            assert len(consumer.provider.calls) == 3
+            recovery_messages = consumer.provider.calls[2]["messages"]
+            assert any(
+                message.role == "system"
+                and "previous tool result is not a final answer" in message.content
+                for message in recovery_messages
+            )
 
         asyncio.run(run())
 

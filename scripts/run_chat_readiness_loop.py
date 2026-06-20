@@ -104,6 +104,7 @@ def main() -> None:
         tier=tier,
         tags=tags,
         run_metadata=run_metadata,
+        recover_missing_tools=True,
     )
     report = print_report(results, verbose=True)
     summary = build_summary(gate=args.gate, run_metadata=run_metadata, results=results)

@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from general_manager.chat.audit import emit_chat_audit_event
 from general_manager.chat.grounding import (
+    build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
     should_recover_missing_tool_call,
 )
@@ -381,6 +382,26 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                                 "session_key": self.session_key,
                             },
                         )
+                    elif (
+                        recover_missing_tools
+                        and not recovered_missing_tools
+                        and _has_tool_after_last_user(messages)
+                    ):
+                        messages.append(
+                            Message(
+                                role="system",
+                                content=build_empty_response_recovery_message(
+                                    _last_user_text(messages)
+                                ),
+                            )
+                        )
+                        await self._stream_provider_turn(
+                            messages,
+                            history,
+                            tool_retries=tool_retries,
+                            recovered_missing_tools=True,
+                        )
+                        return
                     enforce_chat_rate_limit(
                         self.scope,
                         input_tokens=event.usage.input_tokens,

@@ -39,7 +39,10 @@ from general_manager.chat.providers.base import (
     ToolDefinition,
 )
 from general_manager.chat.grounding import (
+    build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
+    build_query_required_recovery_message,
+    should_recover_answer_without_query,
     should_recover_missing_tool_call,
 )
 from general_manager.chat.system_prompt import build_system_prompt
@@ -230,6 +233,23 @@ async def _run_turn(
             if (
                 recover_missing_tools
                 and not recovery_attempted
+                and should_recover_answer_without_query(
+                    user_text=last_user_text,
+                    assistant_text=answer_text,
+                    tool_calls=record.tool_calls,
+                )
+            ):
+                recovery_attempted = True
+                messages.append(
+                    Message(
+                        role="system",
+                        content=build_query_required_recovery_message(last_user_text),
+                    )
+                )
+                continue
+            if (
+                recover_missing_tools
+                and not recovery_attempted
                 and should_recover_missing_tool_call(
                     user_text=last_user_text,
                     assistant_text=answer_text,
@@ -248,6 +268,27 @@ async def _run_turn(
             break
 
         if not tool_calls_this_round:
+            last_user_text = next(
+                (
+                    message.content
+                    for message in reversed(messages)
+                    if message.role == "user"
+                ),
+                "",
+            )
+            if (
+                recover_missing_tools
+                and not recovery_attempted
+                and any(message.role == "tool" for message in messages)
+            ):
+                recovery_attempted = True
+                messages.append(
+                    Message(
+                        role="system",
+                        content=build_empty_response_recovery_message(last_user_text),
+                    )
+                )
+                continue
             break
 
         for tc in tool_calls_this_round:

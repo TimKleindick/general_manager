@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from general_manager.chat.grounding import (
+    build_empty_response_recovery_message,
+    build_query_required_recovery_message,
     build_missing_tool_recovery_message,
+    should_recover_answer_without_query,
     should_recover_missing_tool_call,
 )
 
@@ -39,6 +42,28 @@ def test_existing_tool_call_does_not_trigger_recovery() -> None:
     )
 
 
+def test_schema_only_data_answer_triggers_query_recovery() -> None:
+    assert (
+        should_recover_answer_without_query(
+            user_text="Which projects would be affected if cobalt parts were updated?",
+            assistant_text="Apollo would be affected.",
+            tool_calls=[{"name": "get_manager_schema", "args": {}}],
+        )
+        is True
+    )
+
+
+def test_answer_after_query_does_not_trigger_query_recovery() -> None:
+    assert (
+        should_recover_answer_without_query(
+            user_text="Which projects use cobalt?",
+            assistant_text="Apollo uses cobalt.",
+            tool_calls=[{"name": "query", "args": {"manager": "ProjectManager"}}],
+        )
+        is False
+    )
+
+
 def test_recovery_message_is_short_and_tool_directive() -> None:
     message = build_missing_tool_recovery_message(
         "Which materials have density above 7?"
@@ -47,3 +72,23 @@ def test_recovery_message_is_short_and_tool_directive() -> None:
     assert "Do not answer from memory" in message
     assert "Call the available tools" in message
     assert "Which materials have density above 7?" in message
+
+
+def test_empty_response_recovery_message_continues_after_tool_result() -> None:
+    message = build_empty_response_recovery_message(
+        "What projects contain parts with cobalt?"
+    )
+
+    assert "previous tool result is not a final answer" in message
+    assert "call query" in message
+    assert "What projects contain parts with cobalt?" in message
+
+
+def test_query_required_recovery_message_requires_data_query() -> None:
+    message = build_query_required_recovery_message(
+        "Which projects would be affected if cobalt parts were updated?"
+    )
+
+    assert "Schema and path tools are not data queries" in message
+    assert "Call query" in message
+    assert "Which projects would be affected if cobalt parts were updated?" in message

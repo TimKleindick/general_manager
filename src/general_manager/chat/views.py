@@ -27,6 +27,7 @@ from general_manager.chat.consumer import (
     _last_user_text,
 )
 from general_manager.chat.grounding import (
+    build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
     should_recover_missing_tool_call,
 )
@@ -302,6 +303,28 @@ async def _run_provider_turn(
                     conversation,
                     role="assistant",
                     content=assistant_message,
+                )
+            elif (
+                recover_missing_tools
+                and not recovered_missing_tools
+                and _has_tool_after_last_user(messages)
+            ):
+                messages.append(
+                    Message(
+                        role="system",
+                        content=build_empty_response_recovery_message(
+                            _last_user_text(messages)
+                        ),
+                    )
+                )
+                return await _run_provider_turn(
+                    scope=scope,
+                    conversation=conversation,
+                    provider=provider,
+                    messages=messages,
+                    transport=transport,
+                    tool_retries=tool_retries,
+                    recovered_missing_tools=True,
                 )
             enforce_chat_rate_limit(
                 scope,
