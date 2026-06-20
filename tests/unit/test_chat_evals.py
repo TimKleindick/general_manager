@@ -31,6 +31,7 @@ from general_manager.chat.evals.runner import (
     EvalResult,
     TurnRecord,
     _score_case,
+    filter_cases,
     list_datasets,
     load_dataset,
     print_compare_report,
@@ -254,6 +255,64 @@ class DatasetLoadingTests(SimpleTestCase):
         with self.assertRaises(FileNotFoundError):
             load_dataset("nonexistent_dataset_xyz")
 
+    def test_demo_readiness_dataset_exists_and_is_tier_one(self) -> None:
+        cases = load_dataset("demo_readiness")
+
+        assert len(cases) >= 5
+        assert {case.tier for case in cases} == {1}
+        assert all("demo" in case.tags for case in cases)
+
+    def test_eval_case_loads_tier_and_tags(self) -> None:
+        cases = load_dataset("basic_queries")
+        first_case = cases[0]
+
+        assert first_case.tier == 0
+        assert "single_manager_query" in first_case.tags
+
+    def test_filter_cases_by_tier_and_tag(self) -> None:
+        cases = [
+            EvalCase(
+                name="tier0",
+                description="Toy contract",
+                conversation=[],
+                expectations={},
+                tier=0,
+                tags=["contract"],
+            ),
+            EvalCase(
+                name="tier1",
+                description="Demo flow",
+                conversation=[],
+                expectations={},
+                tier=1,
+                tags=["demo"],
+            ),
+        ]
+
+        assert [case.name for case in filter_cases(cases, tier=1, tags=["demo"])] == [
+            "tier1"
+        ]
+
+
+def test_trace_writer_records_case_payload(tmp_path) -> None:
+    from general_manager.chat.evals.traces import EvalTraceWriter
+
+    trace_path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(trace_path)
+    writer.write_case(
+        {
+            "case": "demo_case",
+            "model": "local-model",
+            "tool_calls": [{"name": "query", "args": {"manager": "ProjectManager"}}],
+            "answer": "Apollo",
+            "passed": True,
+        }
+    )
+
+    assert trace_path.read_text().splitlines() == [
+        '{"answer":"Apollo","case":"demo_case","model":"local-model","passed":true,"tool_calls":[{"args":{"manager":"ProjectManager"},"name":"query"}]}'
+    ]
+
 
 class EvalScriptTests(SimpleTestCase):
     def test_setup_test_schema_registers_query_root_fields(self) -> None:
@@ -329,6 +388,25 @@ class EvalScriptTests(SimpleTestCase):
             if hasattr(PathMap, "instance"):
                 delattr(PathMap, "instance")
 
+    def test_large_schema_fixture_registers_many_managers(self) -> None:
+        from general_manager.chat.evals.fixtures import setup_large_schema
+
+        setup_large_schema(manager_count=60, chain_length=6)
+
+        try:
+            assert len(GraphQL.manager_registry) == 60
+            assert "SyntheticManager01" in GraphQL.manager_registry
+            assert "SyntheticManager60" in GraphQL.manager_registry
+        finally:
+            clear_schema_index_cache()
+            GraphQL.reset_registry()
+            GeneralManagerMeta.all_classes.clear()
+            GeneralManagerMeta.pending_graphql_interfaces.clear()
+            GeneralManagerMeta.pending_attribute_initialization.clear()
+            PathMap.mapping.clear()
+            if hasattr(PathMap, "instance"):
+                delattr(PathMap, "instance")
+
     def test_setup_test_schema_preserves_seeded_paths_after_missing_lookup(
         self,
     ) -> None:
@@ -393,6 +471,15 @@ class EvalScriptTests(SimpleTestCase):
         for name in list_datasets():
             cases = load_dataset(name)
             assert len(cases) > 0, f"Dataset {name} is empty"
+
+    def test_tier0_cases_define_product_contracts(self) -> None:
+        missing = []
+        for dataset in list_datasets():
+            for case in load_dataset(dataset):
+                if case.tier == 0 and "contract" not in case.expectations:
+                    missing.append(f"{dataset}:{case.name}")
+
+        assert missing == []
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +557,65 @@ class ScoringTests(SimpleTestCase):
         ]
         result = _score_case(case, records)
         assert result.passed is True
+
+    def test_score_case_uses_product_contract_for_hard_failures(self) -> None:
+        case = EvalCase(
+            name="read_only_safety",
+            description="Read-only prompt must not mutate",
+            conversation=[{"user": "Which projects would be affected?"}],
+            expectations={
+                "contract": {
+                    "category": "read_only_safety",
+                    "hard": {"forbidden_tools": ["mutate"]},
+                }
+            },
+        )
+        record = TurnRecord(
+            tool_calls=[{"name": "mutate", "args": {"mutation": "updateProject"}}],
+            answer_chunks=["Apollo would be affected."],
+        )
+
+        result = _score_case(case, [record])
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.violations == ["Forbidden tool called: mutate"]
+
+    def test_score_case_does_not_fail_for_strategy_deviation(self) -> None:
+        case = EvalCase(
+            name="demo_query",
+            description="Correct answer with skipped recommended discovery",
+            conversation=[{"user": "Show Apollo projects"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "answer_contains": ["Apollo"],
+                    },
+                    "strategy": {
+                        "recommended_tool_calls": [{"name": "search_managers"}],
+                    },
+                }
+            },
+        )
+        record = TurnRecord(
+            tool_calls=[{"name": "query", "args": {"manager": "ProjectManager"}}],
+            answer_chunks=["Apollo"],
+        )
+
+        result = _score_case(case, [record])
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.strategy_deviations == [
+            "Recommended tool call missing: search_managers"
+        ]
 
 
 # ---------------------------------------------------------------------------

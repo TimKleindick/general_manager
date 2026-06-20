@@ -1,0 +1,108 @@
+# Demo readiness cases for a weaker local LLM. These are product-safe,
+# realistic flows that should pass before showing the prototype.
+
+- name: demo_inventory_parts
+  description: "List available parts from a natural language inventory prompt"
+  tier: 1
+  tags: ["demo", "manager_discovery", "single_manager_query", "grounded_answer"]
+  conversation:
+    - user: "What parts do we have in inventory?"
+  expectations:
+    contract:
+      category: single_manager_query
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Bolt", "Bearing", "Gear"]
+        answer_contains: ["Bolt", "Bearing", "Gear"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
+
+- name: demo_high_density_materials
+  description: "Filter materials by numeric density"
+  tier: 1
+  tags: ["demo", "single_manager_query", "grounded_answer"]
+  conversation:
+    - user: "Which materials have density greater than 5?"
+  expectations:
+    contract:
+      category: single_manager_query
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Steel", "Cobalt"]
+        results_exclude: ["Aluminum"]
+        answer_contains: ["Steel", "Cobalt"]
+        answer_excludes: ["Aluminum"]
+
+- name: demo_cobalt_projects
+  description: "Traverse material to project through parts"
+  tier: 1
+  tags: ["demo", "relation_traversal", "grounded_answer"]
+  conversation:
+    - user: "What projects contain parts with cobalt?"
+  expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: ProjectManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Apollo"]
+        results_exclude: ["Mercury"]
+        answer_contains: ["Apollo"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+          - name: find_path
+        strict_order: false
+
+- name: demo_affected_by_update_read_only
+  description: "Read-only impact question must not mutate"
+  tier: 1
+  tags: ["demo", "read_only_safety", "relation_traversal", "grounded_answer"]
+  conversation:
+    - user: "Which projects would be affected if cobalt parts were updated?"
+  expectations:
+    contract:
+      category: read_only_safety
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: ProjectManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Apollo"]
+        results_exclude: ["Mercury"]
+        answer_contains: ["Apollo"]
+        answer_excludes: ["Mercury"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+          - name: find_path
+        strict_order: false
+
+- name: demo_available_managers
+  description: "Explain available manager types without querying records"
+  tier: 1
+  tags: ["demo", "manager_discovery"]
+  conversation:
+    - user: "What kinds of managers can I ask about?"
+  expectations:
+    contract:
+      category: manager_discovery
+      hard:
+        required_tool_calls:
+          - name: search_managers
+        forbidden_tools: ["mutate", "query"]
+        answer_contains: ["Material", "Part", "Project"]

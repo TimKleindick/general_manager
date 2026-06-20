@@ -2,9 +2,22 @@
 
 - name: parts_with_material
   description: "One hop: Part -> Material via relation"
+  tier: 0
+  tags: ["relation_traversal", "grounded_answer"]
   conversation:
     - user: "What parts use Steel as their material?"
   expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Bolt"]
+        results_exclude: ["Bearing"]
+        answer_contains: ["Bolt"]
     tool_calls:
       - name: query
         args_contain:
@@ -15,18 +28,46 @@
 
 - name: find_path_material_to_project
   description: "Use find_path to discover Material -> Part -> BOM -> Project"
+  tier: 0
+  tags: ["relation_traversal", "manager_discovery", "grounded_answer"]
   conversation:
     - user: "How are materials related to projects?"
   expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: find_path
+        forbidden_tools: ["mutate"]
+        answer_contains: ["material", "part"]
     tool_calls:
       - name: find_path
     answer_contains: ["material", "part"]
 
 - name: cobalt_projects
   description: "Multi-hop: material -> part -> BOM -> project"
+  tier: 0
+  tags: ["manager_discovery", "relation_traversal", "grounded_answer"]
   conversation:
     - user: "What projects contain parts with cobalt?"
   expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: ProjectManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Apollo"]
+        results_exclude: ["Mercury"]
+        answer_contains: ["Apollo"]
+        answer_excludes: ["Mercury"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+          - name: find_path
+        strict_order: false
     tool_calls:
       - name: search_managers
       - name: find_path
@@ -39,9 +80,28 @@
 
 - name: project_parts_list
   description: "Traverse project -> BOM -> parts"
+  tier: 0
+  tags: ["manager_discovery", "schema_inspection", "relation_traversal", "grounded_answer"]
   conversation:
     - user: "What parts are used in the Apollo project?"
   expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: get_manager_schema
+            args_contain:
+              manager: ProjectManager
+          - name: query
+            args_contain:
+              manager: ProjectManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Gear"]
+        answer_contains: ["Gear"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
     tool_calls:
       - name: search_managers
       - name: get_manager_schema
@@ -55,9 +115,19 @@
 
 - name: discover_then_traverse
   description: "Full discovery flow: search, find_path, then query across managers"
+  tier: 0
+  tags: ["manager_discovery", "relation_traversal", "grounded_answer"]
   conversation:
     - user: "I need to find which projects use aluminum parts. Help me explore the data model first."
   expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: search_managers
+          - name: find_path
+        forbidden_tools: ["mutate"]
+        answer_contains: ["Project", "Material"]
     tool_calls:
       - name: search_managers
       - name: find_path

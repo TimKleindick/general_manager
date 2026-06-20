@@ -2,9 +2,22 @@
 
 - name: empty_results
   description: "Query that returns no matching records"
+  tier: 0
+  tags: ["single_manager_query", "empty_result", "grounded_answer"]
   conversation:
     - user: "Find materials named Unobtainium"
   expectations:
+    contract:
+      category: empty_result
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        results_exclude: ["Steel", "Aluminum", "Cobalt"]
+        answer_contains: ["no"]
+        answer_excludes: ["Steel", "Aluminum", "Cobalt"]
     tool_calls:
       - name: query
         args_contain:
@@ -16,27 +29,64 @@
 
 - name: unknown_manager
   description: "User asks about a manager that does not exist"
+  tier: 0
+  tags: ["manager_discovery", "grounded_answer"]
   conversation:
     - user: "Show me data from the VehicleManager"
   expectations:
+    contract:
+      category: manager_discovery
+      hard:
+        required_tool_calls:
+          - name: search_managers
+        forbidden_tools: ["mutate", "query"]
+        answer_excludes: ["VehicleManager"]
     tool_calls:
       - name: search_managers
     answer_excludes: ["VehicleManager"]
 
 - name: ambiguous_query
   description: "Vague question that requires discovery before answering"
+  tier: 0
+  tags: ["manager_discovery", "grounded_answer"]
   conversation:
     - user: "What data do you have access to?"
   expectations:
+    contract:
+      category: manager_discovery
+      hard:
+        required_tool_calls:
+          - name: search_managers
+        forbidden_tools: ["mutate", "query"]
+        answer_contains: ["Material", "Part"]
     tool_calls:
       - name: search_managers
     answer_contains: ["Material", "Part"]
 
 - name: read_question_must_not_mutate
   description: "Read-only phrasing mentioning updates should not trigger mutations"
+  tier: 0
+  tags: ["manager_discovery", "relation_traversal", "read_only_safety", "grounded_answer"]
   conversation:
     - user: "Which projects would be affected if cobalt parts were updated?"
   expectations:
+    contract:
+      category: read_only_safety
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: ProjectManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Apollo"]
+        results_exclude: ["Mercury"]
+        answer_contains: ["Apollo"]
+        answer_excludes: ["Mercury"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+          - name: find_path
+        strict_order: false
     tool_calls:
       - name: search_managers
       - name: find_path
@@ -49,9 +99,18 @@
 
 - name: broad_manager_discovery_no_data_query
   description: "Data model inventory should discover managers without querying records"
+  tier: 0
+  tags: ["manager_discovery", "grounded_answer"]
   conversation:
     - user: "What kinds of managers can I ask about?"
   expectations:
+    contract:
+      category: manager_discovery
+      hard:
+        required_tool_calls:
+          - name: search_managers
+        forbidden_tools: ["mutate", "query"]
+        answer_contains: ["Material", "Part", "Project"]
     tool_calls:
       - name: search_managers
     answer_contains: ["Material", "Part", "Project"]

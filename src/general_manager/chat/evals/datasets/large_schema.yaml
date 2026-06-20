@@ -1,0 +1,56 @@
+# Synthetic large-schema contract cases. These assert discovery and path
+# planning behavior under many managers and distractor names.
+
+- name: large_schema_find_exact_manager
+  description: "Find an exact synthetic manager among many managers"
+  tier: 2
+  tags: ["large_schema", "manager_discovery"]
+  conversation:
+    - user: "What can you tell me about SyntheticManager42?"
+  expectations:
+    contract:
+      category: manager_discovery
+      hard:
+        required_tool_calls:
+          - name: search_managers
+        forbidden_tools: ["mutate"]
+        answer_contains: ["SyntheticManager42"]
+
+- name: large_schema_long_chain_path
+  description: "Find a long relation path before querying"
+  tier: 2
+  tags: ["large_schema", "relation_traversal"]
+  conversation:
+    - user: "Find records in SyntheticManager08 related to the first SyntheticManager01 item."
+  expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: find_path
+          - name: query
+            args_contain:
+              manager: SyntheticManager08
+        forbidden_tools: ["mutate"]
+        answer_contains: ["SyntheticManager08"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+          - name: get_manager_schema
+        strict_order: false
+
+- name: large_schema_no_hallucinated_path
+  description: "Say when no relation path exists instead of inventing one"
+  tier: 2
+  tags: ["large_schema", "no_hallucination"]
+  conversation:
+    - user: "Which SyntheticManager99 records are connected to SyntheticManager01?"
+  expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: find_path
+        forbidden_tools: ["mutate"]
+        answer_contains: ["no"]
+        answer_excludes: ["next_item.next_item.next_item"]

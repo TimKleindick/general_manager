@@ -15,6 +15,10 @@ from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
 )
+from general_manager.chat.evals.judges.contract import (
+    ProductContractScore,
+    judge_product_contract,
+)
 from general_manager.chat.evals.judges.result_accuracy import (
     ResultAccuracyScore,
     judge_result_accuracy,
@@ -32,6 +36,7 @@ from general_manager.chat.providers.base import (
 )
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import execute_chat_tool, get_tool_definitions
+from general_manager.chat.evals.traces import EvalTraceWriter
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
@@ -49,11 +54,14 @@ class EvalCase:
     description: str
     conversation: list[dict[str, str]]
     expectations: dict[str, Any]
+    tier: int = 0
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
 class EvalResult:
     case: EvalCase
+    contract_score: ProductContractScore | None = None
     tool_score: ToolSequenceScore | None = None
     result_score: ResultAccuracyScore | None = None
     answer_score: AnswerQualityScore | None = None
@@ -62,6 +70,8 @@ class EvalResult:
     @property
     def passed(self) -> bool:
         if self.error:
+            return False
+        if self.contract_score is not None and not self.contract_score.passed:
             return False
         for score in (self.tool_score, self.result_score, self.answer_score):
             if score is not None and not score.passed:
@@ -109,9 +119,29 @@ def load_dataset(name: str) -> list[EvalCase]:
             description=item.get("description", ""),
             conversation=item["conversation"],
             expectations=item.get("expectations", {}),
+            tier=int(item.get("tier", 0)),
+            tags=[str(tag) for tag in item.get("tags", [])],
         )
         for item in raw
     ]
+
+
+def filter_cases(
+    cases: list[EvalCase],
+    *,
+    tier: int | None = None,
+    tags: list[str] | None = None,
+) -> list[EvalCase]:
+    """Return cases matching optional tier and tag filters."""
+    required_tags = set(tags or [])
+    output: list[EvalCase] = []
+    for case in cases:
+        if tier is not None and case.tier != tier:
+            continue
+        if required_tags and not required_tags.issubset(set(case.tags)):
+            continue
+        output.append(case)
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -220,16 +250,17 @@ def _score_case(case: EvalCase, records: list[TurnRecord]) -> EvalResult:
     expectations = case.expectations
     result = EvalResult(case=case)
 
-    # Aggregate across all turns
-    all_tool_calls = []
-    all_tool_results = []
-    all_answer_parts = []
-    for rec in records:
-        all_tool_calls.extend(rec.tool_calls)
-        all_tool_results.extend(rec.tool_results)
-        all_answer_parts.append(rec.answer)
+    all_tool_calls, all_tool_results, full_answer = _aggregate_records(records)
 
-    full_answer = "\n".join(all_answer_parts)
+    # Product contract judge
+    contract = expectations.get("contract")
+    if isinstance(contract, dict):
+        result.contract_score = judge_product_contract(
+            contract,
+            tool_calls=all_tool_calls,
+            tool_results=all_tool_results,
+            answer_text=full_answer,
+        )
 
     # Tool sequence judge
     expected_tools = expectations.get("tool_calls")
@@ -240,15 +271,10 @@ def _score_case(case: EvalCase, records: list[TurnRecord]) -> EvalResult:
     results_contain = expectations.get("results_contain")
     results_exclude = expectations.get("results_exclude", [])
     if results_contain is not None:
-        # Flatten tool results that have a "data" key (query results)
-        flat_results = []
-        for tr in all_tool_results:
-            if isinstance(tr, dict) and "data" in tr:
-                flat_results.extend(tr["data"])
-            elif isinstance(tr, dict):
-                flat_results.append(tr)
         result.result_score = judge_result_accuracy(
-            results_contain, results_exclude, flat_results
+            results_contain,
+            results_exclude,
+            _query_result_rows(all_tool_results),
         )
 
     # Answer quality judge
@@ -262,6 +288,67 @@ def _score_case(case: EvalCase, records: list[TurnRecord]) -> EvalResult:
     return result
 
 
+def _aggregate_records(
+    records: list[TurnRecord],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Aggregate tool calls, tool results, and answer text across turns."""
+    all_tool_calls = []
+    all_tool_results = []
+    all_answer_parts = []
+    for rec in records:
+        all_tool_calls.extend(rec.tool_calls)
+        all_tool_results.extend(rec.tool_results)
+        all_answer_parts.append(rec.answer)
+    return all_tool_calls, all_tool_results, "\n".join(all_answer_parts)
+
+
+def _query_result_rows(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten query-style tool results for result-set accuracy checks."""
+    flat_results = []
+    for tr in tool_results:
+        if isinstance(tr, dict) and "data" in tr:
+            flat_results.extend(tr["data"])
+        elif isinstance(tr, dict):
+            flat_results.append(tr)
+    return flat_results
+
+
+def _write_trace(
+    trace_writer: EvalTraceWriter | None,
+    *,
+    case: EvalCase,
+    records: list[TurnRecord],
+    result: EvalResult,
+) -> None:
+    """Write a deterministic trace payload when tracing is enabled."""
+    if trace_writer is None:
+        return
+    all_tool_calls, all_tool_results, full_answer = _aggregate_records(records)
+    trace_writer.write_case(
+        {
+            "case": case.name,
+            "description": case.description,
+            "conversation": case.conversation,
+            "expectations": case.expectations,
+            "tool_calls": all_tool_calls,
+            "tool_results": all_tool_results,
+            "answer": full_answer,
+            "passed": result.passed,
+            "contract": (
+                None
+                if result.contract_score is None
+                else {
+                    "category": result.contract_score.category,
+                    "passed": result.contract_score.passed,
+                    "violations": result.contract_score.violations,
+                    "strategy_deviations": result.contract_score.strategy_deviations,
+                }
+            ),
+            "error": result.error,
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Suite execution
 # ---------------------------------------------------------------------------
@@ -272,6 +359,7 @@ async def run_case(
     case: EvalCase,
     tool_defs: list[dict[str, Any]],
     stream: IO[str] | None = None,
+    trace_writer: EvalTraceWriter | None = None,
 ) -> EvalResult:
     """Run a single eval case and return scored results."""
     system_prompt = build_system_prompt()
@@ -297,15 +385,22 @@ async def run_case(
             stream.write("\n")
             stream.flush()
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
-        return EvalResult(case=case, error=str(exc))
+        result = EvalResult(case=case, error=str(exc))
+        _write_trace(trace_writer, case=case, records=records, result=result)
+        return result
 
-    return _score_case(case, records)
+    result = _score_case(case, records)
+    _write_trace(trace_writer, case=case, records=records, result=result)
+    return result
 
 
 async def run_eval_suite(
     provider: Any,
     dataset_names: list[str] | None = None,
     stream: IO[str] | None = None,
+    trace_writer: EvalTraceWriter | None = None,
+    tier: int | None = None,
+    tags: list[str] | None = None,
 ) -> list[EvalResult]:
     """Run all (or selected) eval datasets and return results."""
     if dataset_names is None:
@@ -315,9 +410,15 @@ async def run_eval_suite(
     results: list[EvalResult] = []
 
     for ds_name in dataset_names:
-        cases = load_dataset(ds_name)
+        cases = filter_cases(load_dataset(ds_name), tier=tier, tags=tags)
         for case in cases:
-            result = await run_case(provider, case, tool_defs, stream=stream)
+            result = await run_case(
+                provider,
+                case,
+                tool_defs,
+                stream=stream,
+                trace_writer=trace_writer,
+            )
             results.append(result)
 
     return results
@@ -327,9 +428,21 @@ def run_eval_suite_sync(
     provider: Any,
     dataset_names: list[str] | None = None,
     stream: IO[str] | None = None,
+    trace_writer: EvalTraceWriter | None = None,
+    tier: int | None = None,
+    tags: list[str] | None = None,
 ) -> list[EvalResult]:
     """Synchronous wrapper for ``run_eval_suite``."""
-    return asyncio.run(run_eval_suite(provider, dataset_names, stream=stream))
+    return asyncio.run(
+        run_eval_suite(
+            provider,
+            dataset_names,
+            stream=stream,
+            trace_writer=trace_writer,
+            tier=tier,
+            tags=tags,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +455,10 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     lines: list[str] = []
     total = len(results)
     passed = sum(1 for r in results if r.passed)
+    contract_pass = sum(
+        1 for r in results if r.contract_score is not None and r.contract_score.passed
+    )
+    contract_total = sum(1 for r in results if r.contract_score is not None)
     tool_pass = sum(
         1 for r in results if r.tool_score is not None and r.tool_score.passed
     )
@@ -357,6 +474,9 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
 
     lines.append(f"{'Dimension':<20} {'Pass':>6} {'Total':>6} {'Rate':>8}")
     lines.append("-" * 42)
+    lines.append(
+        f"{'Product contract':<20} {contract_pass:>6} {contract_total:>6} {_pct(contract_pass, contract_total):>8}"
+    )
     lines.append(
         f"{'Tool selection':<20} {tool_pass:>6} {tool_total:>6} {_pct(tool_pass, tool_total):>8}"
     )
@@ -378,6 +498,11 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
                 lines.append(f"  {r.case.name}: {r.case.description}")
                 if r.error:
                     lines.append(f"    error: {r.error}")
+                if r.contract_score:
+                    for violation in r.contract_score.violations:
+                        lines.append(f"    contract: {violation}")
+                    for deviation in r.contract_score.strategy_deviations:
+                        lines.append(f"    strategy: {deviation}")
                 if r.tool_score and not r.tool_score.passed:
                     for m in r.tool_score.mismatches:
                         lines.append(f"    tool: {m}")

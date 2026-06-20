@@ -2,9 +2,24 @@
 
 - name: list_all_materials
   description: "List all materials without filters"
+  tier: 0
+  tags: ["single_manager_query", "grounded_answer"]
   conversation:
     - user: "Show me all materials"
   expectations:
+    contract:
+      category: single_manager_query
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        answer_contains: ["Steel", "Aluminum", "Cobalt"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
     tool_calls:
       - name: query
         args_contain:
@@ -13,9 +28,26 @@
 
 - name: filter_material_by_name
   description: "Filter materials by exact name"
+  tier: 0
+  tags: ["single_manager_query", "grounded_answer"]
   conversation:
     - user: "Find the material named Steel"
   expectations:
+    contract:
+      category: single_manager_query
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Steel"]
+        results_exclude: ["Aluminum", "Cobalt"]
+        answer_contains: ["Steel"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
     tool_calls:
       - name: query
         args_contain:
@@ -26,9 +58,25 @@
 
 - name: search_then_query_parts
   description: "Discovery flow: search managers then query parts"
+  tier: 0
+  tags: ["manager_discovery", "single_manager_query", "grounded_answer"]
   conversation:
     - user: "What parts do we have in inventory?"
   expectations:
+    contract:
+      category: single_manager_query
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Bolt", "Gear", "Bearing"]
+        answer_contains: ["Bolt", "Gear", "Bearing"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
     tool_calls:
       - name: search_managers
       - name: query
@@ -39,9 +87,23 @@
 
 - name: get_schema_before_query
   description: "Inspect manager schema before querying"
+  tier: 0
+  tags: ["schema_inspection", "single_manager_query", "grounded_answer"]
   conversation:
     - user: "What fields does the MaterialManager have? Then list materials."
   expectations:
+    contract:
+      category: schema_inspection
+      hard:
+        required_tool_calls:
+          - name: get_manager_schema
+            args_contain:
+              manager: MaterialManager
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        answer_contains: ["name", "density"]
     tool_calls:
       - name: get_manager_schema
         args_contain:
@@ -53,9 +115,27 @@
 
 - name: filter_high_density
   description: "Query with numeric filter"
+  tier: 0
+  tags: ["single_manager_query", "grounded_answer"]
   conversation:
     - user: "Which materials have density greater than 5?"
   expectations:
+    contract:
+      category: single_manager_query
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Steel", "Cobalt"]
+        results_exclude: ["Aluminum"]
+        answer_contains: ["Steel", "Cobalt"]
+        answer_excludes: ["Aluminum"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
     tool_calls:
       - name: query
         args_contain:
@@ -66,9 +146,29 @@
 
 - name: schema_before_relation_filter
   description: "Inspect schema before using relation filters from a domain query"
+  tier: 0
+  tags: ["manager_discovery", "schema_inspection", "relation_traversal", "grounded_answer"]
   conversation:
     - user: "Which parts use a material named Steel?"
   expectations:
+    contract:
+      category: relation_traversal
+      hard:
+        required_tool_calls:
+          - name: get_manager_schema
+            args_contain:
+              manager: PartManager
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Bolt"]
+        results_exclude: ["Bearing", "Gear"]
+        answer_contains: ["Bolt", "Steel"]
+      strategy:
+        recommended_tool_calls:
+          - name: search_managers
+        strict_order: false
     tool_calls:
       - name: search_managers
       - name: get_manager_schema
@@ -83,9 +183,24 @@
 
 - name: exact_manager_needs_schema_for_fields
   description: "Exact manager names can skip search but should inspect schema before field-specific query"
+  tier: 0
+  tags: ["schema_inspection", "single_manager_query", "grounded_answer"]
   conversation:
     - user: "In PartManager, show each part with its material name."
   expectations:
+    contract:
+      category: schema_inspection
+      hard:
+        required_tool_calls:
+          - name: get_manager_schema
+            args_contain:
+              manager: PartManager
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Bolt", "Steel", "Bearing", "Aluminum", "Gear", "Cobalt"]
+        answer_contains: ["Bolt", "Steel"]
     tool_calls:
       - name: get_manager_schema
         args_contain:
