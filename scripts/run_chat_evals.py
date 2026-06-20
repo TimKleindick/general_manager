@@ -41,10 +41,13 @@ from general_manager.chat.evals.runner import (
     print_report,
     run_eval_suite_sync,
 )
+from general_manager.chat.evals.fingerprints import build_run_fingerprint
 from general_manager.chat.evals.fixtures import setup_large_schema
 from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.providers.ollama import OllamaProvider
 from general_manager.chat.schema_index import clear_schema_index_cache
+from general_manager.chat.system_prompt import build_system_prompt
+from general_manager.chat.tools import get_tool_definitions
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.path_mapping import PathMap
@@ -381,12 +384,23 @@ def main() -> None:
         OllamaProvider._provider_config = _patched_config  # type: ignore[assignment]
         config = OllamaProvider._provider_config()
     dataset_names = [args.dataset] if args.dataset else None
+    selected_datasets = dataset_names or list_datasets()
+    run_metadata = build_run_fingerprint(
+        provider="OllamaProvider",
+        model=str(config["model"]),
+        fixture=str(args.fixture),
+        datasets=selected_datasets,
+        tier=args.tier,
+        tags=args.tag,
+        prompt=build_system_prompt(),
+        tool_definitions=get_tool_definitions(),
+    )
 
     print(f"Provider: OllamaProvider ({config['model']})")
     print(f"Base URL: {config['base_url']}")
     if remapped:
         print("Note: remapped localhost Ollama URL for container access")
-    print(f"Datasets: {dataset_names or list_datasets()}")
+    print(f"Datasets: {selected_datasets}")
     print()
 
     provider = OllamaProvider()
@@ -398,6 +412,7 @@ def main() -> None:
         trace_writer=trace_writer,
         tier=args.tier,
         tags=args.tag,
+        run_metadata=run_metadata,
     )
     report = print_report(results, verbose=args.verbose)
     print(report)

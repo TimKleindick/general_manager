@@ -10,9 +10,11 @@ from typing import Any
 class EvalTraceWriter:
     """Append deterministic JSONL records for eval case inspection."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, append: bool = False) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not append:
+            self.path.write_text("", encoding="utf-8")
 
     def write_case(self, payload: dict[str, Any]) -> None:
         encoded = json.dumps(
