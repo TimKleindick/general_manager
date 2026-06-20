@@ -371,6 +371,11 @@ Output: summary table with pass rates per dimension per provider, plus detailed
 failure logs for debugging. Trace JSONL output records per-case prompts, tool
 calls, tool results, answers, contract violations, and strategy deviations.
 
+- [ ] Add the chat production-readiness loop:
+  `scripts/run_chat_readiness_loop.py` with diagnostics, prompt/tool
+  fingerprints, baseline comparison, and artifacts for demo and large-schema
+  gates.
+
 #### Eval datasets to ship with Phase 1
 
 | Dataset | Cases | Tests |
