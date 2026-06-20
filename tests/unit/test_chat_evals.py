@@ -864,6 +864,52 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.error is not None
         assert "provider exploded" in result.error
 
+    def test_run_case_can_recover_missing_tool_call_before_answer(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    TextChunkEvent(content="Steel and Cobalt."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={"manager": "MaterialManager", "fields": ["name"]},
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Steel and Cobalt are the dense materials."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="recover",
+            description="Recover missing tool",
+            conversation=[{"user": "Which materials have density above 7?"}],
+            expectations={
+                "tool_calls": [{"name": "query"}],
+                "answer_contains": ["Steel"],
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"data": [{"name": "Steel"}, {"name": "Cobalt"}]},
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+
 
 # ---------------------------------------------------------------------------
 # Reporting tests

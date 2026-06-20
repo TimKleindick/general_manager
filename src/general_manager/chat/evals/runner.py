@@ -38,6 +38,10 @@ from general_manager.chat.providers.base import (
     ToolCallEvent,
     ToolDefinition,
 )
+from general_manager.chat.grounding import (
+    build_missing_tool_recovery_message,
+    should_recover_missing_tool_call,
+)
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import execute_chat_tool, get_tool_definitions
 from general_manager.chat.evals.traces import EvalTraceWriter
@@ -175,11 +179,13 @@ async def _run_turn(
     history: list[dict[str, str]],
     tool_defs: list[dict[str, Any]],
     stream: IO[str] | None = None,
+    recover_missing_tools: bool = False,
 ) -> TurnRecord:
     """Execute one conversation turn through the provider + tool loop."""
     record = TurnRecord()
     messages = _messages_to_provider(history)
     tools = _tool_defs_to_provider(tool_defs)
+    recovery_attempted = False
 
     for _ in range(MAX_TOOL_ITERATIONS):
         tool_calls_this_round: list[ToolCallEvent] = []
@@ -212,6 +218,32 @@ async def _run_turn(
             stream.flush()
 
         if text_chunks and not tool_calls_this_round:
+            answer_text = "".join(text_chunks)
+            last_user_text = next(
+                (
+                    message.content
+                    for message in reversed(messages)
+                    if message.role == "user"
+                ),
+                "",
+            )
+            if (
+                recover_missing_tools
+                and not recovery_attempted
+                and should_recover_missing_tool_call(
+                    user_text=last_user_text,
+                    assistant_text=answer_text,
+                    tool_calls=record.tool_calls,
+                )
+            ):
+                recovery_attempted = True
+                messages.append(
+                    Message(
+                        role="system",
+                        content=build_missing_tool_recovery_message(last_user_text),
+                    )
+                )
+                continue
             record.answer_chunks.extend(text_chunks)
             break
 
@@ -367,6 +399,7 @@ async def run_case(
     stream: IO[str] | None = None,
     trace_writer: EvalTraceWriter | None = None,
     run_metadata: dict[str, Any] | None = None,
+    recover_missing_tools: bool = False,
 ) -> EvalResult:
     """Run a single eval case and return scored results."""
     system_prompt = build_system_prompt()
@@ -383,7 +416,11 @@ async def run_case(
                 _stream_line(stream, f"user: {user_text}")
                 history.append({"role": "user", "content": user_text})
                 record = await _run_turn(
-                    provider, list(history), tool_defs, stream=stream
+                    provider,
+                    list(history),
+                    tool_defs,
+                    stream=stream,
+                    recover_missing_tools=recover_missing_tools,
                 )
                 records.append(record)
                 if record.answer:
@@ -421,6 +458,7 @@ async def run_eval_suite(
     tier: int | None = None,
     tags: list[str] | None = None,
     run_metadata: dict[str, Any] | None = None,
+    recover_missing_tools: bool = False,
 ) -> list[EvalResult]:
     """Run all (or selected) eval datasets and return results."""
     if dataset_names is None:
@@ -439,6 +477,7 @@ async def run_eval_suite(
                 stream=stream,
                 trace_writer=trace_writer,
                 run_metadata=run_metadata,
+                recover_missing_tools=recover_missing_tools,
             )
             results.append(result)
 
@@ -453,6 +492,7 @@ def run_eval_suite_sync(
     tier: int | None = None,
     tags: list[str] | None = None,
     run_metadata: dict[str, Any] | None = None,
+    recover_missing_tools: bool = False,
 ) -> list[EvalResult]:
     """Synchronous wrapper for ``run_eval_suite``."""
     return asyncio.run(
@@ -464,6 +504,7 @@ def run_eval_suite_sync(
             tier=tier,
             tags=tags,
             run_metadata=run_metadata,
+            recover_missing_tools=recover_missing_tools,
         )
     )
 
