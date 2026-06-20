@@ -41,6 +41,7 @@ DEFAULT_CHAT_SETTINGS: dict[str, Any] = {
     "ttl_hours": 24,
     "confirm_timeout_seconds": 30,
     "tool_strategy": "discovery",
+    "recover_missing_tool_calls": False,
     "max_recent_messages": 20,
     "summarize_after": 10,
 }
