@@ -335,18 +335,30 @@ chat/
 
 | Dimension | Scoring | Pass threshold |
 |-----------|---------|---------------|
+| Product contract | Hard invariants for safety, grounding, result correctness, and required product behavior | 100% |
 | Tool selection | Binary: correct sequence and arguments | 100% |
 | Query correctness | Set comparison: precision + recall on result set | 100% |
 | Answer quality | Fraction of expected facts present in response | >= 80% |
 
-Tool selection and query correctness must be 100% — failures are bugs. Answer
-quality has tolerance because phrasing varies across providers and runs.
+Product contract and query correctness must be 100% — failures are bugs. Tool
+selection can also be used as a legacy strict judge, but contract cases should
+separate hard failures from strategy deviations. Answer quality has tolerance
+because phrasing varies across providers and runs.
 
 #### Runner CLI
 
 ```bash
 # Run full eval suite against a provider
 python -m general_manager.chat.evals --provider ollama --model llama3
+
+# Run only toy contract cases
+python -m general_manager.chat.evals --fixture toy --tier 0
+
+# Run local demo readiness cases with traces
+python scripts/run_chat_evals.py --model glm-4.7-flash:q4_K_M --dataset demo_readiness --tier 1 --trace-jsonl /tmp/chat-demo-eval.jsonl
+
+# Run synthetic large-schema cases
+python scripts/run_chat_evals.py --fixture large --dataset large_schema --tier 2
 
 # Run specific dataset
 python -m general_manager.chat.evals --dataset multi_hop
@@ -356,7 +368,8 @@ python -m general_manager.chat.evals --compare ollama,anthropic,openai,google
 ```
 
 Output: summary table with pass rates per dimension per provider, plus detailed
-failure logs for debugging.
+failure logs for debugging. Trace JSONL output records per-case prompts, tool
+calls, tool results, answers, contract violations, and strategy deviations.
 
 #### Eval datasets to ship with Phase 1
 
@@ -366,6 +379,8 @@ failure logs for debugging.
 | `multi_hop` | 5-10 | Cross-manager joins via `find_path`, 2-4 hops |
 | `follow_ups` | 3-5 | Multi-turn conversations with context references |
 | `edge_cases` | 3-5 | Empty results, permission denied, ambiguous queries |
+| `demo_readiness` | 5+ | Curated local-model demo flows |
+| `large_schema` | 3+ | Synthetic 50-200 manager discovery and long-chain traversal |
 
 Additional datasets (`mutations`, provider-specific edge cases) added in later
 phases.
@@ -698,14 +713,24 @@ conversations work without any check failure.
 
 Evals complement deterministic tests by validating the non-deterministic LLM
 behaviour end-to-end. They run against a real (or local) LLM provider with
-seeded test data and assert on tool selection, query correctness, and answer
-quality. See Phase 1.8 for the full eval framework specification.
+seeded test data and assert on product contracts, tool selection, query
+correctness, and answer quality. See Phase 1.8 for the full eval framework
+specification.
+
+Eval datasets are tiered by purpose:
+
+| Tier | Purpose |
+|------|---------|
+| 0 | Toy contract cases for the harness, prompt basics, and safety invariants |
+| 1 | Local demo readiness cases for weaker Ollama models |
+| 2 | Synthetic large-schema cases for manager discovery and long-chain traversal |
+| 3 | Production-like cases copied or adapted from real project workflows |
 
 Eval datasets grow with each phase:
 
 | Phase | Datasets added |
 |-------|---------------|
-| 1     | `basic_queries`, `multi_hop`, `follow_ups`, `edge_cases` |
+| 1     | `basic_queries`, `multi_hop`, `follow_ups`, `edge_cases`, `demo_readiness`, `large_schema` |
 | 2     | `mutations`, `rate_limiting`, `guardrails` |
 | 3     | `long_conversations` (context window management after summarisation) |
 | 4     | Provider-specific datasets (verify all providers pass the same cases) |

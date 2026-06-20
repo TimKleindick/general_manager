@@ -41,6 +41,8 @@ from general_manager.chat.evals.runner import (
     print_report,
     run_eval_suite_sync,
 )
+from general_manager.chat.evals.fixtures import setup_large_schema
+from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.providers.ollama import OllamaProvider
 from general_manager.chat.schema_index import clear_schema_index_cache
 from general_manager.manager.general_manager import GeneralManager
@@ -291,9 +293,27 @@ def main() -> None:
         help=f"Run a single dataset ({', '.join(list_datasets())})",
     )
     parser.add_argument(
+        "--fixture",
+        choices=["toy", "large"],
+        default="toy",
+        help="Eval schema fixture to register before running cases.",
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="Ollama model name (default: from settings, typically gemma4:e4b)",
+    )
+    parser.add_argument(
+        "--tier",
+        type=int,
+        default=None,
+        help="Run only cases in this tier.",
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="Run only cases containing this tag. May be passed multiple times.",
     )
     parser.add_argument(
         "--base-url",
@@ -316,9 +336,17 @@ def main() -> None:
         dest="show_chat",
         help="Stream each eval conversation to stdout while it runs",
     )
+    parser.add_argument(
+        "--trace-jsonl",
+        default=None,
+        help="Write per-case eval traces to the given JSONL file.",
+    )
     args = parser.parse_args()
 
-    setup_test_schema()
+    if args.fixture == "large":
+        setup_large_schema()
+    else:
+        setup_test_schema()
 
     overrides: dict[str, str] = {}
     if args.model:
@@ -362,10 +390,14 @@ def main() -> None:
     print()
 
     provider = OllamaProvider()
+    trace_writer = EvalTraceWriter(args.trace_jsonl) if args.trace_jsonl else None
     results = run_eval_suite_sync(
         provider,
         dataset_names,
         stream=sys.stdout if args.show_chat else None,
+        trace_writer=trace_writer,
+        tier=args.tier,
+        tags=args.tag,
     )
     report = print_report(results, verbose=args.verbose)
     print(report)

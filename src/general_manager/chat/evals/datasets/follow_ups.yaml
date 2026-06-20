@@ -2,10 +2,22 @@
 
 - name: refine_query
   description: "Initial broad query followed by a narrowing follow-up"
+  tier: 0
+  tags: ["follow_up", "single_manager_query", "grounded_answer"]
   conversation:
     - user: "Show me all parts"
     - user: "Now just show me the ones that use Steel"
   expectations:
+    contract:
+      category: follow_up
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Bolt"]
+        answer_contains: ["Bolt"]
     tool_calls:
       - name: query
         args_contain:
@@ -18,10 +30,25 @@
 
 - name: explore_then_query
   description: "Schema exploration turn followed by a data query turn"
+  tier: 0
+  tags: ["follow_up", "schema_inspection", "single_manager_query", "grounded_answer"]
   conversation:
     - user: "Tell me about the MaterialManager schema"
     - user: "Great, now list all materials with density above 7"
   expectations:
+    contract:
+      category: follow_up
+      hard:
+        required_tool_calls:
+          - name: get_manager_schema
+            args_contain:
+              manager: MaterialManager
+          - name: query
+            args_contain:
+              manager: MaterialManager
+        forbidden_tools: ["mutate"]
+        results_contain: ["Steel"]
+        answer_contains: ["Steel"]
     tool_calls:
       - name: get_manager_schema
         args_contain:
@@ -34,10 +61,28 @@
 
 - name: pronoun_reference
   description: "Follow-up uses a pronoun referring to a previous result"
+  tier: 0
+  tags: ["follow_up", "relation_traversal", "grounded_answer"]
   conversation:
     - user: "Find the Cobalt material"
     - user: "What parts use it?"
   expectations:
+    contract:
+      category: follow_up
+      hard:
+        required_tool_calls:
+          - name: query
+            args_contain:
+              manager: MaterialManager
+          - name: query
+            args_contain:
+              manager: PartManager
+        forbidden_tools: ["mutate"]
+        answer_contains: ["Gear"]
+      strategy:
+        recommended_tool_calls:
+          - name: find_path
+        strict_order: false
     tool_calls:
       - name: query
         args_contain:

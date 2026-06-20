@@ -27,6 +27,24 @@ def main(argv: list[str] | None = None) -> None:
         help="Run only the named dataset (e.g. basic_queries).",
     )
     parser.add_argument(
+        "--fixture",
+        choices=["toy", "large"],
+        default=None,
+        help="Register a built-in eval schema fixture before running cases.",
+    )
+    parser.add_argument(
+        "--tier",
+        type=int,
+        default=None,
+        help="Run only cases in this tier.",
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="Run only cases containing this tag. May be passed multiple times.",
+    )
+    parser.add_argument(
         "--compare",
         default=None,
         help="Comma-separated provider paths for side-by-side comparison.",
@@ -41,6 +59,11 @@ def main(argv: list[str] | None = None) -> None:
         "--settings",
         default=None,
         help="Django settings module.",
+    )
+    parser.add_argument(
+        "--trace-jsonl",
+        default=None,
+        help="Write per-case eval traces to the given JSONL file.",
     )
     args = parser.parse_args(argv)
 
@@ -57,9 +80,17 @@ def main(argv: list[str] | None = None) -> None:
         print_report,
         run_eval_suite_sync,
     )
+    from general_manager.chat.evals.fixtures import setup_large_schema, setup_toy_schema
+    from general_manager.chat.evals.traces import EvalTraceWriter
     from general_manager.chat.settings import import_provider
 
+    if args.fixture == "large":
+        setup_large_schema()
+    elif args.fixture == "toy":
+        setup_toy_schema()
+
     dataset_names = [args.dataset] if args.dataset else None
+    trace_writer = EvalTraceWriter(args.trace_jsonl) if args.trace_jsonl else None
 
     if args.compare:
         from django.utils.module_loading import import_string
@@ -69,7 +100,13 @@ def main(argv: list[str] | None = None) -> None:
         for path in provider_paths:
             provider_cls = import_string(path)
             provider = _instantiate_provider(provider_cls, args.model)
-            results = run_eval_suite_sync(provider, dataset_names)
+            results = run_eval_suite_sync(
+                provider,
+                dataset_names,
+                trace_writer=trace_writer,
+                tier=args.tier,
+                tags=args.tag,
+            )
             label = path.rsplit(".", 1)[-1]
             results_by_provider[label] = results
         report = print_compare_report(results_by_provider)
@@ -84,7 +121,13 @@ def main(argv: list[str] | None = None) -> None:
         provider_cls = import_provider()
 
     provider = _instantiate_provider(provider_cls, args.model)
-    results = run_eval_suite_sync(provider, dataset_names)
+    results = run_eval_suite_sync(
+        provider,
+        dataset_names,
+        trace_writer=trace_writer,
+        tier=args.tier,
+        tags=args.tag,
+    )
     report = print_report(results, verbose=args.verbose)
     print(report)
 
