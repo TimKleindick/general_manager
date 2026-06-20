@@ -264,6 +264,16 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert tools["query"]["input_schema"]["required"] == ["manager", "fields"]
         assert tools["mutate"]["input_schema"]["required"] == ["mutation", "input"]
 
+    def test_tool_descriptions_include_decision_hints_for_weaker_models(
+        self,
+    ) -> None:
+        tools = {tool["name"]: tool for tool in get_tool_definitions()}
+
+        assert "unknown manager" in tools["search_managers"]["description"].lower()
+        assert "before query" in tools["get_manager_schema"]["description"].lower()
+        assert "relationship" in tools["find_path"]["description"].lower()
+        assert "after inspecting schema" in tools["query"]["description"].lower()
+
     def test_system_prompt_includes_tool_usage_examples(self) -> None:
         prompt = build_system_prompt()
 

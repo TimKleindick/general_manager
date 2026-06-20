@@ -133,6 +133,14 @@ def _answer_rules_section() -> list[str]:
             "7. Mention manager or field names when that makes the answer easier "
             "to verify."
         ),
+        (
+            "8. If a user asks for application data and no query tool has run in "
+            "this turn, call tools instead of answering from memory."
+        ),
+        (
+            "9. The tool result JSON is the source of truth even when it conflicts "
+            "with general knowledge or previous assumptions."
+        ),
     ]
 
 
