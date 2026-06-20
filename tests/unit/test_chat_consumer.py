@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from django.contrib.auth.models import AnonymousUser
+from django.test.utils import override_settings
 from django.utils import timezone
 
 from general_manager.chat.consumer import ChatConsumer
@@ -82,6 +83,20 @@ class _InfiniteToolProvider:
             args={"query": "parts"},
         )
         yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+
+class _MissingToolRecoveryProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls.append({"messages": messages, "tools": tools})
+        if len(self.calls) == 1:
+            yield TextChunkEvent(content="Steel and Cobalt.")
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        yield TextChunkEvent(content="Steel and Cobalt from query results.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
 
 
 def _deny_permission(*_args: object, **_kwargs: object) -> bool:
@@ -335,6 +350,66 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     "code": "tool_retry_limit",
                 }
                 assert len(consumer.provider.calls) == 2
+
+        asyncio.run(run())
+
+    def test_receive_json_recovers_missing_tool_answer_when_setting_enabled(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _MissingToolRecoveryProvider()
+        consumer.channel_name = "chat.grounding"
+
+        async def run() -> None:
+            with (
+                override_settings(
+                    GENERAL_MANAGER={
+                        "CHAT": {
+                            "recover_missing_tool_calls": True,
+                        }
+                    }
+                ),
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "message",
+                        "text": "Which materials have density above 7?",
+                    }
+                )
+
+            sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
+            assert {
+                "type": "text_chunk",
+                "content": "Steel and Cobalt.",
+            } not in sent_messages
+            assert sent_messages[-2] == {
+                "type": "text_chunk",
+                "content": "Steel and Cobalt from query results.",
+            }
+            assert sent_messages[-1] == {
+                "type": "done",
+                "usage": {"input_tokens": 2, "output_tokens": 2},
+            }
+            assert consumer._history_cache is not None
+            assert consumer._history_cache[-1]["content"] == (
+                "Steel and Cobalt from query results."
+            )
+            assert len(consumer.provider.calls) == 2
+            recovery_messages = consumer.provider.calls[1]["messages"]
+            assert recovery_messages[-1].role == "system"
+            assert "Do not answer from memory" in recovery_messages[-1].content
 
         asyncio.run(run())
 

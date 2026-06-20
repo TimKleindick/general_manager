@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import ClassVar
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -54,6 +55,30 @@ class HttpIntegrationProvider:
             )
 
             yield TextChunkEvent(content=f"tool:{last_message.content}")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
+class HttpMissingToolRecoveryProvider:
+    calls: ClassVar[list[object]] = []
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        type(self).calls.append(messages)
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+            )
+
+            if len(type(self).calls) == 1:
+                yield TextChunkEvent(content="Steel and Cobalt.")
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            yield TextChunkEvent(content="Steel and Cobalt from query results.")
             yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
 
         return _stream()
@@ -194,3 +219,38 @@ class ChatHttpTransportTests(TestCase):
         assert payload["events"][0]["type"] == "tool_result"
         assert payload["events"][1]["type"] == "text_chunk"
         assert payload["events"][-1]["type"] == "done"
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "url": "/chat/",
+                "recover_missing_tool_calls": True,
+            }
+        }
+    )
+    def test_http_chat_uses_same_missing_tool_recovery_setting(self) -> None:
+        HttpMissingToolRecoveryProvider.calls = []
+
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpMissingToolRecoveryProvider,
+        ):
+            response = self.client.post(
+                "/chat/",
+                data=json.dumps({"text": "Which materials have density above 7?"}),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["answer"] == "Steel and Cobalt from query results."
+        assert {
+            "type": "text_chunk",
+            "content": "Steel and Cobalt.",
+        } not in payload["events"]
+        assert len(HttpMissingToolRecoveryProvider.calls) == 2
+        recovery_messages = HttpMissingToolRecoveryProvider.calls[1]
+        assert recovery_messages[-1].role == "system"
+        assert "Do not answer from memory" in recovery_messages[-1].content

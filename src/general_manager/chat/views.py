@@ -21,7 +21,15 @@ from general_manager.chat.models import (
     get_conversation_messages,
     update_conversation_summary,
 )
-from general_manager.chat.consumer import _iter_provider_events
+from general_manager.chat.consumer import (
+    _has_tool_after_last_user,
+    _iter_provider_events,
+    _last_user_text,
+)
+from general_manager.chat.grounding import (
+    build_missing_tool_recovery_message,
+    should_recover_missing_tool_call,
+)
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
@@ -134,17 +142,21 @@ async def _run_provider_turn(
     messages: list[Message],
     transport: str,
     tool_retries: int = 0,
+    recovered_missing_tools: bool = False,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     assistant_chunks: list[str] = []
-    max_retries = int(get_chat_settings().get("max_retries_per_message", 8))
+    settings = get_chat_settings()
+    max_retries = int(settings.get("max_retries_per_message", 8))
+    recover_missing_tools = bool(settings.get("recover_missing_tool_calls", False))
 
     async for event in _iter_provider_events(
         provider, messages, _build_tool_definitions()
     ):
         if isinstance(event, TextChunkEvent):
             assistant_chunks.append(event.content)
-            events.append({"type": "text_chunk", "content": event.content})
+            if not recover_missing_tools:
+                events.append({"type": "text_chunk", "content": event.content})
             continue
         if isinstance(event, ToolCallEvent):
             events.append(
@@ -253,10 +265,43 @@ async def _run_provider_turn(
             return events
         if isinstance(event, DoneEvent):
             if assistant_chunks:
+                assistant_message = "".join(assistant_chunks)
+                if (
+                    recover_missing_tools
+                    and not recovered_missing_tools
+                    and not _has_tool_after_last_user(messages)
+                    and should_recover_missing_tool_call(
+                        user_text=_last_user_text(messages),
+                        assistant_text=assistant_message,
+                        tool_calls=[],
+                    )
+                ):
+                    messages.append(
+                        Message(
+                            role="system",
+                            content=build_missing_tool_recovery_message(
+                                _last_user_text(messages)
+                            ),
+                        )
+                    )
+                    return await _run_provider_turn(
+                        scope=scope,
+                        conversation=conversation,
+                        provider=provider,
+                        messages=messages,
+                        transport=transport,
+                        tool_retries=tool_retries,
+                        recovered_missing_tools=True,
+                    )
+                if recover_missing_tools:
+                    events.extend(
+                        {"type": "text_chunk", "content": chunk}
+                        for chunk in assistant_chunks
+                    )
                 await sync_to_async(append_chat_message)(
                     conversation,
                     role="assistant",
-                    content="".join(assistant_chunks),
+                    content=assistant_message,
                 )
             enforce_chat_rate_limit(
                 scope,

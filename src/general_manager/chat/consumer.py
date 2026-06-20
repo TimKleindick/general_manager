@@ -12,6 +12,10 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer  # type: ignor
 from django.utils import timezone
 
 from general_manager.chat.audit import emit_chat_audit_event
+from general_manager.chat.grounding import (
+    build_missing_tool_recovery_message,
+    should_recover_missing_tool_call,
+)
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
@@ -61,6 +65,24 @@ async def _iter_provider_events(
             return
         first_chunk = False
         yield event
+
+
+def _last_user_text(messages: list[Message]) -> str:
+    """Return the most recent user message content from a provider history."""
+    return next(
+        (message.content for message in reversed(messages) if message.role == "user"),
+        "",
+    )
+
+
+def _has_tool_after_last_user(messages: list[Message]) -> bool:
+    """Return whether a tool result exists after the most recent user message."""
+    for message in reversed(messages):
+        if message.role == "tool":
+            return True
+        if message.role == "user":
+            return False
+    return False
 
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
@@ -277,18 +299,23 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         history: list[dict[str, str]],
         *,
         tool_retries: int,
+        recovered_missing_tools: bool = False,
     ) -> None:
         assistant_chunks: list[str] = []
         self._provider_task = asyncio.current_task()
+        recover_missing_tools = bool(
+            get_chat_settings().get("recover_missing_tool_calls", False)
+        )
         try:
             async for event in _iter_provider_events(
                 self.provider, messages, self._build_tool_definitions()
             ):
                 if isinstance(event, TextChunkEvent):
                     assistant_chunks.append(event.content)
-                    await self.send_json(
-                        {"type": "text_chunk", "content": event.content}
-                    )
+                    if not recover_missing_tools:
+                        await self.send_json(
+                            {"type": "text_chunk", "content": event.content}
+                        )
                 elif isinstance(event, ToolCallEvent):
                     max_retries = int(
                         get_chat_settings().get("max_retries_per_message", 8)
@@ -314,6 +341,36 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 elif isinstance(event, DoneEvent):
                     if assistant_chunks:
                         assistant_message = "".join(assistant_chunks)
+                        if (
+                            recover_missing_tools
+                            and not recovered_missing_tools
+                            and not _has_tool_after_last_user(messages)
+                            and should_recover_missing_tool_call(
+                                user_text=_last_user_text(messages),
+                                assistant_text=assistant_message,
+                                tool_calls=[],
+                            )
+                        ):
+                            messages.append(
+                                Message(
+                                    role="system",
+                                    content=build_missing_tool_recovery_message(
+                                        _last_user_text(messages)
+                                    ),
+                                )
+                            )
+                            await self._stream_provider_turn(
+                                messages,
+                                history,
+                                tool_retries=tool_retries,
+                                recovered_missing_tools=True,
+                            )
+                            return
+                        if recover_missing_tools:
+                            for chunk in assistant_chunks:
+                                await self.send_json(
+                                    {"type": "text_chunk", "content": chunk}
+                                )
                         await self._record_message(
                             role="assistant", content=assistant_message
                         )
