@@ -110,49 +110,49 @@ class Migration(migrations.Migration):
             model_name="chatconversation",
             index=models.Index(
                 fields=["user", "updated_at"],
-                name="general_man_user_up_75c4fa_idx",
+                name="general_man_user_id_198a5f_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="chatconversation",
             index=models.Index(
                 fields=["session_key", "updated_at"],
-                name="general_man_session_26c151_idx",
+                name="general_man_session_10f9c3_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="chatconversation",
             index=models.Index(
                 fields=["updated_at"],
-                name="general_man_updated_b07a6c_idx",
+                name="general_man_updated_44e20a_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="chatmessage",
             index=models.Index(
                 fields=["conversation", "created_at"],
-                name="general_man_convers_2d6293_idx",
+                name="general_man_convers_214d2b_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="chatmessage",
             index=models.Index(
                 fields=["created_at"],
-                name="general_man_created_b35340_idx",
+                name="general_man_created_686065_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="chatpendingconfirmation",
             index=models.Index(
                 fields=["expires_at"],
-                name="general_man_expires_b04b59_idx",
+                name="general_man_expires_c5310a_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="chatpendingconfirmation",
             index=models.Index(
                 fields=["resolved_at"],
-                name="general_man_resolve_9af631_idx",
+                name="general_man_resolve_9d7667_idx",
             ),
         ),
     ]

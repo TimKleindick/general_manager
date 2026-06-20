@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
 from asgiref.sync import async_to_sync, sync_to_async
@@ -472,7 +473,7 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
     denial = _check_permission(request)
     if denial is not None:
         return StreamingHttpResponse(
-            iter([f"data: {json.dumps({'detail': 'Forbidden'})}\n\n"]),
+            iter([f"data: {json.dumps({'detail': 'Forbidden'})}\n\n".encode()]),
             status=403,
             content_type="text/event-stream",
         )
@@ -480,9 +481,9 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
         request, transport="sse"
     )
 
-    def _stream():
+    def _stream() -> Iterator[bytes]:
         for event in events:
-            yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps(event)}\n\n".encode()
 
     return StreamingHttpResponse(_stream(), content_type="text/event-stream")
 
