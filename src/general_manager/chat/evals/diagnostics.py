@@ -154,7 +154,15 @@ def _classify_contract_message(
                 "normalization or schema summaries before weakening expected values."
             ),
         )
-    if message.startswith(("Missing answer text:", "Unexpected answer text:")):
+    if message.startswith(
+        (
+            "Answer contradicts required result value:",
+            "Answer defers after a successful query",
+            "Answer omits required result value:",
+            "Missing answer text:",
+            "Unexpected answer text:",
+        )
+    ):
         return FailureDiagnostic(
             case=case_name,
             owner="prompt",

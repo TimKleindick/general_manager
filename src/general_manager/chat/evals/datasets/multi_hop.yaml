@@ -126,9 +126,25 @@
         required_tool_calls:
           - name: search_managers
           - name: find_path
+          - name: query
+            args_contain:
+              manager: ProjectManager
         forbidden_tools: ["mutate"]
-        answer_contains: ["Project", "Material"]
+        results_contain: ["Mercury", "Bearing", "Aluminum"]
+        results_exclude: ["Apollo"]
+        answer_contains: ["Project", "Material", "Mercury", "Bearing", "Aluminum"]
+        answer_excludes:
+          - "Would you like me to run this query"
+          - "I can run this query"
     tool_calls:
       - name: search_managers
       - name: find_path
-    answer_contains: ["Project", "Material"]
+      - name: query
+        args_contain:
+          manager: ProjectManager
+    results_contain: ["Mercury", "Bearing", "Aluminum"]
+    results_exclude: ["Apollo"]
+    answer_contains: ["Project", "Material", "Mercury", "Bearing", "Aluminum"]
+    answer_excludes:
+      - "Would you like me to run this query"
+      - "I can run this query"

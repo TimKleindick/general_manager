@@ -82,6 +82,24 @@ def test_strategy_deviation_is_soft_prompt_signal() -> None:
     assert diagnostic.severity == "soft"
 
 
+def test_answer_contradiction_is_answer_contract_failure() -> None:
+    result = EvalResult(
+        case=_case("answer_sense_case"),
+        contract_score=ProductContractScore(
+            passed=False,
+            category="read_only_safety",
+            violations=["Answer contradicts required result value: Apollo"],
+        ),
+    )
+
+    diagnostic = classify_result(result)
+
+    assert diagnostic is not None
+    assert diagnostic.owner == "prompt"
+    assert diagnostic.category == "answer_contract"
+    assert diagnostic.severity == "hard"
+
+
 def test_error_result_is_provider_or_harness_failure() -> None:
     result = EvalResult(case=_case("provider_case"), error="Connection refused")
 
