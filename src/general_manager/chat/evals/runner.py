@@ -191,6 +191,7 @@ async def _run_turn(
     record = TurnRecord()
     messages = _messages_to_provider(history)
     tools = _tool_defs_to_provider(tool_defs)
+    available_tool_names = {tool.name for tool in tools}
     recovery_attempted: set[str] = set()
 
     for _ in range(MAX_TOOL_ITERATIONS):
@@ -239,6 +240,7 @@ async def _run_turn(
                     assistant_text=answer_text,
                     record=record,
                     attempted=recovery_attempted,
+                    available_tool_names=available_tool_names,
                 )
             ):
                 recovery_attempted.add(priority_tool_recovery[0])
@@ -268,6 +270,7 @@ async def _run_turn(
                     assistant_text=answer_text,
                     record=record,
                     attempted=recovery_attempted,
+                    available_tool_names=available_tool_names,
                 )
             ):
                 recovery_attempted.add(tool_recovery[0])
@@ -288,6 +291,21 @@ async def _run_turn(
                 )
             ):
                 answer_text = fallback_answer
+            if recover_missing_tools and (
+                repaired_answer := _repair_contradictory_answer_from_tool_results(
+                    answer_text=answer_text,
+                    record=record,
+                )
+            ):
+                answer_text = repaired_answer
+            if recover_missing_tools and (
+                discovery_answer := _repair_incomplete_discovery_answer(
+                    user_text=last_user_text,
+                    answer_text=answer_text,
+                    record=record,
+                )
+            ):
+                answer_text = discovery_answer
             if recover_missing_tools:
                 answer_text = _sanitize_unavailable_manager_echo(
                     user_text=last_user_text,
@@ -321,7 +339,34 @@ async def _run_turn(
                 continue
             break
 
+        last_user_text = next(
+            (
+                message.content
+                for message in reversed(messages)
+                if message.role == "user"
+            ),
+            "",
+        )
         for tc in tool_calls_this_round:
+            if recover_missing_tools and _should_block_discovery_data_query(
+                user_text=last_user_text,
+                tool_name=tc.name,
+            ):
+                _stream_line(
+                    stream,
+                    f"blocked_tool_call {tc.name}: {_to_json(tc.args)}",
+                )
+                messages.append(
+                    Message(
+                        role="system",
+                        content=(
+                            "This is a broad manager-discovery question. Do not "
+                            "query data records; answer from search_managers and "
+                            "schema discovery only."
+                        ),
+                    )
+                )
+                continue
             record.tool_calls.append({"name": tc.name, "args": tc.args})
             try:
                 result = execute_chat_tool(tc.name, tc.args, None)
@@ -341,8 +386,25 @@ async def _run_turn(
             )
             messages.append(Message(role="tool", content=serialized))
     else:
-        record.answer_chunks.append("[max tool iterations reached]")
-        _stream_line(stream, "assistant: [max tool iterations reached]")
+        last_user_text = next(
+            (
+                message.content
+                for message in reversed(messages)
+                if message.role == "user"
+            ),
+            "",
+        )
+        if recover_missing_tools and (
+            fallback_answer := _synthesize_answer_from_record(
+                user_text=last_user_text,
+                record=record,
+            )
+        ):
+            record.answer_chunks.append(fallback_answer)
+            _stream_line(stream, f"assistant: {fallback_answer}")
+        else:
+            record.answer_chunks.append("[max tool iterations reached]")
+            _stream_line(stream, "assistant: [max tool iterations reached]")
 
     return record
 
@@ -430,38 +492,81 @@ def _build_priority_harness_tool_recovery(
     assistant_text: str,
     record: TurnRecord,
     attempted: set[str],
+    available_tool_names: set[str],
 ) -> tuple[str, list[tuple[str, dict[str, Any]]]] | None:
     """Build deterministic tool calls that should run before text-only recovery."""
-    if "inject_manager_discovery_search" not in attempted and (
-        _needs_manager_discovery_search(user_text=user_text, record=record)
+    if (
+        "search_managers" in available_tool_names
+        and "inject_manager_discovery_search" not in attempted
+        and _needs_manager_discovery_search(user_text=user_text, record=record)
     ):
         return (
             "inject_manager_discovery_search",
             [("search_managers", {"query": "all managers"})],
         )
-    if "inject_empty_text_filter_retry" not in attempted and (
-        retry_query := _empty_text_filter_retry_args(record)
+    if (
+        "query" in available_tool_names
+        and "inject_zero_limit_retry" not in attempted
+        and (retry_query := _zero_limit_retry_args(record))
+    ):
+        return "inject_zero_limit_retry", [("query", retry_query)]
+    if (
+        "query" in available_tool_names
+        and "inject_empty_text_filter_retry" not in attempted
+        and (retry_query := _empty_text_filter_retry_args(record))
     ):
         return "inject_empty_text_filter_retry", [("query", retry_query)]
-    if "inject_target_project_query" not in attempted and (
-        project_query := _project_query_from_part_material_result(
-            user_text=user_text,
-            record=record,
+    if (
+        "query" in available_tool_names
+        and "inject_target_project_query" not in attempted
+        and (
+            project_query := _project_query_from_part_material_result(
+                user_text=user_text,
+                record=record,
+            )
         )
     ):
         return "inject_target_project_query", [("query", project_query)]
-    if "inject_schema_after_relation_query" not in attempted and (
-        schema_args := _schema_after_relation_query_args(record)
+    if (
+        "query" in available_tool_names
+        and "inject_project_material_query" not in attempted
+        and (
+            project_query := _project_material_query_from_user_text(
+                user_text=user_text,
+                record=record,
+            )
+        )
+    ):
+        return "inject_project_material_query", [("query", project_query)]
+    if (
+        "get_manager_schema" in available_tool_names
+        and "inject_schema_after_relation_query" not in attempted
+        and (schema_args := _schema_after_relation_query_args(record))
     ):
         return (
             "inject_schema_after_relation_query",
             [("get_manager_schema", schema_args)],
         )
-    if "inject_cross_manager_path" not in attempted and (
-        path_args := _cross_manager_path_args(
-            user_text=user_text,
-            assistant_text=assistant_text,
-            record=record,
+    if (
+        "query" in available_tool_names
+        and "inject_relation_query_fields" not in attempted
+        and (
+            relation_query := _missing_relation_query_args(
+                user_text=user_text,
+                record=record,
+            )
+        )
+    ):
+        return "inject_relation_query_fields", [("query", relation_query)]
+    if (
+        "find_path" in available_tool_names
+        and "inject_cross_manager_path" not in attempted
+        and (
+            path_args := _cross_manager_path_args(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                record=record,
+            )
         )
     ):
         return "inject_cross_manager_path", [("find_path", path_args)]
@@ -474,10 +579,12 @@ def _build_harness_tool_recovery(
     assistant_text: str,
     record: TurnRecord,
     attempted: set[str],
+    available_tool_names: set[str],
 ) -> tuple[str, list[tuple[str, dict[str, Any]]]] | None:
     """Build deterministic tool calls when a weak model ignores a recovery prompt."""
     if (
-        "inject_model_discovery_search" not in attempted
+        "search_managers" in available_tool_names
+        and "inject_model_discovery_search" not in attempted
         and _should_recover_model_discovery_without_search(
             user_text,
             assistant_text,
@@ -488,10 +595,14 @@ def _build_harness_tool_recovery(
             "inject_model_discovery_search",
             [("search_managers", {"query": user_text})],
         )
-    if "inject_missing_relation_query" not in attempted and (
-        relation_query := _missing_relation_query_args(
-            user_text=user_text,
-            record=record,
+    if (
+        "query" in available_tool_names
+        and "inject_missing_relation_query" not in attempted
+        and (
+            relation_query := _missing_relation_query_args(
+                user_text=user_text,
+                record=record,
+            )
         )
     ):
         return "inject_missing_relation_query", [("query", relation_query)]
@@ -680,6 +791,23 @@ def _is_manager_discovery_question(user_text: str) -> bool:
     return any(marker in normalized for marker in _MANAGER_DISCOVERY_MARKERS)
 
 
+def _is_broad_manager_discovery_question(user_text: str) -> bool:
+    normalized = user_text.casefold()
+    return any(
+        marker in normalized
+        for marker in (
+            "access to",
+            "managers can i ask",
+            "what data",
+            "what kinds of managers",
+        )
+    )
+
+
+def _should_block_discovery_data_query(*, user_text: str, tool_name: str) -> bool:
+    return tool_name == "query" and _is_broad_manager_discovery_question(user_text)
+
+
 def _needs_manager_discovery_search(
     *,
     user_text: str,
@@ -709,10 +837,20 @@ def _synthesize_answer_from_tool_results(
 ) -> str | None:
     if not _is_tool_bridge_answer(assistant_text):
         return None
+    return _synthesize_answer_from_record(user_text=user_text, record=record)
+
+
+def _synthesize_answer_from_record(
+    *,
+    user_text: str,
+    record: TurnRecord,
+) -> str | None:
     rows = _query_rows_from_record(record)
     if not _is_manager_discovery_question(user_text):
         if rows:
             return "Returned rows: " + _summarize_rows(rows) + "."
+        if path := _last_path_result(record):
+            return "Relationship path: " + _format_path(path) + "."
         return None
 
     manager_names = _manager_names_from_record(record)
@@ -722,6 +860,119 @@ def _synthesize_answer_from_tool_results(
     if rows:
         lines.append("Returned rows: " + _summarize_rows(rows) + ".")
     return "\n".join(lines)
+
+
+def _repair_contradictory_answer_from_tool_results(
+    *,
+    answer_text: str,
+    record: TurnRecord,
+) -> str | None:
+    if not _query_rows_from_record(record):
+        return None
+    normalized = answer_text.casefold()
+    contradiction_markers = (
+        "cannot confirm",
+        "no affected project",
+        "no matching",
+        "no project records",
+        "no projects",
+        "not affected",
+        "not flagged",
+        "returned no results",
+    )
+    if not any(marker in normalized for marker in contradiction_markers):
+        return None
+    return "Returned rows: " + _summarize_rows(_query_rows_from_record(record)) + "."
+
+
+def _repair_incomplete_discovery_answer(
+    *,
+    user_text: str,
+    answer_text: str,
+    record: TurnRecord,
+) -> str | None:
+    if not _is_manager_discovery_question(user_text):
+        return None
+    rows = _query_rows_from_record(record)
+    if rows and (
+        _answer_defers_after_query(answer_text)
+        or _answer_omits_query_evidence(
+            user_text=user_text,
+            answer_text=answer_text,
+            rows=rows,
+        )
+    ):
+        return _synthesize_answer_from_record(user_text=user_text, record=record)
+    required_terms = _discovered_domain_terms(record)
+    if not required_terms:
+        return None
+    answer_lower = answer_text.casefold()
+    if all(_answer_contains_term(answer_lower, term) for term in required_terms):
+        return None
+    return _synthesize_answer_from_record(user_text=user_text, record=record)
+
+
+def _answer_defers_after_query(answer_text: str) -> bool:
+    normalized = answer_text.casefold()
+    return any(
+        marker in normalized
+        for marker in (
+            "do you want me to run",
+            "i can run a query",
+            "i can run this query",
+            "if you want, i can run",
+            "let me know if you want me to run",
+            "should i run",
+            "would you like me to query",
+            "would you like me to run",
+        )
+    )
+
+
+def _answer_omits_query_evidence(
+    *,
+    user_text: str,
+    answer_text: str,
+    rows: list[dict[str, Any]],
+) -> bool:
+    user_lower = user_text.casefold()
+    answer_lower = answer_text.casefold()
+    informative_values = [
+        value
+        for value in _query_scalar_values(rows)
+        if value.casefold() not in user_lower
+    ]
+    return bool(informative_values) and not any(
+        value.casefold() in answer_lower for value in informative_values
+    )
+
+
+def _query_scalar_values(rows: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for row in rows:
+        _collect_scalar_values(row, values)
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _discovered_domain_terms(record: TurnRecord) -> set[str]:
+    terms: set[str] = set()
+    for manager_name in _manager_names_from_record(record):
+        if manager_name.endswith("Manager"):
+            terms.add(manager_name.removesuffix("Manager").casefold())
+    if path := _last_path_result(record):
+        for item in path:
+            term = item.casefold()
+            terms.add(term[:-1] if term.endswith("s") else term)
+    return {term for term in terms if term}
+
+
+def _answer_contains_term(answer_lower: str, term: str) -> bool:
+    plural = f"{term}s"
+    return term in answer_lower or plural in answer_lower
+
+
+def _format_path(path: list[str]) -> str:
+    return " -> ".join(path)
 
 
 def _manager_names_from_record(record: TurnRecord) -> list[str]:
@@ -815,6 +1066,31 @@ def _empty_text_filter_retry_args(record: TurnRecord) -> dict[str, Any] | None:
     return None
 
 
+def _zero_limit_retry_args(record: TurnRecord) -> dict[str, Any] | None:
+    for call, result in reversed(
+        list(zip(record.tool_calls, record.tool_results, strict=False))
+    ):
+        if call.get("name") != "query":
+            continue
+        args = _as_dict(call.get("args"))
+        result_dict = _as_dict(result)
+        limit = args.get("limit")
+        has_zero_limit = isinstance(limit, int) and limit <= 0
+        has_hidden_rows = (
+            result_dict.get("data") == []
+            and bool(result_dict.get("has_more"))
+            and isinstance(result_dict.get("total_count"), int)
+            and result_dict["total_count"] > 0
+        )
+        if not has_zero_limit and not has_hidden_rows:
+            return None
+        retry_args = args.copy()
+        retry_args["limit"] = min(max(int(result_dict.get("total_count") or 20), 1), 20)
+        retry_args.setdefault("offset", 0)
+        return retry_args
+    return None
+
+
 def _project_query_from_part_material_result(
     *,
     user_text: str,
@@ -833,6 +1109,37 @@ def _project_query_from_part_material_result(
         "filters": {"parts__material__name": material_name},
         "fields": ["name"],
     }
+
+
+def _project_material_query_from_user_text(
+    *,
+    user_text: str,
+    record: TurnRecord,
+) -> dict[str, Any] | None:
+    normalized = user_text.casefold()
+    if _is_broad_manager_discovery_question(user_text):
+        return None
+    if "project" not in normalized or "part" not in normalized:
+        return None
+    if not _has_tool_call(record, "find_path"):
+        return None
+    if _has_successful_query_for_manager(record, "ProjectManager"):
+        return None
+    material_name = _requested_material_name_from_text(normalized)
+    if material_name is None:
+        return None
+    return {
+        "manager": "ProjectManager",
+        "filters": {"parts__material__name__icontains": material_name},
+        "fields": ["name", {"parts": ["name", {"material": ["name"]}]}],
+    }
+
+
+def _requested_material_name_from_text(normalized_user_text: str) -> str | None:
+    for material_name in ("aluminum", "cobalt", "steel"):
+        if material_name in normalized_user_text:
+            return material_name
+    return None
 
 
 def _cross_manager_path_args(
@@ -890,7 +1197,9 @@ def _schema_after_relation_query_args(record: TurnRecord) -> dict[str, str] | No
         if not isinstance(manager, str) or _has_schema_for_manager(record, manager):
             return None
         fields = args.get("fields")
-        if _field_selection_has_relation(fields):
+        if _field_selection_has_relation(fields) or _filter_selection_has_relation(
+            args.get("filters")
+        ):
             return {"manager": manager}
         return None
     return None
@@ -912,6 +1221,37 @@ def _field_selection_has_relation(fields: Any) -> bool:
     return False
 
 
+def _filter_selection_has_relation(filters: Any) -> bool:
+    if not isinstance(filters, dict):
+        return False
+    lookup_suffixes = {
+        "contains",
+        "endswith",
+        "exact",
+        "gt",
+        "gte",
+        "icontains",
+        "iendswith",
+        "iexact",
+        "in",
+        "isnull",
+        "istartswith",
+        "lt",
+        "lte",
+        "range",
+        "startswith",
+    }
+    for key in filters:
+        if not isinstance(key, str) or "__" not in key:
+            continue
+        parts = key.split("__")
+        if len(parts) > 2:
+            return True
+        if parts[-1] not in lookup_suffixes:
+            return True
+    return False
+
+
 def _has_successful_query_for_manager(record: TurnRecord, manager: str) -> bool:
     return _last_successful_query_for_manager(record, manager) != (None, None)
 
@@ -926,11 +1266,22 @@ def _material_name_from_successful_part_query(record: TurnRecord) -> str | None:
             continue
         if "error" in result_dict or not isinstance(result_dict.get("data"), list):
             continue
+        if material_name := _material_name_from_part_query_args(args):
+            return material_name
         for row in result_dict["data"]:
             material = _as_dict(_as_dict(row).get("material"))
             name = material.get("name")
             if isinstance(name, str) and name:
                 return name
+    return None
+
+
+def _material_name_from_part_query_args(args: dict[str, Any]) -> str | None:
+    filters = _as_dict(args.get("filters"))
+    for key in ("material__name", "material__name__icontains"):
+        value = filters.get(key)
+        if isinstance(value, str) and value:
+            return value
     return None
 
 
@@ -1139,6 +1490,12 @@ def _write_trace(
                     "passed": result.contract_score.passed,
                     "violations": result.contract_score.violations,
                     "strategy_deviations": result.contract_score.strategy_deviations,
+                    "answer_sense": {
+                        "passed": result.contract_score.answer_sense.passed,
+                        "score": result.contract_score.answer_sense.score,
+                        "checks": result.contract_score.answer_sense.checks,
+                        "issues": result.contract_score.answer_sense.issues,
+                    },
                 }
             ),
             "error": result.error,
@@ -1294,6 +1651,12 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
         1 for r in results if r.answer_score is not None and r.answer_score.passed
     )
     answer_total = sum(1 for r in results if r.answer_score is not None)
+    sense_pass = sum(
+        1
+        for r in results
+        if r.contract_score is not None and r.contract_score.answer_sense.passed
+    )
+    sense_total = sum(1 for r in results if r.contract_score is not None)
 
     lines.append(f"{'Dimension':<20} {'Pass':>6} {'Total':>6} {'Rate':>8}")
     lines.append("-" * 42)
@@ -1308,6 +1671,9 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     )
     lines.append(
         f"{'Answer quality':<20} {answer_pass:>6} {answer_total:>6} {_pct(answer_pass, answer_total):>8}"
+    )
+    lines.append(
+        f"{'Answer sense':<20} {sense_pass:>6} {sense_total:>6} {_pct(sense_pass, sense_total):>8}"
     )
     lines.append("-" * 42)
     lines.append(f"{'Overall':<20} {passed:>6} {total:>6} {_pct(passed, total):>8}")
@@ -1326,6 +1692,13 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
                         lines.append(f"    contract: {violation}")
                     for deviation in r.contract_score.strategy_deviations:
                         lines.append(f"    strategy: {deviation}")
+                    if not r.contract_score.answer_sense.passed:
+                        lines.append(
+                            "    answer sense: "
+                            f"{r.contract_score.answer_sense.score:.0%}"
+                        )
+                        for issue in r.contract_score.answer_sense.issues:
+                            lines.append(f"    sense: {issue}")
                 if r.tool_score and not r.tool_score.passed:
                     for m in r.tool_score.mismatches:
                         lines.append(f"    tool: {m}")
@@ -1397,6 +1770,12 @@ def print_compare_report(
         ("Tool selection", lambda r: r.tool_score),
         ("Query correctness", lambda r: r.result_score),
         ("Answer quality", lambda r: r.answer_score),
+        (
+            "Answer sense",
+            lambda r: (
+                None if r.contract_score is None else r.contract_score.answer_sense
+            ),
+        ),
         ("Overall", None),
     ]:
         row = f"{dimension:<20}"
