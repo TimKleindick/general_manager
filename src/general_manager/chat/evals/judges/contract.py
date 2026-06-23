@@ -119,13 +119,22 @@ def judge_answer_sense(
     checks["no_contradiction"] = len(contradiction_messages) == 0
     issues.extend(contradiction_messages)
 
-    defers_after_query = _has_successful_query_result(
+    has_successful_query = _has_successful_query_result(
         tool_calls,
         tool_results,
-    ) and _answer_defers_after_query(answer_text)
+    )
+    defers_after_query = has_successful_query and _answer_defers_after_query(
+        answer_text
+    )
     checks["no_unnecessary_deferral"] = not defers_after_query
     if defers_after_query:
         issues.append("Answer defers after a successful query")
+
+    if has_successful_query:
+        includes_raw_query_syntax = _answer_includes_raw_query_syntax(answer_text)
+        checks["no_raw_query_syntax"] = not includes_raw_query_syntax
+        if includes_raw_query_syntax:
+            issues.append("Answer includes raw query syntax after a successful query")
 
     if expected_values:
         omitted_values = [
@@ -181,10 +190,11 @@ def _has_matching_tool_call(
     actual: list[dict[str, Any]],
 ) -> bool:
     for call in actual:
-        if call.get("name") != name:
+        normalized = _normalized_tool_call(call)
+        if normalized.get("name") != name:
             continue
-        args = _as_dict(call.get("args"))
-        if all(args.get(key) == value for key, value in args_contain.items()):
+        args = _as_dict(normalized.get("args"))
+        if all(_arg_matches(args, key, value) for key, value in args_contain.items()):
             return True
     return False
 
@@ -194,7 +204,7 @@ def _forbidden_tool_messages(
     actual: list[dict[str, Any]],
 ) -> list[str]:
     forbidden_names = {item for item in forbidden_tools if isinstance(item, str)}
-    called = {call.get("name") for call in actual}
+    called = {_tool_kind(str(call.get("name", ""))) for call in actual}
     return [
         f"Forbidden tool called: {name}"
         for name in sorted(forbidden_names.intersection(called))
@@ -268,13 +278,35 @@ def _has_successful_query_result(
     tool_results: list[Any],
 ) -> bool:
     return any(
-        call.get("name") == "query"
+        _tool_kind(str(call.get("name", ""))) == "query"
         and isinstance(result, dict)
         and "error" not in result
         and isinstance(result.get("data"), list)
         and len(result["data"]) > 0
         for call, result in zip(tool_calls, tool_results, strict=False)
     )
+
+
+def _normalized_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+    name = str(call.get("name", ""))
+    normalized_name = _tool_kind(name)
+    args = _as_dict(call.get("args")).copy()
+    if normalized_name == "query" and name.startswith("query_"):
+        args.setdefault("manager", name.removeprefix("query_"))
+    return {"name": normalized_name, "args": args}
+
+
+def _tool_kind(name: str) -> str:
+    if name.startswith("query_"):
+        return "query"
+    return name
+
+
+def _arg_matches(args: dict[str, Any], key: str, expected: Any) -> bool:
+    actual = args.get(key)
+    if key == "manager" and isinstance(actual, str) and isinstance(expected, str):
+        return actual.casefold() == expected.casefold()
+    return actual == expected
 
 
 def _answer_defers_after_query(answer_text: str) -> bool:
@@ -290,6 +322,20 @@ def _answer_defers_after_query(answer_text: str) -> bool:
             "should i run",
             "would you like me to query",
             "would you like me to run",
+        )
+    )
+
+
+def _answer_includes_raw_query_syntax(answer_text: str) -> bool:
+    normalized = answer_text.casefold()
+    return any(
+        marker in normalized
+        for marker in (
+            "```graphql",
+            "query {",
+            "query\n",
+            "mutation {",
+            "mutation\n",
         )
     )
 

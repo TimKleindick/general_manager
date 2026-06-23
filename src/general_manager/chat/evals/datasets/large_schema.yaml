@@ -28,16 +28,30 @@
       hard:
         required_tool_calls:
           - name: find_path
+            args_contain:
+              from_manager: SyntheticManager01
+              to_manager: SyntheticManager08
           - name: query
             args_contain:
               manager: SyntheticManager08
         forbidden_tools: ["mutate"]
-        answer_contains: ["SyntheticManager08"]
+        results_contain: ["SyntheticManager08 record"]
+        answer_contains: ["SyntheticManager08 record"]
       strategy:
         recommended_tool_calls:
           - name: search_managers
           - name: get_manager_schema
         strict_order: false
+    tool_calls:
+      - name: find_path
+        args_contain:
+          from_manager: SyntheticManager01
+          to_manager: SyntheticManager08
+      - name: query
+        args_contain:
+          manager: SyntheticManager08
+    results_contain: ["SyntheticManager08 record"]
+    answer_contains: ["SyntheticManager08 record"]
 
 - name: large_schema_no_hallucinated_path
   description: "Say when no relation path exists instead of inventing one"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 
@@ -24,6 +25,10 @@ class ReadinessSummary:
     product_contract_total: int
     product_contract_passed: int
     diagnostics: dict[str, dict[str, int]]
+    native_passed: int = 0
+    recovered_passed: int = 0
+    recovery_total: int = 0
+    recovered_cases: list[str] = field(default_factory=list)
 
     @property
     def pass_rate(self) -> float:

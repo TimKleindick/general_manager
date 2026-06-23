@@ -226,6 +226,49 @@ class AnswerQualityJudgeTests(SimpleTestCase):
 # ---------------------------------------------------------------------------
 
 
+def _missing_answer_result_values(
+    *,
+    dataset_name: str,
+    case_name: str,
+    scope_name: str,
+    expectations: dict[str, Any],
+) -> list[str]:
+    results = [str(item) for item in expectations.get("results_contain", [])]
+    answers = [str(item) for item in expectations.get("answer_contains", [])]
+    missing = [item for item in results if item not in answers]
+    return (
+        [f"{dataset_name}:{case_name}:{scope_name} missing answer_contains {missing}"]
+        if missing
+        else []
+    )
+
+
+def _missing_grounded_query_result_contract(
+    *,
+    dataset_name: str,
+    case: EvalCase,
+) -> list[str]:
+    contract = case.expectations.get("contract")
+    if not isinstance(contract, dict):
+        return []
+    hard = contract.get("hard")
+    if not isinstance(hard, dict):
+        return []
+    required_tools = hard.get("required_tool_calls", [])
+    if not any(
+        isinstance(tool, dict) and tool.get("name") == "query"
+        for tool in required_tools
+    ):
+        return []
+    has_positive_results = bool(hard.get("results_contain"))
+    has_empty_result_contract = "empty_result" in case.tags and bool(
+        hard.get("results_exclude")
+    )
+    if has_positive_results or has_empty_result_contract:
+        return []
+    return [f"{dataset_name}:{case.name} missing hard results_contain"]
+
+
 class DatasetLoadingTests(SimpleTestCase):
     def test_list_datasets_returns_expected_names(self) -> None:
         names = list_datasets()
@@ -294,6 +337,47 @@ class DatasetLoadingTests(SimpleTestCase):
         assert [case.name for case in filter_cases(cases, tier=1, tags=["demo"])] == [
             "tier1"
         ]
+
+    def test_result_values_are_required_in_answers(self) -> None:
+        failures: list[str] = []
+        for dataset_name in list_datasets():
+            for case in load_dataset(dataset_name):
+                expectations = case.expectations
+                contract = expectations.get("contract")
+                if isinstance(contract, dict):
+                    hard = contract.get("hard")
+                    if isinstance(hard, dict):
+                        failures.extend(
+                            _missing_answer_result_values(
+                                dataset_name=dataset_name,
+                                case_name=case.name,
+                                scope_name="contract.hard",
+                                expectations=hard,
+                            )
+                        )
+                failures.extend(
+                    _missing_answer_result_values(
+                        dataset_name=dataset_name,
+                        case_name=case.name,
+                        scope_name="legacy",
+                        expectations=expectations,
+                    )
+                )
+
+        assert failures == []
+
+    def test_grounded_query_cases_declare_result_contracts(self) -> None:
+        failures: list[str] = []
+        for dataset_name in list_datasets():
+            for case in load_dataset(dataset_name):
+                failures.extend(
+                    _missing_grounded_query_result_contract(
+                        dataset_name=dataset_name,
+                        case=case,
+                    )
+                )
+
+        assert failures == []
 
 
 def test_trace_writer_records_case_payload(tmp_path) -> None:
@@ -2841,6 +2925,11 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
+        assert result.recovery_events == [
+            "inject_project_material_query",
+            "inject_schema_after_relation_query",
+            "repair_incomplete_discovery_answer",
+        ]
 
     def test_run_case_synthesizes_deferred_discovery_result_answer(self) -> None:
         provider = _ScriptedProvider(

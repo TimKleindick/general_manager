@@ -78,7 +78,8 @@
             args_contain:
               manager: PartManager
         forbidden_tools: ["mutate"]
-        answer_contains: ["Gear"]
+        results_contain: ["Cobalt", "Gear"]
+        answer_contains: ["Cobalt", "Gear"]
       strategy:
         recommended_tool_calls:
           - name: find_path
@@ -90,4 +91,5 @@
       - name: query
         args_contain:
           manager: PartManager
-    answer_contains: ["Gear"]
+    results_contain: ["Cobalt", "Gear"]
+    answer_contains: ["Cobalt", "Gear"]
