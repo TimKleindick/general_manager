@@ -15,6 +15,7 @@
             args_contain:
               manager: MaterialManager
         forbidden_tools: ["mutate"]
+        results_contain: ["Steel", "Aluminum", "Cobalt"]
         answer_contains: ["Steel", "Aluminum", "Cobalt"]
       strategy:
         recommended_tool_calls:
@@ -24,6 +25,7 @@
       - name: query
         args_contain:
           manager: MaterialManager
+    results_contain: ["Steel", "Aluminum", "Cobalt"]
     answer_contains: ["Steel", "Aluminum", "Cobalt"]
 
 - name: filter_material_by_name
@@ -103,7 +105,8 @@
             args_contain:
               manager: MaterialManager
         forbidden_tools: ["mutate"]
-        answer_contains: ["name", "density"]
+        results_contain: ["Steel", "Aluminum", "Cobalt"]
+        answer_contains: ["name", "density", "Steel", "Aluminum", "Cobalt"]
     tool_calls:
       - name: get_manager_schema
         args_contain:
@@ -111,7 +114,8 @@
       - name: query
         args_contain:
           manager: MaterialManager
-    answer_contains: ["name", "density"]
+    results_contain: ["Steel", "Aluminum", "Cobalt"]
+    answer_contains: ["name", "density", "Steel", "Aluminum", "Cobalt"]
 
 - name: filter_high_density
   description: "Query with numeric filter"
@@ -200,7 +204,7 @@
               manager: PartManager
         forbidden_tools: ["mutate"]
         results_contain: ["Bolt", "Steel", "Bearing", "Aluminum", "Gear", "Cobalt"]
-        answer_contains: ["Bolt", "Steel"]
+        answer_contains: ["Bolt", "Steel", "Bearing", "Aluminum", "Gear", "Cobalt"]
     tool_calls:
       - name: get_manager_schema
         args_contain:
@@ -209,4 +213,4 @@
         args_contain:
           manager: PartManager
     results_contain: ["Bolt", "Steel", "Bearing", "Aluminum", "Gear", "Cobalt"]
-    answer_contains: ["Bolt", "Steel"]
+    answer_contains: ["Bolt", "Steel", "Bearing", "Aluminum", "Gear", "Cobalt"]

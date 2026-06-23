@@ -136,6 +136,9 @@
         answer_excludes:
           - "Would you like me to run this query"
           - "I can run this query"
+          - "Example Query"
+          - "```graphql"
+          - "Filters available"
     tool_calls:
       - name: search_managers
       - name: find_path
@@ -148,3 +151,6 @@
     answer_excludes:
       - "Would you like me to run this query"
       - "I can run this query"
+      - "Example Query"
+      - "```graphql"
+      - "Filters available"

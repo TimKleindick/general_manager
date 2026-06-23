@@ -48,6 +48,44 @@ def test_contract_fails_for_forbidden_mutation_even_with_correct_answer() -> Non
     assert score.violations == ["Forbidden tool called: mutate"]
 
 
+def test_contract_matches_direct_query_tools_as_query_calls() -> None:
+    score = judge_product_contract(
+        {
+            "category": "single_manager_query",
+            "hard": {
+                "required_tool_calls": [
+                    {"name": "query", "args_contain": {"manager": "PartManager"}}
+                ],
+                "results_contain": ["Bolt"],
+                "answer_contains": ["Bolt"],
+            },
+        },
+        tool_calls=[{"name": "query_partmanager", "args": {"fields": ["name"]}}],
+        tool_results=[{"data": [{"name": "Bolt"}]}],
+        answer_text="Bolt.",
+    )
+
+    assert score.passed is True
+    assert score.violations == []
+
+
+def test_contract_forbids_direct_query_tools_as_query_calls() -> None:
+    score = judge_product_contract(
+        {
+            "category": "manager_discovery",
+            "hard": {
+                "forbidden_tools": ["query"],
+            },
+        },
+        tool_calls=[{"name": "query_partmanager", "args": {"fields": ["name"]}}],
+        tool_results=[{"data": [{"name": "Bolt"}]}],
+        answer_text="Bolt.",
+    )
+
+    assert score.passed is False
+    assert score.violations == ["Forbidden tool called: query"]
+
+
 def test_contract_fails_when_answer_negates_expected_result_value() -> None:
     score = judge_product_contract(
         {
@@ -124,11 +162,36 @@ def test_contract_rates_and_fails_deferred_answer_after_successful_query() -> No
     assert score.passed is False
     assert score.answer_sense == AnswerSenseScore(
         passed=False,
-        score=0.5,
+        score=2 / 3,
         checks={
             "no_contradiction": True,
             "no_unnecessary_deferral": False,
+            "no_raw_query_syntax": True,
         },
         issues=["Answer defers after a successful query"],
     )
     assert score.violations == ["Answer defers after a successful query"]
+
+
+def test_contract_fails_raw_query_syntax_after_successful_query() -> None:
+    score = judge_product_contract(
+        {
+            "category": "relation_traversal",
+            "hard": {
+                "results_contain": ["Apollo"],
+                "answer_contains": ["Apollo"],
+            },
+        },
+        tool_calls=[{"name": "query", "args": {"manager": "ProjectManager"}}],
+        tool_results=[{"data": [{"name": "Apollo"}]}],
+        answer_text=(
+            "Apollo.\n\n```graphql\n"
+            "query { projectmanagerList { items { name } } }\n"
+            "```"
+        ),
+    )
+
+    assert score.passed is False
+    assert score.violations == [
+        "Answer includes raw query syntax after a successful query"
+    ]

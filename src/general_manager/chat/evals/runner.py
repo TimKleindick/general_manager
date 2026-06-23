@@ -78,6 +78,7 @@ class EvalResult:
     result_score: ResultAccuracyScore | None = None
     answer_score: AnswerQualityScore | None = None
     error: str | None = None
+    recovery_events: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -100,6 +101,7 @@ class TurnRecord:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     answer_chunks: list[str] = field(default_factory=list)
+    recovery_events: list[str] = field(default_factory=list)
 
     @property
     def answer(self) -> str:
@@ -244,6 +246,7 @@ async def _run_turn(
                 )
             ):
                 recovery_attempted.add(priority_tool_recovery[0])
+                record.recovery_events.append(priority_tool_recovery[0])
                 for tool_name, tool_args in priority_tool_recovery[1]:
                     _execute_recovery_tool(
                         record=record,
@@ -262,6 +265,7 @@ async def _run_turn(
                 )
             ):
                 recovery_attempted.add(recovery_message[0])
+                record.recovery_events.append(recovery_message[0])
                 messages.append(Message(role="system", content=recovery_message[1]))
                 continue
             if recover_missing_tools and (
@@ -274,6 +278,7 @@ async def _run_turn(
                 )
             ):
                 recovery_attempted.add(tool_recovery[0])
+                record.recovery_events.append(tool_recovery[0])
                 for tool_name, tool_args in tool_recovery[1]:
                     _execute_recovery_tool(
                         record=record,
@@ -291,6 +296,7 @@ async def _run_turn(
                 )
             ):
                 answer_text = fallback_answer
+                record.recovery_events.append("synthesize_answer_from_tool_results")
             if recover_missing_tools and (
                 repaired_answer := _repair_contradictory_answer_from_tool_results(
                     answer_text=answer_text,
@@ -298,6 +304,7 @@ async def _run_turn(
                 )
             ):
                 answer_text = repaired_answer
+                record.recovery_events.append("repair_contradictory_answer")
             if recover_missing_tools and (
                 discovery_answer := _repair_incomplete_discovery_answer(
                     user_text=last_user_text,
@@ -306,12 +313,16 @@ async def _run_turn(
                 )
             ):
                 answer_text = discovery_answer
+                record.recovery_events.append("repair_incomplete_discovery_answer")
             if recover_missing_tools:
-                answer_text = _sanitize_unavailable_manager_echo(
+                sanitized_answer = _sanitize_unavailable_manager_echo(
                     user_text=last_user_text,
                     assistant_text=answer_text,
                     record=record,
                 )
+                if sanitized_answer != answer_text:
+                    record.recovery_events.append("sanitize_unavailable_manager_echo")
+                answer_text = sanitized_answer
             record.answer_chunks.append(answer_text)
             break
 
@@ -330,6 +341,7 @@ async def _run_turn(
                 and any(message.role == "tool" for message in messages)
             ):
                 recovery_attempted.add("empty_after_tool")
+                record.recovery_events.append("empty_after_tool")
                 messages.append(
                     Message(
                         role="system",
@@ -356,6 +368,7 @@ async def _run_turn(
                     stream,
                     f"blocked_tool_call {tc.name}: {_to_json(tc.args)}",
                 )
+                record.recovery_events.append("block_discovery_data_query")
                 messages.append(
                     Message(
                         role="system",
@@ -401,6 +414,7 @@ async def _run_turn(
             )
         ):
             record.answer_chunks.append(fallback_answer)
+            record.recovery_events.append("synthesize_answer_after_max_iterations")
             _stream_line(stream, f"assistant: {fallback_answer}")
         else:
             record.answer_chunks.append("[max tool iterations reached]")
@@ -1395,6 +1409,9 @@ def _score_case(case: EvalCase, records: list[TurnRecord]) -> EvalResult:
     """Score a completed eval case against its expectations."""
     expectations = case.expectations
     result = EvalResult(case=case)
+    result.recovery_events = [
+        event for record in records for event in record.recovery_events
+    ]
 
     all_tool_calls, all_tool_results, full_answer = _aggregate_records(records)
 
@@ -1482,6 +1499,7 @@ def _write_trace(
             "tool_results": all_tool_results,
             "answer": full_answer,
             "passed": result.passed,
+            "recovery_events": result.recovery_events,
             "contract": (
                 None
                 if result.contract_score is None
@@ -1546,6 +1564,9 @@ async def run_case(
             stream.flush()
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
         result = EvalResult(case=case, error=str(exc))
+        result.recovery_events = [
+            event for record in records for event in record.recovery_events
+        ]
         _write_trace(
             trace_writer,
             case=case,

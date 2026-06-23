@@ -49,6 +49,7 @@ def build_summary(
         for result in results
         if result.contract_score is not None and result.contract_score.passed
     )
+    recovered_results = [result for result in results if result.recovery_events]
     return ReadinessSummary(
         run_hash=str(run_metadata["run_hash"]),
         gate=gate,
@@ -62,6 +63,12 @@ def build_summary(
         product_contract_total=contract_total,
         product_contract_passed=contract_passed,
         diagnostics=summarize_diagnostics(diagnostics),
+        native_passed=sum(
+            1 for result in results if result.passed and not result.recovery_events
+        ),
+        recovered_passed=sum(1 for result in recovered_results if result.passed),
+        recovery_total=len(recovered_results),
+        recovered_cases=[result.case.name for result in recovered_results],
     )
 
 
@@ -87,6 +94,14 @@ def write_readiness_artifacts(
     config.output_dir.mkdir(parents=True, exist_ok=True)
     write_summary(config.output_dir / "summary.json", summary)
     report_lines = [report]
+    if summary.recovery_total:
+        report_lines.append("")
+        report_lines.append("Harness recovery:")
+        report_lines.append(f"- Native passes: {summary.native_passed}")
+        report_lines.append(
+            f"- Recovered passes: {summary.recovered_passed} / {summary.recovery_total}"
+        )
+        report_lines.append("- Recovered cases: " + ", ".join(summary.recovered_cases))
     if comparison is not None:
         report_lines.append("")
         report_lines.append("Baseline comparison:")
