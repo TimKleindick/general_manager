@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from argparse import ArgumentParser
+from typing import cast
 
 from django.core.management.base import BaseCommand, CommandError
 from django.utils.module_loading import import_string
 
 from general_manager.api.graphql import GraphQL
-from general_manager.api.graphql_warmup import warm_up_graphql_properties
+from general_manager.api.graphql_warmup import (
+    GraphQLWarmUpManagerClass,
+    warm_up_graphql_properties,
+)
 
 
 class UnknownGraphQLWarmUpManagerError(CommandError):
@@ -32,7 +36,7 @@ class Command(BaseCommand):
 
     help = "Warm opted-in GraphQL property cache entries."
 
-    def add_arguments(self, parser: Any) -> None:
+    def add_arguments(self, parser: ArgumentParser) -> None:
         """Register command-line arguments for selecting managers."""
         parser.add_argument(
             "--manager",
@@ -44,10 +48,12 @@ class Command(BaseCommand):
             ),
         )
 
-    def handle(self, *args: Any, **options: Any) -> None:
+    def handle(self, *args: object, **options: object) -> None:
         """Run warm-up for selected managers and print a summary."""
         del args
-        manager_classes = self._manager_classes(options.get("manager"))
+        manager_classes = self._manager_classes(
+            cast(list[str] | None, options.get("manager"))
+        )
         summary = warm_up_graphql_properties(manager_classes)
         self.stdout.write(
             self.style.SUCCESS(
@@ -58,20 +64,25 @@ class Command(BaseCommand):
             )
         )
 
-    def _manager_classes(self, manager_names: list[str] | None) -> list[type] | None:
+    def _manager_classes(
+        self,
+        manager_names: list[str] | None,
+    ) -> list[GraphQLWarmUpManagerClass] | None:
         """Resolve manager names or dotted import paths from command options."""
         if not manager_names:
             return None
-        manager_classes: list[type] = []
+        manager_classes: list[GraphQLWarmUpManagerClass] = []
         for manager_name in manager_names:
             if "." in manager_name:
                 try:
-                    manager_classes.append(import_string(manager_name))
+                    manager_classes.append(
+                        cast(GraphQLWarmUpManagerClass, import_string(manager_name))
+                    )
                 except (AttributeError, ImportError, ModuleNotFoundError) as error:
                     raise InvalidGraphQLWarmUpManagerPathError(manager_name) from error
                 continue
             manager_class = GraphQL.manager_registry.get(manager_name)
             if manager_class is None:
                 raise UnknownGraphQLWarmUpManagerError(manager_name)
-            manager_classes.append(manager_class)
+            manager_classes.append(cast(GraphQLWarmUpManagerClass, manager_class))
         return manager_classes

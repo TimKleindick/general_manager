@@ -258,6 +258,26 @@ class SearchReconcileEngineTests(TestCase):
         assert state.claim_token == ""
         assert "backend down" in state.last_error
 
+    def test_reconcile_records_invalid_manager_path_error(self) -> None:
+        """Record a deliberate validation error for non-manager import targets."""
+        ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+        state.manager_path = "math.sqrt"
+        state.save(update_fields=["manager_path", "updated_at"])
+        GeneralManagerMeta.all_classes = []
+
+        from general_manager.search.reconciliation import reconcile_search_indexes
+
+        with patch("general_manager.search.indexer.SearchIndexer") as indexer:
+            result = reconcile_search_indexes()
+
+        assert result.failed == 1
+        indexer.return_value.reindex_manager_index.assert_not_called()
+        state.refresh_from_db()
+        assert state.dirty_since is not None
+        assert state.claim_token == ""
+        assert "must resolve to a GeneralManager class" in state.last_error
+
     def test_force_reconcile_marks_clean_state_dirty_and_reindexes(self) -> None:
         """Force clean states back through reconciliation."""
         ensure_search_index_states()

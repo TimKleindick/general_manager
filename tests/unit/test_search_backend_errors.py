@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from django.test import SimpleTestCase
 
 from general_manager.search.backend import (
@@ -33,9 +35,12 @@ class SearchBackendErrorTests(SimpleTestCase):
             },
         }
         masked = _mask_backend_setting(setting)
-        assert masked["options"]["api_key"] == "<masked>"
-        assert masked["options"]["token"] == "<masked>"  # noqa: S105
-        assert masked["options"]["url"] == "http://example.com:7700"
+        assert isinstance(masked, Mapping)
+        options = masked["options"]
+        assert isinstance(options, Mapping)
+        assert options["api_key"] == "<masked>"
+        assert options["token"] == "<masked>"  # noqa: S105
+        assert options["url"] == "http://example.com:7700"
 
     def test_mask_backend_setting_string(self) -> None:
         assert _mask_backend_setting("user:pass") == "<masked>"

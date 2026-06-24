@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Event, Lock
-from typing import Any, Mapping
+from collections.abc import Mapping
 from uuid import uuid4
 
 from general_manager.workflow.engine import (
@@ -18,9 +18,16 @@ from general_manager.workflow.engine import (
     WorkflowState,
 )
 
+type WorkflowPayload = Mapping[str, object]
+
 
 class LocalWorkflowEngine:
-    """In-memory workflow engine for development and tests."""
+    """Process-local workflow engine for development and tests.
+
+    Executions are stored in memory, so state is lost when the process exits.
+    Input data, metadata, handler input, and resume signals are deep-copied at
+    the engine boundary to isolate stored snapshots from caller mutation.
+    """
 
     def __init__(self) -> None:
         self._executions: dict[str, WorkflowExecution] = {}
@@ -35,15 +42,25 @@ class LocalWorkflowEngine:
     def start(
         self,
         workflow: WorkflowDefinition,
-        input_data: Mapping[str, Any] | None = None,
+        input_data: WorkflowPayload | None = None,
         *,
         correlation_id: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
+        metadata: WorkflowPayload | None = None,
     ) -> WorkflowExecution:
+        """Start `workflow` and return an execution snapshot.
+
+        Workflows without handlers complete with an empty output mapping.
+        Handler exceptions are captured as failed executions. A non-empty
+        `correlation_id` reuses an existing local execution for the same workflow
+        id, including failed executions. Concurrent starts for the same
+        correlation key wait for the in-flight start to finish and then return
+        the completed or failed snapshot.
+        """
         started_at = self._utcnow()
         execution_id = str(uuid4())
-        reserved_input = deepcopy(input_data or {})
-        reserved_metadata = deepcopy(metadata or {})
+        source_input = {} if input_data is None else input_data
+        reserved_input = deepcopy(source_input)
+        reserved_metadata = deepcopy({} if metadata is None else metadata)
         wait_for_execution: Event | None = None
         if correlation_id:
             correlation_key = (workflow.workflow_id, correlation_id)
@@ -84,12 +101,12 @@ class LocalWorkflowEngine:
                     if existing is None:
                         raise WorkflowExecutionNotFoundError(existing_id)
                     return existing
-        output_data: Mapping[str, Any] | None = {}
+        output_data: WorkflowPayload | None = {}
         state: WorkflowState = "completed"
         error = None
         if workflow.handler is not None:
             try:
-                output_data = workflow.handler(deepcopy(input_data or {})) or {}
+                output_data = workflow.handler(deepcopy(source_input)) or {}
             except Exception as exc:  # noqa: BLE001
                 state = "failed"
                 error = str(exc)
@@ -119,8 +136,15 @@ class LocalWorkflowEngine:
     def resume(
         self,
         execution_id: str,
-        signal: Mapping[str, Any] | None = None,
+        signal: WorkflowPayload | None = None,
     ) -> WorkflowExecution:
+        """Complete a waiting execution with an optional resume signal.
+
+        Raises:
+            WorkflowExecutionNotFoundError: If `execution_id` is unknown.
+            WorkflowCancelledError: If the execution is already cancelled.
+            WorkflowInvalidStateError: If the execution is not waiting.
+        """
         with self._lock:
             execution = self._executions.get(execution_id)
             if execution is None:
@@ -135,7 +159,7 @@ class LocalWorkflowEngine:
                     expected_states=("waiting",),
                 )
             merged_metadata = dict(execution.metadata)
-            if signal:
+            if signal is not None:
                 merged_metadata["resume_signal"] = deepcopy(signal)
             updated = WorkflowExecution(
                 execution_id=execution.execution_id,
@@ -155,6 +179,13 @@ class LocalWorkflowEngine:
     def cancel(
         self, execution_id: str, *, reason: str | None = None
     ) -> WorkflowExecution:
+        """Cancel an active local execution.
+
+        Raises:
+            WorkflowExecutionNotFoundError: If `execution_id` is unknown.
+            WorkflowCancelledError: If the execution is already cancelled.
+            WorkflowInvalidStateError: If the execution is terminal.
+        """
         with self._lock:
             execution = self._executions.get(execution_id)
             if execution is None:
@@ -184,6 +215,11 @@ class LocalWorkflowEngine:
         return updated
 
     def status(self, execution_id: str) -> WorkflowExecution:
+        """Return the stored execution snapshot.
+
+        Raises:
+            WorkflowExecutionNotFoundError: If `execution_id` is unknown.
+        """
         with self._lock:
             execution = self._executions.get(execution_id)
         if execution is None:

@@ -52,10 +52,17 @@ class DevSearchBackendTests(SimpleTestCase):
         )
         assert result.total == 2
 
+    def test_list_field_in_filter_with_scalar_value_returns_no_hits(self) -> None:
+        """Treat invalid scalar `in` filters for list-valued fields as false."""
+        result = self.backend.search("global", "", filters={"tags__in": "a"})
+        assert result.total == 0
+
     def test_search_sorting(self) -> None:
         """Sort search results by a stored document field."""
         result = self.backend.search("global", "", sort_by="name", sort_desc=True)
-        assert result.hits[0].data["name"] == "Beta Project"
+        data = result.hits[0].data
+        assert data is not None
+        assert data["name"] == "Beta Project"
 
     def test_list_document_ids_filters_by_type(self) -> None:
         """Return indexed document IDs restricted to requested type labels."""

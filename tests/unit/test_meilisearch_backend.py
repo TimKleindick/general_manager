@@ -28,6 +28,7 @@ class _FakeIndex:
         self.deleted: list[list[str]] = []
         self.settings: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
+        self.search_payloads: list[dict[str, object]] = []
 
     def update_settings(self, payload: dict[str, object]) -> dict[str, int]:
         """
@@ -82,6 +83,7 @@ class _FakeIndex:
                 - "estimatedTotalHits": 0.
                 - "processingTimeMs": 0.
         """
+        self.search_payloads.append(_payload)
         return {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 0}
 
     def get_documents(self, payload: dict[str, object]) -> dict[str, object]:
@@ -288,7 +290,106 @@ def test_meilisearch_backend_normalize_document_id() -> None:
     """Normalize invalid Meilisearch document IDs deterministically."""
     backend = MeilisearchBackend(client=_FakeClient(_FakeIndex()))
     assert backend._normalize_document_id("valid-id_1") == "valid-id_1"
-    assert backend._normalize_document_id("invalid:{id}") != "invalid:{id}"
+    invalid_id = "invalid:{id}"
+    unicode_id = "Project/ümlaut id"
+    empty_id = ""
+    assert backend._normalize_document_id(invalid_id) != invalid_id
+    assert backend._normalize_document_id(unicode_id) == backend._normalize_document_id(
+        unicode_id
+    )
+    assert backend._normalize_document_id(empty_id).startswith("gm_")
+    assert backend._normalize_document_id("A" * 512).startswith("gm_")
+
+
+def test_meilisearch_backend_settings_ignore_strings_and_accept_iterables() -> None:
+    """Apply iterable settings while treating strings as invalid scalar values."""
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    backend.ensure_index(
+        "test-index",
+        {
+            "searchable_fields": "title",
+            "filterable_fields": ("status", "owner"),
+            "sortable_fields": {"created_at", 5},
+        },
+    )
+
+    assert {"searchableAttributes": ["t", "i", "t", "l", "e"]} not in index.settings
+    assert {"filterableAttributes": ["status", "owner"]} in index.settings
+    sortable_payload = next(
+        payload for payload in index.settings if "sortableAttributes" in payload
+    )
+    assert set(sortable_payload["sortableAttributes"]) == {"created_at", "5"}
+
+
+def test_meilisearch_backend_create_index_uses_id_primary_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create missing indexes with `id` as the Meilisearch primary key."""
+
+    class _NotFoundError(Exception):
+        status_code = 404
+        error_code = "not_found"
+
+    class _CreateClient:
+        def __init__(self) -> None:
+            self.index = _FakeIndex()
+            self.created: list[dict[str, object]] = []
+            self.waited: list[int] = []
+            self.lookups = 0
+
+        def get_index(self, _name: str) -> _FakeIndex:
+            self.lookups += 1
+            if self.lookups == 1:
+                raise _NotFoundError
+            return self.index
+
+        def create_index(
+            self, _name: str, payload: dict[str, object]
+        ) -> dict[str, int]:
+            self.created.append(payload)
+            return {"taskUid": 4}
+
+        def wait_for_task(self, task_uid: int) -> dict[str, object]:
+            self.waited.append(task_uid)
+            return {"status": "succeeded"}
+
+    client = _CreateClient()
+    monkeypatch.setattr(meili_module, "MeilisearchApiError", _NotFoundError)
+    backend = MeilisearchBackend(client=client)
+
+    backend.ensure_index("missing-index", {})
+
+    assert client.created == [{"primaryKey": "id"}]
+    assert client.waited == [4]
+
+
+def test_meilisearch_backend_empty_upsert_and_delete_behavior() -> None:
+    """Empty upsert ensures the index, while empty delete does not touch the client."""
+
+    class _TrackingClient(_FakeClient):
+        def __init__(self, index: _FakeIndex) -> None:
+            super().__init__(index)
+            self.get_or_create_calls = 0
+
+        def get_or_create_index(
+            self, _name: str, _payload: dict[str, object]
+        ) -> _FakeIndex:
+            self.get_or_create_calls += 1
+            return self.index
+
+    index = _FakeIndex()
+    client = _TrackingClient(index)
+    backend = MeilisearchBackend(client=client)
+
+    backend.upsert("test-index", [])
+    backend.delete("test-index", [])
+    backend.delete("test-index", [""])
+
+    assert client.get_or_create_calls == 2
+    assert index.added == []
+    assert index.deleted == [[MeilisearchBackend._normalize_document_id("")]]
 
 
 def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
@@ -335,6 +436,50 @@ def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
     assert result.hits[0].id == 'Project:{"id": 9}'
 
 
+def test_meilisearch_backend_search_payload_precedence_sort_and_defaults() -> None:
+    """Build search payloads predictably and default missing hit fields."""
+
+    class _SearchIndex(_FakeIndex):
+        def search(self, _query: str, payload: dict[str, object]) -> dict[str, object]:
+            self.search_payloads.append(payload)
+            return {
+                "hits": [
+                    "malformed",
+                    {"id": "safe_id"},
+                    {
+                        "gm_document_id": "original",
+                        "type": "Project",
+                        "identification": {"id": 1},
+                        "data": {"name": "Alpha"},
+                    },
+                ],
+                "estimatedTotalHits": 2,
+            }
+
+    index = _SearchIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    result = backend.search(
+        "index",
+        "Alpha",
+        filters={"status": "ready"},
+        filter_expression='status = "raw"',
+        sort_by="created_at:desc",
+        sort_desc=True,
+        types=["Project"],
+    )
+
+    assert index.search_payloads[0]["filter"] == 'status = "raw"'
+    assert index.search_payloads[0]["sort"] == ["created_at:desc:desc"]
+    assert len(result.hits) == 2
+    assert result.hits[0].id == "safe_id"
+    assert result.hits[0].type == ""
+    assert result.hits[0].identification == {}
+    assert result.hits[0].data == {}
+    assert result.hits[0].score is None
+    assert result.hits[1].id == "original"
+
+
 def test_meilisearch_backend_lists_original_document_ids_by_type() -> None:
     """List original document IDs for the requested type labels."""
     index = _FakeIndex()
@@ -349,12 +494,14 @@ def test_meilisearch_backend_lists_original_document_ids_by_type() -> None:
             "gm_document_id": 'Other:{"id": 1}',
             "type": "Other",
         },
+        {"id": "falsey_fallback", "gm_document_id": "", "type": "Project"},
         {"id": "legacy_id", "type": "Project"},
     ]
     backend = MeilisearchBackend(client=_FakeClient(index))
 
     assert backend.list_document_ids("index", types=["Project"]) == {
         'Project:{"id": 1}',
+        "falsey_fallback",
         "legacy_id",
     }
 
@@ -496,6 +643,24 @@ def test_meilisearch_backend_build_filter_expression_groups() -> None:
 def test_meilisearch_backend_build_filter_expression_empty() -> None:
     """Return no filter expression when no filters or types are provided."""
     assert MeilisearchBackend._build_filter_expression(None, None) is None
+
+
+def test_meilisearch_backend_build_filter_expression_exact_value_rendering() -> None:
+    """Render all structured filter values as quoted escaped strings."""
+    expr = MeilisearchBackend._build_filter_expression(
+        {
+            "flag": True,
+            "missing": None,
+            "count": 3,
+            "empty__in": [],
+        },
+        types=None,
+    )
+
+    assert 'flag = "True"' in expr
+    assert 'missing = "None"' in expr
+    assert 'count = "3"' in expr
+    assert "()" in expr
 
 
 def test_meilisearch_error_helpers() -> None:

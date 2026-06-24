@@ -1,39 +1,126 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from threading import Event, Thread
 
 import pytest
 from django.test import SimpleTestCase
 
 from general_manager.workflow.actions import (
+    ActionAlreadyRegisteredError,
     ActionExecutionError,
     ActionNotFoundError,
     ActionRegistry,
 )
 from general_manager.workflow.backends.local import LocalWorkflowEngine
 from general_manager.workflow.engine import (
+    ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES,
+    ACTIVE_WORKFLOW_STATES,
+    TERMINAL_WORKFLOW_STATES,
+    WorkflowCancelledError,
     WorkflowDefinition,
+    WorkflowEngine,
+    WorkflowEngineError,
     WorkflowExecution,
     WorkflowInvalidStateError,
     WorkflowExecutionNotFoundError,
 )
 from general_manager.workflow.event_registry import InMemoryEventRegistry, WorkflowEvent
-from general_manager.workflow.events import manager_updated_event
+from general_manager.workflow.events import (
+    manager_created_event,
+    manager_deleted_event,
+    manager_updated_event,
+)
 
 
 class _EchoAction:
     def execute(
-        self, context: dict[str, object], params: dict[str, object]
+        self, context: Mapping[str, object], params: Mapping[str, object]
     ) -> dict[str, object]:
         return {"context": context, "params": params}
 
 
 class _FailingAction:
-    def execute(self, _context: dict[str, object], _params: dict[str, object]) -> None:
+    def execute(
+        self, _context: Mapping[str, object], _params: Mapping[str, object]
+    ) -> None:
         raise RuntimeError("boom")
 
 
+class _CaptureAction:
+    context: object | None = None
+    params: object | None = None
+
+    def execute(
+        self, context: Mapping[str, object], params: Mapping[str, object]
+    ) -> dict[str, object]:
+        self.context = context
+        self.params = params
+        return {"captured": True}
+
+
+class _FalseyDict(dict[str, object]):
+    def __bool__(self) -> bool:
+        return False
+
+
 class WorkflowCoreTests(SimpleTestCase):
+    def test_workflow_definition_defaults_and_mutable_metadata_boundary(self) -> None:
+        metadata = {"tags": ["initial"]}
+        definition = WorkflowDefinition(workflow_id="sync_project", metadata=metadata)
+
+        metadata["tags"].append("changed")
+
+        assert definition.version == "1"
+        assert definition.description is None
+        assert definition.handler is None
+        assert definition.metadata == {"tags": ["initial", "changed"]}
+
+    def test_workflow_execution_defaults_and_state_constants(self) -> None:
+        execution = WorkflowExecution(
+            execution_id="exec-1",
+            workflow_id="sync_project",
+            state="pending",
+        )
+
+        assert execution.input_data == {}
+        assert execution.output_data is None
+        assert execution.correlation_id is None
+        assert execution.started_at is None
+        assert execution.ended_at is None
+        assert execution.error is None
+        assert execution.metadata == {}
+        assert ACTIVE_WORKFLOW_STATES == ("pending", "running", "waiting")
+        assert ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES == (
+            "pending",
+            "running",
+            "waiting",
+            "completed",
+        )
+        assert TERMINAL_WORKFLOW_STATES == ("failed", "cancelled", "completed")
+
+    def test_workflow_engine_errors_include_context(self) -> None:
+        not_found = WorkflowExecutionNotFoundError("exec-missing")
+        cancelled = WorkflowCancelledError("exec-cancelled")
+        invalid = WorkflowInvalidStateError(
+            "exec-invalid",
+            operation="resume",
+            state="completed",
+            expected_states=("waiting",),
+        )
+
+        assert isinstance(not_found, WorkflowEngineError)
+        assert "exec-missing" in str(not_found)
+        assert "exec-cancelled" in str(cancelled)
+        assert "exec-invalid" in str(invalid)
+        assert "resume" in str(invalid)
+        assert "completed" in str(invalid)
+        assert "waiting" in str(invalid)
+
+    def test_local_engine_satisfies_workflow_engine_protocol(self) -> None:
+        assert isinstance(LocalWorkflowEngine(), WorkflowEngine)
+
     def test_local_engine_start_and_status(self) -> None:
         engine = LocalWorkflowEngine()
         definition = WorkflowDefinition(workflow_id="sync_project")
@@ -63,6 +150,42 @@ class WorkflowCoreTests(SimpleTestCase):
         registry.register("fail", _FailingAction())
         with pytest.raises(ActionExecutionError):
             registry.execute("fail")
+
+    def test_action_registry_rejects_duplicate_names_by_default(self) -> None:
+        registry = ActionRegistry()
+        registry.register("echo", _EchoAction())
+
+        with pytest.raises(ActionAlreadyRegisteredError):
+            registry.register("echo", _EchoAction())
+
+    def test_action_registry_replace_overwrites_existing_action(self) -> None:
+        registry = ActionRegistry()
+        first = _CaptureAction()
+        second = _CaptureAction()
+        registry.register("capture", first)
+        registry.register("capture", second, replace=True)
+
+        assert registry.get("capture") is second
+
+    def test_action_registry_names_are_sorted(self) -> None:
+        registry = ActionRegistry()
+        registry.register("send_email", _EchoAction())
+        registry.register("audit", _EchoAction())
+
+        assert registry.names() == ("audit", "send_email")
+
+    def test_action_registry_preserves_falsey_mapping_inputs(self) -> None:
+        registry = ActionRegistry()
+        action = _CaptureAction()
+        context = _FalseyDict(user="42")
+        params = _FalseyDict(priority="high")
+
+        registry.register("capture", action)
+        result = registry.execute("capture", context=context, params=params)
+
+        assert result == {"captured": True}
+        assert action.context is context
+        assert action.params is params
 
     def test_event_registry_deduplicates_event_ids(self) -> None:
         events: list[str] = []
@@ -123,6 +246,64 @@ class WorkflowCoreTests(SimpleTestCase):
         assert event.event_name == "project_status_changed"
         assert event.payload["identification"] == {"id": 7}
         assert event.payload["changes"]["status"] == {"old": "draft", "new": "active"}
+
+    def test_manager_created_event_copies_payload_and_metadata(self) -> None:
+        values = {"status": "draft"}
+        identification = {"id": 7}
+        metadata = {"actor": "system"}
+        occurred_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+
+        event = manager_created_event(
+            manager="Project",
+            values=values,
+            identification=identification,
+            event_id="evt-created",
+            source="unit-test",
+            occurred_at=occurred_at,
+            metadata=metadata,
+        )
+
+        values["status"] = "changed"
+        identification["id"] = 8
+        metadata["actor"] = "other"
+
+        assert event.event_id == "evt-created"
+        assert event.event_type == "general_manager.manager.created"
+        assert event.event_name == "manager_created"
+        assert event.source == "unit-test"
+        assert event.occurred_at == occurred_at
+        assert event.payload == {
+            "manager": "Project",
+            "values": {"status": "draft"},
+            "identification": {"id": 7},
+        }
+        assert event.metadata == {"actor": "system"}
+
+    def test_manager_updated_event_uses_none_for_missing_old_values(self) -> None:
+        event = manager_updated_event(
+            manager="Project",
+            changes={"status": "active"},
+            event_id="evt-1",
+        )
+
+        assert event.payload["changes"]["status"] == {"old": None, "new": "active"}
+
+    def test_manager_deleted_event_omits_optional_identification(self) -> None:
+        event = manager_deleted_event(manager="Project", event_id="evt-deleted")
+
+        assert event.event_id == "evt-deleted"
+        assert event.event_type == "general_manager.manager.deleted"
+        assert event.event_name == "manager_deleted"
+        assert event.payload == {"manager": "Project"}
+
+    def test_manager_event_helpers_default_id_and_timestamp(self) -> None:
+        before = datetime.now(UTC)
+        event = manager_deleted_event(manager="Project")
+        after = datetime.now(UTC)
+
+        assert event.event_id
+        assert before <= event.occurred_at <= after
+        assert event.occurred_at.tzinfo is UTC
 
     def test_event_registry_isolates_handler_failures(self) -> None:
         handled: list[str] = []
@@ -236,6 +417,24 @@ class WorkflowCoreTests(SimpleTestCase):
         assert registry.publish(event) is True
         assert handled == ["evt-dup-reg"]
 
+    def test_event_registry_deduplicates_after_retry_clamping(self) -> None:
+        handled: list[str] = []
+        registry = InMemoryEventRegistry()
+
+        def handler(event: WorkflowEvent) -> None:
+            handled.append(event.event_id)
+
+        registry.register("invoice.created", handler=handler, retries=-1)
+        registry.register("invoice.created", handler=handler, retries=0)
+
+        event = WorkflowEvent(
+            event_id="evt-dup-clamped-retries",
+            event_type="invoice.created",
+            payload={"invoice_id": 202},
+        )
+        assert registry.publish(event) is True
+        assert handled == ["evt-dup-clamped-retries"]
+
     def test_event_registry_bounds_seen_event_cache(self) -> None:
         handled: list[str] = []
         registry = InMemoryEventRegistry(max_seen_event_ids=2)
@@ -300,6 +499,36 @@ class WorkflowCoreTests(SimpleTestCase):
 
         with pytest.raises(WorkflowInvalidStateError):
             engine.cancel(execution.execution_id, reason="late cancel")
+
+    def test_local_engine_preserves_falsey_input_mapping(self) -> None:
+        engine = LocalWorkflowEngine()
+        payload = _FalseyDict(value=3)
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-falsey-input",
+            handler=lambda data: {"seen": data["value"]},
+        )
+
+        execution = engine.start(workflow, payload)
+
+        assert execution.input_data == {"value": 3}
+        assert execution.output_data == {"seen": 3}
+
+    def test_local_engine_records_falsey_resume_signal(self) -> None:
+        engine = LocalWorkflowEngine()
+        execution = WorkflowExecution(
+            execution_id="exec-waiting",
+            workflow_id="wf-local-wait",
+            state="waiting",
+            input_data={},
+            metadata={},
+        )
+        engine._executions[execution.execution_id] = execution
+        signal = _FalseyDict(step="approve")
+
+        updated = engine.resume(execution.execution_id, signal)
+
+        assert updated.state == "completed"
+        assert updated.metadata["resume_signal"] == {"step": "approve"}
 
     def test_local_engine_reuses_existing_correlation_id(self) -> None:
         engine = LocalWorkflowEngine()

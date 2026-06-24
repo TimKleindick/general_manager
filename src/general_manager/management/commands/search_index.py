@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from argparse import ArgumentParser
+from collections.abc import Iterable
 
 from django.core.management.base import BaseCommand
 
@@ -18,10 +19,18 @@ from general_manager.search.registry import (
 logger = get_logger("search.command")
 
 
+class InvalidSearchIndexCommandOptionError(TypeError):
+    """Raised when repeatable `search_index` options contain non-string values."""
+
+    def __init__(self) -> None:
+        """Build the command option validation error message."""
+        super().__init__("search_index repeatable options must contain strings")
+
+
 class Command(BaseCommand):
     help = "Create or update search indexes and optionally reindex data."
 
-    def add_arguments(self, parser) -> None:  # type: ignore[override]
+    def add_arguments(self, parser: ArgumentParser) -> None:
         """
         Add CLI arguments to control index creation/update and optional reindexing.
 
@@ -50,7 +59,7 @@ class Command(BaseCommand):
             help="Manager class name to reindex. Repeatable.",
         )
 
-    def handle(self, *_: Any, **options: Any) -> None:
+    def handle(self, *_args: object, **options: object) -> None:
         """
         Create or update search indexes and optionally reindex configured managers.
 
@@ -62,10 +71,14 @@ class Command(BaseCommand):
         Side effects:
         - Ensures each target index exists and has its searchable, filterable, sortable fields and field boosts configured on the search backend.
         - When `reindex` is true, reindexes each searchable manager (filtered by `managers` when provided) and logs completion per manager.
+
+        Raises:
+            InvalidSearchIndexCommandOptionError: If `indexes` or `managers` are provided as non-string values.
+            Exception: Backend configuration, index setup, manager discovery, and reindexing errors propagate.
         """
-        index_names = options.get("indexes")
+        index_names = _string_options(options.get("indexes"))
         reindex = bool(options.get("reindex"))
-        manager_filters = set(options.get("managers") or [])
+        manager_filters = set(_string_options(options.get("managers")))
 
         backend = get_search_backend()
         indexer = SearchIndexer(backend)
@@ -110,3 +123,16 @@ class Command(BaseCommand):
                     "search reindex complete",
                     context={"manager": manager_class.__name__},
                 )
+
+
+def _string_options(value: object) -> tuple[str, ...]:
+    """Normalize repeatable Django command options into a tuple of strings."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Iterable):
+        items = tuple(value)
+        if all(isinstance(item, str) for item in items):
+            return items
+    raise InvalidSearchIndexCommandOptionError()

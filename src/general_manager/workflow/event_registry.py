@@ -7,9 +7,10 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha1
 from time import perf_counter
 from collections import deque
+from collections.abc import Callable, Mapping
 from threading import Lock
 from traceback import format_exc
-from typing import Any, Callable, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from uuid import uuid4
 
 from django.db import IntegrityError, models, transaction
@@ -35,18 +36,44 @@ from general_manager.workflow.telemetry import (
     observe_outbox_process_duration,
 )
 
+if TYPE_CHECKING:
+    from general_manager.workflow.models import WorkflowEventRecord
+
+
+type WorkflowEventPayload = Mapping[str, object]
+
 
 @dataclass(frozen=True)
 class WorkflowEvent:
-    """Canonical workflow trigger event."""
+    """
+    Canonical workflow trigger event routed by workflow event registries.
+
+    Attributes:
+        event_id: Stable idempotency key for duplicate suppression.
+        event_type: Canonical dotted type such as
+            `"general_manager.manager.updated"`.
+        payload: Event-specific payload stored in memory or serialized to the
+            database-backed event record.
+        event_name: Optional readable routing name such as
+            `"project_status_changed"`.
+        source: Optional origin label for observability and auditing.
+        occurred_at: Optional timestamp for when the domain event occurred.
+        metadata: Additional event metadata stored alongside the payload.
+
+    The dataclass is frozen but does not validate field values at runtime.
+    Empty strings and caller-supplied mutable mappings are accepted by the
+    constructor. In-memory registries pass mappings through to handlers as-is;
+    database registries snapshot them with `dict(...)` and rely on Django model
+    fields for JSON/date serialization validation.
+    """
 
     event_id: str
     event_type: str
-    payload: Mapping[str, Any]
+    payload: WorkflowEventPayload
     event_name: str | None = None
     source: str | None = None
     occurred_at: datetime | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: WorkflowEventPayload = field(default_factory=dict)
 
 
 WorkflowEventHandler = Callable[[WorkflowEvent], None]
@@ -59,6 +86,23 @@ DeadLetterHandler = Callable[[WorkflowEvent, Exception], None]
 logger = get_logger("workflow.event_registry")
 _SETTINGS_KEY = "GENERAL_MANAGER"
 _EVENT_REGISTRY_KEY = "WORKFLOW_EVENT_REGISTRY"
+
+
+class InvalidWorkflowEventRegistryOptionsError(TypeError):
+    """Raised when WORKFLOW_EVENT_REGISTRY mapping options are not a mapping."""
+
+    def __init__(self) -> None:
+        super().__init__("WORKFLOW_EVENT_REGISTRY options must be a mapping.")
+
+
+class InvalidWorkflowEventRegistryError(TypeError):
+    """Raised when a workflow event registry setting cannot resolve to a registry."""
+
+    def __init__(self, registry_setting: object) -> None:
+        super().__init__(
+            "Workflow event registry setting did not resolve to an EventRegistry: "
+            f"{registry_setting!r}"
+        )
 
 
 class _DeliveryInProgressError(RuntimeError):
@@ -89,7 +133,11 @@ class _EventHandlerRegistration:
 
 def _callable_path(value: object) -> str:
     module = getattr(value, "__module__", "")
+    if not isinstance(module, str):
+        module = ""
     qualname = getattr(value, "__qualname__", "")
+    if not isinstance(qualname, str):
+        qualname = ""
     if module and qualname:
         return f"{module}.{qualname}"
     return repr(value)
@@ -128,10 +176,60 @@ class EventRegistry(Protocol):
         retry_on: RetryPredicate | None = None,
         dead_letter_handler: DeadLetterHandler | None = None,
     ) -> None:
-        """Register a handler for an event type or event name."""
+        """
+        Register a handler for an event type or event name.
+
+        `event` values containing a dot route by `WorkflowEvent.event_type`;
+        values without a dot route by `WorkflowEvent.event_name`. `validator`
+        runs before `when`; validator errors and final handler failures are sent
+        to the registration's dead-letter handler when configured. `retries`
+        counts additional attempts after the first and is clamped to zero when
+        negative.
+
+        The registry trusts the annotated input types. It does not validate
+        non-callable handlers, validators, predicates, retry predicates, or
+        dead-letter handlers at registration time; invalid callables fail when
+        the route is evaluated. Non-string event keys or non-integer retry values
+        may raise normal Python errors during registration.
+
+        Route keys are matched by exact string equality; they are not stripped,
+        normalized, wildcarded, or prefix-matched. Empty strings are valid keys
+        and match events whose `event_name` is `None` or `""`. A readable
+        `event_name` containing a dot is treated as a type route key, so prefer
+        dot-free event names.
+
+        Identical registrations are ignored rather than appended. Registration
+        identity is derived from the event key, handler, validator, predicate,
+        retry count, retry predicate, and dead-letter handler. Different routing
+        options produce separate registrations and may invoke the same handler
+        more than once. Callable identity uses each callable's
+        `__module__ + "." + __qualname__` when available and `repr(...)`
+        otherwise; retry count identity uses the clamped retry count.
+
+        Matching handlers run in registration order within each route bucket.
+        Type-route registrations run before name-route registrations when an
+        event matches both. A registration becomes applicable only after its
+        validator succeeds and its `when` predicate is absent or returns `True`;
+        `when=False` registrations are skipped and do not affect `publish()`
+        return values.
+
+        `retry_on=None` retries every handler exception until the attempt budget
+        is exhausted. Validator failures are not retried. `when` predicate
+        exceptions and dead-letter handler exceptions are not wrapped by the
+        in-memory registry; database outbox processing records them as outbox
+        failures. If a `retry_on` predicate raises, that exception propagates
+        the same way and is not converted into a retry decision.
+        """
 
     def publish(self, event: WorkflowEvent) -> bool:
-        """Publish an event and return True when at least one handler ran."""
+        """
+        Publish an event and return whether at least one handler completed.
+
+        Implementations may suppress duplicate `event.event_id` values and may
+        persist work before handlers run. A duplicate publish returns `False`.
+        If at least one applicable handler completes and another fails,
+        synchronous registries return `True`.
+        """
 
 
 class _RoutingMixin:
@@ -151,6 +249,7 @@ class _RoutingMixin:
         retry_on: RetryPredicate | None = None,
         dead_letter_handler: DeadLetterHandler | None = None,
     ) -> None:
+        retry_count = max(0, retries)
         registration = _EventHandlerRegistration(
             event_key=event,
             registration_id=_registration_id(
@@ -158,14 +257,14 @@ class _RoutingMixin:
                 handler,
                 validator=validator,
                 when=when,
-                retries=retries,
+                retries=retry_count,
                 retry_on=retry_on,
                 dead_letter_handler=dead_letter_handler,
             ),
             handler=handler,
             validator=validator,
             when=when,
-            retries=max(0, retries),
+            retries=retry_count,
             retry_on=retry_on,
             dead_letter_handler=dead_letter_handler,
         )
@@ -275,7 +374,28 @@ class _RoutingMixin:
 
 
 class InMemoryEventRegistry(_RoutingMixin):
-    """Thread-safe in-memory event registry suitable for local development."""
+    """
+    Thread-safe in-memory event registry suitable for local development.
+
+    The registry deduplicates published events by `event_id` using a bounded
+    process-local cache. It routes matching handlers synchronously and isolates
+    handler failures so one failing route does not stop later routes.
+
+    `max_seen_event_ids` is clamped to at least `1`; when the cache is full, the
+    oldest id is evicted. The id is marked seen before routing, so a handler
+    failure does not make the event id publishable again. The dataclass is
+    frozen, but `payload` and `metadata` may still reference mutable mappings.
+
+    Registration-level dead-letter handlers take precedence over the
+    registry-level `dead_letter_handler`; the registry-level handler is used only
+    when a failed registration does not define one.
+
+    The internal lock protects registration mutation, handler snapshot creation,
+    and seen-id cache updates. Handlers run outside the lock. Concurrent
+    `publish()` calls use the handler snapshot available when routing starts;
+    concurrent `register()` calls may affect later publishes but not a snapshot
+    already being routed.
+    """
 
     def __init__(
         self,
@@ -326,7 +446,36 @@ class InMemoryEventRegistry(_RoutingMixin):
 
 
 class DatabaseEventRegistry(_RoutingMixin):
-    """DB-backed event registry for production event durability."""
+    """
+    DB-backed event registry for production event durability.
+
+    `publish()` persists a `WorkflowEventRecord` and `WorkflowOutbox` row. In
+    async mode it schedules outbox processing after commit and returns `False`
+    because handlers have not run yet; otherwise it processes the outbox row
+    synchronously. Duplicate `event_id` values are suppressed by the event
+    record uniqueness constraint; duplicate `publish()` calls return `False`
+    without creating or routing a new outbox row. Database registries do not have a
+    registry-level dead-letter handler; use registration-level handlers for
+    custom dead-letter handling. The class accepts no constructor options.
+
+    Payload and metadata values are handed to Django's `JSONField`; they must be
+    serializable by the configured Django/database JSON handling. `occurred_at`
+    is handed to Django's `DateTimeField` without conversion in this layer, so
+    timezone behavior follows the project's Django settings and database backend.
+    """
+
+    def publish_sync(self, event: WorkflowEvent) -> bool:
+        """
+        Persist `event` if possible and route matching handlers inline.
+
+        A duplicate `event_id` is not inserted again, but inline routing still
+        runs against the provided event object. Non-duplicate persistence errors
+        propagate and prevent routing. Successful persistence commits before
+        inline routing begins. Returns `True` when at least one handler
+        completes.
+        """
+        self._save_event(event)
+        return self._route_event(event).handled
 
     def publish(self, event: WorkflowEvent) -> bool:
         from general_manager.workflow.models import WorkflowEventRecord, WorkflowOutbox
@@ -350,13 +499,39 @@ class DatabaseEventRegistry(_RoutingMixin):
             return False
         return self.process_outbox_entry(int(outbox.pk))
 
-    def publish_sync(self, event: WorkflowEvent) -> bool:
-        self._save_event(event)
-        return self._route_event(event).handled
-
     def process_outbox_entry(
         self, outbox_id: int, *, claim_token: str | None = None
     ) -> bool:
+        """
+        Route one outbox row and finalize its delivery state.
+
+        Returns `False` for missing or already processed rows, stale or missing
+        ownership claims, duplicate in-progress delivery attempts, handler
+        failures, and finalize failures. Rows with only filtered-out handlers are
+        marked processed and return `False`. Successful handler completion marks
+        the row processed and returns `True`.
+
+        Handler failure increments the outbox attempt count. While attempts are
+        below `WORKFLOW_MAX_RETRIES`, the row remains failed and becomes due
+        again at `now + WORKFLOW_RETRY_BACKOFF_SECONDS * attempts`. When attempts
+        reach `WORKFLOW_MAX_RETRIES` and dead letters are enabled, the row moves
+        to `dead_letter`. Handler-level `register(..., retries=...)` controls
+        delivery attempts inside one outbox processing call; outbox attempts
+        control later processing calls. If at least one applicable handler
+        succeeds and another handler fails during the same processing call, the
+        failed handler still receives dead-letter handling but the outbox row is
+        marked processed because the event had a successful route.
+
+        Dead letters are controlled by `WORKFLOW_DEAD_LETTER_ENABLED`, which
+        defaults to `True` and is interpreted with `bool(...)`. When disabled,
+        rows that reach `WORKFLOW_MAX_RETRIES` remain failed and are scheduled
+        again with backoff instead of moving to `dead_letter`.
+        `WORKFLOW_MAX_RETRIES` is parsed with `int(...)`, clamped to at least
+        `0`, defaults to `3` on missing or invalid values, and counts total
+        failed outbox processing calls before dead-letter transition.
+        `WORKFLOW_RETRY_BACKOFF_SECONDS` is parsed with `int(...)`, clamped to
+        at least `1`, and defaults to `5` on missing or invalid values.
+        """
         from general_manager.workflow.models import WorkflowOutbox
 
         started = perf_counter()
@@ -486,6 +661,14 @@ class DatabaseEventRegistry(_RoutingMixin):
     def claim_outbox_batch(
         self, *, batch_size: int | None = None
     ) -> list[tuple[int, str]]:
+        """
+        Claim available outbox rows for async processing.
+
+        The method claims pending/failed rows whose `available_at` is due and
+        stale claimed rows whose claim TTL has expired, using row locks and one
+        fresh claim token for the returned batch. `batch_size=None` uses the
+        configured outbox batch size. Returns `(outbox_id, claim_token)` pairs.
+        """
         from general_manager.workflow.models import WorkflowOutbox
 
         size = batch_size or workflow_outbox_batch_size()
@@ -526,7 +709,7 @@ class DatabaseEventRegistry(_RoutingMixin):
             observe_outbox_claim_batch(len(claims))
             return claims
 
-    def _save_event(self, event: WorkflowEvent):
+    def _save_event(self, event: WorkflowEvent) -> WorkflowEventRecord | None:
         from general_manager.workflow.models import WorkflowEventRecord
 
         try:
@@ -649,18 +832,18 @@ class DatabaseEventRegistry(_RoutingMixin):
                 WorkflowOutbox.objects.select_for_update().filter(id=outbox_id).first()
             )
             if outbox is None:
-                return WorkflowOutbox.STATUS_FAILED
+                return str(WorkflowOutbox.STATUS_FAILED)
             if was_claimed:
                 if (
                     outbox.status != WorkflowOutbox.STATUS_CLAIMED
                     or outbox.claim_token != claim_token
                 ):
-                    return outbox.status
+                    return str(outbox.status)
             elif outbox.status not in (
                 WorkflowOutbox.STATUS_PENDING,
                 WorkflowOutbox.STATUS_FAILED,
             ):
-                return outbox.status
+                return str(outbox.status)
             outbox.status = WorkflowOutbox.STATUS_FAILED
             outbox.attempts += 1
             outbox.last_error = error
@@ -689,8 +872,9 @@ class DatabaseEventRegistry(_RoutingMixin):
                     "updated_at",
                 ]
             )
-            increment_outbox_status(outbox.status)
-            return outbox.status
+            status = str(outbox.status)
+            increment_outbox_status(status)
+            return status
 
     def _finalize_outbox_processed(
         self,
@@ -735,6 +919,12 @@ class DatabaseEventRegistry(_RoutingMixin):
             return True
 
     def outbox_snapshot(self) -> tuple[int, float]:
+        """
+        Return `(pending_count, oldest_pending_age_seconds)` for operations UI.
+
+        The age is `0.0` when no pending rows exist or when clock skew would
+        otherwise produce a negative age.
+        """
         from general_manager.workflow.models import WorkflowOutbox
 
         now = datetime.now(UTC)
@@ -747,51 +937,112 @@ class DatabaseEventRegistry(_RoutingMixin):
         return pending_count, oldest_age
 
 
-def _resolve_registry(value: Any) -> EventRegistry | None:
+def _instantiate_registry_reference(
+    value: object,
+    options: Mapping[str, object] | None = None,
+) -> object:
+    """Instantiate a registry class or factory while preserving registry instances."""
+    if isinstance(value, type):
+        factory = cast(Callable[..., object], value)
+        return factory(**dict(options or {}))
+    if callable(value) and not isinstance(value, EventRegistry):
+        factory = cast(Callable[..., object], value)
+        return factory(**dict(options or {}))
+    return value
+
+
+def _resolve_registry(value: object) -> EventRegistry | None:
+    """Resolve workflow event registry settings values into a registry instance."""
     if value is None:
         return None
     if isinstance(value, str):
-        resolved = import_string(value)
+        resolved: object = import_string(value)
     elif isinstance(value, Mapping):
-        class_path = value.get("class")
-        options = value.get("options", {})
-        if class_path is None:
+        config = cast(Mapping[str, object], value)
+        registry_reference = config.get("class")
+        options_value = config.get("options", {})
+        if registry_reference is None:
             return None
-        resolved = (
-            import_string(class_path) if isinstance(class_path, str) else class_path
+        if options_value is None:
+            options: Mapping[str, object] = {}
+        elif isinstance(options_value, Mapping):
+            options = cast(Mapping[str, object], options_value)
+        else:
+            raise InvalidWorkflowEventRegistryOptionsError
+        resolved_reference = (
+            import_string(registry_reference)
+            if isinstance(registry_reference, str)
+            else registry_reference
         )
-        if isinstance(resolved, type):
-            return resolved(**options)
-        if callable(resolved):
-            return resolved(**options)
-        return None
+        resolved = _instantiate_registry_reference(resolved_reference, options)
     else:
         resolved = value
-    if isinstance(resolved, type):
-        return resolved()
-    if callable(resolved):
-        return resolved()
-    return resolved  # type: ignore[return-value]
+
+    resolved = _instantiate_registry_reference(resolved)
+    return resolved if isinstance(resolved, EventRegistry) else None
 
 
 _event_registry: EventRegistry = InMemoryEventRegistry()
 
 
 def configure_event_registry(registry: EventRegistry) -> None:
-    """Set the active workflow event registry."""
+    """
+    Set the process-local active workflow event registry.
+
+    Parameters:
+        registry: Registry instance used by `get_event_registry()` and
+            `publish_sync()` until it is replaced. The function trusts the type
+            hint and does not perform a runtime `EventRegistry` validation.
+    """
     global _event_registry
     _event_registry = registry
 
 
-def configure_event_registry_from_settings(django_settings: Any) -> None:
-    """Configure event registry from Django settings."""
-    config = getattr(django_settings, _SETTINGS_KEY, {})
-    setting: Any = None
-    if isinstance(config, Mapping):
-        setting = config.get(_EVENT_REGISTRY_KEY)
-    if setting is None:
+def configure_event_registry_from_settings(django_settings: object) -> None:
+    """
+    Configure the workflow event registry from Django settings.
+
+    `GENERAL_MANAGER["WORKFLOW_EVENT_REGISTRY"]` takes precedence over a
+    top-level `WORKFLOW_EVENT_REGISTRY` setting, including explicit `None` to
+    use the `WORKFLOW_MODE` default registry. Values may be:
+
+    - `None` or missing to use the mode default registry.
+    - An `EventRegistry` instance.
+    - A dotted import path to an `EventRegistry` instance, class, or factory.
+    - A zero-argument callable returning an `EventRegistry`.
+    - A mapping with `{"class": <path-or-callable>, "options": {...}}`; options
+      are passed as keyword arguments when constructing/calling the reference.
+      Other mapping keys are ignored and options are not merged with any other
+      settings.
+
+    `WORKFLOW_MODE` values are normalized by stripping whitespace and
+    lowercasing. `"production"` selects `DatabaseEventRegistry`; `"local"` and
+    any unrecognized value select `InMemoryEventRegistry`.
+
+    Import, factory, and constructor exceptions propagate.
+
+    Dotted import strings are resolved before classification. Imported classes
+    are instantiated, imported registry instances are reused, and imported
+    callables that are not already `EventRegistry` instances are called as
+    factories.
+
+    Raises:
+        TypeError: If mapping `options` is not a mapping, or if a non-`None`
+            setting cannot be resolved to an `EventRegistry`.
+    """
+    config_candidate: object = getattr(django_settings, _SETTINGS_KEY, None)
+    setting: object = None
+    if isinstance(config_candidate, Mapping):
+        config = cast(Mapping[str, object], config_candidate)
+        if _EVENT_REGISTRY_KEY in config:
+            setting = config[_EVENT_REGISTRY_KEY]
+        else:
+            setting = getattr(django_settings, _EVENT_REGISTRY_KEY, None)
+    else:
         setting = getattr(django_settings, _EVENT_REGISTRY_KEY, None)
     registry = _resolve_registry(setting)
+    if setting is not None and registry is None:
+        raise InvalidWorkflowEventRegistryError(setting)
     if registry is not None:
         configure_event_registry(registry)
         return
@@ -802,12 +1053,28 @@ def configure_event_registry_from_settings(django_settings: Any) -> None:
 
 
 def get_event_registry() -> EventRegistry:
-    """Return the active workflow event registry."""
+    """
+    Return the currently configured process-local workflow event registry.
+
+    Before explicit configuration, this is the import-time `InMemoryEventRegistry`
+    instance. Call `configure_event_registry_from_settings()` to replace it with
+    the registry selected by Django settings and `WORKFLOW_MODE`.
+    """
     return _event_registry
 
 
 def publish_sync(event: WorkflowEvent) -> bool:
-    """Publish an event synchronously against the configured registry."""
+    """
+    Publish an event synchronously against the configured registry.
+
+    If the active registry exposes `publish_sync`, that method is used so
+    database-backed registries can persist the event and route handlers inline
+    even when async delivery is enabled. Otherwise this falls back to
+    `registry.publish(event)`.
+
+    Returns:
+        bool: `True` when at least one handler completed, `False` otherwise.
+    """
     registry = get_event_registry()
     method = getattr(registry, "publish_sync", None)
     if callable(method):

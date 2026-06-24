@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import time
-from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -21,6 +20,12 @@ class PositiveIntegerArgumentError(argparse.ArgumentTypeError):
         super().__init__("must be a positive integer")
 
 
+class InvalidSearchReconcileOptionError(CommandError):
+    def __init__(self, option_name: str) -> None:
+        """Initialize the error raised for invalid programmatic option values."""
+        super().__init__(f"{option_name} must be a positive number")
+
+
 def positive_int(value: str) -> int:
     """Parse a command-line value as an integer greater than zero."""
     try:
@@ -35,8 +40,15 @@ def positive_int(value: str) -> int:
 class Command(BaseCommand):
     help = "Reconcile dirty search indexes."
 
-    def add_arguments(self, parser) -> None:  # type: ignore[override]
-        """Register command-line options for search reconciliation."""
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        """
+        Register command-line options for search reconciliation.
+
+        The command requires exactly one of `--once` or `--watch`. `--force`
+        marks all configured states dirty for the next sweep, `--max-states`
+        limits one sweep to a positive number of dirty states, and `--interval`
+        controls the watch delay in seconds.
+        """
         parser.add_argument(
             "--once", action="store_true", help="Run one sweep and exit."
         )
@@ -59,16 +71,23 @@ class Command(BaseCommand):
             help="Maximum dirty states to reconcile per sweep.",
         )
 
-    def handle(self, *_: Any, **options: Any) -> None:
-        """Run one reconciliation sweep or watch continuously."""
-        once = bool(options["once"])
-        watch = bool(options["watch"])
-        if once == watch:
-            raise InvalidSearchReconcileModeError
+    def handle(self, *_args: object, **options: object) -> None:
+        """
+        Run one reconciliation sweep or watch continuously.
 
-        interval = max(1.0, float(options["interval"]))
-        force = bool(options["force"])
-        max_states = options["max_states"]
+        Raises:
+            InvalidSearchReconcileModeError: If neither or both run modes are selected.
+            InvalidSearchReconcileOptionError: If programmatic option values are invalid.
+            Exception: Reconciliation service and sleep interruption errors propagate.
+        """
+        once = bool(options.get("once"))
+        watch = bool(options.get("watch"))
+        if once == watch:
+            raise InvalidSearchReconcileModeError()
+
+        interval = _positive_float_option(options.get("interval", 60.0), "interval")
+        force = bool(options.get("force"))
+        max_states = _positive_int_option(options.get("max_states"), "max_states")
 
         while True:
             result = reconcile_search_indexes(force=force, max_states=max_states)
@@ -83,3 +102,33 @@ class Command(BaseCommand):
                 return
             force = False
             time.sleep(interval)
+
+
+def _positive_float_option(value: object, option_name: str) -> float:
+    """Normalize a positive float command option, clamped to at least one."""
+    if isinstance(value, bool):
+        raise InvalidSearchReconcileOptionError(option_name)
+    if isinstance(value, int | float | str):
+        try:
+            return max(1.0, float(value))
+        except ValueError as exc:
+            raise InvalidSearchReconcileOptionError(option_name) from exc
+    raise InvalidSearchReconcileOptionError(option_name)
+
+
+def _positive_int_option(value: object, option_name: str) -> int | None:
+    """Normalize an optional positive integer command option."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise InvalidSearchReconcileOptionError(option_name)
+    if isinstance(value, int):
+        if value > 0:
+            return value
+        raise InvalidSearchReconcileOptionError(option_name)
+    if isinstance(value, str):
+        try:
+            return positive_int(value)
+        except argparse.ArgumentTypeError as exc:
+            raise InvalidSearchReconcileOptionError(option_name) from exc
+    raise InvalidSearchReconcileOptionError(option_name)
