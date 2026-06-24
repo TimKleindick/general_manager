@@ -136,6 +136,24 @@ def _answer_from_events(events: list[dict[str, Any]]) -> str:
     )
 
 
+def _chat_error_events(
+    exc: Exception,
+    request: HttpRequest,
+    *,
+    transport: str,
+    extra_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    context: dict[str, Any] = {"transport": transport, "path": request.path}
+    if extra_context:
+        context.update(extra_context)
+    emit_chat_error(
+        user=getattr(request, "user", None),
+        error=exc,
+        context=context,
+    )
+    return [public_chat_error(exc).as_event()]
+
+
 async def _run_provider_turn(
     *,
     scope: dict[str, Any],
@@ -393,36 +411,38 @@ async def _execute_message_request(
     transport: str,
 ) -> tuple[ChatConversation, list[dict[str, Any]]]:
     conversation = await sync_to_async(_conversation_for_request)(request)
-    payload = _parse_json_body(request)
-    text = payload.get("text")
-    if not isinstance(text, str) or not text.strip():
-        return conversation, [
-            {
-                "type": "error",
-                "message": "Message text is required.",
-                "code": "bad_message",
-            }
-        ]
-    scope = _request_scope(request)
-    rate_limited = enforce_chat_rate_limit(scope)
-    if rate_limited is not None:
-        return conversation, [
-            {
-                "type": "error",
-                "message": "Chat rate limit exceeded. Try again later.",
-                "code": "rate_limited",
-                "retry_after_seconds": rate_limited["retry_after_seconds"],
-            }
-        ]
-    await sync_to_async(append_chat_message)(conversation, role="user", content=text)
-    provider = import_provider()()
-    messages = await _build_messages(conversation, provider)
-    emit_chat_message_received(
-        user=getattr(request, "user", None),
-        message=text,
-        conversation_id=getattr(conversation, "pk", None),
-    )
     try:
+        payload = _parse_json_body(request)
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return conversation, [
+                {
+                    "type": "error",
+                    "message": "Message text is required.",
+                    "code": "bad_message",
+                }
+            ]
+        scope = _request_scope(request)
+        rate_limited = enforce_chat_rate_limit(scope)
+        if rate_limited is not None:
+            return conversation, [
+                {
+                    "type": "error",
+                    "message": "Chat rate limit exceeded. Try again later.",
+                    "code": "rate_limited",
+                    "retry_after_seconds": rate_limited["retry_after_seconds"],
+                }
+            ]
+        await sync_to_async(append_chat_message)(
+            conversation, role="user", content=text
+        )
+        provider = import_provider()()
+        messages = await _build_messages(conversation, provider)
+        emit_chat_message_received(
+            user=getattr(request, "user", None),
+            message=text,
+            conversation_id=getattr(conversation, "pk", None),
+        )
         events = await _run_provider_turn(
             scope=scope,
             conversation=conversation,
@@ -431,12 +451,7 @@ async def _execute_message_request(
             transport=transport,
         )
     except Exception as exc:  # noqa: BLE001
-        emit_chat_error(
-            user=getattr(request, "user", None),
-            error=exc,
-            context={"transport": transport, "path": request.path},
-        )
-        events = [public_chat_error(exc).as_event()]
+        events = _chat_error_events(exc, request, transport=transport)
     return conversation, events
 
 
@@ -444,25 +459,29 @@ async def _execute_confirmation_request(
     request: HttpRequest,
 ) -> tuple[ChatConversation, list[dict[str, Any]]]:
     conversation = await sync_to_async(_conversation_for_request)(request)
-    payload = _parse_json_body(request)
-    confirmation_id = payload.get("confirmation_id")
-    confirmed = payload.get("confirmed")
-    if not isinstance(confirmation_id, str) or not isinstance(confirmed, bool):
-        return conversation, [
-            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
-        ]
-    pending = await sync_to_async(ChatPendingConfirmation.active_for_conversation)(
-        conversation=conversation,
-        confirmation_id=confirmation_id,
-        now=timezone.now(),
-    )
-    if pending is None:
-        return conversation, [
-            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
-        ]
-
-    scope = _request_scope(request)
+    confirmation_id: str | None = None
     try:
+        payload = _parse_json_body(request)
+        requested_confirmation_id = payload.get("confirmation_id")
+        confirmed = payload.get("confirmed")
+        if not isinstance(requested_confirmation_id, str) or not isinstance(
+            confirmed, bool
+        ):
+            return conversation, [
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            ]
+        confirmation_id = requested_confirmation_id
+        pending = await sync_to_async(ChatPendingConfirmation.active_for_conversation)(
+            conversation=conversation,
+            confirmation_id=confirmation_id,
+            now=timezone.now(),
+        )
+        if pending is None:
+            return conversation, [
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            ]
+
+        scope = _request_scope(request)
         if confirmed:
             result = execute_chat_tool(
                 "mutate",
@@ -524,16 +543,15 @@ async def _execute_confirmation_request(
             )
         )
     except Exception as exc:  # noqa: BLE001
-        emit_chat_error(
-            user=getattr(request, "user", None),
-            error=exc,
-            context={
-                "transport": "http_confirm",
-                "path": request.path,
-                "confirmation_id": confirmation_id,
-            },
+        context: dict[str, Any] = {}
+        if confirmation_id is not None:
+            context["confirmation_id"] = confirmation_id
+        events = _chat_error_events(
+            exc,
+            request,
+            transport="http_confirm",
+            extra_context=context,
         )
-        events = [public_chat_error(exc).as_event()]
     return conversation, events
 
 
@@ -543,9 +561,12 @@ def chat_http_view(request: HttpRequest) -> JsonResponse:
     denial = _check_permission(request)
     if denial is not None:
         return denial
-    _conversation, events = async_to_sync(_execute_message_request)(
-        request, transport="http"
-    )
+    try:
+        _conversation, events = async_to_sync(_execute_message_request)(
+            request, transport="http"
+        )
+    except Exception as exc:  # noqa: BLE001
+        events = _chat_error_events(exc, request, transport="http")
     return JsonResponse({"events": events, "answer": _answer_from_events(events)})
 
 
@@ -559,9 +580,12 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
             status=403,
             content_type="text/event-stream",
         )
-    _conversation, events = async_to_sync(_execute_message_request)(
-        request, transport="sse"
-    )
+    try:
+        _conversation, events = async_to_sync(_execute_message_request)(
+            request, transport="sse"
+        )
+    except Exception as exc:  # noqa: BLE001
+        events = _chat_error_events(exc, request, transport="sse")
 
     def _stream() -> Iterator[bytes]:
         for event in events:
@@ -576,5 +600,8 @@ def chat_confirm_view(request: HttpRequest) -> JsonResponse:
     denial = _check_permission(request)
     if denial is not None:
         return denial
-    _conversation, events = async_to_sync(_execute_confirmation_request)(request)
+    try:
+        _conversation, events = async_to_sync(_execute_confirmation_request)(request)
+    except Exception as exc:  # noqa: BLE001
+        events = _chat_error_events(exc, request, transport="http_confirm")
     return JsonResponse({"events": events, "answer": _answer_from_events(events)})
