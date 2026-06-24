@@ -461,67 +461,79 @@ async def _execute_confirmation_request(
             {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
         ]
 
-    if confirmed:
-        result = execute_chat_tool(
-            "mutate",
-            {
+    scope = _request_scope(request)
+    try:
+        if confirmed:
+            result = execute_chat_tool(
+                "mutate",
+                {
+                    "mutation": pending.mutation_name,
+                    "input": pending.payload.get("input", {}),
+                    "confirmed": True,
+                },
+                ScopeChatContext.from_scope(scope),
+            )
+        else:
+            result = {"status": "cancelled", "reason": "user_rejected"}
+        emit_chat_tool_called(
+            user=getattr(request, "user", None),
+            tool_name="mutate",
+            args={
                 "mutation": pending.mutation_name,
                 "input": pending.payload.get("input", {}),
-                "confirmed": True,
             },
-            ScopeChatContext.from_scope(_request_scope(request)),
+            result=result,
         )
-    else:
-        result = {"status": "cancelled", "reason": "user_rejected"}
-    emit_chat_tool_called(
-        user=getattr(request, "user", None),
-        tool_name="mutate",
-        args={
-            "mutation": pending.mutation_name,
-            "input": pending.payload.get("input", {}),
-        },
-        result=result,
-    )
-    emit_chat_mutation_executed(
-        user=getattr(request, "user", None),
-        mutation=pending.mutation_name,
-        input=pending.payload.get("input", {}),
-        result=result,
-    )
-
-    pending.resolved_at = timezone.now()
-    await sync_to_async(pending.save)(update_fields=["resolved_at"])
-    tool_content = json.dumps(result, sort_keys=True)
-    await sync_to_async(append_chat_message)(
-        conversation,
-        role="tool",
-        content=tool_content,
-        tool_name="mutate",
-        tool_args={
-            "mutation": pending.mutation_name,
-            "input": pending.payload.get("input", {}),
-        },
-        tool_result=result,
-    )
-    provider = import_provider()()
-    messages = await _build_messages(conversation, provider)
-    events = [
-        {
-            "type": "tool_result",
-            "id": pending.confirmation_id,
-            "name": "mutate",
-            "result": result,
-        }
-    ]
-    events.extend(
-        await _run_provider_turn(
-            scope=_request_scope(request),
-            conversation=conversation,
-            provider=provider,
-            messages=messages,
-            transport="sse",
+        emit_chat_mutation_executed(
+            user=getattr(request, "user", None),
+            mutation=pending.mutation_name,
+            input=pending.payload.get("input", {}),
+            result=result,
         )
-    )
+        pending.resolved_at = timezone.now()
+        await sync_to_async(pending.save)(update_fields=["resolved_at"])
+        tool_content = json.dumps(result, sort_keys=True)
+        await sync_to_async(append_chat_message)(
+            conversation,
+            role="tool",
+            content=tool_content,
+            tool_name="mutate",
+            tool_args={
+                "mutation": pending.mutation_name,
+                "input": pending.payload.get("input", {}),
+            },
+            tool_result=result,
+        )
+        provider = import_provider()()
+        messages = await _build_messages(conversation, provider)
+        events = [
+            {
+                "type": "tool_result",
+                "id": pending.confirmation_id,
+                "name": "mutate",
+                "result": result,
+            }
+        ]
+        events.extend(
+            await _run_provider_turn(
+                scope=scope,
+                conversation=conversation,
+                provider=provider,
+                messages=messages,
+                transport="sse",
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        emit_chat_error(
+            user=getattr(request, "user", None),
+            error=exc,
+            context={
+                "transport": "http_confirm",
+                "path": request.path,
+                "confirmation_id": confirmation_id,
+            },
+        )
+        events = [public_chat_error(exc).as_event()]
     return conversation, events
 
 

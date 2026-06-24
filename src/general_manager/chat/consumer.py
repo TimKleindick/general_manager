@@ -212,7 +212,22 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def receive_json(self, content: dict[str, Any], **_kwargs: Any) -> None:
         message_type = content.get("type")
         if message_type == "confirm":
-            await self._handle_confirmation_response(content)
+            try:
+                await self._handle_confirmation_response(content)
+            except Exception as exc:  # noqa: BLE001
+                context: dict[str, Any] = {
+                    "transport": "websocket",
+                    "session_key": self.session_key,
+                }
+                confirmation_id = content.get("confirmation_id")
+                if isinstance(confirmation_id, str):
+                    context["confirmation_id"] = confirmation_id
+                emit_chat_error(
+                    user=self.scope.get("user"),
+                    error=exc,
+                    context=context,
+                )
+                await self.send_json(public_chat_error(exc).as_event())
             return
         if message_type != "message":
             await self.send_json(

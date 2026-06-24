@@ -310,6 +310,56 @@ class ChatHttpTransportTests(TestCase):
         assert payload["events"][1]["type"] == "text_chunk"
         assert payload["events"][-1]["type"] == "done"
 
+    def test_confirm_errors_use_public_message(self) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=HttpIntegrationProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "create a part"}),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        body = b"".join(response.streaming_content).decode()
+        assert '"type": "confirm_mutation"' in body
+        pending = (
+            ChatPendingConfirmation.objects.filter(confirmation_id="tool-create")
+            .order_by("id")
+            .last()
+        )
+        assert pending is not None
+        original_error = RuntimeError("secret confirm detail")
+
+        with (
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                side_effect=original_error,
+            ),
+            patch("general_manager.chat.views.emit_chat_error") as chat_error,
+        ):
+            confirm = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps(
+                    {"confirmation_id": pending.confirmation_id, "confirmed": True}
+                ),
+                content_type="application/json",
+            )
+
+        assert confirm.status_code == 200
+        payload = confirm.json()
+        assert payload["events"] == [
+            {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
+        ]
+        assert "secret confirm detail" not in confirm.content.decode()
+        chat_error.assert_called_once()
+        assert chat_error.call_args.kwargs["error"] is original_error
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {
