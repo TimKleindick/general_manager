@@ -201,9 +201,11 @@ async def _run_provider_turn(
                     "args": event.args,
                 }
             )
-            tool_calls.append({"name": event.name, "args": dict(event.args)})
             result = execute_chat_tool(
                 event.name, event.args, ScopeChatContext.from_scope(scope)
+            )
+            tool_calls.append(
+                {"name": event.name, "args": dict(event.args), "result": result}
             )
             emit_chat_tool_called(
                 user=scope.get("user"),
