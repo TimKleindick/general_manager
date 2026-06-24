@@ -231,6 +231,36 @@ def test_answer_sense_allows_directness_qualifier_when_path_exists() -> None:
     assert score.answer_sense.passed
 
 
+def test_answer_sense_fails_bare_not_connected_even_when_answer_mentions_path() -> None:
+    score = judge_product_contract(
+        {
+            "category": "relation_traversal",
+            "hard": {
+                "required_tool_calls": [{"name": "find_path"}],
+                "answer_contains": ["ProjectManager", "MaterialManager"],
+            },
+        },
+        tool_calls=[
+            {
+                "name": "find_path",
+                "args": {
+                    "from_manager": "ProjectManager",
+                    "to_manager": "MaterialManager",
+                },
+            }
+        ],
+        tool_results=[["PartManager", "MaterialManager"]],
+        answer_text=(
+            "They are not connected. "
+            "The path is ProjectManager -> PartManager -> MaterialManager."
+        ),
+    )
+
+    assert not score.passed
+    assert "Answer contradicts successful path result" in score.violations
+    assert not score.answer_sense.passed
+
+
 def test_contract_fails_raw_query_syntax_after_successful_query() -> None:
     score = judge_product_contract(
         {
