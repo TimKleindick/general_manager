@@ -91,6 +91,28 @@ class TimeoutHttpProvider:
         return _stream()
 
 
+class LazySseProvider:
+    started = False
+    yielded = False
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+            )
+
+            type(self).started = True
+            yield TextChunkEvent(content="first")
+            type(self).yielded = True
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+        return _stream()
+
+
 class HttpMissingToolRecoveryProvider:
     calls: ClassVar[list[object]] = []
 
@@ -332,16 +354,38 @@ class ChatHttpTransportTests(TestCase):
                 content_type="application/json",
             )
 
+            assert response.status_code == 200
+            body = b"".join(response.streaming_content).decode()
+            assert body == f"data: {json.dumps(GENERIC_CHAT_ERROR_EVENT)}\n\n"
+            assert "secret setup detail" not in body
+            chat_error.assert_called_once()
+            assert chat_error.call_args.kwargs["error"] is original_error
+            assert chat_error.call_args.kwargs["context"] == {
+                "transport": "sse",
+                "path": "/chat/stream/",
+            }
+
+    def test_sse_does_not_execute_provider_before_stream_is_consumed(self) -> None:
+        LazySseProvider.started = False
+        LazySseProvider.yielded = False
+
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=LazySseProvider,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+
         assert response.status_code == 200
-        body = b"".join(response.streaming_content).decode()
-        assert body == f"data: {json.dumps(GENERIC_CHAT_ERROR_EVENT)}\n\n"
-        assert "secret setup detail" not in body
-        chat_error.assert_called_once()
-        assert chat_error.call_args.kwargs["error"] is original_error
-        assert chat_error.call_args.kwargs["context"] == {
-            "transport": "sse",
-            "path": "/chat/stream/",
-        }
+        assert LazySseProvider.started is False
+
+        first_chunk = next(iter(response.streaming_content)).decode()
+
+        assert '"type": "text_chunk"' in first_chunk
+        assert LazySseProvider.started is True
 
     def test_http_post_rejects_confirmed_mutations(self) -> None:
         with patch(

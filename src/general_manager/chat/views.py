@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from asgiref.sync import async_to_sync, sync_to_async
@@ -56,6 +57,15 @@ from general_manager.chat.tools import (
     execute_chat_tool,
     get_tool_definitions,
 )
+
+
+@dataclass(frozen=True)
+class _PreparedMessageRequest:
+    conversation: ChatConversation
+    scope: dict[str, Any]
+    provider: Any | None
+    messages: list[Message] | None
+    early_events: list[dict[str, Any]] | None
 
 
 def _ensure_session_key(request: HttpRequest) -> str | None:
@@ -405,54 +415,151 @@ def _check_permission(request: HttpRequest) -> JsonResponse | None:
     return None
 
 
-async def _execute_message_request(
+async def _prepare_message_request(
     request: HttpRequest,
     *,
-    transport: str,
-) -> tuple[ChatConversation, list[dict[str, Any]]]:
+    provider_importer: Callable[[], type[Any]] | None = None,
+) -> _PreparedMessageRequest:
     conversation = await sync_to_async(_conversation_for_request)(request)
-    try:
-        payload = _parse_json_body(request)
-        text = payload.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return conversation, [
+    scope: dict[str, Any] = {}
+    payload = _parse_json_body(request)
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return _PreparedMessageRequest(
+            conversation=conversation,
+            scope=scope,
+            provider=None,
+            messages=None,
+            early_events=[
                 {
                     "type": "error",
                     "message": "Message text is required.",
                     "code": "bad_message",
                 }
-            ]
-        scope = _request_scope(request)
-        rate_limited = enforce_chat_rate_limit(scope)
-        if rate_limited is not None:
-            return conversation, [
+            ],
+        )
+    scope = _request_scope(request)
+    rate_limited = enforce_chat_rate_limit(scope)
+    if rate_limited is not None:
+        return _PreparedMessageRequest(
+            conversation=conversation,
+            scope=scope,
+            provider=None,
+            messages=None,
+            early_events=[
                 {
                     "type": "error",
                     "message": "Chat rate limit exceeded. Try again later.",
                     "code": "rate_limited",
                     "retry_after_seconds": rate_limited["retry_after_seconds"],
                 }
-            ]
-        await sync_to_async(append_chat_message)(
-            conversation, role="user", content=text
+            ],
         )
-        provider = import_provider()()
-        messages = await _build_messages(conversation, provider)
-        emit_chat_message_received(
-            user=getattr(request, "user", None),
-            message=text,
-            conversation_id=getattr(conversation, "pk", None),
-        )
+    await sync_to_async(append_chat_message)(conversation, role="user", content=text)
+    provider_cls = (
+        provider_importer() if provider_importer is not None else import_provider()
+    )
+    provider = provider_cls()
+    messages = await _build_messages(conversation, provider)
+    emit_chat_message_received(
+        user=getattr(request, "user", None),
+        message=text,
+        conversation_id=getattr(conversation, "pk", None),
+    )
+    return _PreparedMessageRequest(
+        conversation=conversation,
+        scope=scope,
+        provider=provider,
+        messages=messages,
+        early_events=None,
+    )
+
+
+async def _execute_message_request(
+    request: HttpRequest,
+    *,
+    transport: str,
+) -> tuple[ChatConversation | None, list[dict[str, Any]]]:
+    try:
+        prepared = await _prepare_message_request(request)
+        if prepared.early_events is not None:
+            return prepared.conversation, prepared.early_events
+        if prepared.provider is None or prepared.messages is None:
+            return prepared.conversation, []
         events = await _run_provider_turn(
-            scope=scope,
-            conversation=conversation,
-            provider=provider,
-            messages=messages,
+            scope=prepared.scope,
+            conversation=prepared.conversation,
+            provider=prepared.provider,
+            messages=prepared.messages,
             transport=transport,
         )
     except Exception as exc:  # noqa: BLE001
         events = _chat_error_events(exc, request, transport=transport)
-    return conversation, events
+        return None, events
+    return prepared.conversation, events
+
+
+async def _stream_message_events(
+    request: HttpRequest,
+    *,
+    transport: str,
+    provider_importer: Callable[[], type[Any]] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    try:
+        prepared = await _prepare_message_request(
+            request,
+            provider_importer=provider_importer,
+        )
+        if prepared.early_events is not None:
+            for event in prepared.early_events:
+                yield event
+            return
+        if prepared.provider is None or prepared.messages is None:
+            return
+        events = await _run_provider_turn(
+            scope=prepared.scope,
+            conversation=prepared.conversation,
+            provider=prepared.provider,
+            messages=prepared.messages,
+            transport=transport,
+        )
+        for event in events:
+            yield event
+    except Exception as exc:  # noqa: BLE001
+        for event in _chat_error_events(exc, request, transport=transport):
+            yield event
+
+
+def _encode_sse_event(event: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(event)}\n\n".encode()
+
+
+async def _collect_stream_events(
+    request: HttpRequest,
+    *,
+    provider_importer: Callable[[], type[Any]] | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        event
+        async for event in _stream_message_events(
+            request,
+            transport="sse",
+            provider_importer=provider_importer,
+        )
+    ]
+
+
+def _sync_sse_stream(
+    request: HttpRequest,
+    *,
+    provider_importer: Callable[[], type[Any]] | None = None,
+) -> Iterator[bytes]:
+    events = async_to_sync(_collect_stream_events)(
+        request,
+        provider_importer=provider_importer,
+    )
+    for event in events:
+        yield _encode_sse_event(event)
 
 
 async def _execute_confirmation_request(
@@ -577,21 +684,22 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
         denial = _check_permission(request)
         if denial is not None:
             return StreamingHttpResponse(
-                iter([f"data: {json.dumps({'detail': 'Forbidden'})}\n\n".encode()]),
+                iter([_encode_sse_event({"detail": "Forbidden"})]),
                 status=403,
                 content_type="text/event-stream",
             )
-        _conversation, events = async_to_sync(_execute_message_request)(
-            request, transport="sse"
-        )
+        provider_importer = import_provider
     except Exception as exc:  # noqa: BLE001
         events = _chat_error_events(exc, request, transport="sse")
+        return StreamingHttpResponse(
+            (_encode_sse_event(event) for event in events),
+            content_type="text/event-stream",
+        )
 
-    def _stream() -> Iterator[bytes]:
-        for event in events:
-            yield f"data: {json.dumps(event)}\n\n".encode()
-
-    return StreamingHttpResponse(_stream(), content_type="text/event-stream")
+    return StreamingHttpResponse(
+        _sync_sse_stream(request, provider_importer=provider_importer),
+        content_type="text/event-stream",
+    )
 
 
 @csrf_protect
