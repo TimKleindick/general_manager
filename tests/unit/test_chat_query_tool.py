@@ -139,6 +139,39 @@ class ChatQueryToolTests(SimpleTestCase):
         query_text = str(schema.calls[0]["query"])
         assert "density_Gt: 7" in query_text
 
+    def test_query_preserves_indexed_graphql_filter_keys_that_are_already_shaped(
+        self,
+    ) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            density__gt = graphene.Float()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt"}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={"density_Gt": 7},
+            fields=["name"],
+        )
+
+        assert result["data"] == [{"name": "Bolt"}]
+        query_text = str(schema.calls[0]["query"])
+        assert "density_Gt: 7" in query_text
+
     def test_query_translates_relation_lookup_filters_to_graphene_names(self) -> None:
         schema = _RecordingSchema(
             _Result(

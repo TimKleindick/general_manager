@@ -400,6 +400,19 @@ def _nested_filter_input_type(input_type: Any | None, filter_name: str) -> Any |
     return _unwrap_graphene_type(getattr(field, "type", None))
 
 
+def _resolve_indexed_filter_name(
+    filter_name: str, indexed_filters: set[str]
+) -> str | None:
+    if not indexed_filters:
+        return filter_name
+    if filter_name in indexed_filters:
+        return filter_name
+    for indexed_filter in indexed_filters:
+        if filter_name == _camelize(indexed_filter):
+            return indexed_filter
+    return None
+
+
 def _validate_filter_mapping(
     filters: Mapping[str, Any],
     *,
@@ -408,15 +421,20 @@ def _validate_filter_mapping(
     filter_path: tuple[str, ...] = (),
 ) -> None:
     for filter_name, value in filters.items():
+        indexed_filter_name = (
+            _resolve_indexed_filter_name(filter_name, indexed_filters)
+            if isinstance(filter_name, str)
+            else None
+        )
         if (
             not isinstance(filter_name, str)
             or _GRAPHQL_IDENTIFIER_RE.match(filter_name) is None
-            or (indexed_filters and filter_name not in indexed_filters)
+            or indexed_filter_name is None
         ):
             raise UnknownChatQueryFilterError(str(filter_name))
         if not isinstance(value, Mapping):
             continue
-        nested_input_type = _nested_filter_input_type(input_type, filter_name)
+        nested_input_type = _nested_filter_input_type(input_type, indexed_filter_name)
         if not _is_nested_filter_input_type(nested_input_type):
             raise InvalidChatQueryFilterValueError(
                 ".".join((*filter_path, filter_name))
