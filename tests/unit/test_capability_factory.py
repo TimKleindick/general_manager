@@ -228,6 +228,17 @@ def test_build_capabilities_does_not_inspect_interface_cls():
 
 def test_capability_class_map_keys_match_public_capability_name_type():
     """Default factory keys should stay inside the public capability vocabulary."""
-    keys: tuple[CapabilityName, ...] = tuple(CAPABILITY_CLASS_MAP)
+    expected: set[CapabilityName] = {
+        "read",
+        "create",
+        "update",
+        "delete",
+        "history",
+        "validation",
+        "notification",
+        "scheduling",
+        "access_control",
+        "observability",
+    }
 
-    assert keys == tuple(CAPABILITY_CLASS_MAP)
+    assert set(CAPABILITY_CLASS_MAP) == expected

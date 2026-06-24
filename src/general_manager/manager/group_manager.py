@@ -26,13 +26,17 @@ def _freeze_manager_value(value: object) -> object:
             )
         )
     if isinstance(value, dict):
+        frozen_items = (
+            (
+                _freeze_manager_value(key),
+                _freeze_manager_value(item),
+            )
+            for key, item in value.items()
+        )
         return tuple(
             sorted(
-                (
-                    _freeze_manager_value(key),
-                    _freeze_manager_value(item),
-                )
-                for key, item in value.items()
+                frozen_items,
+                key=lambda entry: (type(entry[0]).__name__, repr(entry[0])),
             )
         )
     if isinstance(value, (list, tuple)):

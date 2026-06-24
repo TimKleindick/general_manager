@@ -3,17 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities import CapabilityName, CapabilityRegistry
+from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.manifests.capability_manifest import CapabilityManifest
 from general_manager.interface.manifests.capability_models import CapabilityPlan
 from general_manager.interface.manifests import (
     CapabilityConfig,
     ManifestCapabilityBuilder,
+)
+from general_manager.interface.infrastructure.startup_hooks import (
+    clear_startup_hooks,
+    registered_startup_hooks,
+)
+from general_manager.interface.infrastructure.system_checks import (
+    clear_system_checks,
+    registered_system_checks,
 )
 from general_manager.interface.manifests import capability_builder as builder_module
 from general_manager.interface.interfaces.calculation import (
@@ -139,8 +148,11 @@ def test_build_restores_interface_state_when_capability_instantiation_fails() ->
 
 
 def test_build_restores_interface_state_when_registry_publication_fails() -> None:
+    clear_startup_hooks()
+    clear_system_checks()
+
     class LocalInterface(InterfaceBase):
-        pass
+        capability_overrides: ClassVar[dict[CapabilityName, object]] = {}
 
     class FailingRegistryError(RuntimeError):
         pass
@@ -155,10 +167,28 @@ def test_build_restores_interface_state_when_registry_publication_fails() -> Non
         ) -> None:
             raise FailingRegistryError
 
+    def startup_hook() -> None:
+        return None
+
+    def system_check() -> list[object]:
+        return []
+
+    class RollbackCapability(BaseCapability):
+        name: ClassVar[CapabilityName] = "observability"
+
+        def get_startup_hooks(
+            self, interface_cls: type[InterfaceBase]
+        ) -> tuple[object, ...]:
+            return (startup_hook,)
+
+        def get_system_checks(
+            self, interface_cls: type[InterfaceBase]
+        ) -> tuple[object, ...]:
+            return (system_check,)
+
+    LocalInterface.capability_overrides = {"observability": RollbackCapability}
     manifest = CapabilityManifest(
-        plans={
-            LocalInterface: CapabilityPlan(required=frozenset())
-        }
+        plans={LocalInterface: CapabilityPlan(required=frozenset({"observability"}))}
     )
     builder = ManifestCapabilityBuilder(
         manifest=manifest,
@@ -171,6 +201,11 @@ def test_build_restores_interface_state_when_registry_publication_fails() -> Non
     assert LocalInterface._capability_selection is None
     assert LocalInterface._capabilities == frozenset()
     assert LocalInterface._capability_handlers == {}
+    assert registered_startup_hooks().get(LocalInterface, ()) == ()
+    assert registered_system_checks().get(LocalInterface, ()) == ()
+
+    clear_startup_hooks()
+    clear_system_checks()
 
 
 def test_calculation_interface_requires_observability() -> None:

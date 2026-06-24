@@ -325,6 +325,7 @@ class RequestReadCapability(BaseCapability):
         identification. Request-field attributes load the request payload through
         `get_data()` and then delegate to `resolve_payload_value()`.
         """
+
         def _resolve_field(
             interface_instance: "RequestInterface", field_name: str
         ) -> object:
@@ -637,7 +638,14 @@ class RequestQueryCapability(BaseCapability):
         }
 
         def _perform() -> RequestQueryResult:
-            return interface_cls.execute_request_plan(request_plan)
+            result = interface_cls.execute_request_plan(request_plan)
+            if not isinstance(result, RequestQueryResult):
+                message = (
+                    f"{interface_cls.__name__}.execute_request_plan() must return "
+                    "RequestQueryResult."
+                )
+                raise TypeError(message)
+            return result
 
         return with_observability(
             target=interface_cls,
@@ -750,9 +758,7 @@ class RequestQueryCapability(BaseCapability):
         if not spec.remote:
             if spec.local_fallback:
                 return RequestPlanFragment(
-                    local_predicates=(
-                        RequestLocalPredicate(lookup_key, value, action),
-                    )
+                    local_predicates=(RequestLocalPredicate(lookup_key, value, action),)
                 )
             if action == "filter":
                 raise RequestLocalFallbackRequiredError(lookup_key)
@@ -761,9 +767,7 @@ class RequestQueryCapability(BaseCapability):
         if action == "exclude" and not spec.allow_exclude:
             if spec.local_fallback:
                 return RequestPlanFragment(
-                    local_predicates=(
-                        RequestLocalPredicate(lookup_key, value, action),
-                    )
+                    local_predicates=(RequestLocalPredicate(lookup_key, value, action),)
                 )
             raise RequestExcludeNotSupportedError(lookup_key, operation_name)
 

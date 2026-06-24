@@ -250,6 +250,10 @@ class TestFactoryMethods(SimpleTestCase):
         obj = type("TestObject", (object,), {})()
         self.assertEqual(declaration.evaluate(obj, 1, None), "option1")
 
+    def test__lazy_choice_rejects_empty_options(self):
+        with self.assertRaises(ValueError):
+            lazy_choice([])
+
     def test__lazy_sequence(self):
         start = 0
         step = 2

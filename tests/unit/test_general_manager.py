@@ -313,13 +313,26 @@ class GeneralManagerTestCase(TestCase):
                 owner=related,
                 owner__in=[related, "external"],
                 reviewer__in=(related, "external"),
-        )
+            )
 
         mock_filter.assert_called_once_with(
             owner="dummy_id",
             owner__in=["dummy_id", "external"],
             reviewer__in=("dummy_id", "external"),
         )
+        self.assertEqual(result, [])
+
+    def test_classmethod_filter_forwards_composite_manager_lookup_copy(self):
+        related = self.manager()
+        composite_identification = {"country": "DE", "number": 7}
+        related._GeneralManager__id = composite_identification
+
+        with patch.object(DummyInterface, "filter", return_value=[]) as mock_filter:
+            result = self.manager.filter(owner=related)
+
+        forwarded = mock_filter.call_args.kwargs["owner"]
+        self.assertEqual(forwarded, composite_identification)
+        self.assertIsNot(forwarded, composite_identification)
         self.assertEqual(result, [])
 
     def test_classmethod_get(self):
@@ -356,6 +369,19 @@ class GeneralManagerTestCase(TestCase):
             owner="dummy_id",
             owner__in=["dummy_id"],
         )
+        self.assertEqual(result, [])
+
+    def test_classmethod_exclude_forwards_composite_manager_lookup_copy(self):
+        related = self.manager()
+        composite_identification = {"country": "DE", "number": 7}
+        related._GeneralManager__id = composite_identification
+
+        with patch.object(DummyInterface, "exclude", return_value=[]) as mock_exclude:
+            result = self.manager.exclude(owner=related)
+
+        forwarded = mock_exclude.call_args.kwargs["owner"]
+        self.assertEqual(forwarded, composite_identification)
+        self.assertIsNot(forwarded, composite_identification)
         self.assertEqual(result, [])
 
     def test_classmethod_create(self):

@@ -244,8 +244,9 @@ class OrmHistoryCapability(BaseCapability):
         Retrieve the latest historical record for primary key ``pk`` at ``search_date``.
 
         The lookup uses the model's ``history`` manager, applies any configured
-        database alias, filters by ``id=pk`` and ``history_date <= search_date``,
-        orders by ``history_date``, and returns the last row.
+        database alias, filters by the model primary-key field and
+        ``history_date <= search_date``, orders by ``history_date``, and returns
+        the last row.
 
         Parameters:
             interface_cls: ORM interface whose underlying model provides the historical manager.
@@ -264,10 +265,14 @@ class OrmHistoryCapability(BaseCapability):
         )
         if database_alias:
             history_manager = history_manager.using(database_alias)
+        pk_field = interface_cls._model._meta.pk
+        pk_field_name = pk_field.name if pk_field is not None else "pk"
         historical = (
             cast(
                 models.QuerySet[models.Model],
-                history_manager.filter(id=pk, history_date__lte=search_date),
+                history_manager.filter(
+                    **{pk_field_name: pk, "history_date__lte": search_date}
+                ),
             )
             .order_by("history_date")
             .last()

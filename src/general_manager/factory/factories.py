@@ -125,12 +125,12 @@ class UnableToResolveManagerInstanceError(ValueError):
     diagnostic and not a stable parsing contract.
     """
 
-    def __init__(self, manager: GeneralManager) -> None:
+    def __init__(self, manager: object) -> None:
         """
-        Initialize with the offending manager instance.
+        Initialize with the offending factory output.
 
         Parameters:
-            manager (GeneralManager): The manager instance that could not be resolved.
+            manager: The manager or factory output that could not be resolved.
         """
         super().__init__(f"Unable to resolve model instance from manager {manager!r}.")
 
@@ -331,7 +331,7 @@ def get_related_model(
             Django model class, including non-relational scalar fields whose
             `related_model` value is `None` or absent.
     """
-    related_model: object = field.related_model
+    related_model: object = getattr(field, "related_model", None)
     if related_model is None:
         raise MissingRelatedModelError(field.name)
     if isinstance(related_model, str):
@@ -469,4 +469,6 @@ def _ensure_model_instance(value: object) -> models.Model:
             model_type = cast(type[models.Model], model_cls)
             return model_type.objects.get(**value.identification)
         raise UnableToResolveManagerInstanceError(value)
-    return cast(models.Model, value)
+    if isinstance(value, models.Model):
+        return value
+    raise UnableToResolveManagerInstanceError(value)

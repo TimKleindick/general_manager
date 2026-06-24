@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.interface.capabilities import CapabilityName, CapabilityRegistry
 from general_manager.interface.capabilities.factory import build_capabilities
+from general_manager.interface.infrastructure.startup_hooks import (
+    clear_startup_hooks,
+    register_startup_hook,
+    registered_startup_hook_entries,
+)
+from general_manager.interface.infrastructure.system_checks import (
+    clear_system_checks,
+    register_system_check,
+    registered_system_checks,
+)
 
 from .capability_manifest import CAPABILITY_MANIFEST, CapabilityManifest
 from .capability_models import CapabilityConfig, CapabilitySelection
@@ -103,6 +114,10 @@ class ManifestCapabilityBuilder:
         previous_selection = interface_cls._capability_selection
         previous_capabilities = interface_cls._capabilities
         previous_handlers = dict(interface_cls._capability_handlers)
+        previous_registry_binding = self._registry._bindings.get(interface_cls)
+        previous_registry_instances = self._registry._instances.get(interface_cls)
+        startup_hooks_snapshot = registered_startup_hook_entries()
+        system_checks_snapshot = registered_system_checks()
         plan = self._manifest.resolve(interface_cls)
         resolved_config = config or CapabilityConfig()
         required = set(plan.required)
@@ -131,9 +146,33 @@ class ManifestCapabilityBuilder:
             self._registry.register(interface_cls, selection.all, replace=True)
             self._registry.bind_instances(interface_cls, capability_instances)
         except Exception:
+            for name, handler in tuple(interface_cls._capability_handlers.items()):
+                if previous_handlers.get(name) is not handler:
+                    with suppress(Exception):
+                        handler.teardown(interface_cls)
             interface_cls._capability_selection = previous_selection
             interface_cls._capabilities = previous_capabilities
             interface_cls._capability_handlers = previous_handlers
+            if previous_registry_binding is None:
+                self._registry._bindings.pop(interface_cls, None)
+            else:
+                self._registry._bindings[interface_cls] = set(previous_registry_binding)
+            if previous_registry_instances is None:
+                self._registry._instances.pop(interface_cls, None)
+            else:
+                self._registry._instances[interface_cls] = previous_registry_instances
+            clear_startup_hooks()
+            for hook_interface, entries in startup_hooks_snapshot.items():
+                for entry in entries:
+                    register_startup_hook(
+                        hook_interface,
+                        entry.hook,
+                        dependency_resolver=entry.dependency_resolver,
+                    )
+            clear_system_checks()
+            for check_interface, checks in system_checks_snapshot.items():
+                for check in checks:
+                    register_system_check(check_interface, check)
             raise
         return selection
 

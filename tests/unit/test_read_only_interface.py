@@ -757,12 +757,12 @@ class SyncDataTests(SimpleTestCase):
         """
         Ensure non-mapping payload entries do not use the fingerprint fast path.
         """
-        DummyManager._data = [[]]
+        DummyManager._data = [object()]
 
         with self.assertRaises(InvalidReadOnlyDataFormatError):
             self.capability.sync_data(DummyInterface)
 
-        self.atomic_mock.assert_called_once()
+        self.atomic_mock.assert_not_called()
 
     def test_sync_falls_back_when_payload_missing_unique_field(self):
         """
@@ -806,7 +806,7 @@ class SyncDataTests(SimpleTestCase):
         """
         DummyManager._data = [{"name": ["a"], "other": 2}]
 
-        with self.assertRaises(TypeError):
+        with self.assertRaises(InvalidReadOnlyDataFormatError):
             self.capability.sync_data(DummyInterface)
 
         self.atomic_mock.assert_called_once()

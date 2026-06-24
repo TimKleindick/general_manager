@@ -12,8 +12,10 @@ from typing import (
 )
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
+from django.db import transaction
 from factory.django import DjangoModelFactory
 from general_manager.factory.factories import (
+    UnableToResolveManagerInstanceError,
     get_field_value,
     get_many_to_many_field_value,
     _ensure_model_instance,
@@ -343,9 +345,9 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         The adjustment method receives generated/default-filled kwargs after
         `_adjust_kwargs()` has stripped many-to-many entries and coerced
         foreign-key/one-to-one values. A returned list is processed in order and
-        an empty list returns an empty list. AutoFactory does not wrap this loop
-        in a transaction, so create-mode failures can leave earlier returned
-        records saved.
+        an empty list returns an empty list. Create-mode list processing is
+        atomic, so later failures roll back earlier saves from the same
+        adjustment-method result.
 
         Parameters:
             use_creation_method (bool): If True, created records are validated and saved; if False, unsaved instances are returned.
@@ -367,11 +369,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             return cls._model_building(model_cls, **records)
 
         created_objects: list[models.Model] = []
+        if use_creation_method:
+            with transaction.atomic():
+                for record in records:
+                    created_objects.append(cls._model_creation(model_cls, **record))
+            return created_objects
         for record in records:
-            if use_creation_method:
-                created_objects.append(cls._model_creation(model_cls, **record))
-            else:
-                created_objects.append(cls._model_building(model_cls, **record))
+            created_objects.append(cls._model_building(model_cls, **record))
         return created_objects
 
     @classmethod
@@ -504,7 +508,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Returns:
             The Django model instance corresponding to the input, or the original value if it cannot be resolved to a model.
         """
-        return _ensure_model_instance(value)
+        try:
+            return _ensure_model_instance(value)
+        except UnableToResolveManagerInstanceError:
+            return value
 
     @classmethod
     def _coerce_many_to_many_values(cls, values: object) -> list[object]:

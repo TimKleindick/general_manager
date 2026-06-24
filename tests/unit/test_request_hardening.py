@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pickle
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from django.test import SimpleTestCase
 
@@ -29,6 +29,10 @@ from general_manager.interface.requests import (
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
+
+
+def _trusted_pickle_loads(data: bytes) -> Any:
+    return pickle.loads(data)  # noqa: S301 - test data is created locally
 
 
 class EqualityProject(GeneralManager):
@@ -508,7 +512,7 @@ class RequestBucketHardeningTests(SimpleTestCase):
         self,
     ) -> None:
         bucket = EqualityProject.filter(status="active")
-        round_tripped = pickle.loads(pickle.dumps(bucket))  # noqa: S301
+        round_tripped = _trusted_pickle_loads(pickle.dumps(bucket))
 
         filtered = round_tripped.filter(status="inactive")
 

@@ -468,9 +468,7 @@ class ReadOnlyManagementCapability(BaseCapability):
             "schema_validated": schema_validated,
         }
 
-        in_progress: set[_ReadOnlyInterface] = getattr(
-            self, "_sync_stack", set()
-        )
+        in_progress: set[_ReadOnlyInterface] = getattr(self, "_sync_stack", set())
         if interface_cls in in_progress:
             return None
         in_progress.add(interface_cls)
@@ -492,7 +490,9 @@ class ReadOnlyManagementCapability(BaseCapability):
             db_connection = connection or cast(_SchemaConnection, django_connection)
             db_transaction = transaction or django_transaction
             integrity_error_cls = integrity_error or IntegrityError
-            json_lib = json_module if json_module is not None else cast(_JsonLoader, json)
+            json_lib = (
+                json_module if json_module is not None else cast(_JsonLoader, json)
+            )
 
             if not schema_validated:
                 warnings = self.ensure_schema_is_up_to_date(
@@ -524,7 +524,11 @@ class ReadOnlyManagementCapability(BaseCapability):
             else:
                 raise InvalidReadOnlyDataTypeError()
 
-            data_list = cast(list[_RowData], parsed_data)
+            data_list: list[_RowData] = []
+            for item in parsed_data:
+                if not isinstance(item, dict):
+                    raise InvalidReadOnlyDataFormatError()
+                data_list.append(cast(_RowData, item))
             calculated_unique_fields = (
                 unique_fields
                 if unique_fields is not None
@@ -925,7 +929,10 @@ class ReadOnlyManagementCapability(BaseCapability):
                     unique_identifier = tuple(
                         lookup[field] for field in unique_field_order
                     )
-                    json_unique_values.add(unique_identifier)
+                    try:
+                        json_unique_values.add(unique_identifier)
+                    except TypeError as exc:
+                        raise InvalidReadOnlyDataFormatError() from exc
                     instance = cast(
                         GeneralManagerBasisModel | None,
                         manager.filter(**lookup).first(),
@@ -1028,7 +1035,9 @@ class ReadOnlyManagementCapability(BaseCapability):
                         changes["deactivated"].append(existing_instance)
 
                 if processed_pks and hasattr(model, "all_objects"):
-                    model.all_objects.filter(pk__in=processed_pks).update(is_active=True)
+                    model.all_objects.filter(pk__in=processed_pks).update(
+                        is_active=True
+                    )
 
             if any(changes.values()):
                 active_logger.info(

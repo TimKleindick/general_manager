@@ -22,10 +22,9 @@ Exports:
         schemas.
     ReadOnlySchemaObservabilityPayload: Payload schema emitted by schema checks.
     ReadOnlySyncObservabilityPayload: Payload schema emitted by data sync.
-    logger: Package-level `GeneralManagerLoggerAdapter` patch point. Patch
-        doubles can follow `ReadOnlyLogger`. Management resolves this name at
-        log time, so replacing `read_only.logger` affects subsequent schema and
-        synchronization logs.
+    logger: Package-level `ReadOnlyLogger` patch point. Management resolves this
+        name at log time, so replacing `read_only.logger` affects subsequent
+        schema and synchronization logs.
     with_observability: Observability wrapper patch point used by read-only
         management. Management resolves this callable at runtime through the
         package, so replacing `read_only.with_observability` affects subsequent
@@ -38,8 +37,6 @@ from typing import Protocol, TypeVar, cast, overload
 from general_manager.interface.capabilities.core.utils import (
     with_observability as _with_observability,
 )
-from general_manager.logging import GeneralManagerLoggerAdapter
-
 from . import management as _management
 from ._types import (
     ReadOnlyEnsureSchemaObservabilityEvent as ReadOnlyEnsureSchemaObservabilityEvent,
@@ -105,7 +102,7 @@ class ReadOnlyObservabilityHook(Protocol):
 
 
 ReadOnlyManagementCapability = _management.ReadOnlyManagementCapability
-logger: GeneralManagerLoggerAdapter = _management.logger
+logger: ReadOnlyLogger = cast(ReadOnlyLogger, _management.logger)
 with_observability = cast(ReadOnlyObservabilityHook, _with_observability)
 
 __all__ = [

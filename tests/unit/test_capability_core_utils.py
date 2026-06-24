@@ -301,6 +301,29 @@ def test_with_observability_returns_func_result():
     assert result is expected_result
 
 
+def test_with_observability_returns_awaitable_unchanged():
+    """Awaitables returned by func should pass through without wrapping."""
+    target = Mock()
+    target.get_capability_handler = Mock(return_value=None)
+
+    class AwaitableResult:
+        def __await__(self):
+            if False:
+                yield None
+            return "complete"
+
+    expected_result = AwaitableResult()
+
+    result = with_observability(
+        target,
+        operation="query",
+        payload={},
+        func=lambda: expected_result,
+    )
+
+    assert result is expected_result
+
+
 def test_with_observability_func_receives_no_args():
     """Test that the func callable is invoked with no arguments."""
     capability = Mock()

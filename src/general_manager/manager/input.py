@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import builtins
 import inspect
-from collections.abc import Callable, Hashable, Iterable, Iterator
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -692,7 +692,7 @@ class Input(Generic[INPUT_TYPE]):
                 if callable(query)
                 else query
             )
-            if isinstance(resolved_query, dict):
+            if isinstance(resolved_query, Mapping):
                 return manager_type.filter(**resolved_query)  # type: ignore[attr-defined]
             return resolved_query
 

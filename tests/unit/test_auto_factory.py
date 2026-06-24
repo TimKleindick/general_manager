@@ -1,5 +1,6 @@
 from django.test import TransactionTestCase
 from django.db import models, connection
+from django.core.exceptions import ValidationError
 from general_manager.factory.auto_factory import AutoFactory
 from typing import Any, Iterable
 from unittest.mock import patch
@@ -226,6 +227,20 @@ class AutoFactoryTestCase(TransactionTestCase):
         self.assertEqual(instance[1].name, "Generated Name")
         self.assertEqual(instance[100].value, 10_000)
         self.assertEqual(DummyModel.objects.count(), 101)
+
+    def test_generate_function_create_rolls_back_list_when_later_record_fails(self):
+        def custom_generate_function(**kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {"name": "saved first", "value": 1},
+                {"name": "invalid second", "value": "not an integer"},
+            ]
+
+        self.factory_class._adjustmentMethod = custom_generate_function
+
+        with self.assertRaises(ValidationError):
+            self.factory_class.create()
+
+        self.assertEqual(DummyModel.objects.count(), 0)
 
     def test_generate_instance_with_generate_function_for_one_entry(self):
         """
@@ -499,6 +514,18 @@ class FactoriesHelpersTestCase(TransactionTestCase):
         result = _ensure_model_instance(instance)
 
         self.assertIs(result, instance)
+
+    def test_ensure_model_instance_rejects_non_model_outputs(self):
+        from general_manager.factory.factories import (
+            UnableToResolveManagerInstanceError,
+            _ensure_model_instance,
+        )
+
+        with self.assertRaises(UnableToResolveManagerInstanceError):
+            _ensure_model_instance(object())
+
+    def test_coerce_single_related_value_preserves_none(self):
+        self.assertIsNone(AutoFactory._coerce_single_related_value(None))
 
     def test_missing_factory_or_instances_error_message(self):
         """

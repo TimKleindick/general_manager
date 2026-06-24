@@ -1997,7 +1997,11 @@ def apply_request_lookup(
             return str(filter_value) in value_to_check
         if lookup == "icontains" and isinstance(value_to_check, str):
             return str(filter_value).lower() in value_to_check.lower()
-        if lookup == "in" and isinstance(filter_value, Iterable):
+        if (
+            lookup == "in"
+            and isinstance(filter_value, Iterable)
+            and not isinstance(filter_value, (str, bytes))
+        ):
             return value_to_check in filter_value
         if lookup == "isnull":
             return (value_to_check is None) is bool(filter_value)
