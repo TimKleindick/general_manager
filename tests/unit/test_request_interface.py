@@ -538,6 +538,14 @@ class TestRequestInterface(SimpleTestCase):
         self.assertEqual(item.name, "Alpha")
         self.assertTrue(bucket._materialized)
 
+        round_tripped = pickle.loads(pickle.dumps(bucket))  # noqa: S301
+        restored = round_tripped.first()
+
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored.name, "Alpha")
+        self.assertEqual(restored._interface._request_payload_cache["name"], "Alpha")
+
     def test_materialized_request_bucket_indexes_keep_distinct_payloads(self) -> None:
         """Keep indexes for separately materialized request buckets isolated."""
         alpha_payload = {

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING, ClassVar
+from collections.abc import Callable
+from typing import TYPE_CHECKING, ClassVar
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.cache.cache_tracker import DependencyTracker
@@ -20,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
     )
 
 
-def _track_cached_manager(value: Any) -> None:
+def _track_cached_manager(value: object) -> None:
     if isinstance(value, GeneralManager):
         DependencyTracker.track(
             value.__class__.__name__,
@@ -34,32 +35,36 @@ class CalculationReadCapability(BaseCapability):
 
     name: ClassVar[CapabilityName] = "read"
 
-    def get_data(self, interface_instance: "CalculationInterface") -> Any:
-        """
-        Indicates that calculation interfaces do not persist instance data and this operation is unsupported.
+    def get_data(self, interface_instance: "CalculationInterface") -> object:
+        """Reject persisted-data access for calculation interface instances.
+
+        Parameters:
+            interface_instance: Calculation interface instance whose stored data
+                was requested. The value is accepted for capability compatibility
+                and is not inspected.
 
         Raises:
-            NotImplementedError: Always raised with the message "Calculations do not store data."
+            NotImplementedError: Always raised because calculation managers are
+                derived from their inputs and do not have backing storage.
         """
         raise NotImplementedError("Calculations do not store data.")
 
     def get_attribute_types(
         self,
         interface_cls: type["CalculationInterface"],
-    ) -> dict[str, dict[str, Any]]:
-        """
-        Builds a mapping of input field metadata for a calculation interface.
+    ) -> dict[str, dict[str, object]]:
+        """Build metadata for each declared calculation input.
 
         Parameters:
-            interface_cls (type): CalculationInterface subclass whose `input_fields` mapping will be inspected.
+            interface_cls: Calculation interface class whose collected
+                ``input_fields`` mapping is inspected.
 
         Returns:
-            dict[str, dict[str, Any]]: A dictionary where each key is an input field name and each value is a metadata dictionary with:
-                - "type": the field's declared Python type,
-                - "default": None,
-                - "is_editable": False,
-                - "is_required": whether the field is required (`field.required`),
-                - "is_derived": False
+            Mapping from input name to metadata rows with the exact keys
+            ``"type"``, ``"default"``, ``"is_editable"``, ``"is_required"``,
+            and ``"is_derived"``. Calculation inputs always report
+            ``default=None``, ``is_editable=False``, and ``is_derived=False``;
+            ``is_required`` mirrors ``Input.required``.
         """
         return {
             name: {
@@ -75,28 +80,38 @@ class CalculationReadCapability(BaseCapability):
     def get_attributes(
         self,
         interface_cls: type["CalculationInterface"],
-    ) -> dict[str, Any]:
-        """
-        Provide attribute accessors for each input field of the calculation interface.
+    ) -> dict[str, Callable[["CalculationInterface"], object]]:
+        """Create lazy input accessors for a calculation interface.
 
         Parameters:
-            interface_cls (type[CalculationInterface]): Calculation interface class whose `input_fields` mapping defines available input names and types.
+            interface_cls: Calculation interface class whose ``input_fields``
+                mapping defines available input names, types, and dependencies.
 
         Returns:
-            dict[str, Callable[[Any], Any]]: Mapping from each input field name to a callable. Each callable takes an interface instance (`self`) and returns the value from `self.identification` for that field cast using the field's `cast` method.
+            Mapping from input name to a callable. Each callable resolves
+            declared dependencies first, casts the raw value from the instance's
+            ``identification`` mapping, memoizes the cast result on that
+            instance, and returns the typed value as ``object``. Missing
+            identification keys are passed to ``Input.cast()`` as ``None``;
+            required-input enforcement is handled by separate validation, not
+            by this accessor.
+
+        Raises:
+            KeyError: Propagated from missing dependency names or field names.
+            TypeError: Propagated from input casting callbacks with incompatible
+                signatures or values.
+            ValueError: Propagated from input normalization/parsing failures.
         """
 
         def _resolve_input_value(
             interface_instance: "CalculationInterface",
             field_name: str,
-        ) -> Any:
-            resolved_values = getattr(
-                interface_instance, "_resolved_input_values", None
-            )
-            if resolved_values is None:
+        ) -> object:
+            try:
+                resolved_values = interface_instance._resolved_input_values
+            except AttributeError:
                 resolved_values = {}
                 interface_instance._resolved_input_values = resolved_values
-            input_field = interface_cls.input_fields[field_name]
             if field_name in resolved_values:
                 cached_value = resolved_values[field_name]
                 _track_cached_manager(cached_value)
@@ -118,28 +133,36 @@ class CalculationReadCapability(BaseCapability):
             resolved_values[field_name] = value
             return value
 
+        def _make_accessor(
+            field_name: str,
+        ) -> Callable[["CalculationInterface"], object]:
+            def _access(interface_instance: "CalculationInterface") -> object:
+                return _resolve_input_value(interface_instance, field_name)
+
+            return _access
+
         return {
-            name: lambda self, name=name: _resolve_input_value(self, name)
-            for name in interface_cls.input_fields.keys()
+            name: _make_accessor(name) for name in interface_cls.input_fields.keys()
         }
 
     def get_field_type(
         self,
         interface_cls: type["CalculationInterface"],
         field_name: str,
-    ) -> type:
-        """
-        Retrieve the declared Python type for a named input field on the calculation interface.
+    ) -> type[object]:
+        """Return the declared Python type for one calculation input.
 
         Parameters:
-            interface_cls (type[CalculationInterface]): Calculation interface class containing `input_fields`.
-            field_name (str): Name of the input field to look up.
+            interface_cls: Calculation interface class containing
+                ``input_fields``.
+            field_name: Name of the input field to look up.
 
         Returns:
-            type: The Python type declared for the input field.
+            The Python type declared on the input field.
 
         Raises:
-            KeyError: If `field_name` is not present in `interface_cls.input_fields`.
+            KeyError: If ``field_name`` is absent from
+                ``interface_cls.input_fields``.
         """
         field = interface_cls.input_fields.get(field_name)
         if field is None:
@@ -155,27 +178,32 @@ class CalculationQueryCapability(BaseCapability):
     def filter(
         self,
         interface_cls: type["CalculationInterface"],
-        **kwargs: Any,
-    ) -> CalculationBucket:
-        """
-        Create a filtered CalculationBucket for the given calculation interface using the provided query criteria.
+        **kwargs: object,
+    ) -> CalculationBucket[GeneralManager]:
+        """Create a filtered calculation bucket for an interface.
 
         Parameters:
-            interface_cls (type[CalculationInterface]): Calculation interface whose underlying parent class will be queried.
-            **kwargs: Query filter parameters forwarded to CalculationBucket.filter.
+            interface_cls: Calculation interface whose parent manager class is
+                enumerated.
+            **kwargs: Query filter parameters forwarded to
+                ``CalculationBucket.filter``.
 
         Returns:
-            CalculationBucket: A bucket representing the filtered set of calculations.
+            Bucket representing calculation input combinations that match the
+            provided filters.
+
+        Raises:
+            InvalidCalculationInterfaceError: Propagated if the parent manager
+                does not use a calculation interface.
+            KeyError: Propagated from missing dependency values.
+            TypeError: Propagated from invalid filter values, input domains, or
+                callback signatures.
+            ValueError: Propagated from input parsing, normalization, or filter
+                value failures.
         """
-        payload_snapshot = {"kwargs": dict(kwargs)}
+        payload_snapshot: dict[str, object] = {"kwargs": dict(kwargs)}
 
-        def _perform() -> CalculationBucket:
-            """
-            Execute the filter operation against the CalculationBucket for the interface's parent class.
-
-            Returns:
-                CalculationBucket: A bucket containing calculations matching the filter criteria provided to the enclosing method.
-            """
+        def _perform() -> CalculationBucket[GeneralManager]:
             return CalculationBucket(interface_cls._parent_class).filter(**kwargs)
 
         return call_with_observability(
@@ -188,27 +216,32 @@ class CalculationQueryCapability(BaseCapability):
     def exclude(
         self,
         interface_cls: type["CalculationInterface"],
-        **kwargs: Any,
-    ) -> CalculationBucket:
-        """
-        Execute an exclusion query against the calculation interface's bucket and record the operation for observability.
+        **kwargs: object,
+    ) -> CalculationBucket[GeneralManager]:
+        """Create a calculation bucket with matching combinations excluded.
 
         Parameters:
-            interface_cls (type[CalculationInterface]): The calculation interface class whose parent model is used to construct the CalculationBucket.
-            **kwargs: Filter criteria forwarded to the bucket's `exclude` method.
+            interface_cls: Calculation interface whose parent manager class is
+                enumerated.
+            **kwargs: Exclusion criteria forwarded to
+                ``CalculationBucket.exclude``.
 
         Returns:
-            CalculationBucket: A bucket representing the query with the specified exclusions applied.
+            Bucket representing calculation input combinations after matching
+            combinations are removed.
+
+        Raises:
+            InvalidCalculationInterfaceError: Propagated if the parent manager
+                does not use a calculation interface.
+            KeyError: Propagated from missing dependency values.
+            TypeError: Propagated from invalid exclusion values, input domains,
+                or callback signatures.
+            ValueError: Propagated from input parsing, normalization, or filter
+                value failures.
         """
-        payload_snapshot = {"kwargs": dict(kwargs)}
+        payload_snapshot: dict[str, object] = {"kwargs": dict(kwargs)}
 
-        def _perform() -> CalculationBucket:
-            """
-            Create a CalculationBucket for the interface's parent class and apply exclusion filters from the surrounding scope.
-
-            Returns:
-                CalculationBucket: Bucket with items excluded according to the provided keyword arguments.
-            """
+        def _perform() -> CalculationBucket[GeneralManager]:
             return CalculationBucket(interface_cls._parent_class).exclude(**kwargs)
 
         return call_with_observability(
@@ -218,25 +251,30 @@ class CalculationQueryCapability(BaseCapability):
             func=_perform,
         )
 
-    def all(self, interface_cls: type["CalculationInterface"]) -> CalculationBucket:
-        """
-        Retrieve all calculation instances for the specified calculation interface.
+    def all(
+        self,
+        interface_cls: type["CalculationInterface"],
+    ) -> CalculationBucket[GeneralManager]:
+        """Create a bucket for all calculation input combinations.
 
         Parameters:
-            interface_cls (type[CalculationInterface]): The calculation interface class whose calculations should be returned.
+            interface_cls: Calculation interface whose parent manager class is
+                enumerated.
 
         Returns:
-            CalculationBucket: A bucket containing all calculation instances for the given interface.
+            Bucket representing every possible calculation input combination.
+
+        Raises:
+            InvalidCalculationInterfaceError: Propagated if the parent manager
+                does not use a calculation interface.
+            KeyError: Propagated from missing dependency values.
+            TypeError: Propagated from invalid input domain definitions or
+                callback signatures.
+            ValueError: Propagated from input parsing or normalization failures.
         """
-        payload_snapshot: dict[str, Any] = {}
+        payload_snapshot: dict[str, object] = {}
 
-        def _perform() -> CalculationBucket:
-            """
-            Get a CalculationBucket containing all calculation instances for the interface's parent class.
-
-            Returns:
-                CalculationBucket: a bucket representing all calculations for the interface's parent class.
-            """
+        def _perform() -> CalculationBucket[GeneralManager]:
             return CalculationBucket(interface_cls._parent_class).all()
 
         return call_with_observability(
@@ -256,38 +294,31 @@ class CalculationLifecycleCapability(BaseCapability):
         self,
         *,
         name: str,
-        attrs: dict[str, Any],
+        attrs: dict[str, object],
         interface: type["CalculationInterface"],
-    ) -> tuple[dict[str, Any], type["CalculationInterface"], None]:
-        """
-        Builds and attaches a specialized CalculationInterface subclass and updates class attributes for creation.
+    ) -> tuple[dict[str, object], type["CalculationInterface"], None]:
+        """Collect calculation inputs and attach the generated interface class.
 
         Parameters:
-            name (str): The declared name for the new interface class.
-            attrs (dict[str, Any]): The attribute mapping that will be updated with interface metadata; this function sets "_interface_type" and "Interface".
-            interface (type[CalculationInterface]): The base calculation interface class used to collect Input-declared fields.
+            name: Declared manager class name, used only for observability
+                payloads.
+            attrs: Mutable manager-class attribute mapping. This method sets
+                ``"_interface_type"`` and ``"Interface"``.
+            interface: User-declared calculation interface class. Only its own
+                ``Input`` class attributes are collected; inherited descriptors
+                and pre-existing ``input_fields`` values are not merged.
 
         Returns:
-            tuple[dict[str, Any], type[CalculationInterface], None]: A tuple containing the possibly modified `attrs` dict, the newly created interface subclass with an `input_fields` mapping, and `None`.
+            Tuple of updated attrs, generated calculation interface subclass,
+            and ``None`` for lifecycle hook compatibility.
         """
-        payload_snapshot = {
+        payload_snapshot: dict[str, object] = {
             "interface": interface.__name__,
             "name": name,
         }
 
-        def _perform() -> tuple[dict[str, Any], type["CalculationInterface"], None]:
-            """
-            Collect input fields from the given interface, create a new interface subclass containing those inputs, attach it to attrs, and return the updated metadata.
-
-            The function scans attributes on `interface` for instances of `Input` and builds an `input_fields` mapping. It sets `attrs["_interface_type"]` from `interface._interface_type`, creates a new subclass named after `interface` with an `input_fields` attribute, assigns that subclass to `attrs["Interface"]`, and returns the updated values.
-
-            Returns:
-                tuple:
-                    - attrs (dict[str, Any]): The input `attrs` dictionary updated with `_interface_type` and `Interface`.
-                    - interface_cls (type[CalculationInterface]): Newly created subclass of the provided `interface` containing the `input_fields` mapping.
-                    - None: Placeholder to match expected return signature.
-            """
-            input_fields: dict[str, Input[Any]] = {}
+        def _perform() -> tuple[dict[str, object], type["CalculationInterface"], None]:
+            input_fields: dict[str, Input[type[object]]] = {}
             for key, value in vars(interface).items():
                 if key.startswith("__"):
                     continue
@@ -313,31 +344,24 @@ class CalculationLifecycleCapability(BaseCapability):
     def post_create(
         self,
         *,
-        new_class: type,
+        new_class: type[GeneralManager],
         interface_class: type["CalculationInterface"],
         model: None = None,
     ) -> None:
-        """
-        Attach the created class as the parent implementation for a calculation interface.
-
-        Sets the interface_class's _parent_class attribute to new_class and records the operation for observability.
+        """Attach the concrete manager class to the generated interface.
 
         Parameters:
-            new_class (type): The concrete class just created for the interface.
-            interface_class (type[CalculationInterface]): The interface class whose parent link will be updated.
-            model (None): Reserved for compatibility with lifecycle hooks; not used.
+            new_class: Concrete manager class just created.
+            interface_class: Generated calculation interface class whose
+                ``_parent_class`` backlink will be updated.
+            model: Reserved for lifecycle compatibility and ignored.
         """
-        payload_snapshot = {"interface": interface_class.__name__}
+        payload_snapshot: dict[str, object] = {"interface": interface_class.__name__}
 
         def _perform() -> None:
-            """
-            Attach the newly created class as the interface's parent.
+            interface_class._parent_class = new_class
 
-            This mutates the provided interface_class by assigning its `_parent_class` attribute to `new_class`.
-            """
-            interface_class._parent_class = new_class  # type: ignore[attr-defined]
-
-        return call_with_observability(
+        call_with_observability(
             interface_class,
             operation="calculation.post_create",
             payload=payload_snapshot,

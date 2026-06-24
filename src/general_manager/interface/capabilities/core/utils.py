@@ -2,44 +2,116 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, TypeVar
+from collections.abc import Mapping
+from typing import Callable, Protocol, TypeVar, cast
 
 ResultT = TypeVar("ResultT")
 
 
+class ObservabilityCapability(Protocol):
+    """
+    Structural hook surface consumed internally by :func:`with_observability`.
+
+    The protocol is not exported from this module. Hook methods receive the same
+    shallow-copied payload dictionary for one wrapper invocation and return
+    ``None``. Concrete hook exceptions are not normalized by the wrapper.
+    """
+
+    def before_operation(
+        self,
+        *,
+        operation: str,
+        target: object,
+        payload: dict[str, object],
+    ) -> None: ...
+
+    def after_operation(
+        self,
+        *,
+        operation: str,
+        target: object,
+        payload: dict[str, object],
+        result: object,
+    ) -> None: ...
+
+    def on_error(
+        self,
+        *,
+        operation: str,
+        target: object,
+        payload: dict[str, object],
+        error: Exception,
+    ) -> None: ...
+
+
+class ObservabilityTarget(Protocol):
+    """
+    Structural target shape consumed internally by :func:`with_observability`.
+
+    The protocol is not exported from this module. The wrapper requests only the
+    ``"observability"`` capability name.
+    """
+
+    def get_capability_handler(self, name: str) -> object | None: ...
+
+
 def with_observability(
-    target: Any,
+    target: object,
     *,
     operation: str,
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     func: Callable[[], ResultT],
 ) -> ResultT:
     """
-    Invoke the provided callable while emitting observability hooks from the target's observability capability when available.
+    Execute a zero-argument callable with optional observability hooks.
 
-    If the target exposes a `get_capability_handler("observability")`, this function will call the capability's optional hooks in this order: `before_operation` (before invoking `func`), `on_error` (if `func` raises), and `after_operation` (after successful completion). The supplied `payload` is shallow-copied before being passed to hooks. If no observability capability is present, `func` is executed directly.
+    If ``target`` exposes ``get_capability_handler("observability")`` and that
+    lookup returns a capability object, this function reads
+    ``before_operation``, ``after_operation``, and ``on_error`` attributes from
+    that capability using ``getattr(..., None)``. Absent hook attributes and hook
+    attributes set to ``None`` are ignored; non-``None`` values are called as hook
+    methods and non-callable values fail when called. The supplied ``payload`` is
+    shallow-copied exactly once after capability lookup and hook-attribute lookup,
+    before ``before_operation``. The same copy is passed to every hook for that
+    invocation. If the target has no handler lookup method, or the lookup returns
+    ``None``, ``func`` is executed directly and no payload copy is made.
+
+    Hook order is ``before_operation`` before ``func``, ``on_error`` only if
+    ``func`` raises, and ``after_operation`` only after ``func`` succeeds. If
+    ``before_operation`` raises, ``func`` is not called. Hook exceptions are not
+    wrapped: a failing ``on_error`` replaces the original operation exception,
+    and a failing ``after_operation`` replaces the successful operation result.
 
     Parameters:
-        target: Object that may provide a `get_capability_handler` method to obtain an observability capability.
-        operation (str): Logical name of the operation for observability hooks.
-        payload (dict[str, Any]): Data passed to observability hooks; a shallow copy is made to avoid mutation of the original.
-        func (Callable[[], ResultT]): Callable to execute for the operation.
+        target: Object that may provide a ``get_capability_handler`` method to
+            obtain an observability capability.
+        operation: Logical operation name passed unchanged to hooks.
+        payload: Mapping copied into a plain ``dict`` for hook payloads when a
+            capability is present.
+        func: Zero-argument callable to execute for the operation.
 
     Returns:
-        ResultT: The value returned by `func`.
+        The value returned by ``func``.
 
     Raises:
-        Exception: Re-raises any exception raised by `func` after invoking `on_error` if that hook is present.
+        Exception: Exceptions from ``get_capability_handler``, hook-attribute
+            lookup, ``dict(payload)``, ``func``, and hook calls propagate
+            directly. When ``func`` raises and ``on_error`` is present, the
+            original exception is re-raised unless ``on_error`` raises a
+            replacement exception.
     """
     get_handler = getattr(target, "get_capability_handler", None)
     if get_handler is None:
         return func()
-    capability = get_handler("observability")
+    capability = cast(ObservabilityTarget, target).get_capability_handler(
+        "observability"
+    )
     if capability is None:
         return func()
-    before = getattr(capability, "before_operation", None)
-    after = getattr(capability, "after_operation", None)
-    on_error = getattr(capability, "on_error", None)
+    observed = cast(ObservabilityCapability, capability)
+    before = getattr(observed, "before_operation", None)
+    after = getattr(observed, "after_operation", None)
+    on_error = getattr(observed, "on_error", None)
     safe_payload = dict(payload)
     if before is not None:
         before(operation=operation, target=target, payload=safe_payload)

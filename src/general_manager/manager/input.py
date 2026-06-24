@@ -5,34 +5,39 @@ from __future__ import annotations
 import calendar
 import builtins
 import inspect
-from collections.abc import Hashable, Iterable, Iterator
+from collections.abc import Callable, Hashable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement import Measurement
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from general_manager.bucket.base_bucket import Bucket
 
 
-INPUT_TYPE = TypeVar("INPUT_TYPE", bound=type)
+INPUT_TYPE = TypeVar("INPUT_TYPE", bound=type[object])
 VALUE_TYPE = TypeVar("VALUE_TYPE")
 
 type PossibleValues = (
-    "InputDomain[Any]"
-    | "Iterable[Any]"
-    | "Bucket[Any]"
-    | "Callable[..., InputDomain[Any] | Iterable[Any] | Bucket[Any]]"
+    "InputDomain[object]"
+    | "Iterable[object]"
+    | "Bucket[GeneralManager]"
+    | "Callable[..., object]"
 )
-type PossibleValuesCacheContext = tuple[type[Any], str]
+type PossibleValuesCacheContext = tuple[type[object], str]
+"""Run-cache context for callable possible values: ``(owner_class, field_name)``."""
 type ScalarConstraint = date | datetime | int | float | Decimal
 type Validator = Callable[..., bool | None]
-type Normalizer = Callable[..., Any]
+type Normalizer = Callable[..., object]
+
+
+class _Comparable(Protocol):
+    def __lt__(self, other: object) -> bool: ...
+
+    def __gt__(self, other: object) -> bool: ...
 
 
 class DomainIterationError(TypeError):
@@ -67,14 +72,19 @@ class InvalidDateRangeError(ValueError):
         super().__init__(messages[reason])
 
 
-def _invoke_callable(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+def _invoke_callable(
+    func: Callable[..., object],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> object:
     """Invoke a callback with only the arguments its signature accepts."""
 
     signature = inspect.signature(func)
     parameters = list(signature.parameters.values())
     positional_args = list(args)
-    bound_args: list[Any] = []
-    bound_kwargs: dict[str, Any] = {}
+    bound_args: list[object] = []
+    bound_kwargs: dict[str, object] = {}
     remaining_kwargs = dict(kwargs)
 
     for parameter in parameters:
@@ -105,7 +115,7 @@ def _invoke_callable(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> 
     return func(*bound_args, **bound_kwargs)
 
 
-def _materialize_cached_possible_values(possible_values: Any) -> Any:
+def _materialize_cached_possible_values(possible_values: object) -> object:
     """Store one-shot iterators as reusable values in the run cache."""
 
     if isinstance(possible_values, Iterator):
@@ -167,7 +177,16 @@ def _decimal_tolerance(step: int | float | Decimal) -> Decimal:
 
 @dataclass(frozen=True)
 class InputDomain(Generic[VALUE_TYPE]):
-    """Structured description of an input domain."""
+    """Structured description of an input domain.
+
+    The base domain stores a ``kind`` string, returns identity values from
+    :meth:`normalize`, reports ``{"kind": kind}`` from :meth:`metadata`, and
+    implements ``contains(value)`` as a safe membership check. Direct ``in``
+    checks call :meth:`__contains__`, which iterates over :meth:`__iter__`. On
+    the base class that raises ``DomainIterationError`` because subclasses are
+    responsible for finite iteration; call :meth:`contains` when callers need a
+    false result instead of that eager-iteration error.
+    """
 
     kind: str
 
@@ -180,7 +199,7 @@ class InputDomain(Generic[VALUE_TYPE]):
     def normalize(self, value: VALUE_TYPE) -> VALUE_TYPE:
         return value
 
-    def metadata(self) -> dict[str, Any]:
+    def metadata(self) -> dict[str, object]:
         return {"kind": self.kind}
 
     def __iter__(self) -> Iterator[VALUE_TYPE]:
@@ -195,7 +214,19 @@ class InputDomain(Generic[VALUE_TYPE]):
 
 @dataclass(frozen=True)
 class NumericRangeDomain(InputDomain[int | float | Decimal]):
-    """Finite numeric range with optional stepping."""
+    """Inclusive finite numeric range with optional stepping.
+
+    Values are valid only when they fall on the generated step sequence. If any
+    bound, step, or candidate is a ``Decimal``, membership and iteration use
+    ``Decimal`` arithmetic and iteration yields ``Decimal`` values. Otherwise,
+    if any bound, step, or candidate is a ``float``, they use ``float``
+    arithmetic and iteration yields ``float`` values. Pure integer ranges yield
+    ``int`` values. ``bool`` is not a documented numeric input type even though
+    Python may treat it as an integer at runtime. Floating-point checks use
+    ``max(1e-12, abs(step) * 1e-9)`` tolerance and decimal checks use the
+    equivalent ``Decimal`` tolerance so endpoint and step comparisons remain
+    stable for common decimal fractions.
+    """
 
     min_value: int | float | Decimal
     max_value: int | float | Decimal
@@ -272,7 +303,7 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
             current = cast(int, _add_numeric_step(current, step))
         return False
 
-    def metadata(self) -> dict[str, Any]:
+    def metadata(self) -> dict[str, object]:
         return {
             "kind": self.kind,
             "min_value": self.min_value,
@@ -335,7 +366,19 @@ class NumericRangeDomain(InputDomain[int | float | Decimal]):
 
 @dataclass(frozen=True)
 class DateRangeDomain(InputDomain[date]):
-    """Finite date domain backed by an inclusive range and frequency."""
+    """Inclusive finite date domain backed by a frequency and step.
+
+    Non-daily frequencies normalize candidate dates to the configured anchor
+    before membership checks. ``week_end`` anchors to Sunday. Month and year
+    steps advance by calendar months or years from the current anchored date;
+    quarter steps advance by three-month intervals. Iteration starts at
+    ``normalize(start)`` and stops once the next generated date would be greater
+    than the raw ``end`` value, so unaligned starts may anchor before or after
+    the supplied start date and unaligned ends are upper bounds rather than
+    additional anchors. ``datetime`` values are accepted by membership checks and
+    converted to their date component first; :meth:`normalize` itself is typed
+    for ``date`` inputs.
+    """
 
     start: date
     end: date
@@ -392,7 +435,7 @@ class DateRangeDomain(InputDomain[date]):
             return False
         return normalized in self
 
-    def metadata(self) -> dict[str, Any]:
+    def metadata(self) -> dict[str, object]:
         return {
             "kind": self.kind,
             "start": self.start,
@@ -441,7 +484,15 @@ class DateRangeDomain(InputDomain[date]):
 
 
 class Input(Generic[INPUT_TYPE]):
-    """Descriptor describing the expected type and constraints for an interface input."""
+    """Describe an interface input's type, constraints, and dependency metadata.
+
+    ``Input`` instances are attached to ``Interface`` classes and consumed by
+    GeneralManager interfaces when casting raw values, enumerating calculation
+    combinations, or exposing GraphQL input metadata. The descriptor stores the
+    expected Python class, optional allowed values, scalar bounds, dependency
+    names, and optional validation/normalization callbacks. It does not validate
+    that static ``possible_values`` match ``type`` during construction.
+    """
 
     def __init__(
         self,
@@ -459,7 +510,7 @@ class Input(Generic[INPUT_TYPE]):
         Create an Input specification with type information, constraints, and dependency metadata.
 
         Parameters:
-            type (INPUT_TYPE): Expected Python type for the input value.
+            type (INPUT_TYPE): Expected Python class for the input value.
             possible_values: Allowed values as a domain, iterable, bucket, or callable returning one.
             depends_on (list[str] | None): Names of other inputs required for dynamic constraints.
             required (bool): Whether callers must provide a value for this input.
@@ -467,8 +518,11 @@ class Input(Generic[INPUT_TYPE]):
             max_value: Inclusive upper bound for scalar values.
             validator: Extra validation callback returning ``True``/``False`` or ``None``.
             normalizer: Optional callback used to canonicalize values after casting.
+
+        Raises:
+            TypeError: If ``type`` is not a class accepted by ``issubclass``.
         """
-        self.type: builtins.type[Any] = cast(Any, type)
+        self.type: builtins.type[object] = cast(builtins.type[object], type)
         self.possible_values = possible_values
         self.required = required
         self.min_value = min_value
@@ -495,9 +549,24 @@ class Input(Generic[INPUT_TYPE]):
         depends_on: list[str] | None = None,
         required: bool = True,
     ) -> "Input[type[date]]":
-        """Create a date input backed by a structured date range domain."""
+        """Create a date input backed by a structured date range domain.
 
-        def build_domain(**dependency_values: Any) -> DateRangeDomain:
+        ``start`` and ``end`` may be dates or callbacks that accept declared
+        dependency values. Dependency names are inferred from callback parameter
+        names unless ``depends_on`` is supplied. The generated input normalizes
+        non-daily frequencies to their canonical date before returning values
+        from :meth:`cast`.
+
+        Raises:
+            InvalidDateRangeError: If bounds, frequency, or step are invalid
+                after dependency callbacks have been resolved.
+            TypeError: If a dependency callback cannot be invoked with the
+                available dependency values.
+            KeyError: If a dependent domain is resolved without a required
+                dependency value.
+        """
+
+        def build_domain(**dependency_values: object) -> DateRangeDomain:
             resolved_start = cls._resolve_bound(start, dependency_values)
             resolved_end = cls._resolve_bound(end, dependency_values)
             return DateRangeDomain(
@@ -520,7 +589,7 @@ class Input(Generic[INPUT_TYPE]):
         return cast(
             "Input[type[date]]",
             cls(
-                cast(Any, date),
+                cast(INPUT_TYPE, date),
                 possible_values=domain_or_builder,
                 depends_on=resolved_depends_on,
                 required=required,
@@ -543,7 +612,13 @@ class Input(Generic[INPUT_TYPE]):
         depends_on: list[str] | None = None,
         required: bool = True,
     ) -> "Input[type[date]]":
-        """Create a date input constrained to canonical monthly dates."""
+        """Create a date input constrained to canonical monthly dates.
+
+        ``anchor`` accepts ``"start"``/``"month_start"`` and
+        ``"end"``/``"month_end"``. Other values are forwarded as date-range
+        frequencies and invalid values raise ``InvalidDateRangeError`` when the
+        domain is built.
+        """
 
         frequency = {"start": "month_start", "end": "month_end"}.get(anchor, anchor)
         return cls.date_range(
@@ -566,7 +641,13 @@ class Input(Generic[INPUT_TYPE]):
         depends_on: list[str] | None = None,
         required: bool = True,
     ) -> "Input[type[date]]":
-        """Create a date input constrained to canonical yearly dates."""
+        """Create a date input constrained to canonical yearly dates.
+
+        ``anchor`` accepts ``"start"``/``"year_start"`` and
+        ``"end"``/``"year_end"``. Other values are forwarded as date-range
+        frequencies and invalid values raise ``InvalidDateRangeError`` when the
+        domain is built.
+        """
 
         frequency = {"start": "year_start", "end": "year_end"}.get(anchor, anchor)
         return cls.date_range(
@@ -583,13 +664,27 @@ class Input(Generic[INPUT_TYPE]):
         cls,
         manager_type: INPUT_TYPE,
         *,
-        query: dict[str, Any] | Callable[..., dict[str, Any] | Any] | None = None,
+        query: dict[str, object] | Callable[..., object] | None = None,
         depends_on: list[str] | None = None,
         required: bool = True,
     ) -> "Input[INPUT_TYPE]":
-        """Create a manager input whose possible values come from a manager query."""
+        """Create a manager input whose possible values come from a manager query.
 
-        def build_values(**dependency_values: Any) -> Any:
+        With no query, possible values come from ``manager_type.all()``. Mapping
+        queries are passed to ``manager_type.filter(**query)``; callable queries
+        receive dependency values and may return either a mapping or an already
+        resolved iterable/bucket/domain.
+
+        Raises:
+            AttributeError: If ``manager_type`` does not provide the required
+                ``all`` or ``filter`` class method for the selected query form.
+            TypeError: If a query callback cannot be invoked with the available
+                dependency values.
+            KeyError: If dependency values are missing when possible values are
+                resolved.
+        """
+
+        def build_values(**dependency_values: object) -> object:
             if query is None:
                 return manager_type.all()  # type: ignore[attr-defined]
             resolved_query = (
@@ -608,7 +703,7 @@ class Input(Generic[INPUT_TYPE]):
         if resolved_depends_on:
             possible_values = build_values
         else:
-            possible_values = build_values()
+            possible_values = cast(PossibleValues, build_values())
         return cls(
             manager_type,
             possible_values=possible_values,
@@ -637,7 +732,7 @@ class Input(Generic[INPUT_TYPE]):
     @staticmethod
     def _resolve_bound(
         value: date | Callable[..., date],
-        dependency_values: dict[str, Any],
+        dependency_values: dict[str, object],
     ) -> date:
         if callable(value):
             return cast(date, _invoke_callable(value, **dependency_values))
@@ -646,7 +741,7 @@ class Input(Generic[INPUT_TYPE]):
     def _possible_values_run_cache_key(
         self,
         cache_context: PossibleValuesCacheContext,
-        dependency_values: dict[str, Any],
+        dependency_values: dict[str, object],
     ) -> tuple[Hashable, ...]:
         from general_manager.bucket.indexing import freeze_bucket_index_value
 
@@ -668,26 +763,31 @@ class Input(Generic[INPUT_TYPE]):
 
     def resolve_possible_values(
         self,
-        identification: dict[str, Any] | None = None,
+        identification: dict[str, object] | None = None,
         *,
         cache_context: PossibleValuesCacheContext | None = None,
-    ) -> Any:
-        """Resolve the configured possible values for the current dependency context."""
+    ) -> object:
+        """Resolve possible values for the current dependency context.
+
+        Static values are returned unchanged. Callable providers receive only
+        declared dependency values, raising ``KeyError`` when a dependency is
+        missing. When called inside a calculation run with ``cache_context``,
+        provider results are cached by owner class, field name, and declared
+        dependency values; one-shot iterators are materialized before caching.
+        Unhashable dependency values skip the cache and call the provider.
+        """
 
         if self.possible_values is None:
             return None
         if callable(self.possible_values):
-            possible_values_provider = cast(Any, self.possible_values)
+            possible_values_provider = self.possible_values
             dependency_values = self._build_dependency_values(identification)
 
-            def invoke_possible_values() -> Any:
-                return cast(
-                    Any,
-                    _invoke_callable(
-                        possible_values_provider,
-                        *dependency_values.values(),
-                        **dependency_values,
-                    ),
+            def invoke_possible_values() -> object:
+                return _invoke_callable(
+                    possible_values_provider,
+                    *dependency_values.values(),
+                    **dependency_values,
                 )
 
             if cache_context is None:
@@ -712,20 +812,31 @@ class Input(Generic[INPUT_TYPE]):
                 cache_key,
                 lambda: _materialize_cached_possible_values(invoke_possible_values()),
             )
-        return cast(Any, self.possible_values)
+        return self.possible_values
 
     def normalize(
         self,
-        value: Any,
-        identification: dict[str, Any] | None = None,
+        value: object,
+        identification: dict[str, object] | None = None,
         *,
         cache_context: PossibleValuesCacheContext | None = None,
-    ) -> Any:
-        """Canonicalize a cast value using domain or explicit normalization rules."""
+    ) -> object:
+        """Canonicalize a cast value using domain or explicit normalization rules.
+
+        If ``possible_values`` is a static ``InputDomain``, domain normalization
+        runs even when no custom normalizer is configured. Dynamic possible
+        values are resolved only when a custom normalizer exists; if that
+        resolved value is an ``InputDomain``, dynamic-domain normalization runs
+        before the custom normalizer. Custom normalizers receive the converted
+        value first, then positional dependency values, a ``domain`` keyword
+        containing the resolved possible-values object or ``None``, and named
+        dependency values. Unsupported callback signatures raise the normal
+        Python ``TypeError`` from invocation.
+        """
 
         if value is None:
             return None
-        possible_values = (
+        possible_values: object | None = (
             self.possible_values
             if isinstance(self.possible_values, InputDomain)
             else None
@@ -750,23 +861,34 @@ class Input(Generic[INPUT_TYPE]):
             )
         return value
 
-    def validate_bounds(self, value: Any) -> bool:
-        """Return whether a value satisfies configured scalar bounds."""
+    def validate_bounds(self, value: object) -> bool:
+        """Return whether a value satisfies configured scalar bounds.
+
+        ``None`` is valid only for non-required inputs. For non-``None`` values,
+        Python comparison errors from incompatible value/bound types propagate.
+        """
 
         if value is None:
             return not self.required
-        if self.min_value is not None and value < self.min_value:
+        bounded_value = cast(_Comparable, value)
+        if self.min_value is not None and bounded_value < self.min_value:
             return False
-        if self.max_value is not None and value > self.max_value:
+        if self.max_value is not None and bounded_value > self.max_value:
             return False
         return True
 
     def validate_with_callable(
         self,
-        value: Any,
-        identification: dict[str, Any] | None = None,
+        value: object,
+        identification: dict[str, object] | None = None,
     ) -> bool:
-        """Return whether a value satisfies the configured validator callback."""
+        """Return whether a value satisfies the configured validator callback.
+
+        ``None`` values bypass custom validators. Validator callbacks receive the
+        candidate value first, followed by declared dependency values selected
+        from ``identification``. A ``None`` return is treated as a successful
+        validation and callback exceptions propagate unchanged.
+        """
 
         if self.validator is None or value is None:
             return True
@@ -783,9 +905,9 @@ class Input(Generic[INPUT_TYPE]):
 
     def _build_dependency_values(
         self,
-        identification: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        dependency_values: dict[str, Any] = {}
+        identification: dict[str, object] | None,
+    ) -> dict[str, object]:
+        dependency_values: dict[str, object] = {}
         for dependency_name in self.depends_on:
             if identification is None or dependency_name not in identification:
                 raise KeyError(dependency_name)
@@ -794,23 +916,36 @@ class Input(Generic[INPUT_TYPE]):
 
     def cast(
         self,
-        value: Any,
-        identification: dict[str, Any] | None = None,
+        value: object,
+        identification: dict[str, object] | None = None,
         *,
         cache_context: PossibleValuesCacheContext | None = None,
-    ) -> Any:
+    ) -> object:
         """
-        Convert a raw value to the configured input type.
+        Convert a raw value to the configured input type and normalize it.
+
+        ``cast`` does not apply scalar bounds, possible-value membership checks,
+        or the validator callback. Interface validation calls
+        :meth:`validate_bounds`, possible-value membership, and
+        :meth:`validate_with_callable` as separate steps.
 
         Parameters:
-            value (Any): Raw value supplied by the caller.
-            identification (dict[str, Any] | None): Dependency values used by normalizers.
+            value: Raw value supplied by the caller.
+            identification: Mapping of dependency input names to their current
+                values, used by dynamic possible values, normalizers, and
+                validators.
 
         Returns:
-            Any: Value converted to the target type.
+            Value converted to the target type, or ``None`` when ``value`` is
+            ``None``.
 
         Raises:
-            ValueError: If the value cannot be converted to the target type.
+            ValueError: If date, datetime, measurement, or fallback constructor
+                conversion rejects the value.
+            TypeError: If the configured type constructor or a callback cannot
+                accept the supplied value/dependencies.
+            KeyError: If normalization needs a declared dependency that is
+                missing from ``identification``.
         """
         if value is None:
             return None
@@ -820,7 +955,7 @@ class Input(Generic[INPUT_TYPE]):
             elif isinstance(value, date):
                 cast_value = value
             else:
-                cast_value = date.fromisoformat(value)
+                cast_value = date.fromisoformat(cast(str, value))
             return self.normalize(
                 cast_value,
                 identification,
@@ -832,7 +967,7 @@ class Input(Generic[INPUT_TYPE]):
             elif isinstance(value, date):
                 cast_value = datetime.combine(value, datetime.min.time())
             else:
-                cast_value = datetime.fromisoformat(value)
+                cast_value = datetime.fromisoformat(cast(str, value))
             return self.normalize(
                 cast_value,
                 identification,
@@ -841,14 +976,15 @@ class Input(Generic[INPUT_TYPE]):
         if isinstance(value, self.type):
             return self.normalize(value, identification, cache_context=cache_context)
         if issubclass(self.type, GeneralManager):
+            manager_type = self.type
             if isinstance(value, dict):
                 return self.normalize(
-                    self.type(**value),  # type: ignore[misc]
+                    manager_type(**value),
                     identification,
                     cache_context=cache_context,
                 )
             return self.normalize(
-                self.type(id=value),  # type: ignore[misc]
+                manager_type(id=value),
                 identification,
                 cache_context=cache_context,
             )
@@ -858,8 +994,9 @@ class Input(Generic[INPUT_TYPE]):
                 identification,
                 cache_context=cache_context,
             )
+        value_type = cast(Callable[[object], object], self.type)
         return self.normalize(
-            self.type(value),
+            value_type(value),
             identification,
             cache_context=cache_context,
         )

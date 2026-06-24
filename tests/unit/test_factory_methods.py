@@ -39,6 +39,10 @@ class TestFactoryMethods(SimpleTestCase):
                 self.assertTrue(min_value <= float(measurement.magnitude) <= max_value)
                 self.assertEqual(measurement.unit, unit)
 
+    def test__lazy_measurement_rejects_reversed_bounds(self):
+        with self.assertRaisesRegex(ValueError, "min_value must be <= max_value"):
+            lazy_measurement(30.5, 10.0, "kilogram")
+
     def test__lazy_delta_date(self):
         avg_delta_days = 5  # -> 2.5 to 7.5 days
         base_attribute = "start_date"
@@ -111,6 +115,10 @@ class TestFactoryMethods(SimpleTestCase):
                 self.assertIsInstance(integer_value, int)
                 self.assertTrue(min_value <= integer_value <= max_value)
 
+    def test__lazy_integer_rejects_reversed_bounds(self):
+        with self.assertRaisesRegex(ValueError, "min_value must be <= max_value"):
+            lazy_integer(100, 1)
+
     def test__lazy_decimal(self):
         min_value = 1.0
         max_value = 100.0
@@ -129,6 +137,14 @@ class TestFactoryMethods(SimpleTestCase):
                 if "." in decimal_str:
                     self.assertEqual(len(decimal_str.split(".")[1]), precision)
 
+    def test__lazy_decimal_rejects_negative_precision(self):
+        with self.assertRaisesRegex(ValueError, "precision must be >= 0"):
+            lazy_decimal(1.0, 100.0, -1)
+
+    def test__lazy_decimal_rejects_reversed_bounds(self):
+        with self.assertRaisesRegex(ValueError, "min_value must be <= max_value"):
+            lazy_decimal(100.0, 1.0)
+
     def test__lazy_uuid(self):
         obj = type("TestObject", (object,), {})()
         for i in range(100):
@@ -146,6 +162,15 @@ class TestFactoryMethods(SimpleTestCase):
             with self.subTest(run=i):
                 boolean_value = lazy_boolean().evaluate(obj, 1, None)
                 self.assertIsInstance(boolean_value, bool)
+
+    def test__lazy_boolean_rejects_probability_outside_unit_interval(self):
+        for ratio in (-0.01, 1.01):
+            with self.subTest(ratio=ratio):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "trues_ratio must be between 0 and 1",
+                ):
+                    lazy_boolean(ratio)
 
     def test__lazy_faker_name(self):
         obj = type("TestObject", (object,), {})()
@@ -216,6 +241,14 @@ class TestFactoryMethods(SimpleTestCase):
                 self.assertIn(choice_value, options)
                 self.assertIsInstance(choice_value, str)
                 self.assertTrue(len(choice_value) > 0)
+
+    def test__lazy_choice_snapshots_options_at_declaration_time(self):
+        options = ["option1"]
+        declaration = lazy_choice(options)
+        options.clear()
+
+        obj = type("TestObject", (object,), {})()
+        self.assertEqual(declaration.evaluate(obj, 1, None), "option1")
 
     def test__lazy_sequence(self):
         start = 0

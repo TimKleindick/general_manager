@@ -6,11 +6,20 @@ from collections.abc import Mapping
 
 import pytest
 
+from general_manager.interface.manifests import capability_models as capability_models_module
 from general_manager.interface.manifests.capability_models import (
     CapabilityPlan,
     CapabilityConfig,
     CapabilitySelection,
 )
+
+
+def test_capability_models_module_exports_public_models() -> None:
+    assert capability_models_module.__all__ == [
+        "CapabilityConfig",
+        "CapabilityPlan",
+        "CapabilitySelection",
+    ]
 
 
 def test_capability_plan_initialization():
@@ -125,6 +134,21 @@ def test_capability_config_mutable():
     assert "notification" in config.enabled
     assert "scheduling" in config.disabled
     assert config.flags["debug"] is True
+
+
+def test_capability_config_copies_inputs() -> None:
+    enabled = {"notification"}
+    disabled = {"scheduling"}
+    flags = {"debug": True}
+
+    config = CapabilityConfig(enabled=enabled, disabled=disabled, flags=flags)
+    enabled.add("access_control")
+    disabled.add("observability")
+    flags["debug"] = False
+
+    assert config.enabled == {"notification"}
+    assert config.disabled == {"scheduling"}
+    assert config.flags == {"debug": True}
 
 
 def test_capability_selection_initialization():

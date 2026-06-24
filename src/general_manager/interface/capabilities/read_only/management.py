@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from hashlib import sha256
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Type, cast
+from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 
 from django.core.checks import Warning
 from django.db import (
@@ -15,7 +17,10 @@ from django.db import (
 )
 
 from general_manager.measurement.measurement_field import MeasurementField
-from general_manager.interface.utils.models import GeneralManagerBasisModel
+from general_manager.interface.utils.models import (
+    GeneralManagerBasisModel,
+    SoftDeleteMixin,
+)
 from general_manager.interface.utils.errors import (
     InvalidReadOnlyDataFormatError,
     InvalidReadOnlyDataTypeError,
@@ -29,11 +34,57 @@ from general_manager.logging import get_logger
 from ..base import CapabilityName
 from ..builtin import BaseCapability
 from ._compat import call_with_observability
+from ._types import (
+    ReadOnlyLogger,
+    ReadOnlySchemaObservabilityPayload,
+    ReadOnlySyncObservabilityPayload,
+)
 
 logger = get_logger("interface.read_only")
 
 
-def _resolve_logger():
+class _ColumnDescription(Protocol):
+    """Column metadata returned by Django database introspection."""
+
+    name: str
+
+
+class _ReadOnlyIntrospection(Protocol):
+    """Subset of Django introspection used by read-only schema checks."""
+
+    def table_names(self, cursor: object | None = None) -> list[str]:
+        """Return table names visible through `cursor`."""
+
+    def get_table_description(
+        self, cursor: object, table_name: str
+    ) -> Sequence[_ColumnDescription]:
+        """Return column descriptions for `table_name`."""
+
+
+class _SchemaConnection(Protocol):
+    """Subset of a Django database connection used by read-only management."""
+
+    introspection: _ReadOnlyIntrospection
+
+    def cursor(self) -> AbstractContextManager[object]:
+        """Return a cursor context manager."""
+
+
+class _TransactionModule(Protocol):
+    """Subset of Django transaction management used by read-only sync."""
+
+    def atomic(self) -> AbstractContextManager[object]:
+        """Return a transaction context manager."""
+
+
+class _JsonLoader(Protocol):
+    """JSON parser shape consumed by read-only sync."""
+
+    def loads(self, value: str) -> object:
+        """Parse a JSON string into a Python object."""
+
+
+def _resolve_logger() -> ReadOnlyLogger:
     """
     Resolve the logger to use for read-only capability operations.
 
@@ -43,7 +94,9 @@ def _resolve_logger():
     from general_manager.interface.capabilities import read_only as read_only_package
 
     patched = getattr(read_only_package, "logger", None)
-    return patched or logger
+    if patched is not None:
+        return cast(ReadOnlyLogger, patched)
+    return cast(ReadOnlyLogger, logger)
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -53,6 +106,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from general_manager.manager.general_manager import GeneralManager
 
 
+type _ReadOnlyInterface = type["OrmInterfaceBase[models.Model]"]
+type _RowData = dict[str, object]
+type _RowSnapshot = dict[str, object]
+
+
 class ReadOnlyManagementCapability(BaseCapability):
     """Provide schema verification and data-sync behavior for read-only interfaces."""
 
@@ -60,18 +118,18 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     @staticmethod
     def _related_readonly_interfaces(
-        interface_cls: type["OrmInterfaceBase[Any]"],
-    ) -> set[type["OrmInterfaceBase[Any]"]]:
+        interface_cls: _ReadOnlyInterface,
+    ) -> set[_ReadOnlyInterface]:
         """
         Discover read-only interface classes referenced by concrete relation fields on the given interface's model.
 
         Inspects the model's fields and collects distinct read-only interface classes referenced by relation fields (excluding the provided interface).
 
         Parameters:
-            interface_cls (type): The ORM interface class whose model will be inspected.
+            interface_cls: The ORM interface class whose model will be inspected.
 
         Returns:
-            set[type]: A set of read-only interface classes referenced from the model's relation fields (excluding `interface_cls`).
+            A set of read-only interface classes referenced from the model's relation fields (excluding `interface_cls`).
         """
 
         model = getattr(interface_cls, "_model", None)
@@ -79,7 +137,7 @@ class ReadOnlyManagementCapability(BaseCapability):
         if not opts or not hasattr(opts, "get_fields"):
             return set()
 
-        related: set[type["OrmInterfaceBase[Any]"]] = set()
+        related: set[_ReadOnlyInterface] = set()
         for field in opts.get_fields():
             if not getattr(field, "is_relation", False) or getattr(
                 field, "auto_created", False
@@ -97,16 +155,23 @@ class ReadOnlyManagementCapability(BaseCapability):
         return related
 
     def get_startup_hook_dependency_resolver(
-        self, interface_cls: type["OrmInterfaceBase[Any]"]
+        self, interface_cls: _ReadOnlyInterface
     ) -> Callable[[type[object]], set[type[object]]]:
         """
         Return a resolver function that identifies read-only interfaces which must run before a given interface's startup hook.
 
+        The returned resolver inspects the interface class passed to the
+        resolver, not the `interface_cls` argument captured here. It reports
+        direct read-only dependencies referenced by non-auto-created relation
+        fields, including foreign-key, one-to-one, and many-to-many fields.
+        Transitive dependencies and cycle handling are left to the startup hook
+        runner.
+
         Parameters:
-            interface_cls (type[OrmInterfaceBase[Any]]): The interface class for which to obtain a startup-hook dependency resolver.
+            interface_cls: The interface class for which to obtain a startup-hook dependency resolver.
 
         Returns:
-            Callable[[type[object]], Set[type[object]]]: A callable that, when invoked with an interface class, returns a set of read-only interface classes that should be executed prior to that interface's startup hook.
+            A callable that, when invoked with an interface class, returns a set of read-only interface classes that should be executed prior to that interface's startup hook.
         """
 
         return cast(
@@ -114,14 +179,20 @@ class ReadOnlyManagementCapability(BaseCapability):
             self._related_readonly_interfaces,
         )
 
-    def get_unique_fields(self, model: Type[models.Model]) -> set[str]:
+    def get_unique_fields(self, model: type[models.Model]) -> set[str]:
         """
         Gather candidate unique field names declared on the Django model, remapping measurement-backed fields to their public attribute names.
 
-        Includes fields marked `unique=True`, fields listed in `unique_together` (or equivalent tuple/list/set entries), and fields referenced by `UniqueConstraint` definitions. Excludes the primary key named "id". If the model has no `_meta`, returns an empty set.
+        Includes fields marked `unique=True`, fields listed in `unique_together` (or equivalent tuple/list/set entries), and fields referenced by `UniqueConstraint` definitions. Excludes the primary key named "id". If multiple unique declarations exist, the returned flat set is their union; `sync_data()` treats every returned field as part of one composite row identity. If the model has no `_meta`, returns an empty set.
+
+        Parameters:
+            model: Django model class whose unique declarations should be inspected.
 
         Returns:
-            set[str]: A set of unique field names (with MeasurementField-backed value attributes remapped to their wrapper attribute names).
+            A set of unique field names with `MeasurementField`-backed value attributes remapped to their wrapper attribute names.
+
+        Raises:
+            ValueError: If two `MeasurementField` descriptors map to the same concrete `value_attr`.
         """
         opts = getattr(model, "_meta", None)
         if opts is None:
@@ -188,28 +259,38 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def ensure_schema_is_up_to_date(
         self,
-        interface_cls: type["OrmInterfaceBase[Any]"],
-        manager_cls: Type["GeneralManager"],
-        model: Type[models.Model],
+        interface_cls: _ReadOnlyInterface,
+        manager_cls: type["GeneralManager"],
+        model: type[models.Model],
         *,
-        connection=None,
+        connection: _SchemaConnection | None = None,
     ) -> list[Warning]:
         """
-        Verify that the Django model's declared schema matches the actual database table and return any schema-related warnings.
+        Verify that the Django model's declared column names match the actual database table and return schema-related warnings.
 
         Performs the following checks and returns corresponding Django `Warning` objects when applicable:
         - Model metadata (`_meta`) is missing.
         - `db_table` is not defined on the model meta.
         - The named database table does not exist.
-        - The table's columns differ from the model's local field columns (missing or extra columns).
+        - The table's column names differ from the model's local concrete field column names (missing or extra columns).
+
+        Field types, nullability, defaults, indexes, generated columns,
+        many-to-many through tables, and inherited fields outside the local
+        concrete field list are not compared.
 
         Parameters:
-            connection (optional): Database connection to use for introspection. If omitted, the default Django connection is used.
+            interface_cls: Read-only interface class passed to observability hooks.
+            manager_cls: Manager class used in warning hints and observability payloads.
+            model: Django model class whose database table should be checked.
+            connection: Database connection to use for introspection. If omitted, the default Django connection is used.
 
         Returns:
-            list[Warning]: A list of Django system-check `Warning` objects describing discovered mismatches; returns an empty list when no issues are found.
+            A list of Django system-check `Warning` objects describing discovered mismatches; returns an empty list when no issues are found.
+
+        Raises:
+            Exception: Propagates database introspection errors and read-only observability hook exceptions without wrapping.
         """
-        payload_snapshot = {
+        payload_snapshot: ReadOnlySchemaObservabilityPayload = {
             "manager": manager_cls.__name__,
             "model": getattr(model, "__name__", str(model)),
         }
@@ -236,7 +317,7 @@ class ReadOnlyManagementCapability(BaseCapability):
                     )
                 ]
 
-            db_connection = connection or django_connection
+            db_connection = connection or cast(_SchemaConnection, django_connection)
 
             def table_exists(table_name: str) -> bool:
                 """
@@ -250,13 +331,13 @@ class ReadOnlyManagementCapability(BaseCapability):
                 return table_name in tables
 
             def compare_model_to_table(
-                model_arg: Type[models.Model], table: str
+                model_arg: type[models.Model], table: str
             ) -> tuple[list[str], list[str]]:
                 """
                 Compare a Django model's declared column names to the actual columns of a database table.
 
                 Parameters:
-                    model_arg (Type[models.Model]): The Django model class whose local field column names will be compared.
+                    model_arg: The Django model class whose local field column names will be compared.
                     table (str): The database table name to compare against.
 
                 Returns:
@@ -330,30 +411,49 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def sync_data(
         self,
-        interface_cls: type["OrmInterfaceBase[Any]"],
+        interface_cls: _ReadOnlyInterface,
         *,
-        connection: Optional[Any] = None,
-        transaction: Optional[Any] = None,
-        integrity_error: Optional[Any] = None,
-        json_module: Optional[Any] = None,
-        logger_instance: Optional[Any] = None,
+        connection: _SchemaConnection | None = None,
+        transaction: _TransactionModule | None = None,
+        integrity_error: type[BaseException] | None = None,
+        json_module: _JsonLoader | None = None,
+        logger_instance: ReadOnlyLogger | None = None,
         unique_fields: set[str] | None = None,
         schema_validated: bool = False,
     ) -> None:
         """
         Synchronize the interface's bound read-only JSON data into the underlying Django model, creating, updating, and deactivating records to match the input.
 
-        Parses the read-only payload defined on the interface's parent class, enforces a set of unique identifying fields to match incoming items to existing rows, writes only model-editable fields, marks matched records active, creates missing records, and deactivates previously active records not present in the incoming data. If schema validation is enabled (or performed), aborts when schema warnings are detected.
+        Parses the read-only payload defined on the interface's parent class, enforces a set of unique identifying fields to match incoming items to existing rows, writes only model-editable fields that are present in each payload row, marks matched records active, creates missing records, and deactivates previously active records not present in the incoming data. If schema validation is enabled (or performed), aborts when schema warnings are detected.
+
+        When `unique_fields` is omitted, `get_unique_fields()` supplies a flat
+        union of all unique declarations and every field in that union is
+        required in each payload row. Omitted editable scalar fields are left
+        unchanged on existing rows and are not included in create payloads.
+        Omitted many-to-many fields are left unchanged; a present value of
+        `None` clears the relation and a present list replaces it. Related
+        read-only interfaces sync before the local transaction, each through
+        its own `sync_data()` call, and recursive cycles are skipped by the
+        in-progress guard.
 
         Parameters:
-            interface_cls (type[OrmInterfaceBase[Any]]): Read-only interface class whose parent class must expose `_data` and model binding.
-            connection: Optional Django DB connection to use instead of the default.
-            transaction: Optional Django transaction management module or object to use instead of the default.
-            integrity_error: Optional exception class to treat as a DB integrity error (defaults to Django's IntegrityError).
-            json_module: Optional JSON-like module to parse JSON strings (defaults to the standard library json).
-            logger_instance: Optional logger to record sync results; falls back to the capability's resolved logger.
+            interface_cls: Read-only interface class whose parent class must expose `_data` and model binding.
+            connection: Django DB connection to use instead of the default.
+            transaction: Django transaction management object with an `atomic()` context manager.
+            integrity_error: Exception class to treat as a DB integrity error (defaults to Django's IntegrityError).
+            json_module: JSON-like parser with `loads(str)` support (defaults to the standard library json).
+            logger_instance: Logger to record sync results; falls back to the capability's resolved logger.
             unique_fields (set[str] | None): Explicit set of field names to use as the unique identifier for items; when omitted, the model's unique metadata is used.
             schema_validated (bool): When True, skip runtime schema validation; when False, ensure_schema_is_up_to_date is called before syncing and the sync is aborted if warnings are returned.
+
+        Raises:
+            MissingReadOnlyBindingError: If the interface is not bound to both a parent manager and a model.
+            MissingReadOnlyDataError: If the parent manager has no `_data` attribute.
+            InvalidReadOnlyDataTypeError: If `_data` is neither a JSON string nor a list.
+            InvalidReadOnlyDataFormatError: If JSON does not decode to a list, many-to-many data is not a list, or an item misses a required unique field.
+            MissingUniqueFieldError: If no unique fields can be determined or supplied.
+            ReadOnlyRelationLookupError: If a relation lookup dictionary matches zero or multiple related records.
+            BaseException: Propagates the configured `integrity_error`, database errors, logger errors, and observability hook exceptions.
         """
         parent_class = getattr(interface_cls, "_parent_class", None)
         model = getattr(interface_cls, "_model", None)
@@ -362,13 +462,13 @@ class ReadOnlyManagementCapability(BaseCapability):
                 getattr(interface_cls, "__name__", str(interface_cls))
             )
 
-        payload_snapshot = {
+        payload_snapshot: ReadOnlySyncObservabilityPayload = {
             "manager": getattr(parent_class, "__name__", None),
             "model": getattr(model, "__name__", None),
             "schema_validated": schema_validated,
         }
 
-        in_progress: set[type["OrmInterfaceBase[Any]"]] = getattr(
+        in_progress: set[_ReadOnlyInterface] = getattr(
             self, "_sync_stack", set()
         )
         if interface_cls in in_progress:
@@ -389,10 +489,10 @@ class ReadOnlyManagementCapability(BaseCapability):
                 MissingUniqueFieldError: if no unique fields can be determined for the model.
                 IntegrityError: if a create operation violates database constraints and reconciliation fails.
             """
-            db_connection = connection or django_connection
+            db_connection = connection or cast(_SchemaConnection, django_connection)
             db_transaction = transaction or django_transaction
             integrity_error_cls = integrity_error or IntegrityError
-            json_lib = json_module or json
+            json_lib = json_module if json_module is not None else cast(_JsonLoader, json)
 
             if not schema_validated:
                 warnings = self.ensure_schema_is_up_to_date(
@@ -424,7 +524,7 @@ class ReadOnlyManagementCapability(BaseCapability):
             else:
                 raise InvalidReadOnlyDataTypeError()
 
-            data_list = cast(list[dict[str, Any]], parsed_data)
+            data_list = cast(list[_RowData], parsed_data)
             calculated_unique_fields = (
                 unique_fields
                 if unique_fields is not None
@@ -471,7 +571,7 @@ class ReadOnlyManagementCapability(BaseCapability):
                 if isinstance(field, MeasurementField)
             }
 
-            related_interfaces: list[type["OrmInterfaceBase[Any]"]] = []
+            related_interfaces: list[_ReadOnlyInterface] = []
             for field in relation_fields.values():
                 remote_model = getattr(
                     getattr(field, "remote_field", None), "model", None
@@ -509,7 +609,7 @@ class ReadOnlyManagementCapability(BaseCapability):
                     schema_validated=schema_validated,
                 )
 
-            def _fingerprint(rows: list[dict[str, Any]]) -> str | None:
+            def _fingerprint(rows: list[_RowSnapshot]) -> str | None:
                 """
                 Return a deterministic fingerprint for comparable row snapshots.
                 """
@@ -525,7 +625,7 @@ class ReadOnlyManagementCapability(BaseCapability):
                     payload.encode("utf-8"), usedforsecurity=False
                 ).hexdigest()
 
-            def _row_sort_key(row: dict[str, Any]) -> str | None:
+            def _row_sort_key(row: _RowSnapshot) -> str | None:
                 """
                 Build a stable sort key for a comparable row snapshot.
                 """
@@ -539,12 +639,12 @@ class ReadOnlyManagementCapability(BaseCapability):
                     return None
 
             def _sort_rows(
-                rows: list[dict[str, Any]],
-            ) -> list[dict[str, Any]] | None:
+                rows: list[_RowSnapshot],
+            ) -> list[_RowSnapshot] | None:
                 """
                 Sort comparable row snapshots or return None when keys are unsafe.
                 """
-                keyed_rows: list[tuple[str, dict[str, Any]]] = []
+                keyed_rows: list[tuple[str, _RowSnapshot]] = []
                 for row in rows:
                     sort_key = _row_sort_key(row)
                     if sort_key is None:
@@ -570,8 +670,8 @@ class ReadOnlyManagementCapability(BaseCapability):
                     return False
 
                 comparable_fields = unique_field_set | editable_fields
-                payload_rows: list[dict[str, Any]] = []
-                expected_fields_by_key: dict[tuple[Any, ...], tuple[str, ...]] = {}
+                payload_rows: list[_RowSnapshot] = []
+                expected_fields_by_key: dict[tuple[object, ...], tuple[str, ...]] = {}
 
                 for data in data_list:
                     if not isinstance(data, dict):
@@ -615,8 +715,8 @@ class ReadOnlyManagementCapability(BaseCapability):
                 if len(active_instances) != len(payload_rows):
                     return False
 
-                active_rows: list[dict[str, Any]] = []
-                seen_keys: set[tuple[Any, ...]] = set()
+                active_rows: list[_RowSnapshot] = []
+                seen_keys: set[tuple[object, ...]] = set()
                 for instance in active_instances:
                     try:
                         key = tuple(
@@ -656,7 +756,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
             def _resolve_to_instance(
                 field_name: str,
-                remote_model: Type[models.Model],
+                remote_model: type[models.Model],
                 raw_value: object,
                 idx: int,
             ) -> models.Model | object:
@@ -665,7 +765,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
                 Parameters:
                     field_name (str): Name of the relation field used for logging and error context.
-                    remote_model (Type[models.Model]): The related Django model to query.
+                    remote_model: The related Django model to query.
                     raw_value (object): A value from the payload; if a dict it is treated as a filter lookup for `remote_model`.
                     idx (int): Index of the current item in the incoming payload, used for logging context.
 
@@ -738,7 +838,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
             def _resolve_many_to_many(
                 field_name: str,
-                remote_model: Type[models.Model],
+                remote_model: type[models.Model],
                 raw_value: object,
                 idx: int,
             ) -> list[models.Model | object]:
@@ -747,7 +847,7 @@ class ReadOnlyManagementCapability(BaseCapability):
 
                 Parameters:
                         field_name (str): Name of the many-to-many field being resolved.
-                        remote_model (Type[models.Model]): The related model class for the field.
+                        remote_model: The related model class for the field.
                         raw_value (object): The incoming payload for the field; may be None or a list of entries (each entry is a lookup dict or identifier).
                         idx (int): Index of the parent item in the incoming payload (used for error context).
 
@@ -769,19 +869,19 @@ class ReadOnlyManagementCapability(BaseCapability):
                 return resolved
 
             def _resolve_relations(
-                data: dict[str, Any],
+                data: _RowData,
                 idx: int,
-            ) -> tuple[dict[str, Any], dict[str, list[models.Model | object]]]:
+            ) -> tuple[_RowData, dict[str, list[models.Model | object]]]:
                 """
                 Resolve relation payloads in a single data item into model instances and collect many-to-many assignments for post-save processing.
 
                 Parameters:
-                        data (dict[str, Any]): Incoming record payload; keys may include relation field names whose values are lookup dicts or lists.
+                        data: Incoming record payload; keys may include relation field names whose values are lookup dicts or lists.
                         idx (int): Index of the record within the incoming payload used to annotate errors and logs.
 
                 Returns:
                         tuple:
-                                - resolved (dict[str, Any]): A copy of `data` where foreign key and one-to-one relation values are replaced with resolved model instances and many-to-many fields are removed.
+                                - resolved: A copy of `data` where foreign key and one-to-one relation values are replaced with resolved model instances and many-to-many fields are removed.
                                 - m2m_assignments (dict[str, list[models.Model | object]]): Mapping of many-to-many field names to lists of resolved related model instances to assign after the main instance is saved.
                 """
                 resolved = dict(data)
@@ -789,7 +889,7 @@ class ReadOnlyManagementCapability(BaseCapability):
                 for field_name, field in relation_fields.items():
                     if field_name not in data:
                         continue
-                    remote_model = cast(Type[models.Model], field.remote_field.model)
+                    remote_model = cast(type[models.Model], field.remote_field.model)
                     if isinstance(field, models.ManyToManyField):
                         resolved.pop(field_name, None)
                         m2m_assignments[field_name] = _resolve_many_to_many(
@@ -808,8 +908,8 @@ class ReadOnlyManagementCapability(BaseCapability):
                 return resolved, m2m_assignments
 
             with db_transaction.atomic():
-                json_unique_values: set[tuple[Any, ...]] = set()
-                processed_pks: list[Any] = []
+                json_unique_values: set[tuple[object, ...]] = set()
+                processed_pks: list[object] = []
 
                 for idx, data in enumerate(data_list):
                     resolved_data, m2m_assignments = _resolve_relations(data, idx)
@@ -901,15 +1001,13 @@ class ReadOnlyManagementCapability(BaseCapability):
                         ):
                             activation_manager.filter(
                                 pk=getattr(instance, "pk", None)
-                            ).update(  # type: ignore[arg-type]
-                                is_active=True
-                            )
+                            ).update(is_active=True)
                             if hasattr(instance, "refresh_from_db"):
                                 instance.refresh_from_db()
                             elif hasattr(instance, "save"):
                                 instance.save()
                         else:
-                            instance.is_active = True  # type: ignore[attr-defined]
+                            cast(SoftDeleteMixin, instance).is_active = True
                             if hasattr(instance, "save"):
                                 instance.save()
                         changes["created" if is_created else "updated"].append(instance)
@@ -925,14 +1023,12 @@ class ReadOnlyManagementCapability(BaseCapability):
                         lookup[field] for field in unique_field_order
                     )
                     if unique_identifier not in json_unique_values:
-                        existing_instance.is_active = False  # type: ignore[attr-defined]
+                        existing_instance.is_active = False
                         existing_instance.save()
                         changes["deactivated"].append(existing_instance)
 
                 if processed_pks and hasattr(model, "all_objects"):
-                    model.all_objects.filter(pk__in=processed_pks).update(  # type: ignore[arg-type]
-                        is_active=True
-                    )
+                    model.all_objects.filter(pk__in=processed_pks).update(is_active=True)
 
             if any(changes.values()):
                 active_logger.info(
@@ -958,16 +1054,22 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def get_startup_hooks(
         self,
-        interface_cls: type["OrmInterfaceBase[Any]"],
+        interface_cls: _ReadOnlyInterface,
     ) -> tuple[Callable[[], None], ...]:
         """
         Provide a startup hook that triggers read-only data synchronization for the given interface.
 
+        If the interface is not bound to both a parent manager and model when
+        hooks are requested, no hook is registered and an empty tuple is
+        returned. The registered hook catches `MissingReadOnlyBindingError`
+        only to tolerate binding metadata becoming unavailable between
+        registration and startup execution; other sync errors propagate.
+
         Parameters:
-            interface_cls (type[OrmInterfaceBase[Any]]): Interface class used to derive the bound manager and model.
+            interface_cls: Interface class used to derive the bound manager and model.
 
         Returns:
-            tuple[Callable[[], None], ...]: A one-element tuple containing a callable that runs synchronization when invoked,
+            A one-element tuple containing a callable that runs synchronization when invoked,
             or an empty tuple if the interface lacks the necessary manager/model metadata. The callable invokes the capability's
             sync logic and silently skips if the read-only binding is not yet available.
         """
@@ -1011,16 +1113,21 @@ class ReadOnlyManagementCapability(BaseCapability):
 
     def get_system_checks(
         self,
-        interface_cls: type["OrmInterfaceBase[Any]"],
+        interface_cls: _ReadOnlyInterface,
     ) -> tuple[Callable[[], list[Warning]], ...]:
         """
         Provide a system check function that validates the read-only model schema against the database.
 
+        Missing parent-manager or model binding is intentionally silent and
+        returns an empty warning list from the check callable. Once binding is
+        present, schema warnings and propagated introspection or observability
+        errors follow `ensure_schema_is_up_to_date()`.
+
         Parameters:
-            interface_cls (type[OrmInterfaceBase[Any]]): The read-only interface class whose binding (parent manager and model) will be inspected.
+            interface_cls: The read-only interface class whose binding (parent manager and model) will be inspected.
 
         Returns:
-            tuple[Callable[[], list[Warning]], ...]: A tuple containing a single callable. When invoked, the callable returns a list of `Warning` objects produced by `ensure_schema_is_up_to_date` if both the parent manager and model are present; otherwise it returns an empty list.
+            A tuple containing a single callable. When invoked, the callable returns a list of `Warning` objects produced by `ensure_schema_is_up_to_date` if both the parent manager and model are present; otherwise it returns an empty list.
         """
 
         def _check() -> list[Warning]:

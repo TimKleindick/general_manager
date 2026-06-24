@@ -25,7 +25,14 @@ CapabilityName = Literal[
     "read_only_management",
     "soft_delete",
 ]
-"""Enumeration of supported capability identifiers."""
+"""
+Supported capability identifiers used by interface capability registries.
+
+Capability names are stable string keys. Interfaces store active names in
+`InterfaceBase._capabilities`, map them to handler instances in
+`InterfaceBase._capability_handlers`, and may use them as override keys in
+`capability_overrides`.
+"""
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.base_interface import InterfaceBase
@@ -33,7 +40,14 @@ if TYPE_CHECKING:  # pragma: no cover
 
 @runtime_checkable
 class Capability(Protocol):
-    """Common API required by all capabilities."""
+    """
+    Runtime-checkable protocol implemented by interface capability handlers.
+
+    A capability advertises one stable `name` and can attach or detach behavior
+    from an interface class. Implementations mutate the supplied class in place
+    and return `None`. Exceptions from concrete implementations propagate; this
+    protocol does not define a normalization layer or idempotency guarantee.
+    """
 
     name: ClassVar[CapabilityName]
 
@@ -41,10 +55,19 @@ class Capability(Protocol):
         """
         Attach this capability to the given interface class.
 
-        Implementations should modify or extend the provided interface class so that it exposes or enables the capability's behavior (for example by registering methods, attributes, or hooks).
+        Implementations should modify or extend the provided interface class so
+        that it exposes or enables the capability's behavior, for example by
+        registering methods, attributes, or lifecycle hooks.
 
         Parameters:
-            interface_cls (type[InterfaceBase]): The interface class to which the capability will be attached.
+            interface_cls: Interface class to mutate.
+
+        Returns:
+            `None`.
+
+        Raises:
+            Exception: Concrete capability implementations define their own
+                validation and setup errors, which propagate unchanged.
         """
 
     def teardown(self, interface_cls: type["InterfaceBase"]) -> None:
@@ -52,5 +75,12 @@ class Capability(Protocol):
         Detach this capability from the given interface class.
 
         Parameters:
-            interface_cls (type["InterfaceBase"]): The interface class to remove this capability's behavior from.
+            interface_cls: Interface class to mutate.
+
+        Returns:
+            `None`.
+
+        Raises:
+            Exception: Concrete capability implementations define their own
+                teardown errors, which propagate unchanged.
         """

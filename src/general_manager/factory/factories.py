@@ -1,16 +1,18 @@
 """Helpers for generating realistic factory values for Django models."""
 
 from __future__ import annotations
+
+from collections.abc import Callable
 import string
-from typing import Any, cast
+from typing import Protocol, cast
 
 from factory.declarations import LazyFunction
 from factory.faker import Faker
-import exrex  # type: ignore[import-untyped]
+import exrex
 from django.apps import apps
 from django.core.validators import RegexValidator
 from django.db import models
-from datetime import date, datetime, timezone, timedelta
+from datetime import timezone
 from decimal import Decimal
 from random import SystemRandom
 from general_manager.measurement.measurement import Measurement
@@ -20,10 +22,48 @@ from general_manager.manager.general_manager import GeneralManager
 
 _RNG = SystemRandom()
 _NO_DEFAULT = object()
+type DjangoField = models.Field[object, object]
+type RelatedFactory = Callable[[], object]
+
+_LazyFunctionConstructor = cast(
+    Callable[[Callable[[], object]], LazyFunction],
+    LazyFunction,
+)
+_FakerConstructor = cast(
+    Callable[..., Faker],
+    Faker,
+)
+
+
+class GeneralManagerFactoryOwner(Protocol):
+    """Protocol for generated manager classes that expose an AutoFactory."""
+
+    Factory: RelatedFactory
+
+
+class GeneralManagerBackedModel(Protocol):
+    """Protocol for Django model classes wired to a GeneralManager class."""
+
+    _general_manager_class: GeneralManagerFactoryOwner
+
+
+def _lazy_function(callback: Callable[[], object]) -> LazyFunction:
+    """Create a typed LazyFunction declaration from an untyped factory_boy API."""
+    return _LazyFunctionConstructor(callback)
+
+
+def _faker(provider: str, **kwargs: object) -> Faker:
+    """Create a typed Faker declaration from factory_boy's untyped API."""
+    return _FakerConstructor(provider, **kwargs)
 
 
 class MissingFactoryOrInstancesError(ValueError):
-    """Raised when a related model offers neither a factory nor existing instances."""
+    """
+    Raised when a related model offers neither a factory nor existing instances.
+
+    Public callers should handle this by exception type; the message is
+    diagnostic and not a stable parsing contract.
+    """
 
     def __init__(self, related_model: type[models.Model]) -> None:
         """
@@ -38,7 +78,12 @@ class MissingFactoryOrInstancesError(ValueError):
 
 
 class MissingRelatedModelError(ValueError):
-    """Raised when a relational field lacks a related model definition."""
+    """
+    Raised when a relational field lacks a related model definition.
+
+    Public callers should handle this by exception type; the message is
+    diagnostic and not a stable parsing contract.
+    """
 
     def __init__(self, field_name: str) -> None:
         """
@@ -51,7 +96,13 @@ class MissingRelatedModelError(ValueError):
 
 
 class InvalidRelatedModelTypeError(TypeError):
-    """Raised when a relational field references an incompatible model type."""
+    """
+    Raised when a relational field references an incompatible model type.
+
+    This also covers scalar/non-relational fields passed to relation helpers.
+    Public callers should handle this by exception type; the message is
+    diagnostic and not a stable parsing contract.
+    """
 
     def __init__(self, field_name: str, related: object) -> None:
         """
@@ -67,7 +118,12 @@ class InvalidRelatedModelTypeError(TypeError):
 
 
 class UnableToResolveManagerInstanceError(ValueError):
-    """Raised when a GeneralManager instance cannot be converted back into its model."""
+    """
+    Raised when a GeneralManager instance cannot be converted back into its model.
+
+    Public callers should handle this by exception type; the message is
+    diagnostic and not a stable parsing contract.
+    """
 
     def __init__(self, manager: GeneralManager) -> None:
         """
@@ -80,15 +136,34 @@ class UnableToResolveManagerInstanceError(ValueError):
 
 
 def get_field_value(
-    field: models.Field[Any, Any] | models.ForeignObjectRel,
-) -> Any:
+    field: DjangoField | models.ForeignObjectRel,
+) -> object:
     """
     Generate a realistic sample value appropriate for the given Django model field or relation.
 
-    This returns a value suitable for assignment to the field: common scalar and text fields produce Faker-generated values; Decimal/Float/Integer/Boolean/Date/DateTime/UUID/Duration/GUID/IP/Email/URL fields return matching scalar values; CharField respects max_length and RegexValidator (generates a matching string when a regex is present); MeasurementField returns a LazyFunction that produces a Measurement in the field's base unit; relational fields (OneToOneField, ForeignKey, Many-to-many via other helpers) return model instances or LazyFunction wrappers that either create instances via a GeneralManager factory or select existing related instances. If the field is nullable there is a 10% chance this will return None.
+    This returns a value suitable for assignment to the field: common scalar and
+    text fields produce Faker-generated declarations; `CharField` respects
+    `max_length` and `RegexValidator`; `MeasurementField` returns a
+    `LazyFunction` that produces a `Measurement` in the field's base unit; and
+    `OneToOneField`/`ForeignKey` values return model instances or LazyFunction
+    wrappers that either create instances via a GeneralManager factory or select
+    existing related instances. Unsupported scalar or custom field types return
+    `None`. Many-to-many fields are not generated here; passing one returns
+    `None`, and callers should use `get_many_to_many_field_value()` for
+    many-to-many assignment values.
+
+    Nullable fields have a 10% chance to return `None`. Nullable relation fields
+    whose declared default is `None` return `None` immediately. Nullable
+    foreign-key or one-to-one fields with no factory and no existing rows return
+    `None`; non-nullable relation fields in the same situation raise
+    `MissingFactoryOrInstancesError`. `blank` does not change foreign-key or
+    one-to-one generation behavior.
 
     Parameters:
-        field (models.Field | models.ForeignObjectRel): The Django model field or relation to generate a value for.
+        field: A Django scalar field, foreign-key field, one-to-one field, or
+            relation descriptor to generate a value for. Many-to-many fields are
+            accepted by the broad type shape but intentionally return `None`
+            here; pass them to `get_many_to_many_field_value()` instead.
 
     Returns:
         A value suitable for assignment to the field (scalar, string, Measurement-producing LazyFunction, model instance, LazyFunction that yields a related instance, or `None`).
@@ -121,8 +196,8 @@ def get_field_value(
             value = Decimal(_RNG.randrange(0, 10_000_000)) / Decimal("100")  # two dp
             return Measurement(value, field.base_unit)
 
-        return LazyFunction(_measurement)
-    elif (
+        return _lazy_function(_measurement)
+    if (
         getattr(field, "choices", None)
         and not getattr(field, "many_to_one", False)
         and not getattr(field, "many_to_many", False)
@@ -133,51 +208,45 @@ def get_field_value(
             for choice in list(getattr(field, "flatchoices", ()))
         ]
         if flat_choices:
-            return LazyFunction(lambda: _RNG.choice(flat_choices))
+            return _lazy_function(lambda: _RNG.choice(flat_choices))
         # Fall through to default behaviour when no usable choices were discovered.
-    elif isinstance(field, models.TextField):
-        return cast(str, Faker("paragraph"))
+    if isinstance(field, models.TextField):
+        return _faker("paragraph")
     elif isinstance(field, models.IntegerField):
-        return cast(int, Faker("random_int"))
+        return _faker("random_int")
     elif isinstance(field, models.DecimalField):
         max_digits = field.max_digits
         decimal_places = field.decimal_places
         left_digits = max_digits - decimal_places
-        return cast(
-            Decimal,
-            Faker(
-                "pydecimal",
-                left_digits=left_digits,
-                right_digits=decimal_places,
-                positive=True,
-            ),
+        return _faker(
+            "pydecimal",
+            left_digits=left_digits,
+            right_digits=decimal_places,
+            positive=True,
         )
     elif isinstance(field, models.FloatField):
-        return cast(float, Faker("pyfloat", positive=True))
+        return _faker("pyfloat", positive=True)
     elif isinstance(field, models.DateTimeField):
-        return cast(
-            datetime,
-            Faker(
-                "date_time_between",
-                start_date="-1y",
-                end_date="now",
-                tzinfo=timezone.utc,
-            ),
+        return _faker(
+            "date_time_between",
+            start_date="-1y",
+            end_date="now",
+            tzinfo=timezone.utc,
         )
     elif isinstance(field, models.DateField):
-        return cast(date, Faker("date_between", start_date="-1y", end_date="today"))
+        return _faker("date_between", start_date="-1y", end_date="today")
     elif isinstance(field, models.BooleanField):
-        return cast(bool, Faker("pybool"))
+        return _faker("pybool")
     elif isinstance(field, models.EmailField):
-        return cast(str, Faker("email"))
+        return _faker("email")
     elif isinstance(field, models.URLField):
-        return cast(str, Faker("url"))
+        return _faker("url")
     elif isinstance(field, models.GenericIPAddressField):
-        return cast(str, Faker("ipv4"))
+        return _faker("ipv4")
     elif isinstance(field, models.UUIDField):
-        return cast(str, Faker("uuid4"))
+        return _faker("uuid4")
     elif isinstance(field, models.DurationField):
-        return cast(timedelta, Faker("time_delta"))
+        return _faker("time_delta")
     elif isinstance(field, models.CharField):
         if field.max_length == 0:
             return ""
@@ -190,24 +259,24 @@ def get_field_value(
                 break
         if regex:
             # Use exrex to generate a string matching the regex
-            return LazyFunction(lambda: exrex.getone(regex))
+            return _lazy_function(lambda: exrex.getone(regex))
         else:
             if max_length < 5:
                 alphabet = string.ascii_letters + string.digits
-                return LazyFunction(
+                return _lazy_function(
                     lambda: "".join(_RNG.choice(alphabet) for _ in range(max_length))
                 )
-            return cast(str, Faker("text", max_nb_chars=max_length))
+            return _faker("text", max_nb_chars=max_length)
     elif isinstance(field, models.OneToOneField):
         related_model = get_related_model(field)
         if hasattr(related_model, "_general_manager_class"):
-            related_factory = related_model._general_manager_class.Factory  # type: ignore
+            related_factory = _get_related_factory(related_model)
             return _ensure_model_instance(related_factory())
         else:
             # If no factory exists, pick a random existing instance
             related_instances = list(related_model.objects.all())
             if related_instances:
-                return LazyFunction(lambda: _RNG.choice(related_instances))
+                return _lazy_function(lambda: _RNG.choice(related_instances))
             if field.null:
                 return None
             raise MissingFactoryOrInstancesError(related_model)
@@ -220,16 +289,16 @@ def get_field_value(
                 existing_instances = list(related_model.objects.all())
                 if existing_instances:
                     # Pick a random existing instance
-                    return LazyFunction(lambda: _RNG.choice(existing_instances))
+                    return _lazy_function(lambda: _RNG.choice(existing_instances))
 
-            related_factory = related_model._general_manager_class.Factory  # type: ignore
+            related_factory = _get_related_factory(related_model)
             return _ensure_model_instance(related_factory())
 
         else:
             # If no factory exists, pick a random existing instance
             related_instances = list(related_model.objects.all())
             if related_instances:
-                return LazyFunction(lambda: _RNG.choice(related_instances))
+                return _lazy_function(lambda: _RNG.choice(related_instances))
             if field.null:
                 return None
             raise MissingFactoryOrInstancesError(related_model)
@@ -238,7 +307,11 @@ def get_field_value(
 
 
 def get_related_model(
-    field: models.ForeignObjectRel | models.Field[Any, Any],
+    field: (
+        models.ForeignObjectRel
+        | DjangoField
+        | models.ManyToManyField[models.Model, models.Model]
+    ),
 ) -> type[models.Model]:
     """
     Resolve and return the Django model class referenced by a relational field.
@@ -246,14 +319,17 @@ def get_related_model(
     If the field's declared related model is the string "self", this resolves it to the field's model before validation.
 
     Parameters:
-        field (models.ForeignObjectRel | models.Field): Relational field or relation descriptor to inspect.
+        field: Relational field or relation descriptor to inspect. Passing a
+            non-relational scalar field is unsupported.
 
     Returns:
         type[models.Model]: The related Django model class.
 
     Raises:
         MissingRelatedModelError: If the field does not declare a related model.
-        InvalidRelatedModelTypeError: If the resolved related model is not a Django model class.
+        InvalidRelatedModelTypeError: If the resolved related model is not a
+            Django model class, including non-relational scalar fields whose
+            `related_model` value is `None` or absent.
     """
     related_model: object = field.related_model
     if related_model is None:
@@ -264,11 +340,15 @@ def get_related_model(
         related_model, models.Model
     ):
         raise InvalidRelatedModelTypeError(field.name, related_model)
-    return cast(type[models.Model], related_model)
+    return related_model
 
 
 def _resolve_related_model_string(
-    field: models.ForeignObjectRel | models.Field[Any, Any],
+    field: (
+        models.ForeignObjectRel
+        | DjangoField
+        | models.ManyToManyField[models.Model, models.Model]
+    ),
     related_model: str,
 ) -> object:
     if related_model == "self":
@@ -291,12 +371,17 @@ def _resolve_related_model_string(
 
 
 def get_many_to_many_field_value(
-    field: models.ManyToManyField,
+    field: models.ManyToManyField[models.Model, models.Model],
 ) -> list[models.Model]:
     """
     Generate a list of related model instances suitable for assigning to a ManyToManyField.
 
-    The function selects a random number of related objects (at least one when the field is not blank, up to 10). It will use the related model's factory to create new instances when available, prefer a mix of created and existing instances if both are present, or return existing instances when no factory is available.
+    The function selects a random number of related objects (at least one when
+    the field is not blank, up to 10). It will use the related model's factory
+    to create new instances when available, prefer a mix of created and existing
+    instances if both are present, or return existing instances when no factory
+    is available. `blank=True` allows an empty result; `blank=False` requires at
+    least one related instance.
 
     Parameters:
         field (models.ManyToManyField): The ManyToMany field to generate values for.
@@ -306,12 +391,18 @@ def get_many_to_many_field_value(
 
     Raises:
         MissingFactoryOrInstancesError: If the related model provides neither a factory nor any existing instances.
+        MissingRelatedModelError: If the field does not declare a related model.
+        InvalidRelatedModelTypeError: If the resolved related model is not a
+            Django model class.
+        UnableToResolveManagerInstanceError: If a related GeneralManager factory
+            returns a manager instance that cannot be resolved to its Django
+            model row.
     """
-    related_factory = None
+    related_factory: RelatedFactory | None = None
     related_model = get_related_model(field)
-    related_instances = list(related_model.objects.all())
+    related_instances: list[models.Model] = list(related_model.objects.all())
     if hasattr(related_model, "_general_manager_class"):
-        related_factory = related_model._general_manager_class.Factory  # type: ignore
+        related_factory = _get_related_factory(related_model)
 
     min_required = 0 if field.blank else 1
     number_of_instances = _RNG.randint(min_required, 10)
@@ -321,9 +412,9 @@ def get_many_to_many_field_value(
         if number_to_pick > len(related_instances):
             number_to_pick = len(related_instances)
         existing_instances = _RNG.sample(related_instances, number_to_pick)
-        new_instances = [related_factory() for _ in range(number_to_create)]
+        new_factory_values = [related_factory() for _ in range(number_to_create)]
         return existing_instances + [
-            _ensure_model_instance(instance) for instance in new_instances
+            _ensure_model_instance(instance) for instance in new_factory_values
         ]
     elif related_factory:
         number_to_create = number_of_instances
@@ -342,7 +433,13 @@ def get_many_to_many_field_value(
         raise MissingFactoryOrInstancesError(related_model)
 
 
-def _ensure_model_instance(value: Any) -> models.Model:
+def _get_related_factory(related_model: type[models.Model]) -> RelatedFactory:
+    """Return the factory configured on a GeneralManager-backed related model."""
+    backed_model = cast(GeneralManagerBackedModel, related_model)
+    return backed_model._general_manager_class.Factory
+
+
+def _ensure_model_instance(value: object) -> models.Model:
     """
     Normalize a factory output into a Django model instance.
 
@@ -350,7 +447,7 @@ def _ensure_model_instance(value: Any) -> models.Model:
     instances. If `value` is already a Django model instance, it is returned unchanged.
 
     Parameters:
-        value (Any): A factory output, either a GeneralManager or a Django model instance.
+        value: A factory output, either a GeneralManager or a Django model instance.
 
     Returns:
         models.Model: The resolved Django model instance.
@@ -369,8 +466,7 @@ def _ensure_model_instance(value: Any) -> models.Model:
             raise UnableToResolveManagerInstanceError(value)
         model_cls = getattr(interface_cls, "_model", None)
         if model_cls is not None:
-            return cast(type[models.Model], model_cls).objects.get(
-                **value.identification
-            )
+            model_type = cast(type[models.Model], model_cls)
+            return model_type.objects.get(**value.identification)
         raise UnableToResolveManagerInstanceError(value)
     return cast(models.Model, value)

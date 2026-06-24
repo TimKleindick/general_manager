@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, ClassVar, Generic, Type, TypeVar, cast
+from typing import ClassVar, Generic, Type, TypeVar, cast
 
 from django.db import models
 from django.utils import timezone
@@ -27,7 +27,21 @@ HistoryModelT = TypeVar("HistoryModelT", bound=models.Model)
 
 
 class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
-    """Common initialization + metadata shared by ORM-backed interfaces."""
+    """Common initialization and metadata for ORM-backed interfaces.
+
+    Subclasses provide ORM lifecycle capabilities and a Django model type. The
+    base interface defines one required public input field, ``id``, which is
+    cast through ``Input(int)`` before becoming ``identification["id"]``. During
+    construction, the interface stores that value as ``pk``, normalizes an
+    optional historical ``search_date``, and loads the current or historical ORM
+    row into the internal ``_instance`` attribute through the configured
+    lifecycle capability. Subclasses that override :attr:`input_fields` must keep
+    an ``"id"`` field unless they also override initialization and row loading.
+
+    ``historical_lookup_buffer_seconds`` is consumed by ORM query support: a
+    ``search_date`` must be at least this many seconds before ``timezone.now()``
+    before history tables are queried instead of the current row.
+    """
 
     _interface_type: ClassVar[str] = "database"
     lifecycle_capability_name: ClassVar[CapabilityName | None] = "orm_lifecycle"
@@ -39,7 +53,9 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     _field_descriptors: ClassVar[dict[str, "FieldDescriptor"] | None] = None
 
     historical_lookup_buffer_seconds: ClassVar[int] = 5
-    input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
+    input_fields: ClassVar[dict[str, Input[type[object]]]] = {
+        "id": cast(Input[type[object]], Input(int))
+    }
 
     _search_date: datetime | None
 
@@ -49,16 +65,34 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         search_date: datetime | None = None,
         **kwargs: object,
     ) -> None:
-        """
-        Initialize the ORM-backed interface, set the primary key from identification, normalize the optional search date, and load the corresponding history model instance.
+        """Initialize the ORM-backed interface for a primary key.
 
-        Parameters:
-            search_date (datetime | None): Optional datetime used to select a historical record; if provided and timezone-naive, it will be converted to a timezone-aware datetime.
+        Positional and keyword inputs are parsed by :class:`InterfaceBase` using
+        :attr:`input_fields`. The default shape accepts one ``id`` value. Naive
+        ``search_date`` values are made timezone-aware with Django's current
+        timezone before the row is loaded into the internal ``_instance`` cache.
+        Subclasses overriding :attr:`input_fields` must preserve ``"id"`` unless
+        they also replace this initializer.
+
+        Args:
+            *args: Raw input values consumed by ``InterfaceBase``.
+            search_date: Optional point-in-time lookup date.
+            **kwargs: Raw named input values consumed by ``InterfaceBase``.
+
+        Raises:
+            KeyError: If parsed identification does not contain ``"id"``.
+            model.DoesNotExist: Propagated from ``get_data`` when no live or
+                historical row exists for the parsed primary key.
+            TypeError: Propagated from runtime values outside the typed
+                ``datetime | None`` ``search_date`` contract or from capability
+                lookup/configuration failures while loading ORM data.
+            Exception: Propagates history capability and Django ORM lookup
+                errors raised by ``get_data`` without wrapping.
         """
         super().__init__(*args, **kwargs)
         self.pk = self.identification["id"]
         self._search_date = self.normalize_search_date(search_date)
-        self._instance: HistoryModelT = self.get_data()
+        self._instance = cast(HistoryModelT, self.get_data())
 
     @classmethod
     def _from_trusted_orm_instance(
@@ -70,11 +104,16 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         """
         Build an interface from an ORM-loaded row without public input validation.
 
-        This is an internal trusted path. Callers must only pass model or
-        historical rows that came from Django ORM querysets owned by this
-        interface. External/API/user payloads must continue through __init__.
+        This is an internal extension hook used by bucket/query hydration.
+        Callers must only pass model or historical rows that came from Django ORM
+        querysets owned by this interface. External/API/user payloads must
+        continue through __init__. If a subclass replaces ``__init__``, trusted
+        hydration calls that constructor with the row primary key and optional
+        ``search_date``; otherwise it bypasses construction and installs the
+        trusted instance, identification, primary key, and normalized search date
+        directly.
         """
-        pk = cast(Any, instance).pk
+        pk: object = instance.pk
         if cls.__init__ is not OrmInterfaceBase.__init__:
             if search_date is None:
                 return cls(pk)
@@ -90,14 +129,16 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
 
     @staticmethod
     def normalize_search_date(search_date: datetime | None) -> datetime | None:
-        """
-        Ensure the provided search_date is timezone-aware.
+        """Return ``search_date`` as a timezone-aware datetime.
 
-        Parameters:
-            search_date (datetime | None): A datetime to normalize; may be naive or timezone-aware.
+        Naive values are converted with Django's current timezone. Aware values
+        and ``None`` are returned unchanged.
+
+        Args:
+            search_date: Datetime to normalize, or ``None``.
 
         Returns:
-            datetime | None: The input converted to a timezone-aware datetime if it was naive, the original datetime if already timezone-aware, or None if no date was provided.
+            The timezone-aware datetime, existing aware datetime, or ``None``.
         """
         if search_date is not None and timezone.is_naive(search_date):
             search_date = timezone.make_aware(search_date)
@@ -105,11 +146,10 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
 
     @staticmethod
     def _default_base_model_class() -> type[GeneralManagerBasisModel]:
-        """
-        Provide the default base Django model class used by ORM-backed interfaces.
+        """Return the internal default base Django model class.
 
-        Returns:
-            type[GeneralManagerBasisModel]: The default base model class, GeneralManagerModel.
+        This is an internal extension hook for interface creation; normal user
+        code should configure concrete interfaces instead of calling it.
         """
         return GeneralManagerModel
 
@@ -118,14 +158,24 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
         cls,
         model: type[models.Model] | models.Model,
     ) -> tuple[list[str], list[str]]:
-        """
-        Retrieve custom-field metadata for the given model from the configured ORM lifecycle capability.
+        """Return custom field names and generated ignore markers for ``model``.
 
-        Parameters:
-            model (type[models.Model] | models.Model): Model class or model instance to describe.
+        The result is delegated to the configured ``orm_lifecycle`` capability.
+        The first list contains discovered custom field names. The second list
+        contains generated ignore markers such as ``"<field>_value"`` and
+        ``"<field>_unit"``.
+
+        Args:
+            model: Model class or model instance to inspect.
 
         Returns:
-            tuple[list[str], list[str]]: A pair of lists of custom field names as returned by the lifecycle capability.
+            ``(field_names, ignore_markers)``.
+
+        Raises:
+            CapabilityNotAvailableError: If the ORM lifecycle capability is not
+                configured.
+            TypeError: If the configured capability is not an
+                ``OrmLifecycleCapability``.
         """
         lifecycle = cast(
             OrmLifecycleCapability,

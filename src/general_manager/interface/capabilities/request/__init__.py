@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
-from typing import Any, ClassVar, TYPE_CHECKING, cast
+from typing import ClassVar, TYPE_CHECKING, TypeVar, cast
 from django.core.exceptions import ValidationError
 
 from general_manager.bucket.request_bucket import RequestBucket
@@ -17,12 +17,16 @@ from general_manager.interface.requests import (
     RequestConfigurationError,
     RequestExcludeNotSupportedError,
     RequestFieldsRequiredError,
+    RequestAction,
     RequestFilter,
     RequestFilterBinding,
+    RequestHeaders,
     RequestLocalFallbackRequiredError,
     RequestLocalPredicate,
+    RequestMutablePayload,
     RequestPlanConflictError,
     RequestPlanFragment,
+    RequestPayload,
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
@@ -43,13 +47,41 @@ from ..base import CapabilityName
 from ..builtin import BaseCapability, ValidationCapability
 
 if TYPE_CHECKING:  # pragma: no cover
+    from django.core.exceptions import ValidationErrorMessageArg
     from general_manager.interface.interfaces.request import RequestInterface
+    from general_manager.manager.general_manager import GeneralManager
+
+RequestLookupValue = object
+RequestLookupMap = dict[str, tuple[RequestLookupValue, ...]]
+RequestAttributeMetadata = dict[str, object]
+RequestAttributeResolver = Callable[["RequestInterface"], object]
+FragmentValue = TypeVar("FragmentValue")
 
 
 class RequestValidationCapability(ValidationCapability):
     """Validate request-interface declarations during capability binding."""
 
     def setup(self, interface_cls: type[InterfaceBase]) -> None:
+        """
+        Validate a RequestInterface declaration before manager class creation.
+
+        Validation requires declared fields, a `detail` query operation, callable
+        serializers/auth providers when configured, valid retry policy settings,
+        Rule instances when rules are configured, and at least one mutation
+        operation when rules exist. Interface and operation filter keys are
+        validated, filter specs must be remote, compiler-backed, or local
+        fallback-capable, exclude params require public `supports_exclude`
+        (available internally as the legacy `allow_exclude` alias), operation
+        references must exist, query operations need both `name` and `path`, and
+        operation-local filters must not duplicate interface-level filters.
+
+        Raises:
+            RequestFieldsRequiredError: If no request fields are declared.
+            MissingRequestDetailOperationError: If the `detail` operation is absent.
+            RequestConfigurationError: If rules, serializers, auth, or retry policy settings are invalid.
+            InvalidRequestFilterConfigurationError: If filter or operation declarations are malformed.
+            UnknownRequestFilterOperationReferenceError: If a filter references an undeclared operation.
+        """
         super().setup(interface_cls)
         request_interface_cls = cast(type["RequestInterface"], interface_cls)
         if not request_interface_cls.fields:
@@ -182,10 +214,25 @@ class RequestReadCapability(BaseCapability):
 
     name: ClassVar[CapabilityName] = "read"
 
-    def get_data(self, interface_instance: "RequestInterface") -> Mapping[str, Any]:
+    def get_data(self, interface_instance: "RequestInterface") -> RequestPayload:
+        """
+        Return the payload backing one request-backed manager instance.
+
+        A cached payload is returned when present. Otherwise the interface's
+        `detail` query operation is compiled into a request plan using the
+        instance identification as path params, executed through
+        `execute_request_plan()`, required to return exactly one item, cached on
+        the interface instance, and returned. The uncached fetch is wrapped in
+        observability operation `request.read.detail` with payload metadata for
+        service, operation, method, path, and sorted identification keys.
+
+        Raises:
+            NotImplementedError: If the interface does not declare a `detail` query operation.
+            RequestSingleResponseRequiredError: If the detail response does not contain exactly one item.
+        """
         cached_payload = getattr(interface_instance, "_request_payload_cache", None)
         if cached_payload is not None:
-            return cast(Mapping[str, Any], cached_payload)
+            return cast(RequestPayload, cached_payload)
 
         interface_cls = type(interface_instance)
         try:
@@ -234,8 +281,16 @@ class RequestReadCapability(BaseCapability):
     def get_attribute_types(
         self,
         interface_cls: type["RequestInterface"],
-    ) -> dict[str, dict[str, Any]]:
-        attribute_types = {
+    ) -> dict[str, RequestAttributeMetadata]:
+        """
+        Return generated attribute metadata for request-backed managers.
+
+        Input fields and declared request fields are both exposed as non-editable
+        manager attributes. Input metadata uses the input descriptor type and
+        required flag; request-field metadata uses `RequestField` type, default,
+        required, and derived flags.
+        """
+        attribute_types: dict[str, RequestAttributeMetadata] = {
             name: {
                 "type": input_field.type,
                 "default": None,
@@ -262,33 +317,51 @@ class RequestReadCapability(BaseCapability):
     def get_attributes(
         self,
         interface_cls: type["RequestInterface"],
-    ) -> dict[str, Any]:
+    ) -> dict[str, RequestAttributeResolver]:
+        """
+        Return attribute resolver callables for input and request fields.
+
+        Input-field attributes resolve directly from the interface instance
+        identification. Request-field attributes load the request payload through
+        `get_data()` and then delegate to `resolve_payload_value()`.
+        """
         def _resolve_field(
             interface_instance: "RequestInterface", field_name: str
-        ) -> Any:
-            payload = cast(Mapping[str, Any], interface_instance.get_data())
+        ) -> object:
+            payload = cast(RequestPayload, interface_instance.get_data())
             return interface_cls.resolve_payload_value(payload, field_name)
 
-        attributes = {
-            name: lambda interface_instance,
-            name=name: interface_instance.identification[name]
-            for name in interface_cls.input_fields.keys()
-        }
-        attributes.update(
-            {
-                name: lambda interface_instance, name=name: _resolve_field(
-                    interface_instance, name
-                )
-                for name in interface_cls.fields.keys()
-            }
-        )
+        attributes: dict[str, RequestAttributeResolver] = {}
+
+        def _input_resolver(field_name: str) -> RequestAttributeResolver:
+            def resolve(interface_instance: "RequestInterface") -> object:
+                return interface_instance.identification[field_name]
+
+            return resolve
+
+        def _field_resolver(field_name: str) -> RequestAttributeResolver:
+            def resolve(interface_instance: "RequestInterface") -> object:
+                return _resolve_field(interface_instance, field_name)
+
+            return resolve
+
+        for name in interface_cls.input_fields.keys():
+            attributes[name] = _input_resolver(name)
+        for name in interface_cls.fields.keys():
+            attributes[name] = _field_resolver(name)
         return attributes
 
     def get_field_type(
         self,
         interface_cls: type["RequestInterface"],
         field_name: str,
-    ) -> type[Any]:
+    ) -> type[object]:
+        """
+        Return the declared Python type for one request-backed field name.
+
+        Request fields are checked first, then input fields. Unknown field names
+        raise `KeyError`.
+        """
         field = interface_cls.fields.get(field_name)
         if field is not None:
             return field.field_type
@@ -307,15 +380,31 @@ class RequestLifecycleCapability(BaseCapability):
         self,
         *,
         name: str,
-        attrs: dict[str, Any],
+        attrs: dict[str, object],
         interface: type["RequestInterface"],
-    ) -> tuple[dict[str, Any], type["RequestInterface"], None]:
+    ) -> tuple[dict[str, object], type["RequestInterface"], None]:
+        """
+        Clone a declared request interface for the generated manager class.
+
+        The clone receives collected `Input` descriptors when `input_fields` is
+        empty by walking the interface MRO from base classes to subclasses. It
+        copies request fields, filters, query/mutation operations,
+        transport/auth/retry configuration, serializers, and rules, syncs its
+        configured capabilities, stores the interface type on
+        `attrs["_interface_type"]`, and stores the clone on `attrs["Interface"]`.
+        The lifecycle step is wrapped in observability operation
+        `request.pre_create` with payload metadata for interface and manager
+        name.
+
+        Returns:
+            A tuple of updated manager attrs, cloned request interface, and no model.
+        """
         payload_snapshot = {
             "interface": interface.__name__,
             "name": name,
         }
 
-        def _perform() -> tuple[dict[str, Any], type["RequestInterface"], None]:
+        def _perform() -> tuple[dict[str, object], type["RequestInterface"], None]:
             input_fields = dict(interface.input_fields)
             if not input_fields:
                 for base in reversed(interface.__mro__):
@@ -384,10 +473,16 @@ class RequestLifecycleCapability(BaseCapability):
         interface_class: type["RequestInterface"],
         model: None = None,
     ) -> None:
+        """
+        Attach the generated manager class to the cloned request interface.
+
+        Assigns `interface_class._parent_class = new_class` inside
+        observability operation `request.post_create`.
+        """
         payload_snapshot = {"interface": interface_class.__name__}
 
         def _perform() -> None:
-            interface_class._parent_class = new_class  # type: ignore[attr-defined]
+            interface_class._parent_class = new_class
 
         with_observability(
             target=interface_class,
@@ -405,8 +500,9 @@ class RequestQueryCapability(BaseCapability):
     def filter(
         self,
         interface_cls: type["RequestInterface"],
-        **kwargs: Any,
-    ) -> RequestBucket:
+        **kwargs: RequestLookupValue,
+    ) -> RequestBucket["GeneralManager"]:
+        """Return a lazy request bucket for the default query operation with filters."""
         return self.build_bucket(
             interface_cls, filters=self._normalize_lookup_map(kwargs)
         )
@@ -414,13 +510,17 @@ class RequestQueryCapability(BaseCapability):
     def exclude(
         self,
         interface_cls: type["RequestInterface"],
-        **kwargs: Any,
-    ) -> RequestBucket:
+        **kwargs: RequestLookupValue,
+    ) -> RequestBucket["GeneralManager"]:
+        """Return a lazy request bucket for the default query operation with excludes."""
         return self.build_bucket(
             interface_cls, excludes=self._normalize_lookup_map(kwargs)
         )
 
-    def all(self, interface_cls: type["RequestInterface"]) -> RequestBucket:
+    def all(
+        self, interface_cls: type["RequestInterface"]
+    ) -> RequestBucket["GeneralManager"]:
+        """Return a lazy request bucket for the default query operation without lookups."""
         return self.build_bucket(interface_cls)
 
     def validate_lookups(
@@ -428,9 +528,16 @@ class RequestQueryCapability(BaseCapability):
         interface_cls: type["RequestInterface"],
         *,
         operation_name: str | None = None,
-        filters: Mapping[str, tuple[Any, ...]] | None = None,
-        excludes: Mapping[str, tuple[Any, ...]] | None = None,
+        filters: Mapping[str, tuple[RequestLookupValue, ...]] | None = None,
+        excludes: Mapping[str, tuple[RequestLookupValue, ...]] | None = None,
     ) -> None:
+        """
+        Compile lookup maps to validate them without tracking dependencies or executing.
+
+        Raises the same request-planning errors as `build_bucket()` for unknown
+        filters, unsupported excludes, invalid values, unsupported locations,
+        missing local fallback, or fragment conflicts.
+        """
         self._build_request_plan(
             interface_cls,
             operation_name=operation_name,
@@ -442,8 +549,9 @@ class RequestQueryCapability(BaseCapability):
         self,
         interface_cls: type["RequestInterface"],
         operation_name: str,
-        **kwargs: Any,
-    ) -> RequestBucket:
+        **kwargs: RequestLookupValue,
+    ) -> RequestBucket["GeneralManager"]:
+        """Return a lazy request bucket for a named query operation."""
         return self.build_bucket(
             interface_cls,
             operation_name=operation_name,
@@ -455,9 +563,17 @@ class RequestQueryCapability(BaseCapability):
         interface_cls: type["RequestInterface"],
         *,
         operation_name: str | None = None,
-        filters: Mapping[str, tuple[Any, ...]] | None = None,
-        excludes: Mapping[str, tuple[Any, ...]] | None = None,
-    ) -> RequestBucket:
+        filters: Mapping[str, tuple[RequestLookupValue, ...]] | None = None,
+        excludes: Mapping[str, tuple[RequestLookupValue, ...]] | None = None,
+    ) -> RequestBucket["GeneralManager"]:
+        """
+        Compile a request query plan, track its dependency, and return a lazy bucket.
+
+        The dependency payload records the operation name plus compiled filter
+        and exclude lookup maps under the `request_query` dependency operation.
+        Request execution is deferred until the returned `RequestBucket` is
+        materialized.
+        """
         filter_map = self._copy_lookup_map(filters)
         exclude_map = self._copy_lookup_map(excludes)
         request_plan = self._build_request_plan(
@@ -498,6 +614,14 @@ class RequestQueryCapability(BaseCapability):
         interface_cls: type["RequestInterface"],
         request_plan: RequestQueryPlan,
     ) -> RequestQueryResult:
+        """
+        Execute a compiled request plan through `interface_cls.execute_request_plan()`.
+
+        The call is wrapped in observability operation `request.query.execute`
+        with payload metadata for service, operation, method, path, sorted query
+        param keys, path param keys, header keys, body keys, and local predicate
+        lookup keys.
+        """
         payload_snapshot = {
             "service": interface_cls._parent_class.__name__,
             "operation": request_plan.operation_name,
@@ -513,10 +637,7 @@ class RequestQueryCapability(BaseCapability):
         }
 
         def _perform() -> RequestQueryResult:
-            result = interface_cls.execute_request_plan(request_plan)
-            if isinstance(result, RequestQueryResult):
-                return result
-            return RequestQueryResult(items=tuple(result.items))  # type: ignore[arg-type]
+            return interface_cls.execute_request_plan(request_plan)
 
         return with_observability(
             target=interface_cls,
@@ -527,14 +648,14 @@ class RequestQueryCapability(BaseCapability):
 
     @staticmethod
     def _normalize_lookup_map(
-        kwargs: Mapping[str, Any],
-    ) -> dict[str, tuple[Any, ...]]:
+        kwargs: Mapping[str, RequestLookupValue],
+    ) -> RequestLookupMap:
         return {key: (value,) for key, value in kwargs.items()}
 
     @staticmethod
     def _copy_lookup_map(
-        values: Mapping[str, tuple[Any, ...]] | None,
-    ) -> dict[str, tuple[Any, ...]]:
+        values: Mapping[str, tuple[RequestLookupValue, ...]] | None,
+    ) -> RequestLookupMap:
         if not values:
             return {}
         return {key: tuple(items) for key, items in values.items()}
@@ -544,17 +665,21 @@ class RequestQueryCapability(BaseCapability):
         interface_cls: type["RequestInterface"],
         *,
         operation_name: str | None,
-        filters: Mapping[str, tuple[Any, ...]],
-        excludes: Mapping[str, tuple[Any, ...]],
+        filters: Mapping[str, tuple[RequestLookupValue, ...]],
+        excludes: Mapping[str, tuple[RequestLookupValue, ...]],
     ) -> RequestQueryPlan:
         operation = interface_cls.get_query_operation(operation_name)
-        query_params: dict[str, Any] = {}
-        headers: dict[str, Any] = {}
-        path_params: dict[str, Any] = {}
-        body: dict[str, Any] = {}
+        query_params: RequestMutablePayload = {}
+        headers: dict[str, str] = {}
+        path_params: RequestMutablePayload = {}
+        body: RequestMutablePayload = {}
         local_predicates: list[RequestLocalPredicate] = []
 
-        for action, lookup_map in (("filter", filters), ("exclude", excludes)):
+        lookup_sources: tuple[
+            tuple[RequestAction, Mapping[str, tuple[RequestLookupValue, ...]]],
+            ...,
+        ] = (("filter", filters), ("exclude", excludes))
+        for action, lookup_map in lookup_sources:
             for lookup_key, values in lookup_map.items():
                 spec = self._get_filter_spec(interface_cls, operation, lookup_key)
                 for value in values:
@@ -562,7 +687,7 @@ class RequestQueryCapability(BaseCapability):
                         spec=spec,
                         lookup_key=lookup_key,
                         value=value,
-                        action=cast(Any, action),
+                        action=action,
                         operation_name=operation.name,
                     )
                     self._merge_fragment(query_params, fragment.query_params, "query")
@@ -607,15 +732,15 @@ class RequestQueryCapability(BaseCapability):
         *,
         spec: RequestFilter,
         lookup_key: str,
-        value: Any,
-        action: str,
+        value: RequestLookupValue,
+        action: RequestAction,
         operation_name: str,
     ) -> RequestPlanFragment:
         spec.validate_value(lookup_key, value)
         binding = RequestFilterBinding(
             lookup_key=lookup_key,
             value=value,
-            action=cast(Any, action),
+            action=action,
             operation_name=operation_name,
             spec=spec,
         )
@@ -626,7 +751,7 @@ class RequestQueryCapability(BaseCapability):
             if spec.local_fallback:
                 return RequestPlanFragment(
                     local_predicates=(
-                        RequestLocalPredicate(lookup_key, value, cast(Any, action)),
+                        RequestLocalPredicate(lookup_key, value, action),
                     )
                 )
             if action == "filter":
@@ -637,7 +762,7 @@ class RequestQueryCapability(BaseCapability):
             if spec.local_fallback:
                 return RequestPlanFragment(
                     local_predicates=(
-                        RequestLocalPredicate(lookup_key, value, cast(Any, action)),
+                        RequestLocalPredicate(lookup_key, value, action),
                     )
                 )
             raise RequestExcludeNotSupportedError(lookup_key, operation_name)
@@ -654,7 +779,7 @@ class RequestQueryCapability(BaseCapability):
     def _resolve_param_name(
         spec: RequestFilter,
         lookup_key: str,
-        action: str,
+        action: RequestAction,
     ) -> str:
         if action == "exclude" and spec.exclude_param:
             return spec.exclude_param
@@ -665,12 +790,12 @@ class RequestQueryCapability(BaseCapability):
         *,
         location: RequestLocation,
         key: str,
-        value: Any,
+        value: object,
     ) -> RequestPlanFragment:
         if location == "query":
             return RequestPlanFragment(query_params={key: value})
         if location == "headers":
-            return RequestPlanFragment(headers={key: value})
+            return RequestPlanFragment(headers=cast(RequestHeaders, {key: value}))
         if location == "path":
             return RequestPlanFragment(path_params={key: value})
         if location == "body":
@@ -679,14 +804,14 @@ class RequestQueryCapability(BaseCapability):
 
     @staticmethod
     def _merge_fragment(
-        target: dict[str, Any],
-        updates: Mapping[str, Any],
+        target: dict[str, FragmentValue],
+        updates: Mapping[str, FragmentValue],
         location: str,
     ) -> None:
         for key, value in updates.items():
             if key in target and target[key] != value:
                 raise RequestPlanConflictError(
-                    location=cast(Any, location),
+                    location=cast(RequestLocation, location),
                     key=key,
                 )
             target[key] = value
@@ -703,8 +828,20 @@ class RequestCreateCapability(BaseCapability):
         *,
         creator_id: int | None = None,
         history_comment: str | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, object]:
+        """
+        Execute the declared create operation and return extracted identification.
+
+        `creator_id` and `history_comment` are accepted for manager API
+        compatibility and ignored. Request rules validate the create kwargs,
+        `create_serializer` serializes the request body when configured, the
+        create plan is executed, and exactly one response item is required.
+
+        Raises:
+            RequestSingleResponseRequiredError: If the create response does not contain exactly one item.
+            ValidationError: If configured request rules reject the candidate values.
+        """
         del creator_id, history_comment
         operation = interface_cls.get_mutation_operation("create")
         serializer = getattr(interface_cls, "create_serializer", None)
@@ -738,8 +875,23 @@ class RequestUpdateCapability(BaseCapability):
         *,
         creator_id: int | None = None,
         history_comment: str | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, object]:
+        """
+        Execute the declared update operation and return extracted identification.
+
+        `creator_id` and `history_comment` are accepted for manager API
+        compatibility and ignored. Rule validation sees existing payload values,
+        identification values, and update kwargs together. `update_serializer`
+        serializes only the update kwargs for the request body. The update plan
+        uses path params from the instance identification, requires exactly one
+        response item, caches the merged response payload, and returns extracted
+        identification.
+
+        Raises:
+            RequestSingleResponseRequiredError: If the update response does not contain exactly one item.
+            ValidationError: If configured request rules reject the candidate values.
+        """
         del creator_id, history_comment
         interface_cls = type(interface_instance)
         operation = interface_cls.get_mutation_operation("update")
@@ -747,7 +899,7 @@ class RequestUpdateCapability(BaseCapability):
         cached_payload = getattr(interface_instance, "_request_payload_cache", None)
         existing_values = dict(
             cast(
-                Mapping[str, Any],
+                RequestPayload,
                 cached_payload
                 if cached_payload is not None
                 else interface_instance.get_data(),
@@ -793,6 +945,13 @@ class RequestDeleteCapability(BaseCapability):
         creator_id: int | None = None,
         history_comment: str | None = None,
     ) -> None:
+        """
+        Execute the declared delete operation and return None.
+
+        `creator_id` and `history_comment` are accepted for manager API
+        compatibility and ignored. The delete plan uses path params from the
+        instance identification and does not require a response body.
+        """
         del creator_id, history_comment
         interface_cls = type(interface_instance)
         operation = interface_cls.get_mutation_operation("delete")
@@ -810,20 +969,27 @@ class RequestDeleteCapability(BaseCapability):
 
 def _apply_request_rules(
     interface_cls: type["RequestInterface"],
-    candidate_values: Mapping[str, Any],
+    candidate_values: Mapping[str, object],
 ) -> None:
-    rules = cast(list[Rule[Any]], getattr(interface_cls, "rules", []))
+    """
+    Evaluate configured request rules against candidate values.
+
+    Candidate values are exposed as attributes on a SimpleNamespace. Each failed
+    rule contributes its error-message mapping, and merged errors are raised as a
+    Django ValidationError.
+    """
+    rules = cast(list["Rule[GeneralManager]"], getattr(interface_cls, "rules", []))
     if not rules:
         return
     candidate = SimpleNamespace(**candidate_values)
-    errors: dict[str, Any] = {}
+    errors: dict[str, object] = {}
     for rule in rules:
-        if rule.evaluate(candidate) is False:
+        if rule.evaluate(cast("GeneralManager", candidate)) is False:
             error_message = rule.get_error_message()
             if error_message:
                 errors.update(error_message)
     if errors:
-        raise ValidationError(errors)
+        raise ValidationError(cast("ValidationErrorMessageArg", errors))
 
 
 __all__ = [

@@ -1,14 +1,14 @@
 """Auto-generating factory utilities for GeneralManager models."""
 
 from __future__ import annotations
+from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
-    Type,
-    Callable,
-    Union,
-    Any,
+    ClassVar,
+    Protocol,
     TypeVar,
     Literal,
+    cast,
 )
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
@@ -27,6 +27,15 @@ if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
 
 modelsModel = TypeVar("modelsModel", bound=models.Model)
+type FactoryParams = dict[str, object]
+type AdjustmentRecords = FactoryParams | list[FactoryParams]
+
+
+class AdjustmentMethod(Protocol):
+    """Callable shape for AutoFactory payload adjustment hooks."""
+
+    def __call__(self, **kwargs: object) -> AdjustmentRecords:
+        """Return one or more factory payload dictionaries."""
 
 
 class InvalidGeneratedObjectError(TypeError):
@@ -90,23 +99,44 @@ class MissingIdentificationFieldError(AttributeError):
 
 
 class AutoFactory(DjangoModelFactory[modelsModel]):
-    """Factory that auto-populates model fields based on interface metadata."""
+    """Factory that auto-populates model fields based on interface metadata.
 
-    interface: Type[OrmInterfaceBase]
-    _adjustmentMethod: (
-        Callable[..., Union[dict[str, Any], list[dict[str, Any]]]] | None
-    ) = None
+    The factory inspects the bound ORM interface, fills missing model fields with
+    generated values or declared defaults, applies many-to-many relations after
+    model construction, and wraps created objects back into GeneralManager
+    instances. Build strategy returns Django model instances; create strategy
+    returns manager wrappers. Subclasses are generated with an ORM interface that
+    provides ``handle_custom_fields()``, ``input_fields``,
+    ``format_identification()``, and ``_parent_class`` for created-object
+    wrapping.
+    """
+
+    interface: type[OrmInterfaceBase[models.Model]]
+    _adjustmentMethod: ClassVar[AdjustmentMethod | None] = None
 
     @classmethod
     def _generate(
-        cls, strategy: Literal["build", "create"], params: dict[str, Any]
+        cls, strategy: Literal["build", "create"], params: FactoryParams
     ) -> models.Model | list[models.Model] | "GeneralManager" | list["GeneralManager"]:
         """
         Generate and populate model instances using interface-derived values and declared defaults.
 
+        Generation first adds missing scalar and relation defaults to `params`;
+        caller-supplied values already present in `params` win. factory_boy then
+        dispatches to `_build()` or `_create()`, where many-to-many values are
+        stripped from constructor kwargs and foreign-key/one-to-one values are
+        coerced before `_adjustmentMethod` is called. After model construction,
+        this hook applies many-to-many assignments from the original `params`
+        and wraps created models into manager instances for create strategy.
+
+        Many-to-many assignment is attempted for both build and create strategy.
+        Django requires saved instances for many-to-many `.set(...)`; therefore
+        build calls with explicit or generated many-to-many values are
+        unsupported and may raise Django's unsaved-instance relation error.
+
         Parameters:
-            strategy (Literal["build", "create"]): "build" returns unsaved model instance(s); "create" returns saved model instance(s).
-            params (dict[str, Any]): Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values.
+            strategy (Literal["build", "create"]): "build" returns unsaved model instance(s); "create" saves model instance(s) and returns GeneralManager wrapper(s).
+            params: Field values supplied by the caller; missing non-auto fields will be populated from declared defaults or generated values.
 
         Returns:
             A Django model instance or a list of Django model instances. If `strategy` is "create", returns a `GeneralManager` instance or a list of `GeneralManager` instances wrapping the created model(s).
@@ -114,6 +144,12 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Raises:
             InvalidAutoFactoryModelError: If the factory target `_meta.model` is not a Django model class.
             InvalidGeneratedObjectError: If an element of a generated list is not a Django model instance.
+            MissingManagerClassError: If create-strategy wrapping cannot find the
+                interface parent manager class.
+            MissingIdentificationFieldError: If create-strategy wrapping cannot
+                resolve one of the interface identification fields.
+            Exception: Propagates field generation, model validation, save,
+                many-to-many assignment, and factory_boy errors.
         """
         model = cls._meta.model
         try:
@@ -130,14 +166,14 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
             if field.name not in to_ignore_list
             and not isinstance(field, GenericForeignKey)
         ]
-        special_fields: list[models.Field[Any, Any]] = [
+        special_fields: list[models.Field[object, object]] = [
             getattr(model, field_name) for field_name in field_name_list
         ]
         pre_declarations = getattr(cls._meta, "pre_declarations", ())
         post_declarations = getattr(cls._meta, "post_declarations", ())
         declared_fields: set[str] = set(pre_declarations) | set(post_declarations)
 
-        field_list: list[models.Field[Any, Any] | models.ForeignObjectRel] = [
+        field_list: list[models.Field[object, object] | models.ForeignObjectRel] = [
             *fields,
             *special_fields,
         ]
@@ -153,7 +189,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 continue
             params[field.name] = get_field_value(field)
 
-        obj: list[models.Model] | models.Model = super()._generate(strategy, params)
+        generate = cast(
+            Callable[[Literal["build", "create"], FactoryParams], object],
+            super()._generate,
+        )
+        obj = generate(strategy, params)
+        if not isinstance(obj, (models.Model, list)):
+            raise InvalidGeneratedObjectError()
         if isinstance(obj, list):
             for item in obj:
                 if not isinstance(item, models.Model):
@@ -167,14 +209,14 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _handle_many_to_many_fields_after_creation(
-        cls, obj: models.Model, attrs: dict[str, Any]
+        cls, obj: models.Model, attrs: FactoryParams
     ) -> None:
         """
         Assign related objects to many-to-many fields after creation/building.
 
         Parameters:
             obj (models.Model): Instance whose many-to-many relations should be populated.
-            attrs (dict[str, Any]): Original attributes passed to the factory.
+            attrs: Original attributes passed to the factory.
         """
         for field in obj._meta.many_to_many:
             if field.name in attrs:
@@ -186,14 +228,14 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 getattr(obj, field.name).set(normalized_values)
 
     @classmethod
-    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+    def _adjust_kwargs(cls, **kwargs: object) -> FactoryParams:
         """
         Strip many-to-many entries from kwargs and coerce single-related values for foreign/one-to-one relation fields.
 
         Returns:
-            dict[str, Any]: Keyword arguments with many-to-many fields removed and relation field values normalized.
+            Keyword arguments with many-to-many fields removed and relation field values normalized.
         """
-        model: Type[models.Model] = cls._meta.model
+        model: type[models.Model] = cls._meta.model
         m2m_fields = {field.name for field in model._meta.many_to_many}
         for field_name in list(kwargs.keys()):
             if field_name in m2m_fields:
@@ -211,7 +253,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _create(
-        cls, model_class: Type[models.Model], *args: Any, **kwargs: Any
+        cls, model_class: type[models.Model], *args: object, **kwargs: object
     ) -> models.Model | list[models.Model]:
         """
         Create and save model instance(s), applying adjustment hooks when defined.
@@ -219,7 +261,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Parameters:
             model_class (type[models.Model]): Django model class to instantiate.
             *args: Unused positional arguments (required by factory_boy).
-            **kwargs (dict[str, Any]): Field values supplied by the caller.
+            **kwargs: Field values supplied by the caller.
 
         Returns:
             models.Model | list[models.Model]: Saved instance(s).
@@ -233,7 +275,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _build(
-        cls, model_class: Type[models.Model], *args: Any, **kwargs: Any
+        cls, model_class: type[models.Model], *args: object, **kwargs: object
     ) -> models.Model | list[models.Model]:
         """
         Build (without saving) model instance(s), applying adjustment hooks when defined.
@@ -241,7 +283,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         Parameters:
             model_class (type[models.Model]): Django model class to instantiate.
             *args: Unused positional arguments (required by factory_boy).
-            **kwargs (dict[str, Any]): Field values supplied by the caller.
+            **kwargs: Field values supplied by the caller.
 
         Returns:
             models.Model | list[models.Model]: Unsaved instance(s).
@@ -255,14 +297,14 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _model_creation(
-        cls, model_class: Type[models.Model], **kwargs: Any
+        cls, model_class: type[models.Model], **kwargs: object
     ) -> models.Model:
         """
         Instantiate, validate, and save a model instance.
 
         Parameters:
             model_class (type[models.Model]): Model class to instantiate.
-            **kwargs (dict[str, Any]): Field assignments applied prior to saving.
+            **kwargs: Field assignments applied prior to saving.
 
         Returns:
             models.Model: Saved instance.
@@ -283,7 +325,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def _model_building(
-        cls, model_class: Type[models.Model], **kwargs: Any
+        cls, model_class: type[models.Model], **kwargs: object
     ) -> models.Model:
         """Construct an unsaved model instance with the provided field values."""
         obj = model_class()
@@ -293,14 +335,21 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
     @classmethod
     def __create_with_generate_func(
-        cls, use_creation_method: bool, params: dict[str, Any]
+        cls, use_creation_method: bool, params: FactoryParams
     ) -> models.Model | list[models.Model]:
         """
         Create or build model instance(s) using the configured adjustment method.
 
+        The adjustment method receives generated/default-filled kwargs after
+        `_adjust_kwargs()` has stripped many-to-many entries and coerced
+        foreign-key/one-to-one values. A returned list is processed in order and
+        an empty list returns an empty list. AutoFactory does not wrap this loop
+        in a transaction, so create-mode failures can leave earlier returned
+        records saved.
+
         Parameters:
             use_creation_method (bool): If True, created records are validated and saved; if False, unsaved instances are returned.
-            params (dict[str, Any]): Keyword arguments forwarded to the adjustment method to produce record dict(s).
+            params: Keyword arguments forwarded to the adjustment method to produce record dict(s).
 
         Returns:
             models.Model | list[models.Model]: A single model instance or a list of instances — saved instances when `use_creation_method` is True, unsaved otherwise.
@@ -337,8 +386,13 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         Raises:
             MissingManagerClassError: If the interface does not define a `_parent_class` manager to wrap instances.
+            MissingIdentificationFieldError: If an identification field cannot be
+                read from a generated model instance.
         """
-        manager_cls = getattr(cls.interface, "_parent_class", None)
+        manager_cls = cast(
+            "type[GeneralManager] | None",
+            getattr(cls.interface, "_parent_class", None),
+        )
         if manager_cls is None:
             raise MissingManagerClassError()
 
@@ -363,21 +417,29 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return _to_manager(generated)
 
     @classmethod
-    def _extract_identification(cls, instance: models.Model) -> dict[str, Any]:
+    def _extract_identification(cls, instance: models.Model) -> FactoryParams:
         """
         Builds the identification dictionary used to instantiate a manager by reading the interface's input fields from the given model instance.
 
+        Each key in `interface.input_fields` is resolved from an instance
+        attribute with the same name, falling back to `<name>_id`. Related model
+        objects are represented by their primary key. The resulting mapping is
+        passed through `interface.format_identification()` and must be accepted
+        as keyword arguments by the parent manager constructor.
+
         Returns:
-            dict[str, Any]: A mapping of identification field names to their resolved values, formatted via the interface's `format_identification` method.
+            A mapping of identification field names to their resolved values, formatted via the interface's `format_identification` method.
         """
-        identification: dict[str, Any] = {}
+        identification: FactoryParams = {}
         for name in cls.interface.input_fields.keys():
             value = cls._resolve_identification_value(instance, name)
             identification[name] = value
         return cls.interface.format_identification(dict(identification))
 
     @staticmethod
-    def _resolve_identification_value(instance: models.Model, field_name: str) -> Any:
+    def _resolve_identification_value(
+        instance: models.Model, field_name: str
+    ) -> object:
         """
         Resolve an identification value from a model instance for a given identification field.
 
@@ -387,7 +449,7 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
                 the function will attempt to use the corresponding `<field_name>_id` attribute.
 
         Returns:
-            Any: The resolved value. If the resolved value is a Django model, its primary key (`pk`) is returned.
+            The resolved value. If the resolved value is a Django model, its primary key (`pk`) is returned.
 
         Raises:
             MissingIdentificationFieldError: If neither `field_name` nor `field_name_id` exist on the instance.
@@ -404,18 +466,22 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return value
 
     @classmethod
-    def _get_declared_default(cls, field_name: str) -> Any | None:
+    def _get_declared_default(cls, field_name: str) -> object | None:
         """
         Return the constant default value for field_name declared on the factory class, if present.
+
+        `None` is the sentinel for "no usable declared default", so a factory
+        class attribute explicitly set to `None` is indistinguishable from a
+        missing default and will not be used by `_generate()`.
 
         Parameters:
             field_name (str): Field name to look up on the factory class.
 
         Returns:
-            Any | None: The declared value if the class attribute exists and is not callable or a method descriptor (classmethod/staticmethod); otherwise `None`.
+            The declared value if the class attribute exists and is not callable or a method descriptor (classmethod/staticmethod); otherwise `None`.
         """
         if field_name in cls.__dict__:
-            value = cls.__dict__[field_name]
+            value = cast(object, cls.__dict__[field_name])
             if not callable(value) and not isinstance(
                 value, (classmethod, staticmethod)
             ):
@@ -423,28 +489,33 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
         return None
 
     @staticmethod
-    def _coerce_single_related_value(value: Any) -> Any:
+    def _coerce_single_related_value(value: object) -> object:
         """
         Resolve a related value to a Django model instance.
 
+        Coercion delegates to the lower-level manager-instance resolver. Values
+        that are already Django model instances, unsaved model instances, raw
+        identifiers, or otherwise unrecognized are returned unchanged and left
+        for Django field assignment or relation managers to accept or reject.
+
         Parameters:
-            value (Any): A related value such as a Django model instance or a GeneralManager wrapper.
+            value: A related value such as a Django model instance or a GeneralManager wrapper.
 
         Returns:
-            Any: The Django model instance corresponding to the input, or the original value if it cannot be resolved to a model.
+            The Django model instance corresponding to the input, or the original value if it cannot be resolved to a model.
         """
         return _ensure_model_instance(value)
 
     @classmethod
-    def _coerce_many_to_many_values(cls, values: Any) -> list[models.Model] | Any:
+    def _coerce_many_to_many_values(cls, values: object) -> list[object]:
         """
         Normalize various many-to-many assignment forms into a flat list of related model instances or values.
 
         Parameters:
-            values (Any): A related-value or collection accepted for a many-to-many field — can be a Django Manager, QuerySet, any iterable (list/tuple/set), or a single model/identifier.
+            values: A related-value or collection accepted for a many-to-many field — can be a Django Manager, QuerySet, list, tuple, set, or a single model/identifier.
 
         Returns:
-            list[models.Model] | list[Any]: A list where each element has been normalized; wrapper/manager-like inputs are converted to their underlying model instances or preserved values when conversion is not applicable.
+            A list where each element has been normalized; wrapper/manager-like inputs are converted to their underlying model instances or preserved values when conversion is not applicable.
         """
         if isinstance(values, models.Manager):
             iterable = list(values.all())

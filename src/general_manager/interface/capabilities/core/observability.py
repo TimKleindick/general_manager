@@ -3,32 +3,43 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol, ClassVar
+from typing import ClassVar, Protocol
 
 from general_manager.logging import get_logger
 
 from ..builtin import BaseCapability
 from ..base import CapabilityName
 
+_MISSING = object()
+
 
 class SupportsObservabilityTarget(Protocol):
-    """Protocol for objects passed into the observability capability."""
+    """Structural target name hook used by logging observability."""
 
     @property
     def __name__(self) -> str:  # pragma: no cover - protocol definition
         """
         Public name of the target used for observability and logging.
 
-        This read-only property supplies the identifier that LoggingObservabilityCapability records as the target name in log contexts.
+        ``LoggingObservabilityCapability`` uses this string as the ``target``
+        context value. Objects without a string ``__name__`` fall back to their
+        class name. An ``AttributeError`` raised while reading ``__name__`` is
+        treated as a missing name; other lookup errors propagate.
 
         Returns:
-            str: The target's name.
+            The target name.
         """
         ...
 
 
 class LoggingObservabilityCapability(BaseCapability):
-    """Record lifecycle events for interface operations using the shared logger."""
+    """
+    Record interface operation lifecycle events as the ``observability`` capability.
+
+    The capability has no constructor options. It writes structured log calls to
+    ``get_logger("interface.observability")`` and lets logger, payload, target,
+    and metadata access errors propagate unchanged.
+    """
 
     name: ClassVar[CapabilityName] = "observability"
 
@@ -36,7 +47,10 @@ class LoggingObservabilityCapability(BaseCapability):
         """
         Initialize the observability capability and configure its logger.
 
-        Sets the instance attribute `self._logger` to a logger named "interface.observability".
+        Sets ``self._logger`` to ``get_logger("interface.observability")``.
+
+        Raises:
+            Exception: Logger construction errors propagate unchanged.
         """
         self._logger = get_logger("interface.observability")
 
@@ -45,17 +59,29 @@ class LoggingObservabilityCapability(BaseCapability):
         *,
         operation: str,
         target: SupportsObservabilityTarget | object,
-        payload: dict[str, Any],
+        payload: dict[str, object],
     ) -> None:
         """
         Log the start of an interface operation with contextual metadata.
 
-        Records a debug-level log entry containing the operation name, the target identifier, and the payload's keys.
+        Calls ``self._logger.debug("interface operation start", context=...)``.
+        The context contains ``operation``, a string ``target`` name,
+        ``payload_keys`` sorted from the payload keys, and selected payload
+        metadata values: ``service``, ``method``, ``path``, ``status_code``,
+        ``retry_count``, and ``request_id``. Selected metadata keys are included
+        whenever they are present in the payload, including when their value is
+        ``None``.
 
         Parameters:
-            operation (str): The name of the operation being started.
-            target (SupportsObservabilityTarget | object): The operation target; its `__name__` is used when available, otherwise the target's class name is used.
-            payload (dict[str, Any]): The payload for the operation; only its keys are included in the log context.
+            operation: Operation name recorded unchanged.
+            target: Operation target. A string ``target.__name__`` is used when
+                present; otherwise ``target.__class__.__name__`` is used.
+            payload: Operation payload. Values are copied only for the selected
+                metadata keys listed above.
+
+        Raises:
+            Exception: Target-name lookup, payload-key sorting, payload metadata
+                lookup, and logger errors propagate unchanged.
         """
         self._logger.debug(
             "interface operation start",
@@ -67,17 +93,35 @@ class LoggingObservabilityCapability(BaseCapability):
         *,
         operation: str,
         target: SupportsObservabilityTarget | object,
-        payload: dict[str, Any],
-        result: Any,
+        payload: dict[str, object],
+        result: object,
     ) -> None:
         """
-        Record the end of an interface operation by logging its context including the result's type.
+        Record the end of an interface operation.
+
+        Calls ``self._logger.debug("interface operation end", context=...)``.
+        The context starts with the same fields as ``before_operation()`` and
+        adds ``result_type`` as ``type(result).__name__``. If
+        ``result.metadata`` is a mapping, ``status_code``, ``retry_count``, and
+        ``request_id`` from that ``collections.abc.Mapping`` replace same-named
+        payload metadata values in the end-event context. Result metadata keys
+        are included whenever they are present in the mapping, including when
+        their value is ``None``. A missing ``metadata`` attribute, an
+        ``AttributeError`` raised while reading ``metadata``, or a non-mapping
+        metadata value is ignored.
 
         Parameters:
-            operation (str): Name of the operation that completed.
-            target (SupportsObservabilityTarget | object): The operation target; its `__name__` is used when available, otherwise the target's class name is used.
-            payload (dict[str, Any]): The operation payload; only the payload's keys are included in the logged context.
-            result (Any): The operation result whose type name is recorded in the logged context.
+            operation: Operation name recorded unchanged.
+            target: Operation target. A string ``target.__name__`` is used when
+                present; otherwise ``target.__class__.__name__`` is used.
+            payload: Operation payload used to build the base context.
+            result: Operation result whose type name and optional mapping
+                metadata are recorded.
+
+        Raises:
+            Exception: Target-name lookup, payload-key sorting, payload metadata
+                lookup, non-``AttributeError`` result metadata lookup failures,
+                and logger errors propagate unchanged.
         """
         context = self._context(operation, target, payload)
         result_metadata = getattr(result, "metadata", None)
@@ -96,52 +140,70 @@ class LoggingObservabilityCapability(BaseCapability):
         *,
         operation: str,
         target: SupportsObservabilityTarget | object,
-        payload: dict[str, Any],
+        payload: dict[str, object],
         error: Exception,
     ) -> None:
         """
         Record an operation error event to the observability logger.
 
-        Logs an error-level entry "interface operation error" with a context containing:
-        the operation name, the target identifier (uses target.__name__ if present, otherwise the target's class name),
-        a sorted list of payload keys, and the `repr` of the provided exception.
+        Calls ``self._logger.error("interface operation error", context=...)``.
+        The context starts with the same fields as ``before_operation()`` and
+        adds ``error`` as ``repr(error)``, ``error_class`` as
+        ``type(error).__name__``, and ``status_code`` from ``error.status_code``
+        when that attribute exists, including when the value is ``None``. A
+        missing ``status_code`` attribute is ignored.
 
         Parameters:
-            operation (str): The name of the operation that failed.
-            target (SupportsObservabilityTarget | object): The target of the operation; if it exposes `__name__` that value is used for the target identifier, otherwise the target's class name is used.
-            payload (dict[str, Any]): The operation payload; only its keys are included in the logged context.
-            error (Exception): The exception that occurred; its `repr` is included in the logged context.
+            operation: Operation name recorded unchanged.
+            target: Operation target. A string ``target.__name__`` is used when
+                present; otherwise ``target.__class__.__name__`` is used.
+                ``AttributeError`` from ``__name__`` lookup is treated as
+                missing.
+            payload: Operation payload used to build the base context.
+            error: Exception whose representation, class name, and optional
+                status code are recorded.
+
+        Raises:
+            Exception: Target-name lookup, payload-key sorting, payload metadata
+                lookup, non-``AttributeError`` error status lookup failures, and
+                logger errors propagate unchanged.
         """
         context = self._context(operation, target, payload)
         context["error"] = repr(error)
         context["error_class"] = type(error).__name__
-        if hasattr(error, "status_code"):
-            context["status_code"] = error.status_code
+        status_code = getattr(error, "status_code", _MISSING)
+        if status_code is not _MISSING:
+            context["status_code"] = status_code
         self._logger.error("interface operation error", context=context)
 
     def _context(
         self,
         operation: str,
         target: SupportsObservabilityTarget | object,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
+        payload: dict[str, object],
+    ) -> dict[str, object]:
         """
-        Create a structured context dictionary describing an operation invocation.
+        Create the structured log context shared by all observability events.
 
         Parameters:
-            operation (str): The operation name.
-            target: The target of the operation; if the object exposes a `__name__` attribute that value is used, otherwise the target's class name is used.
-            payload (dict[str, Any]): The operation payload from which keys will be extracted.
+            operation: Operation name recorded unchanged.
+            target: Operation target. A string ``target.__name__`` is used when
+                present; otherwise ``target.__class__.__name__`` is used.
+            payload: Operation payload from which keys and selected metadata are
+                extracted.
 
         Returns:
-            dict[str, Any]: A dictionary with keys:
-                - "operation": the provided operation name
-                - "target": resolved target name (string)
-                - "payload_keys": sorted list of keys from the payload
+            A new dictionary containing ``operation``, ``target``,
+            ``payload_keys``, and selected payload metadata keys whenever those
+            keys are present in the payload, including when their values are
+            ``None``.
+
+        Raises:
+            Exception: Non-``AttributeError`` target-name lookup failures and
+                payload key/value access errors propagate unchanged.
         """
-        if hasattr(target, "__name__"):
-            target_name = getattr(target, "__name__", None)
-        else:
+        target_name = getattr(target, "__name__", _MISSING)
+        if not isinstance(target_name, str):
             target_name = target.__class__.__name__
         return {
             "operation": operation,
@@ -159,3 +221,6 @@ class LoggingObservabilityCapability(BaseCapability):
             )
             if key in payload
         }
+
+
+__all__ = ["LoggingObservabilityCapability", "SupportsObservabilityTarget"]

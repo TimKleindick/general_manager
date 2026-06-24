@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from typing import ClassVar
 
 from django.test import SimpleTestCase
@@ -17,6 +18,7 @@ from general_manager.interface.requests import (
     RequestConfigurationError,
     RequestField,
     RequestFilter,
+    RequestLocalPaginationUnsupportedError,
     RequestMutationOperation,
     RequestQueryOperation,
     RequestQueryPlan,
@@ -74,7 +76,8 @@ class EqualityProject(GeneralManager):
                         "name": "Alpha" if status == "active" else "Beta",
                         "status": status,
                     },
-                )
+                ),
+                total_count=3 if status == "active" else None,
             )
 
 
@@ -106,7 +109,44 @@ class OtherEqualityProject(GeneralManager):
             return RequestQueryResult(items=({"id": 1, "name": "Other"},))
 
 
-for manager_cls in (EqualityProject, OtherEqualityProject):
+class LocalFallbackProject(GeneralManager):
+    class Interface(RequestInterface):
+        id = Input(type=int)
+
+        name = RequestField(str)
+
+        class Meta:
+            filters: ClassVar[dict[str, RequestFilter]] = {
+                "name__icontains": RequestFilter(
+                    value_type=str,
+                    allow_local_fallback=True,
+                ),
+            }
+            query_operations: ClassVar[dict[str, RequestQueryOperation]] = {
+                "detail": RequestQueryOperation(
+                    name="detail",
+                    method="GET",
+                    path="/local/{id}",
+                ),
+                "list": RequestQueryOperation(
+                    name="list",
+                    method="GET",
+                    path="/local",
+                ),
+            }
+
+        @classmethod
+        def execute_request_plan(cls, plan: RequestQueryPlan) -> RequestQueryResult:
+            return RequestQueryResult(
+                items=(
+                    {"id": 1, "name": "Alpha"},
+                    {"id": 2, "name": "Beta"},
+                ),
+                total_count=3,
+            )
+
+
+for manager_cls in (EqualityProject, OtherEqualityProject, LocalFallbackProject):
     manager_cls._attributes = manager_cls.Interface.get_attributes()
     GeneralManagerMeta.create_at_properties_for_attributes(
         manager_cls._attributes.keys(),
@@ -433,6 +473,52 @@ class RequestBucketHardeningTests(SimpleTestCase):
         list(left)
 
         self.assertEqual(left, right)
+
+    def test_request_bucket_all_preserves_lazy_query_plan(self) -> None:
+        bucket = EqualityProject.filter(status="active")
+
+        cloned = bucket.all()
+
+        self.assertEqual(cloned, bucket)
+        self.assertEqual(next(iter(cloned)).status, "active")
+
+    def test_request_bucket_count_uses_total_count_when_available(self) -> None:
+        bucket = EqualityProject.filter(status="active")
+
+        self.assertEqual(bucket.count(), 3)
+
+    def test_request_bucket_count_falls_back_to_item_count(self) -> None:
+        bucket = EqualityProject.filter(status="inactive")
+
+        self.assertEqual(bucket.count(), 1)
+
+    def test_request_bucket_filter_validates_and_filters_materialized_items(
+        self,
+    ) -> None:
+        bucket = EqualityProject.filter(status="active")[:]
+
+        filtered = bucket.filter(status="active")
+        missing = bucket.filter(status="inactive")
+
+        self.assertEqual([item.status for item in filtered], ["active"])
+        self.assertEqual(list(missing), [])
+        self.assertEqual(bucket.operation_name, "list")
+
+    def test_request_bucket_pickle_follow_up_filter_compiles_request_plan(
+        self,
+    ) -> None:
+        bucket = EqualityProject.filter(status="active")
+        round_tripped = pickle.loads(pickle.dumps(bucket))  # noqa: S301
+
+        filtered = round_tripped.filter(status="inactive")
+
+        self.assertEqual(next(iter(filtered)).status, "inactive")
+
+    def test_request_bucket_local_fallback_rejects_partial_remote_page(self) -> None:
+        bucket = LocalFallbackProject.filter(name__icontains="a")
+
+        with self.assertRaises(RequestLocalPaginationUnsupportedError):
+            list(bucket)
 
     def test_request_bucket_union_rejects_incompatible_bucket_types(self) -> None:
         bucket = EqualityProject.filter(status="active")

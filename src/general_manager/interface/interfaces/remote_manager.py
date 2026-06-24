@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from urllib.parse import urlencode, urlsplit, urlunsplit
-from typing import Any, ClassVar, cast
+from typing import ClassVar, cast
 
 from general_manager.cache.dependency_index import (
     invalidate_request_query_dependencies,
 )
 from general_manager.interface.capabilities.base import CapabilityName
-from general_manager.interface.base_interface import CapabilityOverride
+from general_manager.interface.capabilities.factory import CapabilityOverride
 from general_manager.interface.bundles.remote_manager import (
     REMOTE_MANAGER_CAPABILITIES,
 )
@@ -24,6 +24,8 @@ from general_manager.interface.requests import (
     RequestQueryOperation,
     RequestOperation,
     RequestPlan,
+    RequestPayload,
+    RequestResponse,
     RequestTransportConfig,
     RequestTransportResponse,
     RequestConfigurationError,
@@ -33,13 +35,42 @@ from general_manager.interface.requests import (
 
 
 def _normalize_remote_envelope(
-    response: RequestTransportResponse | Mapping[str, Any] | list[Mapping[str, Any]],
-    interface_cls: type[Any],
+    response: RequestTransportResponse | RequestResponse,
+    interface_cls: type[object],
     operation: RequestOperation,
     plan: RequestPlan,
 ) -> RequestQueryResult:
-    metadata: dict[str, Any] = dict(plan.metadata)
-    payload: Any
+    """Convert a remote-manager JSON envelope into a query result.
+
+    Args:
+        response: Either a decoded transport response or a decoded response body.
+            Bodies may be a list of item mappings or an object envelope with
+            optional ``items``, ``total_count``, and ``metadata`` keys.
+        interface_cls: Interface class used only to identify unmapped remote
+            errors in configuration exceptions.
+        operation: Request operation being normalized. The remote-manager
+            normalizer currently does not branch on the operation.
+        plan: Request plan whose metadata is copied into the normalized result.
+
+    Returns:
+        A ``RequestQueryResult`` with tuple-normalized item mappings, optional
+        total count, and merged metadata. Metadata precedence is plan metadata,
+        then transport metadata, then transport ``status_code`` and
+        ``retry_count`` defaulting to ``0``, then transport ``x-request-id`` as
+        ``request_id``, and finally envelope ``metadata``. An envelope that omits
+        ``items`` returns an empty item tuple.
+
+    Raises:
+        RequestSchemaError: If the payload is not a list of object items or an
+            object envelope with list ``items``, mapping ``metadata``, and an
+            integer ``total_count`` when supplied.
+        RequestConfigurationError: If the payload envelope contains ``error``;
+            remote-manager errors do not map to local request operations.
+    """
+    del operation
+
+    metadata: dict[str, object] = dict(plan.metadata)
+    payload: RequestResponse
     if isinstance(response, RequestTransportResponse):
         payload = response.payload
         metadata.update(response.metadata)
@@ -55,7 +86,7 @@ def _normalize_remote_envelope(
         if not all(isinstance(item, Mapping) for item in payload):
             raise RequestSchemaError.non_object_json_payload()
         return RequestQueryResult(items=tuple(payload), metadata=metadata)
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         raise RequestSchemaError.non_object_json_payload()
     items = payload.get("items", [])
     if not isinstance(items, list):
@@ -70,14 +101,39 @@ def _normalize_remote_envelope(
         raise RequestSchemaError.non_object_json_payload()
     if "error" in payload:
         raise RequestConfigurationError.unmapped_remote_error(interface_cls.__name__)
-    metadata.update(payload_metadata)
+    metadata.update(cast(RequestPayload, payload_metadata))
     return RequestQueryResult(
-        items=tuple(items), total_count=total_count, metadata=metadata
+        items=tuple(cast(RequestPayload, item) for item in items),
+        total_count=total_count,
+        metadata=metadata,
     )
 
 
 class RemoteManagerInterface(RequestInterface):
-    """Request-backed interface specialized for exposed GeneralManager REST endpoints."""
+    """Request-backed interface for a remote GeneralManager REST resource.
+
+    Direct subclasses read ``Meta.base_url``, optional ``Meta.base_path``,
+    ``Meta.remote_manager``, optional ``Meta.protocol_version``, and optional
+    ``Meta.websocket_invalidation_enabled`` when the class is defined. The
+    interface validates that metadata, defaults ``base_path`` to ``/gm`` when it
+    is omitted, defaults ``protocol_version`` to ``"v1"``, coerces
+    ``websocket_invalidation_enabled`` with ``bool(...)``, normalizes
+    ``base_path``, installs the
+    generated ``GET <base_path>/<remote_manager>/{id}`` detail query,
+    ``POST <base_path>/<remote_manager>/query`` list query, and
+    create/update/delete mutation operations, and configures response
+    normalization for the remote-manager envelope. Generated operations include
+    the ``X-General-Manager-Protocol-Version`` header. If a subclass already
+    defines ``transport_config``, its timeout, auth provider, retry policy,
+    metrics backend, and trace backend are preserved while the validated
+    ``Meta.base_url`` and response normalizer replace the transport's values.
+
+    Configuration errors are raised during direct subclass creation by
+    ``validate_remote_manager_meta(...)``. Indirect subclasses are not
+    reconfigured by this class hook. Query execution can additionally raise
+    request operation, schema, transport, serializer, or validator errors from
+    the underlying request interface.
+    """
 
     base_url: ClassVar[str] = ""
     base_path: ClassVar[str] = "/gm"
@@ -90,7 +146,7 @@ class RemoteManagerInterface(RequestInterface):
     )
     configured_capabilities = (REMOTE_MANAGER_CAPABILITIES,)
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
         if cls is RemoteManagerInterface:
             return
@@ -157,7 +213,7 @@ class RemoteManagerInterface(RequestInterface):
             )
         else:
             cls.transport_config = RequestTransportConfig(
-                base_url=cls.base_url or transport_config.base_url,
+                base_url=cls.base_url,
                 timeout=transport_config.timeout,
                 auth_provider=transport_config.auth_provider,
                 response_normalizer=_normalize_remote_envelope,
@@ -168,6 +224,21 @@ class RemoteManagerInterface(RequestInterface):
 
     @classmethod
     def get_websocket_invalidation_url(cls) -> str:
+        """Return the websocket URL used for remote cache invalidation.
+
+        The URL is derived from ``base_url`` and the normalized ``base_path``.
+        Class creation validates ``base_url`` as ``http`` or ``https`` before
+        this helper is available on a configured interface. ``https`` base URLs
+        become ``wss`` and valid ``http`` base URLs become ``ws``. A path prefix
+        already present on ``base_url`` is stripped of trailing slashes and
+        preserved before ``<base_path>/ws/<remote_manager>``. Query and fragment
+        components from ``base_url`` are not preserved; the protocol version is
+        emitted as the ``version`` query parameter. This helper does not check
+        ``websocket_invalidation_enabled`` by itself.
+
+        Returns:
+            Absolute websocket URL for this interface's invalidation stream.
+        """
         parsed = urlsplit(cls.base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
         normalized_base_path = cls.base_path.rstrip("/") or "/gm"
@@ -180,7 +251,24 @@ class RemoteManagerInterface(RequestInterface):
         return urlunsplit((scheme, parsed.netloc, path, query, ""))
 
     @classmethod
-    def handle_invalidation_event(cls, event: Mapping[str, Any]) -> bool:
+    def handle_invalidation_event(cls, event: Mapping[str, object]) -> bool:
+        """Invalidate cached remote queries when a websocket event matches.
+
+        Args:
+            event: Decoded websocket payload. Only ``protocol_version``,
+                ``base_path``, and ``resource_name`` are used for matching.
+                ``action``, ``identification``, and ``event_id`` are intentionally
+                ignored by the local request-query cache invalidation path.
+
+        Returns:
+            ``True`` when the event matches this interface and invalidation was
+            requested for the parent manager; ``False`` for non-matching events.
+
+        Raises:
+            AttributeError: If called before the interface is bound to a parent
+                manager class.
+            Exception: Propagates cache invalidation backend errors.
+        """
         if (
             event.get("protocol_version") != cls.protocol_version
             or event.get("base_path") != cls.base_path

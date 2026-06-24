@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import cast
+
 import pytest
 
+from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.capabilities import CapabilityName, CapabilityRegistry
+from general_manager.interface.manifests.capability_manifest import CapabilityManifest
+from general_manager.interface.manifests.capability_models import CapabilityPlan
 from general_manager.interface.manifests import (
     CapabilityConfig,
     ManifestCapabilityBuilder,
 )
+from general_manager.interface.manifests import capability_builder as builder_module
 from general_manager.interface.interfaces.calculation import (
     CalculationInterface,
 )
@@ -22,6 +30,10 @@ from general_manager.interface.capabilities.orm import (
 from general_manager.interface.capabilities.core.observability import (
     LoggingObservabilityCapability,
 )
+
+
+def test_capability_builder_module_exports_builder() -> None:
+    assert builder_module.__all__ == ["ManifestCapabilityBuilder"]
 
 
 def test_database_interface_default_capabilities() -> None:
@@ -80,6 +92,14 @@ def test_optional_capabilities_enabled_manually() -> None:
     assert selection.activated_optional == frozenset({"notification", "scheduling"})
 
 
+def test_disabled_optional_capability_wins_over_manual_enable() -> None:
+    builder = ManifestCapabilityBuilder()
+    config = CapabilityConfig(enabled={"notification"}, disabled={"notification"})
+    selection = builder.build(DatabaseInterface, config=config)
+
+    assert selection.activated_optional == frozenset()
+
+
 def test_disabling_required_capability_raises() -> None:
     builder = ManifestCapabilityBuilder()
     config = CapabilityConfig(disabled={"read"})
@@ -92,6 +112,65 @@ def test_enable_non_optional_capability_raises() -> None:
     config = CapabilityConfig(enabled={"history"})
     with pytest.raises(ValueError, match="not optional"):
         builder.build(DatabaseInterface, config=config)
+
+
+def test_build_restores_interface_state_when_capability_instantiation_fails() -> None:
+    class LocalInterface(InterfaceBase):
+        pass
+
+    unknown_capability = cast(CapabilityName, "unknown_capability_for_test")
+    manifest = CapabilityManifest(
+        plans={
+            LocalInterface: CapabilityPlan(
+                required=frozenset({unknown_capability}),
+            )
+        }
+    )
+    builder = ManifestCapabilityBuilder(manifest=manifest)
+
+    with pytest.raises(KeyError, match="unknown_capability_for_test"):
+        builder.build(LocalInterface)
+
+    assert LocalInterface._capability_selection is None
+    assert LocalInterface._capabilities == frozenset()
+    assert LocalInterface._capability_handlers == {}
+    assert builder.registry.get(LocalInterface) == frozenset()
+    assert builder.registry.instances(LocalInterface) == ()
+
+
+def test_build_restores_interface_state_when_registry_publication_fails() -> None:
+    class LocalInterface(InterfaceBase):
+        pass
+
+    class FailingRegistryError(RuntimeError):
+        pass
+
+    class FailingRegistry(CapabilityRegistry):
+        def register(
+            self,
+            interface_cls: type[InterfaceBase],
+            capabilities: Iterable[CapabilityName],
+            *,
+            replace: bool = False,
+        ) -> None:
+            raise FailingRegistryError
+
+    manifest = CapabilityManifest(
+        plans={
+            LocalInterface: CapabilityPlan(required=frozenset())
+        }
+    )
+    builder = ManifestCapabilityBuilder(
+        manifest=manifest,
+        registry=FailingRegistry(),
+    )
+
+    with pytest.raises(FailingRegistryError):
+        builder.build(LocalInterface)
+
+    assert LocalInterface._capability_selection is None
+    assert LocalInterface._capabilities == frozenset()
+    assert LocalInterface._capability_handlers == {}
 
 
 def test_calculation_interface_requires_observability() -> None:

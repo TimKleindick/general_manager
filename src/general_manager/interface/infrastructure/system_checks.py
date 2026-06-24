@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Iterator, List, Tuple, Type
+from collections.abc import Callable, Iterator
 
-InterfaceType = Type[object]
-SystemCheckHook = Callable[[], list]
+InterfaceType = type[object]
+SystemCheckHook = Callable[[], list[object]]
 
-_REGISTRY: Dict[InterfaceType, List[SystemCheckHook]] = {}
+_REGISTRY: dict[InterfaceType, list[SystemCheckHook]] = {}
 
 
 def register_system_check(
@@ -19,7 +19,8 @@ def register_system_check(
 
     Parameters:
         interface_cls (InterfaceType): The interface class to associate the hook with.
-        hook (SystemCheckHook): A no-argument callable that returns a list of system-check results.
+        hook (SystemCheckHook): No-argument callable that returns a list of
+            Django system-check result objects.
 
     Notes:
         If the same hook is already registered for the interface, this function leaves registrations unchanged.
@@ -29,28 +30,32 @@ def register_system_check(
         hooks.append(hook)
 
 
-def iter_interface_system_checks() -> Iterator[Tuple[InterfaceType, SystemCheckHook]]:
+def iter_interface_system_checks() -> Iterator[tuple[InterfaceType, SystemCheckHook]]:
     """
     Iterate over all registered system-check hooks, yielding an (interface, hook) pair for each.
 
     Returns:
-        iterator (Iterator[Tuple[InterfaceType, SystemCheckHook]]): An iterator that yields (interface_cls, hook) pairs for every hook currently registered in the module registry.
+        iterator: An iterator that yields `(interface_cls, hook)` pairs for
+            every hook currently registered in the module registry.
     """
     for interface_cls, hooks in _REGISTRY.items():
         for hook in hooks:
             yield interface_cls, hook
 
 
-def registered_system_checks() -> Dict[InterfaceType, Tuple[SystemCheckHook, ...]]:
+def registered_system_checks() -> dict[InterfaceType, tuple[SystemCheckHook, ...]]:
     """
     Map interface types to tuples of their registered system-check hooks.
 
     Returns:
-        Dict[InterfaceType, Tuple[SystemCheckHook, ...]]: A snapshot mapping each interface class to a tuple of its registered system-check hooks. Subsequent modifications to the registry do not affect the returned tuples.
+        A detached snapshot mapping each interface class to a tuple of its
+        registered system-check hooks. Mutating the returned dict is harmless
+        and does not mutate the registry; subsequent registry changes do not
+        affect the returned tuples.
     """
     return {interface: tuple(hooks) for interface, hooks in _REGISTRY.items()}
 
 
 def clear_system_checks() -> None:
-    """Remove all registered system checks (primarily for tests)."""
+    """Remove all registered system checks, primarily for test isolation."""
     _REGISTRY.clear()

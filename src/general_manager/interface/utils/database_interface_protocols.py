@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 
 class SupportsHistoryQuery(Protocol):
     """Protocol for the query object returned by django-simple-history managers."""
 
-    def as_of(self, search_date: Any | None) -> "SupportsHistoryQuery":
+    def as_of(self, search_date: object | None) -> "SupportsHistoryQuery":
         """
         Scope the history query to the state at a given date.
 
-        Parameters:
-            search_date (Any | None): The date or timestamp to scope the history
-                to; if `None`, the returned query covers the full history.
+        Args:
+            search_date: Date-like cutoff value accepted by the underlying
+                history manager, or `None` for the full history.
 
         Returns:
-            SupportsHistoryQuery: A history query limited to the specified
-                `search_date`, or the full history when `search_date` is `None`.
+            History query limited to the specified `search_date`, or full
+            history when `search_date` is `None`.
         """
         ...
 
@@ -26,32 +26,33 @@ class SupportsHistoryQuery(Protocol):
         """
         Return a history query scoped to the given database/router alias.
 
-        Parameters:
-            alias (str): Database/router alias to target for the returned query.
+        Args:
+            alias: Database/router alias to target for the returned query.
 
         Returns:
             A history query object configured to operate against the specified alias.
         """
         ...
 
-    def filter(self, **kwargs: Any) -> "SupportsHistoryQuery":
+    def filter(self, **kwargs: object) -> "SupportsHistoryQuery":
         """
         Filter the history query using the provided lookup expressions.
 
-        Parameters:
-            **kwargs: Lookup expressions to filter history records (for example, field=value).
+        Args:
+            **kwargs: Lookup expressions to filter history records.
 
         Returns:
             A `SupportsHistoryQuery` representing the filtered history results.
         """
         ...
 
-    def last(self) -> Any:
+    def last(self) -> object:
         """
         Retrieve the last item from the history query results.
 
         Returns:
-            Any: The final object in the query result set, or `None` if the query contains no items.
+            Final object in the query result set, or `None` when the query is
+            empty.
         """
         ...
 
@@ -75,31 +76,31 @@ class SupportsWrite(Protocol):
     """Protocol for models supporting full_clean/save operations."""
 
     history: SupportsHistoryQuery
-    pk: Any
+    pk: object
 
-    def full_clean(self, *args: Any, **kwargs: Any) -> None:
+    def full_clean(self, *args: object, **kwargs: object) -> None:
         """
         Validate the model's fields and run model- and field-level validation.
 
-        Parameters:
-            *args: Positional arguments supported by Django's Model.full_clean (forwarded to validators).
-            **kwargs: Keyword arguments supported by Django's Model.full_clean (for example, `exclude`).
+        Args:
+            *args: Positional arguments forwarded to Django's `Model.full_clean`.
+            **kwargs: Keyword arguments forwarded to Django's `Model.full_clean`.
 
         Raises:
             django.core.exceptions.ValidationError: If validation fails.
         """
         ...
 
-    def save(self, *args: Any, **kwargs: Any) -> Any:
+    def save(self, *args: object, **kwargs: object) -> object:
         """
         Persist the model instance using its implementation-defined save behavior.
 
-        Parameters:
-            *args: Positional arguments forwarded to the underlying save implementation.
-            **kwargs: Keyword arguments forwarded to the underlying save implementation.
+        Args:
+            *args: Positional arguments forwarded to the underlying save method.
+            **kwargs: Keyword arguments forwarded to the underlying save method.
 
         Returns:
-            The result of the underlying save operation (commonly the saved instance or its primary key).
+            Result of the underlying save operation.
         """
         ...
 
