@@ -301,6 +301,56 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_receive_json_rejects_non_object_payload(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.bad-payload"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+            ):
+                await consumer.receive_json([])
+
+            mock_send_json.assert_awaited_once_with(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+            chat_error.assert_not_called()
+            assert consumer.provider.calls == []
+
+        asyncio.run(run())
+
+    def test_receive_json_rejects_unknown_event_type(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.unknown-event"
+
+        async def run() -> None:
+            with patch.object(
+                consumer, "send_json", new_callable=AsyncMock
+            ) as mock_send_json:
+                await consumer.receive_json({"type": "unknown"})
+
+            mock_send_json.assert_awaited_once_with(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+            assert consumer.provider.calls == []
+
+        asyncio.run(run())
+
     def test_receive_json_errors_use_public_message(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {

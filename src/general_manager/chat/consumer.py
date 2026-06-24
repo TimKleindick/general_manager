@@ -217,7 +217,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         await self._cancel_confirmation_timeout()
         await super().disconnect(code)
 
-    async def receive_json(self, content: dict[str, Any], **_kwargs: Any) -> None:
+    async def receive_json(self, content: Any, **_kwargs: Any) -> None:
+        if not isinstance(content, dict):
+            await self.send_json(
+                {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+            )
+            return
         message_type = content.get("type")
         if message_type == "confirm":
             try:
