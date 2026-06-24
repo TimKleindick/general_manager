@@ -13,6 +13,7 @@ from general_manager.interface.requests import (
     FieldMappingSerializer,
     HeaderApiKeyAuthProvider,
     QueryApiKeyAuthProvider,
+    RequestPayload,
     RequestQueryOperation,
     RequestQueryPlan,
     RequestRetryPolicy,
@@ -27,6 +28,10 @@ from general_manager.interface.requests import (
     default_request_response_normalizer,
     resolve_request_value,
 )
+
+
+def test_request_payload_type_alias_is_exported() -> None:
+    assert RequestPayload.__name__ == "RequestPayload"
 
 
 class DummyInterface:
