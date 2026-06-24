@@ -107,17 +107,18 @@ class GeneralManagerLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
             InvalidContextError: If ``context`` is not a mapping.
             InvalidExtraError: If ``extra`` is present but not mutable.
         """
+        if not self.isEnabledFor(level):
+            return
         context_mapping = self._pop_context(kwargs)
         if context_mapping is not None:
             kwargs["context"] = context_mapping
-        if self.isEnabledFor(level):
-            processed_msg, processed_kwargs = self.process(msg, kwargs)
-            self.logger.log(
-                level,
-                processed_msg,
-                *args,
-                **cast(LoggingKwargs, processed_kwargs),
-            )
+        processed_msg, processed_kwargs = self.process(msg, kwargs)
+        self.logger.log(
+            level,
+            processed_msg,
+            *args,
+            **cast(LoggingKwargs, processed_kwargs),
+        )
 
     @staticmethod
     def _pop_context(

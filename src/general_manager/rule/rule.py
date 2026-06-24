@@ -446,11 +446,11 @@ class Rule(Generic[GeneralManagerType]):
 
         if comparisons:
             for cmp in comparisons:
-                left, rights, ops = cmp.left, cmp.comparators, cmp.ops
+                current_left, rights, ops = cmp.left, cmp.comparators, cmp.ops
                 for right, op in zip(rights, ops, strict=False):
                     # Special handler?
-                    if isinstance(left, ast.Call):
-                        fn = self._get_node_name(left.func)
+                    if isinstance(current_left, ast.Call):
+                        fn = self._get_node_name(current_left.func)
                         handler = self._handlers.get(fn)
                         if handler:
                             logger.debug(
@@ -462,14 +462,17 @@ class Rule(Generic[GeneralManagerType]):
                                 },
                             )
                             errors.update(
-                                handler.handle(cmp, left, right, op, var_values, self)
+                                handler.handle(
+                                    cmp, current_left, right, op, var_values, self
+                                )
                             )
+                            current_left = right
                             continue
 
                     # Standard error message
-                    lnm = self._get_node_name(left)
+                    lnm = self._get_node_name(current_left)
                     rnm = self._get_node_name(right)
-                    lval = self._eval_node(left)
+                    lval = self._eval_node(current_left)
                     rval = self._eval_node(right)
                     ldisp = f"[{lnm}] ({lval})" if lnm in var_values else str(lval)
                     rdisp = f"[{rnm}] ({rval})" if rnm in var_values else str(rval)
@@ -479,6 +482,7 @@ class Rule(Generic[GeneralManagerType]):
                         errors[lnm] = msg
                     if rnm in var_values and rnm != lnm:
                         errors[rnm] = msg
+                    current_left = right
 
             if logical and not self._last_result:
                 combo = ", ".join(f"[{v}]" for v in self._variables)

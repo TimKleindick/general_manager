@@ -3,6 +3,7 @@ from general_manager.measurement.measurement import Measurement, ureg
 from decimal import Decimal
 from random import Random
 import pickle
+from pint.errors import DimensionalityError
 from typing import Any
 
 
@@ -70,6 +71,12 @@ class MeasurementTestCase(TestCase):
 
         with self.assertRaises(MissingExchangeRateError):
             m.to("EUR/t")
+
+    def test_fractional_currency_power_falls_back_to_pint_conversion(self):
+        m = Measurement(4, "EUR ** 0.5")
+
+        with self.assertRaises(DimensionalityError):
+            m.to("USD ** 0.5")
 
     def test_same_currency_compound_conversion_does_not_require_exchange_rate(self):
         m = Measurement(100, "EUR/kg")
@@ -333,6 +340,12 @@ class MeasurementTestCase(TestCase):
             with self.subTest(left=left, right=right):
                 self.assertEqual(left, right)
                 self.assertEqual(hash(left), hash(right))
+
+    def test_offset_equality_uses_hash_quantization_boundary(self):
+        left = Measurement(Decimal("0.0000000004"), "degC")
+        right = Measurement(Decimal("273.1500000006"), "K")
+
+        self.assertNotEqual(left, right)
 
     def test_percentage_values(self):
         """

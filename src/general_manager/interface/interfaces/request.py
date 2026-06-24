@@ -28,6 +28,7 @@ from general_manager.interface.requests import (
     RequestField,
     RequestFilter,
     RequestMutationOperation,
+    RequestPayload,
     RequestQueryOperation,
     RequestQueryPlan,
     RequestQueryResult,
@@ -62,7 +63,7 @@ class RequestInterface(InterfaceBase):
     update_serializer: ClassVar[Any | None] = None
     response_serializer: ClassVar[Any | None] = None
     rules: ClassVar[list[Any]] = []
-    _request_payload_cache: Mapping[str, Any] | None = None
+    _request_payload_cache: RequestPayload | None = None
 
     configured_capabilities: ClassVar[tuple[CapabilityConfigEntry, ...]] = (
         REQUEST_CORE_CAPABILITIES,
@@ -184,7 +185,7 @@ class RequestInterface(InterfaceBase):
             return handler.for_operation(cls, operation_name, **kwargs)
         raise NotImplementedError
 
-    def set_request_payload_cache(self, payload: Mapping[str, Any] | None) -> None:
+    def set_request_payload_cache(self, payload: RequestPayload | None) -> None:
         """Cache the raw response payload used to populate request-backed fields."""
 
         self._request_payload_cache = payload
@@ -203,7 +204,7 @@ class RequestInterface(InterfaceBase):
         return operation
 
     @classmethod
-    def extract_identification(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def extract_identification(cls, payload: RequestPayload) -> dict[str, Any]:
         """Extract manager identification values from a query payload."""
 
         identification: dict[str, Any] = {}
@@ -214,7 +215,7 @@ class RequestInterface(InterfaceBase):
     @classmethod
     def resolve_payload_value(
         cls,
-        payload: Mapping[str, Any],
+        payload: RequestPayload,
         field_name: str,
     ) -> Any:
         """Resolve a declared request field from a payload mapping."""

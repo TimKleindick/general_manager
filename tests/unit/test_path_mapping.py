@@ -1,5 +1,7 @@
 # type: ignore
 
+from types import MappingProxyType
+
 from django.test import SimpleTestCase
 from general_manager.utils.path_mapping import (
     InvalidPathTraversalValueError,
@@ -90,6 +92,11 @@ class PathMappingUnitTests(SimpleTestCase):
         self.assertIsNone(tracer.path)  # type: ignore
         end_instance = self.EndManager()
         result = PathMap(end_instance).go_to(self.StartManager)
+        self.assertIsNone(result)
+
+    def test_go_to_class_start_returns_none_for_unreachable_tracer(self):
+        result = PathMap(self.EndManager).go_to(self.StartManager)
+
         self.assertIsNone(result)
 
     def test_pathmap_singleton_behavior(self):
@@ -665,6 +672,21 @@ class PathMappingUnitTests(SimpleTestCase):
 
         # Should find connection defined in interface attribute types
         self.assertIn(self.EndManager.__name__, connected)
+
+    def test_pathmap_interface_attribute_types_accept_mapping_metadata(self):
+        class InterfaceWithMappingTypes(BaseTestInterface):
+            @classmethod
+            def get_attribute_types(cls):
+                return {
+                    "interface_end": MappingProxyType({"type": self.EndManager}),
+                }
+
+        class ManagerWithMappingInterfaceTypes(GeneralManager):
+            Interface = InterfaceWithMappingTypes
+
+        pm = PathMap(ManagerWithMappingInterfaceTypes)
+
+        self.assertIn(self.EndManager.__name__, pm.get_all_connected())
 
     def test_pathmap_none_path_scenarios(self):
         """
