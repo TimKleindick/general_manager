@@ -214,6 +214,10 @@
       "general_manager.cache.dependency_index",
       "invalidate_cache_key"
     ],
+    "parse_dependency_identifier": [
+      "general_manager.cache.dependency_index",
+      "parse_dependency_identifier"
+    ],
     "record_dependencies": [
       "general_manager.cache.dependency_index",
       "record_dependencies"
@@ -221,6 +225,10 @@
     "remove_cache_key_from_index": [
       "general_manager.cache.dependency_index",
       "remove_cache_key_from_index"
+    ],
+    "serialize_dependency_identifier": [
+      "general_manager.cache.dependency_index",
+      "serialize_dependency_identifier"
     ]
   },
   "general_manager.factory": {
@@ -693,6 +701,10 @@
     "PathMap": [
       "general_manager.utils.path_mapping",
       "PathMap"
+    ],
+    "UnknownInputFieldError": [
+      "general_manager.utils.filter_parser",
+      "UnknownInputFieldError"
     ],
     "args_to_kwargs": [
       "general_manager.utils.args_to_kwargs",

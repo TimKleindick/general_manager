@@ -160,6 +160,10 @@ UTILS_EXPORTS: LazyExportMap = {
         "general_manager.utils.filter_parser",
         "create_filter_function",
     ),
+    "UnknownInputFieldError": (
+        "general_manager.utils.filter_parser",
+        "UnknownInputFieldError",
+    ),
     "snake_to_pascal": ("general_manager.utils.format_string", "snake_to_pascal"),
     "snake_to_camel": ("general_manager.utils.format_string", "snake_to_camel"),
     "pascal_to_snake": ("general_manager.utils.format_string", "pascal_to_snake"),
@@ -382,6 +386,14 @@ CACHE_EXPORTS: LazyExportMap = {
     "invalidate_cache_key": (
         "general_manager.cache.dependency_index",
         "invalidate_cache_key",
+    ),
+    "parse_dependency_identifier": (
+        "general_manager.cache.dependency_index",
+        "parse_dependency_identifier",
+    ),
+    "serialize_dependency_identifier": (
+        "general_manager.cache.dependency_index",
+        "serialize_dependency_identifier",
     ),
 }
 
