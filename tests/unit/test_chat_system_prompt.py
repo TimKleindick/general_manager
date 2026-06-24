@@ -15,6 +15,16 @@ from general_manager.utils.path_mapping import PathMap
 from tests.utils.simple_manager_interface import BaseTestInterface
 
 
+def test_system_prompt_requires_query_after_successful_path_for_record_questions() -> (
+    None
+):
+    prompt = build_system_prompt()
+
+    assert "If find_path returns a non-empty path for a record question" in prompt
+    assert "call query on the destination manager" in prompt
+    assert "do not say there is no path" in prompt
+
+
 class ChatSystemPromptTests(SimpleTestCase):
     def setUp(self) -> None:
         GraphQL.reset_registry()

@@ -18,6 +18,14 @@ DATA_QUESTION_MARKERS = (
     "records",
 )
 
+METADATA_TOOL_NAMES = frozenset(
+    {
+        "search_managers",
+        "get_manager_schema",
+        "find_path",
+    }
+)
+
 
 def should_recover_missing_tool_call(
     *,
@@ -44,6 +52,8 @@ def should_recover_answer_without_query(
     if not tool_calls:
         return False
     if any(call.get("name") == "query" for call in tool_calls):
+        return False
+    if not any(call.get("name") in METADATA_TOOL_NAMES for call in tool_calls):
         return False
     if not assistant_text.strip():
         return False
