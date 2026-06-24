@@ -359,15 +359,12 @@ class SumHandler(FunctionHandler):
             InvalidNumericThresholdError: If the threshold evaluated from `right_node` is not numeric or is bool.
         """
 
-        # Name und Wert holen
         var_name = rule._get_node_name(arg_node)
         values = _numeric_iterable(var_values.get(var_name), "sum")
         total = sum(values)
 
-        # Schwellenwert aus dem rechten Knoten
         right_value = _numeric_threshold(rule, right_node, "sum")
 
-        # Message formulieren
         if op_symbol in (">", ">="):
             msg = (
                 f"[{var_name}] (sum={total}) is too small ({op_symbol} {right_value})!"

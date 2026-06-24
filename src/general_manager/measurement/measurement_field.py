@@ -401,8 +401,7 @@ class MeasurementField(MeasurementFieldBase):
             raise ValidationError(
                 {self.name: ["Value must be a Measurement instance or None."]}
             )
-        for v in self.validators:
-            v(value)
+        super().run_validators(value)
 
     def clean(
         self,

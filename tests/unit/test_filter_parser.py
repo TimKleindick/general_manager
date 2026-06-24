@@ -220,6 +220,17 @@ class TestFilterParser(TestCase):
         self.assertFalse(apply_lookup(10, "lt", 10))
         self.assertFalse(apply_lookup("Test", "exact", "test"))
 
+    def test_apply_lookup_uses_reflected_rich_comparison(self):
+        class Left:
+            def __lt__(self, other: object) -> object:
+                return NotImplemented
+
+        class Right:
+            def __gt__(self, other: object) -> bool:
+                return isinstance(other, Left)
+
+        self.assertTrue(apply_lookup(Left(), "lt", Right()))
+
     def test_apply_lookup_invalid(self):
         """
         Tests that apply_lookup returns False for invalid lookup types or improper argument types.

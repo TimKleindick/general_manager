@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Container, Mapping
+from operator import ge, gt, le, lt
 from typing import Callable, Literal, TypedDict, TypeGuard, cast
 
 from general_manager.manager.input import Input
@@ -297,10 +298,16 @@ def _compare(
     method_name: Literal["__lt__", "__le__", "__gt__", "__ge__"],
     filter_value: object,
 ) -> bool:
-    comparison = getattr(value_to_check, method_name, None)
-    if not callable(comparison):
+    comparison = {
+        "__lt__": lt,
+        "__le__": le,
+        "__gt__": gt,
+        "__ge__": ge,
+    }[method_name]
+    try:
+        result = comparison(value_to_check, filter_value)
+    except TypeError:
         return False
-    result = comparison(filter_value)
     if result is NotImplemented:
         return False
     return bool(result)

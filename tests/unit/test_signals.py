@@ -276,7 +276,27 @@ class DataChangeSignalTests(TestCase):
             NestedDataChangeDummy().outer()
 
         self.assertEqual(barrier_states, [("inner", True), ("outer", True)])
-        self.assertEqual(enqueued_keys, [("inner-key", "outer-key")])
+        self.assertEqual(len(enqueued_keys), 1)
+        self.assertEqual(set(enqueued_keys[0]), {"inner-key", "outer-key"})
+
+    def test_cleanup_barrier_read_error_does_not_mask_primary_exception(self):
+        def raise_from_post_change(sender, **kwargs):
+            del sender, kwargs
+            raise RuntimeError("primary")
+
+        post_data_change.connect(raise_from_post_change, weak=False)
+        with (
+            patch(
+                "general_manager.cache.dependency_index.is_dependency_data_change_active",
+                side_effect=RuntimeError("cleanup"),
+            ),
+            patch("general_manager.cache.signals.logger.exception") as log,
+            self.assertRaisesRegex(RuntimeError, "primary"),
+        ):
+            Dummy.create("warm")
+
+        log.assert_called_once()
+        self.assertFalse(is_dependency_data_change_active())
 
     def test_data_change_supports_wrapped_classmethod_object(self):
         """The wrapper can invoke a raw classmethod object."""

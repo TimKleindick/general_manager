@@ -4,7 +4,6 @@
 from __future__ import annotations
 from collections.abc import Callable
 from typing import TypeAlias, TypeGuard, cast
-import math
 import pint
 from decimal import Decimal, getcontext, InvalidOperation
 from operator import eq, ne, lt, le, gt, ge
@@ -125,15 +124,26 @@ def _currency_component(unit: str) -> tuple[str, int] | None:
     """Return the single configured currency component in a unit expression."""
 
     parsed_unit = ureg.parse_units(str(unit))
-    currency_components = [
-        (unit_name, int(power))
-        for unit_name, power in parsed_unit._units.items()
-        if not isinstance(power, complex)
-        if unit_name in currency_units
-    ]
+    currency_components: list[tuple[str, int]] = []
+    for unit_name, power in parsed_unit._units.items():
+        currency_power = _integer_unit_power(power)
+        if currency_power is not None and unit_name in currency_units:
+            currency_components.append((unit_name, currency_power))
     if len(currency_components) != 1:
         return None
     return currency_components[0]
+
+
+def _integer_unit_power(power: object) -> int | None:
+    """Return an integer power only when the parsed unit power is integral."""
+
+    if isinstance(power, bool) or isinstance(power, complex):
+        return None
+    if isinstance(power, int):
+        return power
+    if isinstance(power, float) and power.is_integer():
+        return int(power)
+    return None
 
 
 def _unit_without_currency(unit: str, currency: str, power: int) -> str:
@@ -159,8 +169,6 @@ def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Dec
     return _decimal_from_magnitude(converted_quantity.magnitude)
 
 
-OFFSET_COMPARISON_REL_TOL = 1e-9
-OFFSET_COMPARISON_ABS_TOL = 1e-9
 HASH_DECIMAL_QUANTUM = Decimal("1e-9")
 
 
@@ -171,33 +179,12 @@ def _compare_magnitudes(
     *,
     tolerant: bool,
 ) -> bool:
-    """Compare magnitudes, using tolerance for float-backed offset-unit paths."""
+    """Compare magnitudes, quantizing offset-unit paths to match hashing."""
 
     if not tolerant:
         return operation(left, right)
 
-    left_float = float(left)
-    right_float = float(right)
-    is_close = math.isclose(
-        left_float,
-        right_float,
-        rel_tol=OFFSET_COMPARISON_REL_TOL,
-        abs_tol=OFFSET_COMPARISON_ABS_TOL,
-    )
-
-    if operation is eq:
-        return is_close
-    if operation is ne:
-        return not is_close
-    if operation is lt:
-        return not is_close and left_float < right_float
-    if operation is le:
-        return is_close or left_float < right_float
-    if operation is gt:
-        return not is_close and left_float > right_float
-    if operation is ge:
-        return is_close or left_float > right_float
-    return operation(left_float, right_float)
+    return operation(_hash_decimal(left), _hash_decimal(right))
 
 
 def _hash_decimal(value: NumericMagnitude) -> Decimal:
@@ -588,6 +575,8 @@ class Measurement:
         Components with explicit power one, such as ``EUR ** 1``, are treated as
         the same currency component; expressions such as ``EUR / EUR`` simplify
         before this check and therefore are not currency conversions.
+        Fractional currency powers, such as ``EUR ** 0.5``, are not handled by
+        the exchange-rate shortcut and fall back to Pint conversion.
         Equivalent simplification beyond these rules follows Pint's parsed unit
         container; GeneralManager classifies the expression after Pint
         simplification and only inspects the resulting configured currency
@@ -896,10 +885,11 @@ class Measurement:
         ``InvalidMeasurementStringError`` or ``InvalidDimensionlessValueError``.
         Other falsey values such as ``0`` and ``False`` are unsupported operands
         and raise ``UnsupportedComparisonError``.
-        Offset-unit comparisons use ``1e-9`` relative and absolute tolerance;
-        non-offset comparisons use exact Decimal comparison after conversion.
-        Which units Pint treats as offset units and which operations require
-        float-backed quantities are delegated to Pint.
+        Offset-unit comparisons quantize normalized magnitudes to ``1e-9`` so
+        equality matches hashing. Non-offset comparisons use exact Decimal
+        comparison after conversion. Which units Pint treats as offset units
+        and which operations require float-backed quantities are delegated to
+        Pint.
 
         Parameters:
             other (object): A Measurement instance or a string parseable by Measurement.from_string; empty or null-like values return False.
@@ -1140,12 +1130,11 @@ class Measurement:
         Compute a hash using the measurement's canonical base magnitude and unit.
 
         Hashing mirrors equality by converting to base units first. The base
-        magnitude is normalized to a Decimal and quantized to ``1e-9`` so
-        offset-unit comparisons that are equal within the documented tolerance
-        also hash consistently. Hash collisions remain possible, as with any
-        Python hash. Non-offset equality uses exact Decimal comparison after
-        conversion; quantization may introduce extra hash collisions but does not
-        make unequal measurements compare equal.
+        magnitude is normalized to a Decimal and quantized to ``1e-9``,
+        matching offset-unit equality. Hash collisions remain possible, as with
+        any Python hash. Non-offset equality uses exact Decimal comparison after
+        conversion; quantization may introduce extra hash collisions but does
+        not make unequal measurements compare equal.
         "Equivalent" means measurements for which the comparison methods report
         equality; additional Pint simplifications only matter when they affect
         that equality result.

@@ -377,14 +377,14 @@ class LoggingCache(LocMemCache):
         self.ops.append(("get", key, val is not _SENTINEL))
         return val
 
-    def get_many(
+    def get_many(  # type: ignore[override]
         self,
         keys: Iterable[str],
         version: int | None = None,
-    ) -> dict[str, int | str]:
+    ) -> dict[str, object]:
         """Retrieve multiple keys and record the bulk lookup key/result names."""
         key_tuple = tuple(keys)
-        values = super().get_many(key_tuple, version=version)
+        values: dict[str, object] = dict(super().get_many(key_tuple, version=version))
         self.ops.append(("get_many", key_tuple, tuple(values.keys())))
         return values
 

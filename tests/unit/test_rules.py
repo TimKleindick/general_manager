@@ -374,6 +374,19 @@ class RuleTests(TestCase):
         expected_error = {"username": "[username] (abc) is too short (min length 5)!"}
         self.assertEqual(error_message, expected_error)
 
+    def test_rule_with_chained_len_comparison_reports_selected_leg(self):
+        def func(item: DummyObject) -> bool:
+            return 1 < len(item.username) < 5
+
+        x = DummyObject(username="abcdef")
+        rule = Rule(func)
+
+        self.assertFalse(rule.evaluate(x))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"username": "[username] (abcdef) is too long (max length 4)!"},
+        )
+
     def test_rule_with_lists(self):
         """
         Verifies that a Rule based on list length marks an empty list as invalid and produces the expected error message.
