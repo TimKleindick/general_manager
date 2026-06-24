@@ -5,7 +5,8 @@ import ast
 import inspect
 import re
 import textwrap
-from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar
+from collections.abc import Iterable
+from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 from decimal import Decimal
 
 from django.utils.module_loading import import_string
@@ -64,6 +65,15 @@ class ErrorMessageGenerationError(ValueError):
         This exception is initialized with the default message "No input provided for error message generation."
         """
         super().__init__("No input provided for error message generation.")
+
+
+class InvalidRuleHandlerConfigurationError(TypeError):
+    """Raised when a RULE_HANDLERS entry does not resolve to a rule handler class."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"RULE_HANDLERS entry {path!r} must resolve to a BaseRuleHandler subclass."
+        )
 
 
 class Rule(Generic[GeneralManagerType]):
@@ -130,10 +140,20 @@ class Rule(Generic[GeneralManagerType]):
             self._handlers[inst.function_name] = inst
         from general_manager.conf import get_setting
 
-        for path in get_setting("RULE_HANDLERS", []):
-            handler_cls: type[BaseRuleHandler] = import_string(path)
+        handler_paths = cast(Iterable[object], get_setting("RULE_HANDLERS", []))
+        for path in handler_paths:
+            path = str(path)
+            imported_handler = import_string(path)
+            if not isinstance(imported_handler, type) or not issubclass(
+                imported_handler, BaseRuleHandler
+            ):
+                raise InvalidRuleHandlerConfigurationError(path)
+            handler_cls = imported_handler
             inst = handler_cls()
-            self._handlers[inst.function_name] = inst
+            function_name = getattr(inst, "function_name", None)
+            if not isinstance(function_name, str) or function_name == "":
+                raise InvalidRuleHandlerConfigurationError(path)
+            self._handlers[function_name] = inst
         logger.debug(
             "initialised rule",
             context={
@@ -357,7 +377,7 @@ class Rule(Generic[GeneralManagerType]):
     ) -> Dict[str, Optional[object]]:
         out: Dict[str, Optional[object]] = {}
         for var in self._variables:
-            obj: object = x  # type: ignore
+            obj: object = x
             for part in var.split("."):
                 obj = getattr(obj, part, NOTEXISTENT)
                 if obj is NOTEXISTENT:
@@ -541,13 +561,13 @@ class Rule(Generic[GeneralManagerType]):
         if not isinstance(node, ast.expr):
             return None
         try:
-            return ast.literal_eval(node)
+            return cast(object | None, ast.literal_eval(node))
         except (ValueError, TypeError):
             if isinstance(node, ast.Attribute):
                 base = self._eval_node(node.value)
                 if base is None:
                     return None
-                return getattr(base, node.attr, None)
+                return cast(object | None, getattr(base, node.attr, None))
             if isinstance(node, ast.Name):
                 if node.id in self._last_args:
                     return self._last_args[node.id]

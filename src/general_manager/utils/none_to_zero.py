@@ -1,22 +1,28 @@
 """Convenience helpers for normalising optional numeric inputs."""
 
-from typing import Optional, TypeVar, Literal
+from typing import Literal, TypeVar
+
 from general_manager.measurement import Measurement
 
-NUMBERVALUE = TypeVar("NUMBERVALUE", int, float, Measurement)
+NumberValue = TypeVar("NumberValue", int, float, Measurement)
 
 
 def none_to_zero(
-    value: Optional[NUMBERVALUE],
-) -> NUMBERVALUE | Literal[0]:
+    value: NumberValue | None,
+) -> NumberValue | Literal[0]:
     """
-    Replace None with zero while preserving existing numeric values.
+    Return ``0`` for ``None`` and otherwise return the original numeric value.
+
+    The helper does not coerce, copy, or normalize non-``None`` values. Existing
+    ``int``, ``float``, and ``Measurement`` inputs are returned unchanged, so
+    falsey numeric values such as ``0`` or ``0.0`` remain their original values.
 
     Parameters:
-        value (Optional[NUMBERVALUE]): Numeric value or Measurement instance that may be None.
+        value: Numeric value or ``Measurement`` instance that may be ``None``.
 
     Returns:
-        NUMBERVALUE | Literal[0]: The input value if it is not None; otherwise, zero.
+        The original value when it is not ``None``; otherwise the integer
+        literal ``0``.
     """
     if value is None:
         return 0

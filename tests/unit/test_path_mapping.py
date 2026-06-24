@@ -1,7 +1,11 @@
 # type: ignore
 
 from django.test import SimpleTestCase
-from general_manager.utils.path_mapping import PathMap, PathTracer
+from general_manager.utils.path_mapping import (
+    InvalidPathTraversalValueError,
+    PathMap,
+    PathTracer,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
@@ -312,6 +316,26 @@ class PathMappingUnitTests(SimpleTestCase):
         start_instance = self.StartManager()
         result = PathMap(start_instance).go_to("NonExistentManager")
         self.assertIsNone(result)
+
+    def test_go_to_rejects_non_traversable_graphql_property_value(self):
+        """
+        Traversed GraphQL properties must resolve to a manager or bucket.
+        """
+
+        class InvalidPathInterface(BaseTestInterface):
+            pass
+
+        class InvalidPathManager(GeneralManager):
+            Interface = InvalidPathInterface
+
+            @GraphQLProperty
+            def invalid_path(self) -> self.EndManager:  # type: ignore
+                return "not traversable"
+
+        path_map = PathMap(InvalidPathManager())
+
+        with self.assertRaises(InvalidPathTraversalValueError):
+            path_map.go_to(self.EndManager)
 
     def test_circular_reference_handling(self):
         """

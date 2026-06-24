@@ -1,31 +1,37 @@
 """Utilities for building deterministic cache keys from function calls."""
 
+from collections.abc import Callable, Mapping
 import inspect
 import json
 from hashlib import sha256
-from typing import Callable, Mapping
 
 from general_manager.utils.json_encoder import CustomJSONEncoder
+
+type CacheKeyArgs = tuple[object, ...]
+type CacheKeyKwargs = Mapping[str, object]
 
 
 def make_cache_key(
     func: Callable[..., object],
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object] | None,
+    args: CacheKeyArgs,
+    kwargs: CacheKeyKwargs | None,
 ) -> str:
-    """
-    Build a deterministic cache key that uniquely identifies a function invocation.
+    """Build a deterministic cache key for one function invocation.
 
-    Parameters:
-        func (Callable[..., Any]): The function whose invocation should be cached.
-        args (tuple[Any, ...]): Positional arguments supplied to the function.
-        kwargs (dict[str, Any]): Keyword arguments supplied to the function.
+    `kwargs=None` is treated as an empty mapping; supplied mappings are copied
+    with `dict(...)` even when they are falsey. The function module, qualified
+    name, and normalized bound arguments are encoded as JSON with sorted keys and
+    `CustomJSONEncoder`, then hashed with SHA-256 using `usedforsecurity=False`.
+    Positional and keyword forms of the same call produce the same key after
+    `inspect.Signature.bind_partial()` and default application.
 
-    Returns:
-        str: Hexadecimal SHA-256 digest representing the call signature.
+    Raises:
+        TypeError: If `args` and `kwargs` cannot bind to `func`'s signature, or
+            if payload serialization fails before `CustomJSONEncoder` can fall
+            back to strings.
     """
     sig = inspect.signature(func)
-    kwargs_dict = dict(kwargs or {})
+    kwargs_dict = {} if kwargs is None else dict(kwargs)
     bound = sig.bind_partial(*args, **kwargs_dict)
     bound.apply_defaults()
     payload = {
@@ -33,7 +39,5 @@ def make_cache_key(
         "qualname": func.__qualname__,
         "args": bound.arguments,
     }
-    raw = json.dumps(
-        payload, sort_keys=True, default=str, cls=CustomJSONEncoder
-    ).encode()
+    raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
     return sha256(raw, usedforsecurity=False).hexdigest()
