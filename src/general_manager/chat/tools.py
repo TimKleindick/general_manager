@@ -364,16 +364,59 @@ def _normalize_filters(manager: str, filters: Mapping[str, Any]) -> dict[str, An
     }
 
 
-def _validate_chat_query_filters(manager: str, filters: Mapping[str, Any]) -> None:
-    summary = get_manager_schema_summary(manager)
-    indexed_filters = set(summary.get("filters", [])) if summary is not None else set()
-    for filter_name in filters:
+def _unwrap_graphene_type(field_type: Any) -> Any:
+    current = field_type
+    while hasattr(current, "of_type"):
+        current = current.of_type
+    return current
+
+
+def _input_fields(input_type: Any | None) -> Mapping[str, Any]:
+    meta = getattr(input_type, "_meta", None)
+    fields = getattr(meta, "fields", None)
+    if isinstance(fields, Mapping):
+        return fields
+    return {}
+
+
+def _nested_filter_input_type(input_type: Any | None, filter_name: str) -> Any | None:
+    field = _input_fields(input_type).get(filter_name)
+    if field is None:
+        return None
+    return _unwrap_graphene_type(getattr(field, "type", None))
+
+
+def _validate_filter_mapping(
+    filters: Mapping[str, Any],
+    *,
+    indexed_filters: set[str],
+    input_type: Any | None,
+) -> None:
+    for filter_name, value in filters.items():
         if (
             not isinstance(filter_name, str)
             or _GRAPHQL_IDENTIFIER_RE.match(filter_name) is None
             or (indexed_filters and filter_name not in indexed_filters)
         ):
             raise UnknownChatQueryFilterError(str(filter_name))
+        if not isinstance(value, Mapping):
+            continue
+        nested_input_type = _nested_filter_input_type(input_type, filter_name)
+        _validate_filter_mapping(
+            value,
+            indexed_filters=set(_input_fields(nested_input_type)),
+            input_type=nested_input_type,
+        )
+
+
+def _validate_chat_query_filters(manager: str, filters: Mapping[str, Any]) -> None:
+    summary = get_manager_schema_summary(manager)
+    indexed_filters = set(summary.get("filters", [])) if summary is not None else set()
+    _validate_filter_mapping(
+        filters,
+        indexed_filters=indexed_filters,
+        input_type=GraphQL.graphql_filter_type_registry.get(manager),
+    )
 
 
 def _get_authenticated_user(context: ChatToolContext | None) -> Any:
