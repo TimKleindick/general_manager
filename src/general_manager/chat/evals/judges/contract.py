@@ -136,6 +136,15 @@ def judge_answer_sense(
         if includes_raw_query_syntax:
             issues.append("Answer includes raw query syntax after a successful query")
 
+    path_contradiction = _answer_contradicts_successful_path(
+        tool_calls,
+        tool_results,
+        answer_text,
+    )
+    checks["no_path_contradiction"] = not path_contradiction
+    if path_contradiction:
+        issues.append("Answer contradicts successful path result")
+
     if expected_values:
         omitted_values = [
             value
@@ -283,6 +292,31 @@ def _has_successful_query_result(
         and "error" not in result
         and isinstance(result.get("data"), list)
         and len(result["data"]) > 0
+        for call, result in zip(tool_calls, tool_results, strict=False)
+    )
+
+
+def _answer_contradicts_successful_path(
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[Any],
+    answer_text: str,
+) -> bool:
+    normalized = answer_text.casefold()
+    denial_markers = (
+        "no path",
+        "don't have a path",
+        "do not have a path",
+        "can't find a path",
+        "cannot find a path",
+        "no relationship",
+        "not connected",
+    )
+    if not any(marker in normalized for marker in denial_markers):
+        return False
+    return any(
+        str(call.get("name", "")) == "find_path"
+        and isinstance(result, list)
+        and len(result) > 0
         for call, result in zip(tool_calls, tool_results, strict=False)
     )
 
