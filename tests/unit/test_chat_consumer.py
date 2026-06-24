@@ -48,6 +48,13 @@ class _ExplodingProvider:
         yield  # pragma: no cover
 
 
+class _TimeoutProvider:
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        raise TimeoutError("provider timed out")  # noqa: TRY003
+        yield  # pragma: no cover
+
+
 class _ToolLoopProvider:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -226,6 +233,36 @@ class ChatConsumerMessageTests(unittest.TestCase):
         consumer.session_key = "existing-key"
         consumer.provider = _ExplodingProvider()
         consumer.channel_name = "chat.public-error"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            assert mock_send_json.await_args_list[-1].args[0] == {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
+
+        asyncio.run(run())
+
+    def test_receive_json_timeout_errors_use_generic_public_message(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _TimeoutProvider()
+        consumer.channel_name = "chat.timeout-error"
 
         async def run() -> None:
             with (
