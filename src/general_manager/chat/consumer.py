@@ -113,7 +113,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             for tool in get_tool_definitions()
         ]
 
-    async def _get_persistent_conversation(self) -> ChatConversation | None:
+    async def _get_persistent_conversation(
+        self, *, suppress_errors: bool = True
+    ) -> ChatConversation | None:
         from general_manager.chat.models import ChatConversation
 
         try:
@@ -121,7 +123,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 user=self.scope.get("user"),
                 session_key=getattr(self, "session_key", None),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
+            if not suppress_errors:
+                raise
             return None
 
     async def _load_history(self) -> list[dict[str, str]]:
@@ -196,7 +200,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             self._confirmation_waiter = None
             self._confirmation_timeout_task = None
             self._history_cache = []
-            self.conversation = await self._get_persistent_conversation()
+            self.conversation = await self._get_persistent_conversation(
+                suppress_errors=False
+            )
             await self.accept()
         except Exception as exc:  # noqa: BLE001
             emit_chat_error(
@@ -741,15 +747,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             and self.conversation is not None
             and isinstance(confirmation_id, str)
         ):
-            try:
-                db_pending = await sync_to_async(
-                    ChatPendingConfirmation.active_for_conversation
-                )(
-                    conversation=self.conversation,
-                    confirmation_id=confirmation_id,
-                )
-            except Exception:  # noqa: BLE001
-                db_pending = None
+            db_pending = await sync_to_async(
+                ChatPendingConfirmation.active_for_conversation
+            )(
+                conversation=self.conversation,
+                confirmation_id=confirmation_id,
+            )
             if db_pending is not None:
                 history = await self._load_history()
                 pending = {
