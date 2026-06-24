@@ -33,6 +33,7 @@ from general_manager.chat.evals.runner import (
     EvalResult,
     TurnRecord,
     _score_case,
+    _should_recover_answer_without_successful_query,
     filter_cases,
     is_forbidden_recovery_event,
     list_datasets,
@@ -703,6 +704,60 @@ class ScoringTests(SimpleTestCase):
         assert result.contract_score.strategy_deviations == [
             "Recommended tool call missing: search_managers"
         ]
+
+    def test_answer_without_query_recovery_uses_successful_find_path_result(
+        self,
+    ) -> None:
+        record = TurnRecord(
+            tool_calls=[
+                {
+                    "name": "find_path",
+                    "args": {
+                        "from_manager": "SourceManager",
+                        "to_manager": "TargetManager",
+                    },
+                }
+            ],
+            tool_results=[{"path": ["TargetManager"]}],
+        )
+
+        assert (
+            _should_recover_answer_without_successful_query(
+                "Find records in TargetManager related to SourceManager.",
+                "I found a path, but no records yet.",
+                record,
+            )
+            is True
+        )
+
+    def test_answer_without_query_recovery_ignores_empty_find_path_after_metadata(
+        self,
+    ) -> None:
+        record = TurnRecord(
+            tool_calls=[
+                {"name": "search_managers", "args": {"query": "managers"}},
+                {
+                    "name": "find_path",
+                    "args": {
+                        "from_manager": "SourceManager",
+                        "to_manager": "TargetManager",
+                    },
+                },
+            ],
+            tool_results=[
+                [{"name": "SourceManager"}, {"name": "TargetManager"}],
+                {"path": []},
+            ],
+        )
+
+        assert (
+            _should_recover_answer_without_successful_query(
+                "Find records in TargetManager related to SourceManager.",
+                "I cannot continue from that path result.",
+                record,
+            )
+            is False
+        )
 
     def test_product_contract_pass_is_not_failed_by_legacy_tool_sequence(
         self,

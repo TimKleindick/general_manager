@@ -928,16 +928,15 @@ def _should_recover_answer_without_successful_query(
         return False
     if _has_successful_query(record):
         return False
+    tool_calls = []
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        if call.get("name") == "query" and "error" in _as_dict(result):
+            continue
+        tool_calls.append({**call, "result": result})
     return should_recover_answer_without_query(
         user_text=user_text,
         assistant_text=assistant_text,
-        tool_calls=[
-            call
-            for call, result in zip(
-                record.tool_calls, record.tool_results, strict=False
-            )
-            if call.get("name") != "query" or "error" not in _as_dict(result)
-        ],
+        tool_calls=tool_calls,
     )
 
 
