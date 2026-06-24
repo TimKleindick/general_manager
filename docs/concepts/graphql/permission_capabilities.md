@@ -82,6 +82,8 @@ Name capability fields in stable business language. Prefer `canRename`,
 Capability declarations also carry GraphQL field descriptions. The helper
 functions provide default descriptions, and you can pass `description=` when a
 client needs more precise business language in schema introspection.
+Entries on `Permission.graphql_capabilities` that are not
+`GraphQLPermissionCapability` instances are ignored when the schema is built.
 
 ## Object capabilities
 
@@ -342,6 +344,11 @@ List resolvers warm capability values for the returned page only when the query
 selects `items { capabilities { ... } }`. The batch evaluator may return a
 sequence of booleans in the same order as the input instances, or a mapping from
 instances to booleans.
+
+Batch evaluators fail closed. If the batch callable raises, returns a sequence
+whose length does not match the warmed page, or omits an instance from a mapping
+result, GeneralManager caches `false` for the affected capability values rather
+than falling back to repeated per-object checks.
 
 Capability results are cached for the current GraphQL operation using the
 manager type, object identity, user identity, and capability name. Batched HTTP

@@ -38,7 +38,7 @@ commit. You can run them manually with `pre-commit run --all-files`.
 - Follow type-hinted, readable Python. Prefer simple, explicit code over clever
   one-liners.
 - Run `ruff check` and `ruff format` to keep lint and style consistent.
-- Run `mypy` to maintain type safety.
+- Run `mypy --strict` to maintain type safety.
 - Keep dependencies minimal and document any new third-party package you add.
 - Use docstrings and inline comments sparingly but clearly when the intent is
   not obvious from the code itself.
@@ -69,7 +69,7 @@ impacts users. Screenshots or diagrams should live under `docs/assets/`.
 
 - Changes are rebased on the latest `main` branch.
 - Commits follow the Conventional Commits format (`feat:`, `fix:`, `docs:` …).
-- `python -m pytest`, `ruff check`, and `mypy` all pass locally.
+- `python -m pytest`, `ruff check`, and `mypy --strict` all pass locally.
 - New or updated documentation is included when behavior changes.
 - The PR description explains the problem, the chosen solution, and any
   follow-up work.

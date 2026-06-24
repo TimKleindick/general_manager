@@ -82,7 +82,7 @@ python manage.py test               # Django tests
 # Linting / Formatting
 ruff check .
 ruff format .
-mypy .
+mypy --strict
 
 # Django
 python manage.py migrate

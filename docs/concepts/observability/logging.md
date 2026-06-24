@@ -39,6 +39,15 @@ def charge(customer_id: str, amount: str) -> None:
     )
 ```
 
+`get_logger(None)` uses the package root logger `general_manager` and does not
+set an initial component. `get_logger("cache.dependency_index")` uses logger
+name `general_manager.cache.dependency_index` and sets `component` to
+`cache.dependency_index`. Component strings are stripped of surrounding spaces
+and dots, spaces become underscores, and an already-prefixed value such as
+`general_manager.cache` is treated as a literal suffix
+(`general_manager.general_manager.cache`). Blank component strings raise
+`BlankComponentError`; non-string component values raise `TypeError`.
+
 ## Django settings integration
 
 Configure handlers, formatters, and filters centrally in `settings.py`. The snippet below emits structured JSON logs, forwards `context` payloads, and raises alerts whenever multiple errors occur inside `general_manager` components.
@@ -88,6 +97,15 @@ Place project-specific handlers (e.g. OpenSearch, CloudWatch) inside the same di
 
 - `component`: automatically filled with the dotted suffix (e.g. `permission.base`).
 - `context`: arbitrary mapping merged per log call. Non-mapping values raise `TypeError` to avoid silently dropping data.
+
+The exported constants `COMPONENT_EXTRA_FIELD` and `CONTEXT_EXTRA_FIELD` are the
+stable `LogRecord.extra` keys for formatters and filters. Per-call
+`context={...}` is the preferred way to add structured metadata. You may also
+pass `extra={"context": {...}}`; the merge is shallow and per-call `context`
+wins on key conflicts. The caller-provided `extra` mapping is updated in place
+with the merged context, while the adapter's own `extra` mapping is not mutated.
+`extra` must be a mutable mapping, and `extra["context"]` must be a mapping when
+present.
 
 Couple the adapter with existing middleware, such as [`django-request-id`](https://pypi.org/project/django-request-id/) or `django-structlog`, so request or job identifiers are attached to every log that GeneralManager emits. Downstream observability pipelines can then slice by `component`, join logs with traces (OpenTelemetry), and power alerts (e.g. “≥5 `ERROR` per minute from `general_manager.cache.dependency_index`”).
 

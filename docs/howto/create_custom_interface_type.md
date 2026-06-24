@@ -8,17 +8,37 @@ This guide walks through building a new interface type that composes existing ca
 - Use `OrmInterfaceBase` when you need the built-in Django ORM plumbing.
 
 ```python
+from typing import ClassVar
+
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.manager.input import Input
 
 class ExternalReportInterface(InterfaceBase):
     _interface_type = "external_report"
-    input_fields = {"id": Input(int), "year": Input(int)}
+    input_fields: ClassVar[dict[str, Input[type[int]]]] = {
+        "id": Input(int),
+        "year": Input(int),
+    }
 ```
+
+`OrmInterfaceBase` already declares `{"id": Input(int)}` and loads an ORM row for
+that primary key. Override `input_fields` only when your custom ORM interface
+needs additional constructor inputs. Preserve the `"id"` field unless you also
+override initialization and row loading, and keep the annotation precise so
+strict type checking can validate the declared `Input` types.
 
 ## 2. Declare capabilities
 
-Set `configured_capabilities` to bundles or explicit `InterfaceCapabilityConfig` entries.
+Set `configured_capabilities` to bundles or explicit `InterfaceCapabilityConfig`
+entries. `InterfaceCapabilityConfig(CapabilityClass, options=None)` constructs
+the capability with no keyword arguments; a supplied mapping is copied to a plain
+`dict` when the capability is instantiated and expanded as keyword arguments.
+`CapabilitySet(label, entries)` stores concrete config entries as a tuple.
+GeneralManager expands bundles one level in order and does not deduplicate them,
+so a later handler with the same capability name replaces an earlier one when the
+interface binds handlers. The expansion helpers do not runtime-validate invalid
+entries if static typing is bypassed; interface binding is the validation
+boundary.
 
 ```python
 from general_manager.interface.capabilities.configuration import InterfaceCapabilityConfig

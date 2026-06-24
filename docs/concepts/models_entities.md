@@ -31,6 +31,21 @@ All collection-returning APIs produce a `Bucket`. Buckets behave like Python ite
 - Slice (`bucket[0:10]`) or iterate lazily.
 - Merge buckets with the union operator (`bucket_a | bucket_b`).
 
+For ORM-backed managers, these calls return a `DatabaseBucket`. Builder methods
+keep queryset evaluation lazy, while terminal methods such as `count()`,
+`first()`, `last()`, `len(bucket)`, scalar indexing, iteration, and `manager in
+bucket` evaluate the effective query and record cache dependencies. Use
+filterable/sortable `@graph_ql_property` fields the same way as model fields;
+GeneralManager evaluates properties without query annotations in Python and
+preserves manager wrapping in the returned bucket.
+
+Database buckets may reuse run-scoped row or primary-key snapshots for safe
+querysets, but skip reuse for risky queryset shapes such as distinct, combined,
+prefetched, deferred, select-for-update, invalid, or oversized results. Cached
+`get()` shortcuts apply only to single-key `pk` or `id` lookups. Bucket unions
+require matching manager classes and `search_date` values, and `none()` keeps the
+same bucket context while returning no rows.
+
 ### Bucket variants
 
 `Bucket` is the common collection contract. Concrete bucket types preserve the source and evaluation semantics of the managers they contain:
@@ -44,7 +59,35 @@ Most application code should depend on the shared bucket behavior returned by ma
 
 ### Grouped data
 
-Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped managers expose the grouping key and aggregate the remaining attributes according to their type (e.g., summing numbers, merging lists). See the example in [Cookbook: Volume curve](../examples/project_volume_curve.md).
+Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped
+managers expose the grouping key and aggregate the remaining attributes
+according to their type, such as summing numbers, merging lists, or combining
+measurements. Group-by keys must be string attribute names exposed by the
+manager interface. Non-string keys raise `InvalidGroupByKeyTypeError`, and
+unknown keys raise `UnknownGroupByKeyError`.
+
+A `GroupBucket` is materialized from the source bucket at construction time.
+Each distinct tuple of group-by values becomes one group, emitted in
+`str(group_by_value)` order. Manager-valued group keys compare by manager class
+plus sorted identification items. Mapping group values compare by recursively
+frozen key/value pairs sorted by `repr`; lists and tuples compare by frozen
+element order, sets compare as frozensets, and other values use their raw
+hashable value. Bucket equality ignores group order and compares the set of
+groups plus manager class and grouping-key tuple. Pickle reconstruction stores
+`(GroupBucket, (manager_class, group_by_keys, basis_data))` and rebuilds groups
+from the basis bucket. `filter()` and `exclude()` run on the underlying source
+bucket and then rebuild the grouped view. `get()` returns the first matching
+group and raises `GroupItemNotFoundError` only when no group matches; use stricter
+checks in application code if multiple matching groups would be ambiguous.
+
+Indexing a `GroupBucket` with an integer returns one group. Slicing returns a new
+`GroupBucket` backed by the union of the selected groups' source buckets; slicing
+to no groups raises `EmptyGroupBucketSliceError`. `sort()` orders groups in
+memory by group attributes and can propagate normal `AttributeError` or
+`TypeError` from missing or incomparable values. Combining grouped buckets with
+`|` requires the same bucket type, manager class, and group-by key tuple; the
+union is rebuilt from the combined source buckets. See the example in
+[Cookbook: Volume curve](../examples/project_volume_curve.md).
 
 ## Identity and equality
 
@@ -54,6 +97,21 @@ For ORM foreign keys, GeneralManager exposes raw ID helpers such as
 `project.customer_id` alongside relation accessors such as `project.customer`.
 Use the raw ID helper when you only need the stored identifier and want to avoid
 resolving the related manager.
+
+Manager-valued lookups are accepted by the public query helpers. For example,
+`Task.filter(project=project)` and `Task.exclude(project__in=[archived_project])`
+forward single-id related managers as their scalar `identification["id"]` value
+before the interface handles the query; composite identifiers are forwarded as
+copied identification mappings. The scalar path applies only to an
+identification mapping shaped exactly as `{"id": value}`; empty mappings,
+single-key non-`"id"` mappings, and multi-key mappings are copied as mappings.
+This normalization is shallow and only covers top-level lookup values plus
+direct list/tuple items; nested containers and non-manager values are left
+unchanged, and interface or bucket errors propagate.
+`create()` returns a new manager for the
+identification returned by the interface; `update()` refreshes and returns the
+same manager instance; `delete()` invalidates the manager so later field reads
+raise `InvalidManagerStateError`.
 
 ## Pattern recommendations
 

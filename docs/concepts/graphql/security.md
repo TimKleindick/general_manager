@@ -4,7 +4,10 @@ Security in the GraphQL layer relies on permission checks and robust error handl
 
 ## Permission enforcement
 
-- Every query obtains read filters from the manager's `Permission` class via `get_read_permission_filter()`.
+- Every query obtains read filters from the manager's `Permission` class via `get_read_permission_filter()`. Managers without a `Permission` class receive no GraphQL read prefilter and no per-object read gate from this helper.
+- Permission classes can return a full `ReadPermissionPlan` from the zero-argument permission instance method `get_read_permission_plan()`. `ReadPermissionPlan` is an internal adapter with `filters`, `requires_instance_check`, and `instance_check_reasons`; it is used by generated resolvers, not intended as a stable user import. If `get_read_permission_plan()` is absent or does not return that adapter, GraphQL falls back to the zero-argument legacy permission instance method `get_permission_filter()` and runs per-object read checks after the prefilter.
+- The helper reads `Permission` from the manager class with normal Python attribute lookup and calls it positionally as `Permission(manager_class, info.context.user)`. The later row gate calls the same permission class as `Permission(instance, info.context.user).can_read_instance()`.
+- Legacy permission filter entries may contain optional `filter` and `exclude` mappings. Missing keys are treated as empty mappings by resolvers. Malformed entries are not validated by the helper and fail later when applied to the bucket or search backend. If the fallback `get_permission_filter()` method is missing, the resulting `AttributeError` propagates. The legacy fallback plan uses `requires_instance_check=True` and `instance_check_reasons=("no_prefilter_backend",)`.
 - Mutations invoke `check_create_permission`, `check_update_permission`, or `check_delete_permission` before executing. Permission errors translate into `success: false` responses with descriptive messages.
 - Attribute-level restrictions hide protected fields even when the user can access the object.
 - Optional GraphQL permission capabilities expose advisory boolean hints for clients. They do not replace read or mutation permission checks.
@@ -81,7 +84,20 @@ Set `AUTHENTICATION_BACKENDS` and middleware according to your project. The Grap
 
 ## Error propagation
 
-Validation errors from interfaces and rules bubble up as GraphQL `GraphQLError` instances. Use try/except blocks in custom resolvers to add more context while preserving the original message for clients.
+Explicit `GraphQLError` instances keep their existing object identity, message,
+and full extensions mapping. Converted errors use an extensions mapping with a
+single `code` key.
+`PermissionError` maps to `PERMISSION_DENIED`. Django `ValidationError` and
+plain `ValueError` map to `BAD_USER_INPUT`. `TypeError`, `AttributeError`, and
+`RuntimeError` are treated as suspicious handled errors and map to
+`INTERNAL_SERVER_ERROR`. Other handled manager exceptions, including
+`LookupError`, currently also map to `INTERNAL_SERVER_ERROR`. The original
+exception text is exposed as the GraphQL error message for compatibility.
+Logging is diagnostic behavior of the internal `api.graphql` logger and should
+not be treated as a public API contract. These helper details document current
+generated-resolver compatibility behavior, not stable direct-import guarantees.
+Use try/except blocks in custom resolvers to add more context while preserving
+the original message for clients.
 
 ## Hardening tips
 

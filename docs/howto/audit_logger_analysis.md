@@ -28,7 +28,7 @@ GENERAL_MANAGER = {
 }
 ```
 
-`configure_audit_logger_from_settings()` resolves those settings during app startup (see `general_manager.apps:PermissionAuditReady`).
+`configure_audit_logger_from_settings()` resolves those settings during app startup. `GENERAL_MANAGER["AUDIT_LOGGER"]` takes precedence over a top-level `AUDIT_LOGGER`; if neither is present, logging is disabled by installing the no-op logger.
 
 ## 2. Trigger and inspect events
 
@@ -42,8 +42,10 @@ Each call to `BasePermission.check_*` or mutation permissions emits a `Permissio
 | `granted` | `True` when the check passed. |
 | `bypassed` | `True` when the request user was a superuser. |
 | `manager` | Name of the manager class, if known. |
-| `user_id` | Primary key of the user (falls back to `repr(user)` when missing). |
+| `user_id` | Primary key of the user when available. |
+| `user_repr` | `repr(user)` when no primary key is available. |
 | `permissions` | All expressions evaluated, including inherited rules from `__based_on__`. |
+| `metadata` | JSON-compatible custom context. |
 
 Load events into your preferred analysis tool:
 
@@ -86,6 +88,6 @@ denied = logger.model.objects.filter(granted=False).order_by("-created_at")
 
 - In unit tests, inject a stub logger implementing `record()` to capture events.
 - Assert that permission checks produce both success and failure entries.
-- Call `close()` or `flush()` on buffered loggers (`FileAuditLogger`, `DatabaseAuditLogger`) in teardown hooks to ensure the worker thread finishes processing events.
+- Call `close()` or `flush()` on buffered loggers (`FileAuditLogger`, and `DatabaseAuditLogger` on non-SQLite databases) in teardown hooks to ensure the worker thread finishes processing events. After a logger is closed, later `record()` calls are ignored.
 
 With logging enabled and observed, you can prove your permission model behaves as intended and quickly diagnose unexpected access results.

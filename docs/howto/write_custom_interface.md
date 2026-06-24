@@ -48,9 +48,24 @@ Call `DependencyTracker.track()` when you fetch data so cache invalidation works
 from general_manager.cache.cache_tracker import DependencyTracker
 
     def fetch_report(self) -> dict[str, object]:
-        DependencyTracker.track("ExternalReport", "fetch", str(self.identification))
+        DependencyTracker.track(
+            "ExternalReport",
+            "request_query",
+            str(self.identification),
+        )
         return external_api.get_report(...)
 ```
+
+Supported operations are `filter`, `exclude`, `identification`, `request_query`,
+and `all`; any other operation raises `ValueError`. `manager_name`, `operation`,
+and `identifier` must be strings, and malformed values raise `TypeError`.
+Concrete invalid-input exception subclasses and messages are internal details.
+Calls outside an active
+`with DependencyTracker()` context are ignored after validation. Nested contexts
+record dependencies in both the nested collector and each enclosing collector,
+and duplicate dependency tuples collapse because collectors are sets. Returned
+collector sets remain usable after the context exits. The tracker is
+thread-local, not async task-local.
 
 ## Step 4: Wire up permissions
 

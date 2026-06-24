@@ -48,6 +48,11 @@ GENERAL_MANAGER = {
 When `GENERAL_MANAGER["DEFAULT_PERMISSIONS"]` is not configured, these same
 values are used as the built-in fallback.
 
+Default permission values may be configured with uppercase keys such as `READ`
+or lowercase keys such as `read`; uppercase wins when both are present. The
+configured value is copied with `list(...)`, so use a list or another iterable of
+permission-expression strings.
+
 This affects three places:
 
 - subclasses that omit `__read__`, `__create__`, `__update__`, or `__delete__`
@@ -58,7 +63,13 @@ For `__based_on__` subclasses, implicit CRUD defaults are still initialised as
 empty lists at class creation time so delegation remains the primary source of
 permissions. If the delegated object is `None` at runtime, the instance falls
 back to the configured defaults above unless the subclass explicitly defined its
-own CRUD list for that action.
+own CRUD list for that action. If the configured delegated attribute is missing
+for an instance-level check, `InvalidBasedOnConfigurationError` is raised.
+Class-level checks cannot inspect a concrete delegated object, so missing
+delegation there keeps the read plan fail-closed by requiring a row-level
+instance check. If the delegated attribute resolves to a value that is neither a
+`GeneralManager` instance nor a manager class after any field-type dictionary/id
+coercion, `InvalidBasedOnTypeError` is raised.
 
 ## Attribute-level rules
 
@@ -99,6 +110,14 @@ When `__based_on__` is set, delegated permissions always remain an outer gate in
 
 `AdditiveManagerPermission.get_permission_filter()` and `OverrideManagerPermission.get_permission_filter()` convert read expressions into Django queryset filters. Buckets use those filters as a prefilter, then run a final per-instance read check before a row contributes to list membership or counts. This keeps list and search authorization fail-closed even when a read rule cannot be represented as a queryset constraint.
 
+`get_read_permission_plan()` combines delegated `__based_on__` filters and local
+read filters as alternative constraint groups. Delegated filter and exclude keys
+are prefixed with `<based_on>__` before they are merged with local constraints.
+The plan requires a row-level instance check when a read rule is unfilterable,
+when delegated permissions are evaluated in class context without a concrete
+object, or when delegated/local filter keys conflict. Reason labels are sorted
+for deterministic diagnostics.
+
 The read path also plugs into the project's existing observability pattern:
 
 - GraphQL list and search paths emit one aggregate structured log event per manager/query path, with the structured payload attached at the log call site (for example `logger.info(..., context=...)`).
@@ -134,6 +153,25 @@ def in_department(_instance, user, config):
 ```
 
 Registered permissions are immediately available to every process that imports the module, so each worker should load the module (for example in `AppConfig.ready`). Attempting to register the same name twice raises `ValueError` to prevent accidental overrides.
+
+The duplicate check runs when the returned decorator is applied, because that is
+the point where the function is inserted into the global `permission_functions`
+registry. Each registry entry stores the permission method and a callable
+`permission_filter`. If you omit `permission_filter`, the stored callable
+returns `None`.
+
+Permission filters can return `{"filter": {...}}`, `{"exclude": {...}}`, both
+keys, or `None`. The GraphQL/list path applies Django constraints as
+`filter(...).exclude(...)`, combines those constraints with client filters, and
+still evaluates a final per-instance read check for rules that could not be
+fully represented as query filters. Search backends receive the `filter` side as
+the backend prefilter and rely on the final instance gate for `exclude` checks.
+
+Permission expressions use simple string splitting: `&` joins sub-permissions and
+`:` separates the registry name from config values. There is no escape syntax,
+and empty config segments are passed through. The registry itself is a normal
+mutable dictionary, but production code should use `register_permission()` so
+duplicate-name protection remains in place.
 
 ## Superuser bypass
 

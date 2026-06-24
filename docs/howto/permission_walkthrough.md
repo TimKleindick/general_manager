@@ -72,6 +72,27 @@ def can_access_customer(instance, user, config):
 
 Add `"belongsToCustomer:customer"` to `__read__` to produce filters automatically when the GraphQL layer runs the resolver. Use `python -m pytest` with fixtures that hit `get_permission_filter()` and list/search responses so both the prefilter and the final instance gate match expectations.
 
+`permission_filter` may return only a `filter` mapping, only an `exclude`
+mapping, both keys, or `None`. Return `None` when a rule depends on runtime
+state that cannot be expressed as queryset kwargs. GeneralManager still stores a
+callable filter in `permission_functions` for permissions registered without a
+custom filter; that default callable returns `None`.
+
+Permission strings are split on `&` and `:` without escaping. Keep registered
+names colon-free for ordinary rules, and expect empty config segments to be
+passed through unchanged. An empty string attempts to resolve an empty
+permission name and raises `PermissionNotFoundError`. If a custom permission
+method or filter raises, that exception propagates; catch and convert domain
+errors inside the callable when a denial should be represented as `False` or
+`None`.
+
+For an AND expression such as
+`"isAuthenticated&belongsToCustomer:customer"`, GeneralManager evaluates
+fragments from left to right and stops at the first `False` result. Unknown
+permission names raise `PermissionNotFoundError` only when the evaluator reaches
+that fragment, so `"customDeny&missingPermission"` returns `False` if
+`customDeny` denies access before the missing name is inspected.
+
 On production paths, these list/search checks also emit aggregate structured logs through the standard `get_logger(..., context=...)` pattern. That gives you candidate/authorized/denied counts plus reason labels such as unfilterable read rules or delegated `__based_on__` fallbacks without logging one event per row.
 
 ## 3. Chain permissions with `__based_on__`

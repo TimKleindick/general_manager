@@ -1,6 +1,8 @@
 # Schema Auto-Generation
 
 `general_manager.api.graphql.GraphQL` inspects manager interfaces and creates matching Graphene types and mutations.
+Classes without an `Interface` are ignored by interface and mutation
+registration.
 
 ## Type mapping
 
@@ -10,14 +12,48 @@ For each manager class, GeneralManager:
 2. Creates resolvers that read values from the underlying manager or bucket.
 3. Adds fields for every `@graph_ql_property` method. Union types and optional hints are converted into GraphQL-friendly types.
 4. Registers measurement scalars (`MeasurementScalar`) and object wrappers so units stay intact.
+5. Adds a `capabilities` field only when the manager exposes GraphQL permission capability declarations.
+
+Single-valued manager relations are exposed as object fields. Relation fields
+whose Python-side name ends with `_list` are exposed as paginated list fields
+with filtering, grouping, sorting, and pagination arguments.
 
 ## Mutations
 
-Create, update, and delete mutations are added automatically when the interface overrides the base method. Each mutation returns:
+Create, update, and delete mutations are added automatically when the interface
+overrides the base method or advertises the matching capability from
+`Interface.get_capabilities()`. If a mutation factory returns no class for a
+supported operation, that operation is skipped and later supported operations are
+still considered. Each mutation returns:
 
 - `success`: boolean indicating whether the operation completed.
 - `errors`: list of validation or permission errors when present.
 - A field with the manager name containing the affected object.
+
+Generated create and update mutations expose writable, non-derived interface
+attributes and skip raw direct-relation ID aliases when the canonical relation
+field is already present. Raw many-relation ID-list aliases such as
+`member_id_list` are skipped when the canonical `member_list` relation exists.
+Create mutations omit manager constructor input fields such as `id`; update and
+delete mutations always require `id` so the resolver can locate the existing
+manager instance. Update mutations make every generated write field optional,
+filter out omitted Graphene `NOT_PROVIDED` values, and forward an explicit
+history comment as the manager `history_comment`. With Graphene's default
+camel-casing, clients send `historyComment`; Python-side tests and helpers use
+`history_comment`. Delete mutations also accept optional history-comment metadata
+and forward it to `delete()`. Explicit GraphQL `null` is forwarded as
+`history_comment=None`; when the history comment argument is omitted, the
+resolver does not send a `history_comment` keyword at all.
+
+For relation inputs, the GraphQL schema exposes the canonical manager-facing
+field names and normalizes them before calling the ORM mutation layer. A direct
+manager relation such as `owner: User` is exposed as `owner` in the mutation and
+is forwarded as `owner_id`. If metadata also contains `owner_id`, that raw alias
+is not exposed separately. A many-valued relation such as `member_list:
+list[User]` is represented by the Python argument key `member_list`, exposed to
+GraphQL clients as `memberList` with Graphene's default camel-casing, and
+forwarded as `member_id_list`. If metadata also contains `member_id_list`, that
+raw alias is not exposed separately.
 
 Custom mutations use the `@graph_ql_mutation` decorator from `general_manager.api.mutation`. The decorator analyses the function signature to generate GraphQL input arguments and return types.
 

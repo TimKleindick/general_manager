@@ -4,7 +4,13 @@ Factories respect the same validation pipeline as your application code. Underst
 
 ## Interface validation
 
-`InterfaceBase` calls `parse_input_fields_to_identification()` to convert raw inputs into validated types. During `create` and `update`, interfaces execute `full_clean()` on the underlying Django model, invoke rules declared in `Meta.rules`, and run custom `clean()` methods.
+`InterfaceBase` calls `parse_input_fields_to_identification()` to convert raw
+inputs into validated types. During `create` and `update`, interfaces execute
+`full_clean()` on the underlying Django model, including Django field,
+uniqueness, and constraint checks plus rules declared in `Meta.rules`. A rule
+adds errors only when it returns `False`; `True` and `None` are treated as
+passing results. Rule messages are merged with Django validation messages for
+the same field.
 
 ## Factory interaction
 

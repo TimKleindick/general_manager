@@ -28,7 +28,7 @@ def ready(self) -> None:
 
 ## Buffered logger with batching
 
-Extend `_BufferedAuditLogger` to inherit queueing and background worker support. Only `_handle_batch()` needs to be implemented.
+For a fully public integration, implement `AuditLogger.record()` directly and manage your own queue. General Manager also ships an internal `_BufferedAuditLogger` helper that the built-in loggers use; subclass it only when you are comfortable following internal API changes. Only `_handle_batch()` needs to be implemented.
 
 ```python
 import json
@@ -60,6 +60,7 @@ class KafkaAuditLogger(_BufferedAuditLogger):
 
 - The worker thread flushes automatically on application exit.
 - Call `close()` (or `flush()`) during test teardown to ensure all events are processed.
+- After `close()` or `flush()`, later `record()` calls are ignored.
 
 ## Wiring the Kafka producer
 
@@ -105,7 +106,7 @@ GENERAL_MANAGER = {
 }
 ```
 
-`configure_audit_logger_from_settings()` accepts dotted paths, callables returning loggers, or direct instances.
+`configure_audit_logger_from_settings()` accepts dotted paths, callables returning loggers, direct instances, or a mapping with `class` plus `options`. `GENERAL_MANAGER["AUDIT_LOGGER"]` takes precedence over the top-level `AUDIT_LOGGER` setting.
 
 ## Testing the logger
 
