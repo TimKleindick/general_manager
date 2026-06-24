@@ -12,6 +12,7 @@ from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_POST
 from django.utils import timezone
 
+from general_manager.chat.errors import public_chat_error
 from general_manager.chat.models import (
     ChatConversation,
     ChatPendingConfirmation,
@@ -435,7 +436,7 @@ async def _execute_message_request(
             error=exc,
             context={"transport": transport, "path": request.path},
         )
-        events = [{"type": "error", "message": str(exc), "code": "chat_error"}]
+        events = [public_chat_error(exc).as_event()]
     return conversation, events
 
 

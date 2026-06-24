@@ -41,6 +41,13 @@ class _Provider:
         yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=2))
 
 
+class _ExplodingProvider:
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        raise RuntimeError("secret provider stack detail")  # noqa: TRY003
+        yield  # pragma: no cover
+
+
 class _ToolLoopProvider:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -207,6 +214,36 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 assert provider_messages[0].role == "system"
                 assert provider_messages[0].content == "system prompt text"
                 assert provider_messages[-1].content == "hello"
+
+        asyncio.run(run())
+
+    def test_receive_json_errors_use_public_message(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ExplodingProvider()
+        consumer.channel_name = "chat.public-error"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            assert mock_send_json.await_args_list[-1].args[0] == {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
 
         asyncio.run(run())
 

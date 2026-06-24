@@ -12,6 +12,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer  # type: ignor
 from django.utils import timezone
 
 from general_manager.chat.audit import emit_chat_audit_event
+from general_manager.chat.errors import public_chat_error
 from general_manager.chat.grounding import (
     build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
@@ -287,9 +288,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                     error=exc,
                     context={"transport": "websocket", "session_key": self.session_key},
                 )
-                await self.send_json(
-                    {"type": "error", "message": str(exc), "code": "chat_error"}
-                )
+                await self.send_json(public_chat_error(exc).as_event())
         finally:
             if self._active_turn is not None and not self._active_turn.done():
                 self._active_turn.set_result(None)

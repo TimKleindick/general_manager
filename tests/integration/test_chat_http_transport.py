@@ -60,6 +60,19 @@ class HttpIntegrationProvider:
         return _stream()
 
 
+class ExplodingHttpProvider:
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+
+        async def _stream():
+            raise RuntimeError(  # noqa: TRY003
+                "database password leaked in stack context"
+            )
+            yield  # pragma: no cover
+
+        return _stream()
+
+
 class HttpMissingToolRecoveryProvider:
     calls: ClassVar[list[object]] = []
 
@@ -142,6 +155,26 @@ class ChatHttpTransportTests(TestCase):
         payload = response.json()
         assert payload["answer"] == "hello back"
         assert payload["events"][-1]["type"] == "done"
+
+    def test_http_errors_use_public_message(self) -> None:
+        with patch(
+            "general_manager.chat.views.import_provider",
+            return_value=ExplodingHttpProvider,
+        ):
+            response = self.client.post(
+                "/chat/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+
+        payload = response.json()
+        assert payload["events"] == [
+            {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
+        ]
 
     def test_http_post_rejects_confirmed_mutations(self) -> None:
         with patch(
