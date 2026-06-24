@@ -321,6 +321,27 @@ class ChatQueryToolTests(SimpleTestCase):
 
         assert schema.calls == []
 
+    def test_query_rejects_scalar_list_filter_mapping_before_execute(self) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            name__in = graphene.List(graphene.String)
+
+        schema = _RecordingSchema(_Result(data={}))
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="does not accept nested filters"):
+            query(
+                manager="PartManager",
+                filters={"name__in": [{"bad } injected {": "x"}]},
+                fields=["name"],
+            )
+
+        assert schema.calls == []
+
     def test_query_rejects_malformed_nested_filter_before_execute(self) -> None:
         class MaterialFilter(graphene.InputObjectType):
             name = graphene.String()
@@ -390,6 +411,32 @@ class ChatQueryToolTests(SimpleTestCase):
             query(
                 manager="PartManager",
                 filters={"material": {"name": {"unknown": "x"}}},
+                fields=["name"],
+            )
+
+        assert schema.calls == []
+
+    def test_query_rejects_nested_scalar_list_filter_mapping_before_execute(
+        self,
+    ) -> None:
+        class MaterialFilter(graphene.InputObjectType):
+            name__in = graphene.List(graphene.String)
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            material = graphene.InputField(MaterialFilter)
+
+        schema = _RecordingSchema(_Result(data={}))
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="does not accept nested filters"):
+            query(
+                manager="PartManager",
+                filters={"material": {"name__in": [{"bad } injected {": "x"}]}},
                 fields=["name"],
             )
 

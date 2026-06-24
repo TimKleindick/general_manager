@@ -400,6 +400,45 @@ def _nested_filter_input_type(input_type: Any | None, filter_name: str) -> Any |
     return _unwrap_graphene_type(getattr(field, "type", None))
 
 
+def _is_non_string_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    )
+
+
+def _contains_mapping(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return True
+    if _is_non_string_sequence(value):
+        return any(_contains_mapping(item) for item in value)
+    return False
+
+
+def _validate_nested_filter_value(
+    value: Any,
+    *,
+    indexed_filters: set[str],
+    input_type: Any | None,
+    filter_path: tuple[str, ...],
+) -> None:
+    if isinstance(value, Mapping):
+        _validate_filter_mapping(
+            value,
+            indexed_filters=indexed_filters,
+            input_type=input_type,
+            filter_path=filter_path,
+        )
+        return
+    if _is_non_string_sequence(value):
+        for item in value:
+            _validate_nested_filter_value(
+                item,
+                indexed_filters=indexed_filters,
+                input_type=input_type,
+                filter_path=filter_path,
+            )
+
+
 def _resolve_indexed_filter_name(
     filter_name: str, indexed_filters: set[str]
 ) -> str | None:
@@ -432,19 +471,18 @@ def _validate_filter_mapping(
             or indexed_filter_name is None
         ):
             raise UnknownChatQueryFilterError(str(filter_name))
-        if not isinstance(value, Mapping):
-            continue
         nested_input_type = _nested_filter_input_type(input_type, indexed_filter_name)
-        if not _is_nested_filter_input_type(nested_input_type):
-            raise InvalidChatQueryFilterValueError(
-                ".".join((*filter_path, filter_name))
+        current_filter_path = (*filter_path, filter_name)
+        if _is_nested_filter_input_type(nested_input_type):
+            _validate_nested_filter_value(
+                value,
+                indexed_filters=set(_input_fields(nested_input_type)),
+                input_type=nested_input_type,
+                filter_path=current_filter_path,
             )
-        _validate_filter_mapping(
-            value,
-            indexed_filters=set(_input_fields(nested_input_type)),
-            input_type=nested_input_type,
-            filter_path=(*filter_path, filter_name),
-        )
+            continue
+        if _contains_mapping(value):
+            raise InvalidChatQueryFilterValueError(".".join(current_filter_path))
 
 
 def _validate_chat_query_filters(manager: str, filters: Mapping[str, Any]) -> None:
