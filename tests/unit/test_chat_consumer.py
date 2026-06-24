@@ -284,6 +284,48 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_receive_json_setup_errors_use_public_message_and_emit_signal(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.setup-error"
+        original_error = RuntimeError("secret setup detail")
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    side_effect=original_error,
+                ),
+                patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            error_event = mock_send_json.await_args_list[-1].args[0]
+            assert error_event == {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
+            assert "secret setup detail" not in str(error_event)
+            chat_error.assert_called_once()
+            assert chat_error.call_args.kwargs["error"] is original_error
+            assert chat_error.call_args.kwargs["context"] == {
+                "transport": "websocket",
+                "session_key": "existing-key",
+            }
+
+        asyncio.run(run())
+
     def test_receive_json_rejects_concurrent_messages(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {

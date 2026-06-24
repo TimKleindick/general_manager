@@ -215,7 +215,7 @@ class ChatSignalEmissionTests(unittest.TestCase):
                 await consumer.receive_json({"type": "message", "text": "hello"})
                 assert mock_send_json.await_args_list[-1].args[0] == {
                     "type": "error",
-                    "message": "provider timeout",
+                    "message": "Chat request failed.",
                     "code": "chat_error",
                 }
 

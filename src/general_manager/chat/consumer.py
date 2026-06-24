@@ -295,15 +295,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 message=text,
                 conversation_id=getattr(self.conversation, "pk", None),
             )
-            try:
-                await self._stream_provider_turn(messages, history, tool_retries=0)
-            except Exception as exc:  # noqa: BLE001
-                emit_chat_error(
-                    user=self.scope.get("user"),
-                    error=exc,
-                    context={"transport": "websocket", "session_key": self.session_key},
-                )
-                await self.send_json(public_chat_error(exc).as_event())
+            await self._stream_provider_turn(messages, history, tool_retries=0)
+        except Exception as exc:  # noqa: BLE001
+            emit_chat_error(
+                user=self.scope.get("user"),
+                error=exc,
+                context={"transport": "websocket", "session_key": self.session_key},
+            )
+            await self.send_json(public_chat_error(exc).as_event())
         finally:
             if self._active_turn is not None and not self._active_turn.done():
                 self._active_turn.set_result(None)
@@ -458,21 +457,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 "args": event.args,
             }
         )
-        try:
-            result = execute_chat_tool(
-                event.name, event.args, ScopeChatContext.from_scope(self.scope)
-            )
-        except Exception as exc:
-            emit_chat_error(
-                user=self.scope.get("user"),
-                error=exc,
-                context={
-                    "transport": "websocket",
-                    "tool_name": event.name,
-                    "args": event.args,
-                },
-            )
-            raise
+        result = execute_chat_tool(
+            event.name, event.args, ScopeChatContext.from_scope(self.scope)
+        )
         emit_chat_tool_called(
             user=self.scope.get("user"),
             tool_name=event.name,

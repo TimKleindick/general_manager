@@ -235,6 +235,69 @@ class ChatHttpTransportTests(TestCase):
             "path": "/chat/",
         }
 
+    def test_permission_exceptions_return_generic_error_events(self) -> None:
+        self.client.raise_request_exception = False
+        permission_errors = [
+            RuntimeError("secret permission detail"),
+            RuntimeError("secret permission detail"),
+            RuntimeError("secret permission detail"),
+        ]
+        remaining_errors = list(permission_errors)
+
+        def _raise_permission(*_args: object, **_kwargs: object) -> bool:
+            raise remaining_errors.pop(0)
+
+        with (
+            patch(
+                "general_manager.chat.views.get_chat_permission",
+                return_value=_raise_permission,
+            ),
+            patch("general_manager.chat.views.emit_chat_error") as chat_error,
+        ):
+            http_response = self.client.post(
+                "/chat/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+            sse_response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+            confirm_response = self.client.post(
+                "/chat/confirm/",
+                data=json.dumps({"confirmation_id": "tool-1", "confirmed": True}),
+                content_type="application/json",
+            )
+
+        assert http_response.status_code == 200
+        assert http_response.json()["events"] == [GENERIC_CHAT_ERROR_EVENT]
+        assert "secret permission detail" not in http_response.content.decode()
+
+        assert sse_response.status_code == 200
+        sse_body = b"".join(sse_response.streaming_content).decode()
+        assert sse_body == f"data: {json.dumps(GENERIC_CHAT_ERROR_EVENT)}\n\n"
+        assert "secret permission detail" not in sse_body
+
+        assert confirm_response.status_code == 200
+        assert confirm_response.json()["events"] == [GENERIC_CHAT_ERROR_EVENT]
+        assert "secret permission detail" not in confirm_response.content.decode()
+
+        expected_contexts = [
+            {"transport": "http", "path": "/chat/"},
+            {"transport": "sse", "path": "/chat/stream/"},
+            {"transport": "http_confirm", "path": "/chat/confirm/"},
+        ]
+        assert chat_error.call_count == 3
+        for call_args, expected_error, expected_context in zip(
+            chat_error.call_args_list,
+            permission_errors,
+            expected_contexts,
+            strict=True,
+        ):
+            assert call_args.kwargs["error"] is expected_error
+            assert call_args.kwargs["context"] == expected_context
+
     def test_http_missing_text_preserves_bad_message_event(self) -> None:
         response = self.client.post(
             "/chat/",
