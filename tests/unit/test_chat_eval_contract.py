@@ -162,15 +162,43 @@ def test_contract_rates_and_fails_deferred_answer_after_successful_query() -> No
     assert score.passed is False
     assert score.answer_sense == AnswerSenseScore(
         passed=False,
-        score=2 / 3,
+        score=3 / 4,
         checks={
             "no_contradiction": True,
             "no_unnecessary_deferral": False,
             "no_raw_query_syntax": True,
+            "no_path_contradiction": True,
         },
         issues=["Answer defers after a successful query"],
     )
     assert score.violations == ["Answer defers after a successful query"]
+
+
+def test_answer_sense_fails_when_answer_denies_successful_path_result() -> None:
+    score = judge_product_contract(
+        {
+            "category": "relation_traversal",
+            "hard": {
+                "required_tool_calls": [{"name": "find_path"}],
+                "answer_contains": ["SyntheticManager08"],
+            },
+        },
+        tool_calls=[
+            {
+                "name": "find_path",
+                "args": {
+                    "from_manager": "SyntheticManager01",
+                    "to_manager": "SyntheticManager08",
+                },
+            }
+        ],
+        tool_results=[["next_item", "next_item", "next_item"]],
+        answer_text="I don't have a path from SyntheticManager01 to SyntheticManager08.",
+    )
+
+    assert not score.passed
+    assert "Answer contradicts successful path result" in score.violations
+    assert not score.answer_sense.passed
 
 
 def test_contract_fails_raw_query_syntax_after_successful_query() -> None:
