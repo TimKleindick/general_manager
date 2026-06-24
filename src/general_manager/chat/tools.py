@@ -77,6 +77,15 @@ class UnknownChatQueryFilterError(ValueError):
         super().__init__(f"Unknown chat query filter: {filter_name}")
 
 
+class InvalidChatQueryFilterValueError(ValueError):
+    """Raised when a chat query filter value is malformed for its input type."""
+
+    def __init__(self, filter_name: str) -> None:
+        super().__init__(
+            f"Chat query filter '{filter_name}' does not accept nested filters."
+        )
+
+
 class ManagerNotChatExposedError(ValueError):
     """Raised when a tool targets a manager hidden from chat."""
 
@@ -379,6 +388,11 @@ def _input_fields(input_type: Any | None) -> Mapping[str, Any]:
     return {}
 
 
+def _is_nested_filter_input_type(input_type: Any | None) -> bool:
+    meta = getattr(input_type, "_meta", None)
+    return isinstance(getattr(meta, "fields", None), Mapping)
+
+
 def _nested_filter_input_type(input_type: Any | None, filter_name: str) -> Any | None:
     field = _input_fields(input_type).get(filter_name)
     if field is None:
@@ -391,6 +405,7 @@ def _validate_filter_mapping(
     *,
     indexed_filters: set[str],
     input_type: Any | None,
+    filter_path: tuple[str, ...] = (),
 ) -> None:
     for filter_name, value in filters.items():
         if (
@@ -402,10 +417,15 @@ def _validate_filter_mapping(
         if not isinstance(value, Mapping):
             continue
         nested_input_type = _nested_filter_input_type(input_type, filter_name)
+        if not _is_nested_filter_input_type(nested_input_type):
+            raise InvalidChatQueryFilterValueError(
+                ".".join((*filter_path, filter_name))
+            )
         _validate_filter_mapping(
             value,
             indexed_filters=set(_input_fields(nested_input_type)),
             input_type=nested_input_type,
+            filter_path=(*filter_path, filter_name),
         )
 
 
