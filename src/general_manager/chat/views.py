@@ -558,10 +558,10 @@ async def _execute_confirmation_request(
 @csrf_protect
 @require_POST
 def chat_http_view(request: HttpRequest) -> JsonResponse:
-    denial = _check_permission(request)
-    if denial is not None:
-        return denial
     try:
+        denial = _check_permission(request)
+        if denial is not None:
+            return denial
         _conversation, events = async_to_sync(_execute_message_request)(
             request, transport="http"
         )
@@ -573,14 +573,14 @@ def chat_http_view(request: HttpRequest) -> JsonResponse:
 @csrf_protect
 @require_POST
 def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
-    denial = _check_permission(request)
-    if denial is not None:
-        return StreamingHttpResponse(
-            iter([f"data: {json.dumps({'detail': 'Forbidden'})}\n\n".encode()]),
-            status=403,
-            content_type="text/event-stream",
-        )
     try:
+        denial = _check_permission(request)
+        if denial is not None:
+            return StreamingHttpResponse(
+                iter([f"data: {json.dumps({'detail': 'Forbidden'})}\n\n".encode()]),
+                status=403,
+                content_type="text/event-stream",
+            )
         _conversation, events = async_to_sync(_execute_message_request)(
             request, transport="sse"
         )
@@ -597,10 +597,10 @@ def chat_sse_view(request: HttpRequest) -> StreamingHttpResponse:
 @csrf_protect
 @require_POST
 def chat_confirm_view(request: HttpRequest) -> JsonResponse:
-    denial = _check_permission(request)
-    if denial is not None:
-        return denial
     try:
+        denial = _check_permission(request)
+        if denial is not None:
+            return denial
         _conversation, events = async_to_sync(_execute_confirmation_request)(request)
     except Exception as exc:  # noqa: BLE001
         events = _chat_error_events(exc, request, transport="http_confirm")
