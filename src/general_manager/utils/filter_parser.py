@@ -1,44 +1,126 @@
 """Utilities for parsing filter keyword arguments into structured callables."""
 
 from __future__ import annotations
-from typing import Any, Callable
+
+from collections.abc import Container, Mapping
+from typing import Callable, Literal, TypedDict, TypeGuard, cast
+
 from general_manager.manager.input import Input
+
+LookupName = Literal[
+    "exact",
+    "lt",
+    "lte",
+    "gt",
+    "gte",
+    "contains",
+    "startswith",
+    "endswith",
+    "in",
+]
+FilterFunction = Callable[[object], bool]
+InputFieldMap = Mapping[str, Input[type[object]]]
+
+
+class ParsedFilterCriteria(TypedDict, total=False):
+    """Structured filters generated for one input field."""
+
+    filter_kwargs: dict[str, object]
+    filter_funcs: list[FilterFunction]
+
+
+ParsedFilters = dict[str, ParsedFilterCriteria]
+_SUPPORTED_LOOKUPS: frozenset[LookupName] = frozenset(
+    {
+        "exact",
+        "lt",
+        "lte",
+        "gt",
+        "gte",
+        "contains",
+        "startswith",
+        "endswith",
+        "in",
+    }
+)
 
 
 class UnknownInputFieldError(ValueError):
     """Raised when a filter references an unknown input field."""
 
     def __init__(self, field_name: str) -> None:
-        """
-        Initialize the UnknownInputFieldError with a message indicating which input field was not recognized.
+        """Build an error for the unknown filter field name.
 
-        Parameters:
-            field_name (str): Name of the input field referenced in the filter that is not defined.
+        Args:
+            field_name: Field name parsed from the filter key.
+
+        Attributes:
+            field_name: The unknown field name parsed from the filter key.
         """
+        self.field_name = field_name
         super().__init__(f"Unknown input field '{field_name}' in filter.")
 
 
 def parse_filters(
-    filter_kwargs: dict[str, Any], possible_values: dict[str, Input]
-) -> dict[str, dict]:
-    """
-    Parse raw filter keyword arguments into structured criteria aligned with configured input fields.
+    filter_kwargs: Mapping[str, object],
+    possible_values: InputFieldMap,
+) -> ParsedFilters:
+    """Parse raw filter keyword arguments into bucket or Python filter criteria.
 
-    Parameters:
-        filter_kwargs (dict[str, Any]): Mapping of filter expressions keyed by "<field>[__lookup]".
-        possible_values (dict[str, Input]): Mapping of field names to Input definitions used for casting and type information.
+    ``filter_kwargs`` uses Django-style keys of ``field`` or
+    ``field__lookup``. Inputs whose type is a
+    :class:`general_manager.GeneralManager` subclass are returned as
+    ``filter_kwargs`` for downstream bucket filtering. The lookup suffix is
+    preserved for manager inputs, so ``project__name__startswith`` becomes a
+    manager criterion with lookup ``name__startswith``. All other inputs are
+    always returned as ``filter_funcs`` predicates produced by
+    :func:`create_filter_function`; non-manager inputs never emit
+    ``filter_kwargs``.
+
+    Manager input aliases ending in ``_id`` are accepted when the alias without
+    ``_id`` is a configured manager input. The alias is translated to an ``id``
+    lookup, so ``project_id__in=[1, 2]`` becomes ``{"id__in": [1, 2]}``. Alias
+    values are passed through unchanged because the alias already targets the
+    downstream id lookup. For manager inputs, any suffix after the field name is
+    an explicit downstream lookup path, whether or not its final segment is one
+    of the predicate lookup names. Such suffixes preserve the raw value
+    unchanged for downstream bucket filtering. A direct manager filter without
+    a suffix, such as ``project=raw_value``, is cast through the manager
+    ``Input`` when the value is not already a manager instance. Values that are
+    already ``GeneralManager`` instances skip casting. In both cases the final
+    downstream value is ``getattr(value, "id", value)``.
+
+    Non-manager list and tuple values are cast element-by-element when they are
+    not already instances of the configured input type; other non-manager
+    values are cast once. Multiple criteria for the same field are appended in
+    the iteration order produced by ``filter_kwargs.items()``. Manager filter
+    kwargs are stored in a mapping, so normalized duplicate lookup keys for the
+    same field overwrite earlier values; for example ``project_id__in`` and
+    ``project__id__in`` both normalize to ``id__in`` and the later item wins.
+    Non-manager duplicate criteria append another predicate. Empty criteria
+    entries are not emitted. ``Input.cast`` conversion behavior follows the
+    public ``Input`` contract documented in the core API reference.
+
+    Args:
+        filter_kwargs: Raw filter expressions keyed by ``field`` or
+            ``field__lookup``.
+        possible_values: Mapping of valid input field names to ``Input``
+            definitions used for type detection and value casting.
 
     Returns:
-        dict[str, dict]: Mapping from input field name to a dictionary containing either:
-            - "filter_kwargs": dict of lookup names to values for bucket (GeneralManager) fields, or
-            - "filter_funcs": list of callables that evaluate non-bucket field conditions.
+        A mapping by input field. Each entry contains ``filter_kwargs`` for
+        manager inputs or ``filter_funcs`` for non-manager inputs.
 
     Raises:
-        UnknownInputFieldError: If a filter references a field name not present in `possible_values`.
+        UnknownInputFieldError: If a filter references a field that is not in
+            ``possible_values`` and is not a valid manager ``_id`` alias.
+        ValueError: Propagated from ``Input.cast`` when a value cannot be
+            converted.
+        TypeError: Propagated from input type checks or custom casts.
     """
     from general_manager.manager.general_manager import GeneralManager
 
-    filters: dict[str, dict[str, Any]] = {}
+    filters: ParsedFilters = {}
     for kwarg, value in filter_kwargs.items():
         parts = kwarg.split("__")
         field_name = parts[0]
@@ -70,48 +152,46 @@ def parse_filters(
                 if not isinstance(value, GeneralManager):
                     value = input_field.cast(value)
                 value = getattr(value, "id", value)
-            filters.setdefault(field_name, {}).setdefault("filter_kwargs", {})[
-                lookup
-            ] = value
+            filter_kwargs_entry = _ensure_filter_kwargs(filters, field_name)
+            filter_kwargs_entry[lookup] = value
         else:
             # Build filter functions for non-bucket types
             if isinstance(value, (list, tuple)) and not isinstance(
                 value, input_field.type
             ):
-                casted_value = [input_field.cast(v) for v in value]
+                casted_value: object = [input_field.cast(v) for v in value]
             else:
                 casted_value = input_field.cast(value)
             filter_func = create_filter_function(lookup, casted_value)
-            filters.setdefault(field_name, {}).setdefault("filter_funcs", []).append(
-                filter_func
-            )
+            filter_funcs_entry = _ensure_filter_funcs(filters, field_name)
+            filter_funcs_entry.append(filter_func)
     return filters
 
 
-def create_filter_function(lookup_str: str, value: Any) -> Callable[[Any], bool]:
-    """
-    Build a callable that evaluates whether an object's attribute satisfies a lookup expression.
+def create_filter_function(lookup_str: str, value: object) -> FilterFunction:
+    """Build a predicate for an optional attribute path and lookup operation.
 
-    Parameters:
-        lookup_str (str): Attribute path and lookup operator separated by double underscores (for example, `age__gte`).
-        value (Any): Reference value used when applying the lookup comparison.
+    ``lookup_str`` may be a lookup name such as ``gte`` or a nested attribute
+    path such as ``address__city__exact``. If the final path segment is not a
+    supported lookup, the whole string is treated as an attribute path and the
+    lookup defaults to ``exact``. Attribute traversal uses ``getattr`` only; it
+    does not read mapping keys or sequence indexes. Missing attributes return
+    ``False``. Empty path segments are treated as literal attribute names, so
+    malformed strings generally return ``False`` instead of raising.
+
+    Args:
+        lookup_str: Attribute path and optional lookup operator separated by
+            double underscores.
+        value: Reference value used by the lookup comparison.
 
     Returns:
-        Callable[[Any], bool]: Function returning True when the target object's attribute value passes the lookup test.
+        A predicate returning ``True`` when the target object or nested
+        attribute satisfies the lookup.
     """
     parts = lookup_str.split("__") if lookup_str else []
-    if parts and parts[-1] in [
-        "exact",
-        "lt",
-        "lte",
-        "gt",
-        "gte",
-        "contains",
-        "startswith",
-        "endswith",
-        "in",
-    ]:
-        lookup = parts[-1]
+    lookup: LookupName
+    if parts and parts[-1] in _SUPPORTED_LOOKUPS:
+        lookup = cast(LookupName, parts[-1])
         attr_path = parts[:-1]
     else:
         lookup = "exact"
@@ -128,38 +208,103 @@ def create_filter_function(lookup_str: str, value: Any) -> Callable[[Any], bool]
     return filter_func
 
 
-def apply_lookup(value_to_check: Any, lookup: str, filter_value: Any) -> bool:
-    """
-    Evaluate a lookup operation against a candidate value.
+def apply_lookup(value_to_check: object, lookup: str, filter_value: object) -> bool:
+    """Evaluate one supported lookup operation against a candidate value.
 
-    Parameters:
-        value_to_check (Any): Value that will be compared using the lookup expression.
-        lookup (str): Name of the comparison operation (for example, `exact`, `gte`, or `contains`).
-        filter_value (Any): Reference value supplied by the filter expression.
+    Supported lookups are ``exact``, ``lt``, ``lte``, ``gt``, ``gte``,
+    ``contains``, ``startswith``, ``endswith``, and ``in``. String operations
+    are case-sensitive and only match when both operands are strings;
+    ``contains`` evaluates ``filter_value in value_to_check``. ``in`` accepts
+    non-string containers such as lists, tuples, sets, and ranges; strings and
+    bytes are rejected as membership containers to avoid accidental substring
+    filtering. Rich comparisons that raise ``TypeError`` or return
+    ``NotImplemented`` evaluate to ``False``.
+
+    Args:
+        value_to_check: Candidate value read from the object being filtered.
+        lookup: Lookup operation name.
+        filter_value: Reference value supplied by the filter expression.
 
     Returns:
-        bool: True if the comparison succeeds; otherwise, False.
+        ``True`` when the lookup succeeds, otherwise ``False``. Unsupported
+        lookups and incompatible operand types return ``False``.
     """
     try:
         if lookup == "exact":
             return value_to_check == filter_value
         elif lookup == "lt":
-            return value_to_check < filter_value
+            return _compare(value_to_check, "__lt__", filter_value)
         elif lookup == "lte":
-            return value_to_check <= filter_value
+            return _compare(value_to_check, "__le__", filter_value)
         elif lookup == "gt":
-            return value_to_check > filter_value
+            return _compare(value_to_check, "__gt__", filter_value)
         elif lookup == "gte":
-            return value_to_check >= filter_value
+            return _compare(value_to_check, "__ge__", filter_value)
         elif lookup == "contains" and isinstance(value_to_check, str):
+            if not isinstance(filter_value, str):
+                return False
             return filter_value in value_to_check
         elif lookup == "startswith" and isinstance(value_to_check, str):
+            if not isinstance(filter_value, str):
+                return False
             return value_to_check.startswith(filter_value)
         elif lookup == "endswith" and isinstance(value_to_check, str):
+            if not isinstance(filter_value, str):
+                return False
             return value_to_check.endswith(filter_value)
         elif lookup == "in":
+            if not _is_membership_container(filter_value):
+                return False
             return value_to_check in filter_value
         else:
             return False
     except TypeError:
         return False
+
+
+def _ensure_filter_kwargs(
+    filters: ParsedFilters,
+    field_name: str,
+) -> dict[str, object]:
+    entry = filters.get(field_name)
+    if entry is None:
+        entry = {}
+        filters[field_name] = entry
+    filter_kwargs = entry.get("filter_kwargs")
+    if filter_kwargs is None:
+        filter_kwargs = {}
+        entry["filter_kwargs"] = filter_kwargs
+    return filter_kwargs
+
+
+def _ensure_filter_funcs(
+    filters: ParsedFilters,
+    field_name: str,
+) -> list[FilterFunction]:
+    entry = filters.get(field_name)
+    if entry is None:
+        entry = {}
+        filters[field_name] = entry
+    filter_funcs = entry.get("filter_funcs")
+    if filter_funcs is None:
+        filter_funcs = []
+        entry["filter_funcs"] = filter_funcs
+    return filter_funcs
+
+
+def _compare(
+    value_to_check: object,
+    method_name: Literal["__lt__", "__le__", "__gt__", "__ge__"],
+    filter_value: object,
+) -> bool:
+    comparison = getattr(value_to_check, method_name, None)
+    if not callable(comparison):
+        return False
+    result = comparison(filter_value)
+    if result is NotImplemented:
+        return False
+    return bool(result)
+
+
+def _is_membership_container(value: object) -> TypeGuard[Container[object]]:
+    return isinstance(value, Container) and not isinstance(value, (str, bytes))

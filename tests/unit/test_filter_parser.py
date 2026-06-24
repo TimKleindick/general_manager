@@ -1,8 +1,9 @@
 from django.test import TestCase
 from general_manager.utils.filter_parser import (
-    parse_filters,
-    create_filter_function,
+    UnknownInputFieldError,
     apply_lookup,
+    create_filter_function,
+    parse_filters,
 )
 from unittest.mock import MagicMock, patch
 from general_manager.manager.input import Input
@@ -126,10 +127,21 @@ class TestFilterParser(TestCase):
             "name": Input(str),
             "age": Input(int),
         }
-        with self.assertRaises(ValueError):
+        with self.assertRaises(UnknownInputFieldError) as error_context:
             parse_filters({"unknown_field__exact": "value"}, possible_values)
-        with self.assertRaises(ValueError):
+        self.assertEqual(error_context.exception.field_name, "unknown_field")
+        self.assertEqual(
+            str(error_context.exception),
+            "Unknown input field 'unknown_field' in filter.",
+        )
+        with self.assertRaises(UnknownInputFieldError):
             parse_filters({"unknown_field_id": "value"}, possible_values)
+
+    def test_unknown_input_field_error_public_export(self):
+        """UnknownInputFieldError is importable from the lazy utils namespace."""
+        from general_manager.utils import UnknownInputFieldError as public_error
+
+        self.assertIs(public_error, UnknownInputFieldError)
 
     def test_filter_function_with_deep_lookup(self):
         """
@@ -152,6 +164,15 @@ class TestFilterParser(TestCase):
 
         m = MagicMock(spec=Foo)
         self.assertFalse(filter_function(m))
+
+    def test_create_filter_function_treats_unknown_lookup_as_path(self):
+        """Unknown lookup suffixes are parsed as attribute path segments."""
+        mock_manager = MagicMock()
+        mock_manager.address.city.unknown = "value"
+
+        filter_function = create_filter_function("address__city__unknown", "value")
+
+        self.assertTrue(filter_function(mock_manager))
 
     def test_create_filter_function(self):
         """
@@ -205,6 +226,7 @@ class TestFilterParser(TestCase):
         """
         self.assertFalse(apply_lookup("value", "invalid_lookup", "value"))
         self.assertFalse(apply_lookup("value", "in", "not_a_list"))
+        self.assertFalse(apply_lookup("value", "in", "value"))
         self.assertFalse(apply_lookup("value", "exact", 123))
         self.assertFalse(apply_lookup("value", "in", 123))
         self.assertFalse(apply_lookup("value", "exact", None))

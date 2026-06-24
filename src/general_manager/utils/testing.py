@@ -2,15 +2,15 @@
 
 from contextlib import suppress
 from importlib import import_module
-from typing import Any, Callable, ClassVar, Iterable, Sequence, cast
+from typing import TYPE_CHECKING, Callable, ClassVar, Iterable, Protocol, Sequence, cast
 
 from django.apps import AppConfig, apps as global_apps
 from django.conf import settings
 from django.core.cache import caches
 from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection, models
+from django.test import TransactionTestCase
 from django.test import override_settings
-from graphene_django.utils.testing import GraphQLTransactionTestCase  # type: ignore[import]
 from unittest.mock import ANY
 
 from simple_history.models import HistoricalChanges
@@ -36,6 +36,11 @@ from general_manager.interface.infrastructure.startup_hooks import (
     registered_startup_hook_entries,
 )
 
+if TYPE_CHECKING:
+    GraphQLTransactionTestCase = TransactionTestCase
+else:
+    from graphene_django.utils.testing import GraphQLTransactionTestCase
+
 _original_get_app: Callable[[str], AppConfig | None] = (
     global_apps.get_containing_app_config
 )
@@ -46,6 +51,47 @@ _DEPENDENCY_COORDINATION_KEYS = {
     INDEX_KEY,
     LOCK_KEY,
 }
+CacheOperation = (
+    tuple[str, object, bool]
+    | tuple[str, object]
+    | tuple[str, tuple[str, ...], tuple[str, ...]]
+)
+
+
+class _HistoryDescriptor(Protocol):
+    """History descriptor shape used by simple-history model managers."""
+
+    model: type[models.Model]
+
+
+class _RemoteField(Protocol):
+    """Many-to-many remote field attributes required during teardown."""
+
+    through: type[models.Model]
+
+
+class _ManyToManyField(Protocol):
+    """Many-to-many field surface used by the test teardown cleanup."""
+
+    remote_field: _RemoteField
+
+
+class _CacheConnections(Protocol):
+    """Django cache connection storage attributes mutated by the test harness."""
+
+    default: object
+
+
+class _MutableDjangoApps(Protocol):
+    """Mutable Django app-registry hooks patched by the test harness."""
+
+    get_containing_app_config: Callable[[str], AppConfig | None]
+
+
+class _ClassSetUpDescriptor(Protocol):
+    """Classmethod descriptor exposing the wrapped setup callable."""
+
+    __func__: Callable[[type["GeneralManagerTransactionTestCase"]], None]
 
 
 def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | None]:
@@ -56,7 +102,7 @@ def create_fallback_get_app(fallback_app: str) -> Callable[[str], AppConfig | No
         fallback_app (str): App label used when the default lookup cannot resolve the object.
 
     Returns:
-        Callable[[str], AppConfig | None]: Function returning either the resolved configuration or the fallback app configuration when available.
+        Callable[[str], AppConfig | None]: Function returning either the resolved configuration, the fallback app configuration, or `None` when both lookups miss.
     """
 
     def _fallback_get_app(object_name: str) -> AppConfig | None:
@@ -125,14 +171,17 @@ def run_registered_startup_hooks(
     interfaces: Sequence[type[InterfaceBase]] | None = None,
 ) -> list[type[InterfaceBase]]:
     """
-    Collects Interface subclasses from the provided GeneralManager classes and/or explicit interface classes, initializes their capabilities, orders them per dependency resolver, and executes their registered startup hooks.
+    Collect interfaces and run their registered startup hooks.
 
     Parameters:
-        managers (Sequence[type[GeneralManager]] | None): GeneralManager classes to source Interface classes from.
+        managers (Sequence[type[GeneralManager]] | None): GeneralManager classes whose nested `Interface` subclasses should be included.
         interfaces (Sequence[type[InterfaceBase]] | None): Explicit Interface classes to include.
 
     Returns:
-        processed_interfaces (list[type[InterfaceBase]]): The list of Interface classes that were collected and whose startup hooks were considered, in the original collection order (not necessarily the execution order).
+        list[type[InterfaceBase]]: Collected Interface classes in collection order.
+
+    Raises:
+        Exception: Exceptions from capability initialization, dependency ordering, or hook execution propagate.
     """
     interface_list: list[type[InterfaceBase]] = []
     if managers:
@@ -159,16 +208,28 @@ def run_registered_startup_hooks(
 
     registry = registered_startup_hook_entries()
     # Group interfaces by dependency resolver so each hook set orders independently.
-    resolver_map: dict[DependencyResolver | None, list[type[InterfaceBase]]] = {}
+    resolver_groups: list[
+        tuple[DependencyResolver | None, list[type[InterfaceBase]]]
+    ] = []
+
+    def _group_for_resolver(
+        resolver: DependencyResolver | None,
+    ) -> list[type[InterfaceBase]]:
+        for registered_resolver, resolver_interfaces in resolver_groups:
+            if registered_resolver is resolver:
+                return resolver_interfaces
+        new_group: list[type[InterfaceBase]] = []
+        resolver_groups.append((resolver, new_group))
+        return new_group
+
     for interface_cls in interface_list:
         entries = registry.get(interface_cls, ())
         for entry in entries:
-            key = entry.dependency_resolver
-            resolver_list = resolver_map.setdefault(key, [])
+            resolver_list = _group_for_resolver(entry.dependency_resolver)
             if interface_cls not in resolver_list:
                 resolver_list.append(interface_cls)
 
-    for resolver, iface_list in resolver_map.items():
+    for resolver, iface_list in resolver_groups:
         ordered = order_interfaces_by_dependency(iface_list, resolver)
         for interface_cls in ordered:
             for entry in registry.get(interface_cls, ()):
@@ -207,7 +268,7 @@ class GMTestCaseMeta(type):
         user_setup = attrs.get("setUpClass")
         fallback_app = cast(str | None, attrs.get("fallback_app", "general_manager"))
         # MERKE dir das echte GraphQLTransactionTestCase.setUpClass
-        base_setup = GraphQLTransactionTestCase.setUpClass
+        base_setup = cast(_ClassSetUpDescriptor, GraphQLTransactionTestCase.setUpClass)
 
         def wrapped_setUpClass(
             cls: type["GeneralManagerTransactionTestCase"],
@@ -221,15 +282,16 @@ class GMTestCaseMeta(type):
 
             if fallback_app is not None:
                 handler = create_fallback_get_app(fallback_app)
-                global_apps.get_containing_app_config = cast(  # type: ignore[assignment]
-                    Callable[[str], AppConfig | None], handler
-                )
+                cast(
+                    _MutableDjangoApps,
+                    global_apps,
+                ).get_containing_app_config = handler
 
             cls._gm_created_tables = set()
             # 1) user-defined setUpClass (if any)
             if user_setup:
                 if isinstance(user_setup, classmethod):
-                    user_setup.__func__(cls)
+                    cast(_ClassSetUpDescriptor, user_setup).__func__(cls)
                 else:
                     cast(
                         Callable[[type["GeneralManagerTransactionTestCase"]], None],
@@ -249,17 +311,15 @@ class GMTestCaseMeta(type):
                         continue
                     model_class = cast(
                         type[models.Model], manager_class.Interface._model
-                    )  # type: ignore[attr-defined]
+                    )
                     model_table = model_class._meta.db_table
                     if model_table not in known_tables:
                         editor.create_model(model_class)
                         known_tables.add(model_table)
                     history_model = getattr(model_class, "history", None)
                     if history_model:
-                        history_model_class = cast(
-                            type[models.Model],
-                            history_model.model,  # type: ignore[attr-defined]
-                        )
+                        history_descriptor = cast(_HistoryDescriptor, history_model)
+                        history_model_class = history_descriptor.model
                         history_table = history_model_class._meta.db_table
                         if history_table not in known_tables:
                             editor.create_model(history_model_class)
@@ -289,16 +349,12 @@ class GMTestCaseMeta(type):
 
 
 class LoggingCache(LocMemCache):
-    """An in-memory cache backend that records its get and set operations."""
+    """In-memory cache backend that records get, get_many, and set operations."""
 
-    def __init__(self, location: str, params: dict[str, Any]) -> None:
+    def __init__(self, location: str, params: dict[str, object]) -> None:
         """Initialise the cache backend and the operation log store."""
         super().__init__(location, params)
-        self.ops: list[
-            tuple[str, object, bool]
-            | tuple[str, object]
-            | tuple[str, tuple[str, ...], tuple[str, ...]]
-        ] = []
+        self.ops: list[CacheOperation] = []
 
     def get(
         self,
@@ -311,11 +367,11 @@ class LoggingCache(LocMemCache):
 
         Parameters:
             key (str): Cache key identifying the stored value.
-            default (Any): Fallback returned when the key is absent.
+            default (object): Fallback returned when the key is absent.
             version (int | None): Optional cache version used for the lookup.
 
         Returns:
-            Any: Cached value when present; otherwise, the provided default.
+            object: Cached value when present; otherwise, the provided default.
         """
         val = super().get(key, default)
         self.ops.append(("get", key, val is not _SENTINEL))
@@ -325,10 +381,10 @@ class LoggingCache(LocMemCache):
         self,
         keys: Iterable[str],
         version: int | None = None,
-    ) -> dict[str, Any]:
-        """Retrieve multiple keys and record the bulk lookup."""
+    ) -> dict[str, int | str]:
+        """Retrieve multiple keys and record the bulk lookup key/result names."""
         key_tuple = tuple(keys)
-        values: dict[str, Any] = super().get_many(key_tuple, version=version)
+        values = super().get_many(key_tuple, version=version)
         self.ops.append(("get_many", key_tuple, tuple(values.keys())))
         return values
 
@@ -369,6 +425,17 @@ class LoggingCache(LocMemCache):
 class GeneralManagerTransactionTestCase(
     GraphQLTransactionTestCase, metaclass=GMTestCaseMeta
 ):
+    """
+    Transaction test case that prepares GeneralManager GraphQL integration state.
+
+    Subclasses set `general_manager_classes` to the managers under test. The
+    harness creates missing model/history tables during class setup, initializes
+    GeneralManager GraphQL and remote API registrations, installs a `LoggingCache`
+    during `setUp`, runs registered startup hooks, and removes created test state
+    during class teardown. Exceptions from Django schema editing, registration,
+    startup hooks, or the Graphene-Django base test case propagate.
+    """
+
     GRAPHQL_URL = "/graphql/"
     general_manager_classes: ClassVar[list[type[GeneralManager]]] = []
     fallback_app: str | None = "general_manager"
@@ -381,7 +448,8 @@ class GeneralManagerTransactionTestCase(
         Replaces Django's default cache connection with a fresh LoggingCache and resets its recorded operations, then runs any registered startup hooks for the test class.
         """
         super().setUp()
-        caches._connections.default = LoggingCache("test-cache", {})  # type: ignore[attr-defined]
+        cache_connections = cast(_CacheConnections, vars(caches)["_connections"])
+        cache_connections.default = LoggingCache("test-cache", {})
         cast(LoggingCache, caches["default"]).clear()
         self.__reset_cache_counter()
         self._run_registered_startup_hooks()
@@ -419,10 +487,8 @@ class GeneralManagerTransactionTestCase(
                 model = cast(type[models.Model], model)
                 auto_through_models: set[type[models.Model]] = set()
                 for field in model._meta.local_many_to_many:
-                    m2m_field = cast(Any, field)
-                    through_model = cast(
-                        type[models.Model], m2m_field.remote_field.through
-                    )
+                    m2m_field = cast(_ManyToManyField, field)
+                    through_model = m2m_field.remote_field.through
                     if getattr(through_model._meta, "auto_created", False):
                         auto_through_models.add(through_model)
                 model_table = model._meta.db_table
@@ -434,17 +500,16 @@ class GeneralManagerTransactionTestCase(
                 history_model = getattr(model, "history", None)
                 related_history_models: list[type[models.Model]] = []
                 if history_model:
-                    history_model_class = cast(
-                        type[models.Model],
-                        history_model.model,  # type: ignore[attr-defined]
-                    )
+                    history_descriptor = cast(_HistoryDescriptor, history_model)
+                    history_model_class = history_descriptor.model
                     related_history_models = _get_historical_changes_related_models(
                         history_model_class
                     )
                 if history_model:
-                    history_table = history_model.model._meta.db_table
+                    history_descriptor = cast(_HistoryDescriptor, history_model)
+                    history_table = history_descriptor.model._meta.db_table
                     if history_table in tables_to_remove:
-                        editor.delete_model(history_model.model)
+                        editor.delete_model(history_descriptor.model)
                         tables_to_remove.discard(history_table)
                     for related_history_model in related_history_models:
                         related_history_table = related_history_model._meta.db_table
@@ -468,9 +533,11 @@ class GeneralManagerTransactionTestCase(
                         app_config.models.pop(model_key, None)
                 if (
                     history_model
-                    and history_model.model._meta.db_table in created_tables
+                    and cast(_HistoryDescriptor, history_model).model._meta.db_table
+                    in created_tables
                 ):
-                    hist_key = history_model.model.__name__.lower()
+                    history_descriptor = cast(_HistoryDescriptor, history_model)
+                    hist_key = history_descriptor.model.__name__.lower()
                     global_apps.all_models[app_label].pop(hist_key, None)
                     if app_config is not None:
                         app_config.models.pop(hist_key, None)
@@ -513,9 +580,10 @@ class GeneralManagerTransactionTestCase(
         ]
 
         # reset fallback app lookup
-        global_apps.get_containing_app_config = cast(  # type: ignore[assignment]
-            Callable[[str], AppConfig | None], _original_get_app
-        )
+        cast(
+            _MutableDjangoApps,
+            global_apps,
+        ).get_containing_app_config = _original_get_app
 
         super().tearDownClass()
 
@@ -574,12 +642,12 @@ class GeneralManagerTransactionTestCase(
         )
         self.__reset_cache_counter()
 
-    def cache_ops(self) -> list[tuple[Any, ...]]:
+    def cache_ops(self) -> list[CacheOperation]:
         """Return recorded cache operations for assertions."""
-        return list(cast(Any, caches["default"]).ops)
+        return list(cast(LoggingCache, caches["default"]).ops)
 
     def reset_cache_ops(self) -> None:
-        """Clear recorded cache operations for assertions."""
+        """Clear recorded cache operations for later assertions."""
         self.__reset_cache_counter()
 
     def __reset_cache_counter(self) -> None:

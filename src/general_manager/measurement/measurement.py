@@ -2,18 +2,27 @@
 
 # units.py
 from __future__ import annotations
-from typing import Any, Callable, cast
+from collections.abc import Callable
+from typing import TypeAlias, TypeGuard, cast
 import math
 import pint
 from decimal import Decimal, getcontext, InvalidOperation
 from operator import eq, ne, lt, le, gt, ge
 from pint.facets.plain import PlainQuantity
 
+NumericMagnitude: TypeAlias = Decimal | float | int | str
+NumericScalar: TypeAlias = Decimal | float | int
+QuantityMagnitude: TypeAlias = Decimal | float
+MeasurementQuantity: TypeAlias = PlainQuantity[QuantityMagnitude]
+ComparisonOperation: TypeAlias = Callable[[QuantityMagnitude, QuantityMagnitude], bool]
+
 # Set precision for Decimal
 getcontext().prec = 28
 
 # Create a new UnitRegistry
-ureg = pint.UnitRegistry(auto_reduce_dimensions=True)  # type: ignore
+ureg: pint.UnitRegistry[QuantityMagnitude] = pint.UnitRegistry(
+    auto_reduce_dimensions=True
+)
 
 # Define currency units
 currency_units = ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD"]
@@ -41,7 +50,7 @@ def _format_decimal(value: Decimal) -> Decimal:
     return value
 
 
-def _decimal_from_magnitude(value: Decimal | float | int | str) -> Decimal:
+def _decimal_from_magnitude(value: NumericMagnitude) -> Decimal:
     """Convert a numeric magnitude into the canonical Decimal representation."""
 
     if isinstance(value, Decimal):
@@ -49,15 +58,18 @@ def _decimal_from_magnitude(value: Decimal | float | int | str) -> Decimal:
     return _format_decimal(Decimal(str(value)))
 
 
-def _unit_uses_offset(unit: str | pint.Unit | PlainQuantity) -> bool:
+def _is_numeric_scalar(value: object) -> TypeGuard[NumericScalar]:
+    """Return whether a value is a supported numeric scalar, excluding bool."""
+
+    return not isinstance(value, bool) and isinstance(value, (Decimal, float, int))
+
+
+def _unit_uses_offset(unit: str | pint.Unit | MeasurementQuantity) -> bool:
     """Return whether a Pint unit has offset conversion semantics."""
 
-    parsed_source: str | Any
-    if isinstance(unit, PlainQuantity):
-        parsed_source = unit.units
-    else:
-        parsed_source = unit
-    parsed_unit = ureg.parse_units(str(parsed_source))
+    parsed_unit = ureg.parse_units(
+        str(unit.units if isinstance(unit, PlainQuantity) else unit)
+    )
     for unit_name, power in parsed_unit._units.items():
         if power != 1:
             continue
@@ -67,40 +79,45 @@ def _unit_uses_offset(unit: str | pint.Unit | PlainQuantity) -> bool:
     return False
 
 
-def _quantity_as_float(quantity: PlainQuantity) -> PlainQuantity:
+def _quantity_as_float(quantity: MeasurementQuantity) -> PlainQuantity[float]:
     """Rebuild a quantity with a float magnitude so offset-unit math stays in Pint."""
 
     return ureg.Quantity(float(quantity.magnitude), quantity.units)
 
 
 def _prepare_quantities_for_binary_operation(
-    *quantities: PlainQuantity,
-) -> tuple[PlainQuantity, ...]:
+    *quantities: MeasurementQuantity,
+) -> tuple[MeasurementQuantity, ...]:
     """
     Coerce quantities to float-backed Pint instances when any operand uses offset units.
     """
 
     if any(_unit_uses_offset(quantity) for quantity in quantities):
-        return tuple(_quantity_as_float(quantity) for quantity in quantities)
+        return tuple(
+            cast(MeasurementQuantity, _quantity_as_float(quantity))
+            for quantity in quantities
+        )
     return quantities
 
 
-def _build_quantity(value: Decimal | float | int | str, unit: str) -> PlainQuantity:
+def _build_quantity(value: NumericMagnitude, unit: str) -> MeasurementQuantity:
     """Build a Pint quantity while routing offset units through float magnitudes."""
 
     decimal_value = _decimal_from_magnitude(value)
-    quantity_value: Decimal | float = decimal_value
+    quantity_value: QuantityMagnitude = decimal_value
     if _unit_uses_offset(unit):
         quantity_value = float(decimal_value)
-    return ureg.Quantity(quantity_value, unit)
+    return cast(MeasurementQuantity, ureg.Quantity(quantity_value, unit))
 
 
-def _convert_quantity(quantity: PlainQuantity, target_unit: str) -> PlainQuantity:
+def _convert_quantity(
+    quantity: MeasurementQuantity, target_unit: str
+) -> MeasurementQuantity:
     """Convert a quantity, coercing offset-unit paths to float-backed quantities."""
 
     source_quantity = quantity
     if _unit_uses_offset(quantity) or _unit_uses_offset(target_unit):
-        source_quantity = _quantity_as_float(quantity)
+        source_quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
     return source_quantity.to(target_unit)
 
 
@@ -109,8 +126,9 @@ def _currency_component(unit: str) -> tuple[str, int] | None:
 
     parsed_unit = ureg.parse_units(str(unit))
     currency_components = [
-        (unit_name, int(cast(Any, power)))
+        (unit_name, int(power))
         for unit_name, power in parsed_unit._units.items()
+        if not isinstance(power, complex)
         if unit_name in currency_units
     ]
     if len(currency_components) != 1:
@@ -143,12 +161,13 @@ def convert_magnitude(value: Decimal, source_unit: str, target_unit: str) -> Dec
 
 OFFSET_COMPARISON_REL_TOL = 1e-9
 OFFSET_COMPARISON_ABS_TOL = 1e-9
+HASH_DECIMAL_QUANTUM = Decimal("1e-9")
 
 
 def _compare_magnitudes(
     left: Decimal,
     right: Decimal,
-    operation: Callable[..., bool],
+    operation: ComparisonOperation,
     *,
     tolerant: bool,
 ) -> bool:
@@ -179,6 +198,16 @@ def _compare_magnitudes(
     if operation is ge:
         return is_close or left_float > right_float
     return operation(left_float, right_float)
+
+
+def _hash_decimal(value: NumericMagnitude) -> Decimal:
+    """Return the Decimal representation used for equality-compatible hashing."""
+
+    decimal_value = _decimal_from_magnitude(value)
+    try:
+        return decimal_value.quantize(HASH_DECIMAL_QUANTUM)
+    except InvalidOperation:
+        return decimal_value
 
 
 class InvalidMeasurementInitializationError(ValueError):
@@ -334,26 +363,63 @@ class IncomparableMeasurementError(ValueError):
 
 
 class Measurement:
-    def __init__(self, value: Decimal | float | int | str, unit: str) -> None:
+    """
+    Decimal-backed measurement value with Pint unit conversion and arithmetic.
+
+    A ``Measurement`` stores a magnitude and unit, exposes the underlying Pint
+    quantity for advanced integrations, and supports compatible arithmetic,
+    comparison, string parsing, pickling, and explicit currency conversion.
+    Currency conversions never use implicit rates; callers must pass an
+    ``exchange_rate`` when converting between different configured currencies.
+    Pint canonicalizes unit names, so ``unit`` and string/repr output may use
+    canonical names such as ``"kilogram"`` rather than the caller's spelling.
+    Exact Pint exception subclasses/messages, canonical compound-unit ordering,
+    aliases, and offset-unit internals are delegated to the installed Pint
+    version and are not a stable GeneralManager API contract.
+    """
+
+    def __init__(self, value: NumericMagnitude, unit: str) -> None:
         """
         Create a Measurement from a numeric value and a unit label.
 
-        Converts the provided numeric-like value to a Decimal and constructs the internal quantity using the given unit.
+        Converts the provided numeric-like value to a Decimal through
+        ``Decimal(str(value))`` and constructs the internal quantity using the
+        given Pint unit expression. ``unit`` may be ``"dimensionless"`` or an
+        empty string for dimensionless measurements. Invalid units are reported
+        by Pint and are not wrapped by this constructor. String values are
+        numeric magnitudes only; use ``from_string()`` for combined
+        ``"<value> <unit>"`` text. ``bool`` is rejected even though it is an
+        ``int`` subclass in Python.
+        Invalid numeric strings, including combined measurement text such as
+        ``"1 kg"`` passed directly as ``value``, raise
+        ``InvalidMeasurementInitializationError``.
+        Decimal special values such as ``NaN`` and infinities are accepted or
+        rejected according to Decimal and Pint quantity construction; later
+        operations inherit that delegated behavior.
 
         Parameters:
             value (Decimal | float | int | str): Numeric value to use as the measurement magnitude; strings and numeric types are coerced to Decimal.
-            unit (str): Unit label registered in the module's unit registry (currency codes or physical unit names).
+            unit (str): Unit label registered in the module's unit registry,
+                including configured currency codes, physical unit names,
+                compound Pint expressions such as ``"kg / m^2"``, or
+                dimensionless units.
 
         Raises:
-            InvalidMeasurementInitializationError: If `value` cannot be converted to a Decimal.
+            InvalidMeasurementInitializationError: If `value` cannot be converted to a Decimal or is a bool.
+            pint.errors.PintError: If `unit` is not parseable by Pint.
         """
+        if isinstance(value, bool):
+            raise InvalidMeasurementInitializationError()
         if not isinstance(value, (Decimal, float, int)):
             try:
                 value = Decimal(str(value))
             except (InvalidOperation, TypeError, ValueError) as error:
                 raise InvalidMeasurementInitializationError() from error
         if not isinstance(value, Decimal):
-            value = Decimal(str(value))
+            try:
+                value = Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError) as error:
+                raise InvalidMeasurementInitializationError() from error
         self.__quantity = _build_quantity(value, unit)
 
     def __getstate__(self) -> dict[str, str]:
@@ -384,9 +450,13 @@ class Measurement:
         self.__quantity = _build_quantity(value, unit)
 
     @property
-    def quantity(self) -> PlainQuantity:
+    def quantity(self) -> MeasurementQuantity:
         """
         Access the underlying pint quantity for advanced operations.
+
+        Magnitudes are usually Decimal-backed. Offset units such as absolute
+        temperatures may be float-backed because Pint performs those conversions
+        with non-multiplicative offsets.
 
         Returns:
             PlainQuantity: Pint quantity representing the measurement value and unit.
@@ -398,6 +468,11 @@ class Measurement:
         """
         Fetch the numeric component of the measurement.
 
+        This property always returns a ``Decimal`` by converting the underlying
+        Pint magnitude with ``Decimal(str(quantity.magnitude))``. For
+        float-backed offset quantities, that preserves Pint's string
+        representation rather than the original binary float.
+
         Returns:
             Decimal: Magnitude of the measurement in its current unit.
         """
@@ -407,6 +482,10 @@ class Measurement:
     def unit(self) -> str:
         """
         Retrieve the unit label associated with the measurement.
+
+        The returned value is Pint's canonical unit string, not necessarily the
+        spelling passed to the constructor. Empty-string and ``"dimensionless"``
+        inputs both expose ``"dimensionless"``.
 
         Returns:
             str: Canonical unit string as provided by the unit registry.
@@ -418,6 +497,14 @@ class Measurement:
         """
         Parse a textual representation into a Measurement.
 
+        Leading and trailing whitespace is ignored. A single token is parsed as
+        a dimensionless Decimal value. Two-token input is split once on
+        whitespace; the first token must be a Decimal-compatible magnitude and
+        the remainder is passed to Pint as the unit expression, so spaced
+        compound units such as ``"1 g / cm^3"`` are supported. Decimal parsing
+        accepts the syntax accepted by ``Decimal(...)``; currency symbols such
+        as ``$`` are not accepted unless Pint knows them as unit text.
+
         Parameters:
             value (str): A string in the form "<number> <unit>" or a single numeric token for a dimensionless value.
 
@@ -427,7 +514,14 @@ class Measurement:
         Raises:
             InvalidDimensionlessValueError: If a single-token input cannot be parsed as a number.
             InvalidMeasurementStringError: If the string does not contain a valid numeric magnitude followed by a parseable unit expression.
-            InvalidMeasurementInitializationError: If constructing the Measurement from the parsed parts fails.
+
+        Notes:
+            Empty strings raise ``InvalidMeasurementStringError``. Single-token
+            inputs with invalid Decimal syntax raise
+            ``InvalidDimensionlessValueError``. Inputs containing whitespace are
+            treated as magnitude-plus-unit text; invalid magnitudes or invalid
+            Pint unit expressions are reported as
+            ``InvalidMeasurementStringError``.
         """
         stripped_value = value.strip()
         if not stripped_value:
@@ -450,7 +544,21 @@ class Measurement:
     @staticmethod
     def format_decimal(value: Decimal) -> Decimal:
         """
-        Normalise decimals so integers have no fractional component.
+        Normalise decimals for measurement storage and display.
+
+        This public helper exposes the same Decimal normalization used by
+        measurement magnitude access and string formatting.
+
+        The value is passed through ``Decimal.normalize()``. If the normalized
+        value is integral, it is quantized to ``Decimal("1")`` so values such as
+        ``Decimal("2.0")`` display and compare as ``Decimal("2")``. Non-integral
+        values keep their significant fractional digits; no rounding is applied.
+        Special Decimal values such as ``NaN`` and infinities are delegated to
+        Decimal's own ``normalize()`` and ``to_integral_value()`` behavior; if
+        integral quantization raises ``InvalidOperation``, the normalized value
+        is returned unchanged. Signed zero follows Decimal normalization. The
+        exact string form of Decimal special values is the standard-library
+        Decimal result, not a separate GeneralManager guarantee.
 
         Parameters:
             value (Decimal): Decimal value that should be normalised.
@@ -468,6 +576,27 @@ class Measurement:
         """
         Convert this measurement to the specified target unit, handling currency conversions when applicable.
 
+        Physical and same-currency conversions are delegated to Pint. For
+        different currencies, ``exchange_rate`` means target units per one
+        source unit: ``Measurement(100, "EUR").to("USD", exchange_rate=1.1)``
+        returns ``110 USD``. Compound currency expressions keep the same rule
+        for the currency component and still convert compatible physical
+        components. Currency-to-currency conversion is only special-cased when
+        each unit expression contains exactly one configured currency component;
+        expressions with zero, multiple, inverse, or mismatched-power currency
+        components fall back to Pint conversion and may raise Pint errors.
+        Components with explicit power one, such as ``EUR ** 1``, are treated as
+        the same currency component; expressions such as ``EUR / EUR`` simplify
+        before this check and therefore are not currency conversions.
+        Equivalent simplification beyond these rules follows Pint's parsed unit
+        container; GeneralManager classifies the expression after Pint
+        simplification and only inspects the resulting configured currency
+        components. For example, if Pint simplifies ``EUR * meter / meter`` to a
+        pure ``EUR`` unit, GeneralManager treats it as one currency component.
+        GeneralManager does not guarantee exact Pint exception subclasses or
+        messages for invalid units, incompatible conversions, or malformed
+        target expressions.
+
         Parameters:
             target_unit (str): Unit label or currency code to convert the measurement into.
             exchange_rate (float | None): Exchange rate to use when converting between different currencies; ignored for same-currency conversions and physical-unit conversions.
@@ -477,6 +606,8 @@ class Measurement:
 
         Raises:
             MissingExchangeRateError: If converting between two different currencies without providing an exchange rate.
+            pint.errors.PintError: If `target_unit` is invalid or incompatible
+                with the source unit.
         """
         source_currency = _currency_component(self.unit)
         target_currency = _currency_component(target_unit)
@@ -520,12 +651,21 @@ class Measurement:
         """
         Determine whether the measurement's unit represents a configured currency.
 
+        Currency matching is case-sensitive and checks the canonical unit string
+        against the module-level ``currency_units`` list. Compound units such as
+        ``"EUR / kilogram"`` are not considered pure currencies by this helper.
+        The configured codes are ``EUR``, ``USD``, ``GBP``, ``JPY``, ``CHF``,
+        ``AUD``, and ``CAD``; aliases are not registered. Percent and
+        dimensionless units are treated as ordinary Pint units.
+        The registry defines each currency as its own dimension named after the
+        currency code, for example ``EUR = [EUR]``.
+
         Returns:
             bool: True if the unit matches one of the registered currency codes.
         """
         return str(self.unit) in currency_units
 
-    def __add__(self, other: Any) -> Measurement:
+    def __add__(self, other: object) -> Measurement:
         """
         Return the sum of this Measurement and another Measurement while enforcing currency and dimensional rules.
 
@@ -573,7 +713,7 @@ class Measurement:
         else:
             raise MixedUnitOperationError("Addition")
 
-    def __sub__(self, other: Any) -> Measurement:
+    def __sub__(self, other: object) -> Measurement:
         """
         Subtract another Measurement from this one, enforcing currency and unit compatibility.
 
@@ -615,19 +755,28 @@ class Measurement:
         else:
             raise MixedUnitOperationError("Subtraction")
 
-    def __mul__(self, other: Any) -> Measurement:
+    def __mul__(self, other: object) -> Measurement:
         """
         Multiply this measurement by another measurement or by a numeric scalar.
 
+        Multiplication combines units through Pint. Two pure currency
+        measurements are rejected because the result would be a currency-squared
+        amount. Currency multiplied by a non-currency measurement, including
+        percent or dimensionless measurements, is allowed and produces the
+        corresponding compound or simplified unit. Pint treats percent as
+        ``0.01 dimensionless`` during conversion, but multiplication preserves
+        the compound unit until callers convert it, e.g. ``100 EUR * 20 percent``
+        renders as ``2000 EUR * percent`` and converts to ``20 EUR``.
+
         Parameters:
-            other (Measurement | Decimal | float | int): The multiplier. When a Measurement is provided, units are combined according to unit algebra; when a numeric scalar is provided, the magnitude is scaled and the unit is preserved.
+            other (Measurement | Decimal | float | int): The multiplier. When a Measurement is provided, units are combined according to unit algebra; when a numeric scalar is provided, the magnitude is scaled and the unit is preserved. Bool is not accepted as a scalar.
 
         Returns:
             Measurement: The product as a Measurement with the resulting magnitude and unit.
 
         Raises:
             CurrencyScalarOperationError: If both operands are currency measurements (multiplying two currencies is not allowed).
-            MeasurementScalarTypeError: If `other` is not a Measurement or a supported numeric type.
+            MeasurementScalarTypeError: If `other` is not a Measurement or a supported numeric type, including bool.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency():
@@ -641,13 +790,13 @@ class Measurement:
                 _decimal_from_magnitude(result_quantity.magnitude),
                 str(result_quantity.units),
             )
-        elif isinstance(other, (Decimal, float, int)):
+        elif _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             quantity = self.quantity
-            scalar: Decimal | float = other
+            scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
-                quantity = _quantity_as_float(quantity)
+                quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
                 scalar = float(other)
             result_quantity = quantity * scalar
             return Measurement(
@@ -657,19 +806,25 @@ class Measurement:
         else:
             raise MeasurementScalarTypeError("Multiplication")
 
-    def __truediv__(self, other: Any) -> Measurement:
+    def __truediv__(self, other: object) -> Measurement:
         """
         Divide this measurement by another measurement or by a numeric scalar.
 
+        Division combines units through Pint. Dividing two measurements with the
+        same currency produces a ratio with Pint's derived units, normally
+        dimensionless for pure currency values. Dividing different currencies is
+        rejected unless callers explicitly convert first with ``to()``.
+
         Parameters:
-            other (Measurement | Decimal | float | int): The divisor; when a Measurement, must be compatible (currencies require same unit).
+            other (Measurement | Decimal | float | int): The divisor; when a Measurement, must be compatible (currencies require same unit). Bool is not accepted as a scalar.
 
         Returns:
             Measurement: The quotient as a new Measurement. If `other` is a Measurement the result carries the derived units; if `other` is a scalar the result retains this measurement's unit.
 
         Raises:
             CurrencyMismatchError: If both operands are currencies with different units.
-            MeasurementScalarTypeError: If `other` is not a Measurement or a numeric type.
+            MeasurementScalarTypeError: If `other` is not a Measurement or a numeric type, including bool.
+            ZeroDivisionError: If dividing by a zero scalar or zero-magnitude measurement.
         """
         if isinstance(other, Measurement):
             if self.is_currency() and other.is_currency() and self.unit != other.unit:
@@ -683,13 +838,13 @@ class Measurement:
                 _decimal_from_magnitude(result_quantity.magnitude),
                 str(result_quantity.units),
             )
-        elif isinstance(other, (Decimal, float, int)):
+        elif _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             quantity = self.quantity
-            scalar: Decimal | float = other
+            scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
-                quantity = _quantity_as_float(quantity)
+                quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
                 scalar = float(other)
             result_quantity = quantity / scalar
             return Measurement(
@@ -703,6 +858,9 @@ class Measurement:
         """
         Return a human-readable string of the measurement, including its unit when not dimensionless.
 
+        The magnitude is read through the ``magnitude`` property, so output uses
+        the same Decimal normalization as other public magnitude access.
+
         Returns:
             A string formatted as "<magnitude> <unit>" for measurements with a unit, or as "<magnitude>" for dimensionless measurements.
         """
@@ -714,18 +872,38 @@ class Measurement:
         """
         Return a detailed representation suitable for debugging.
 
+        The magnitude is read through the ``magnitude`` property, and the unit
+        is Pint's canonical unit string. The GeneralManager-owned shape is
+        ``Measurement(<magnitude>, '<canonical unit>')``; exact magnitude and
+        compound-unit spelling follow the documented Decimal/Pint boundaries.
+
         Returns:
             str: Debug-friendly notation including magnitude and unit.
         """
         return f"Measurement({self.magnitude}, '{self.unit}')"
 
-    def _compare(self, other: Any, operation: Callable[..., bool]) -> bool:
+    def _compare(self, other: object, operation: ComparisonOperation) -> bool:
         """
         Compare this measurement to another value by normalizing both to the same unit and applying a comparison operation.
 
+        ``None`` and values equal to ``""``, ``[]``, ``()``, or ``{}`` return
+        ``False`` for every comparison operation, including equality and
+        inequality, before string parsing occurs. Therefore ``measurement == ""``
+        returns ``False`` rather than raising. The check uses Python equality, so
+        non-string custom objects that compare equal to those literal empty
+        values also take this path. Other non-empty strings are parsed with
+        ``from_string()``, so invalid strings propagate
+        ``InvalidMeasurementStringError`` or ``InvalidDimensionlessValueError``.
+        Other falsey values such as ``0`` and ``False`` are unsupported operands
+        and raise ``UnsupportedComparisonError``.
+        Offset-unit comparisons use ``1e-9`` relative and absolute tolerance;
+        non-offset comparisons use exact Decimal comparison after conversion.
+        Which units Pint treats as offset units and which operations require
+        float-backed quantities are delegated to Pint.
+
         Parameters:
-            other (Any): A Measurement instance or a string parseable by Measurement.from_string; empty or null-like values return False.
-            operation (Callable[..., bool]): A callable that accepts two magnitudes (self and other, after unit normalization) and returns a boolean result.
+            other (object): A Measurement instance or a string parseable by Measurement.from_string; empty or null-like values return False.
+            operation (ComparisonOperation): Callable receiving the normalized left and right magnitudes.
 
         Returns:
             bool: Result of applying `operation` to the two magnitudes; `False` for empty/null-like `other`.
@@ -761,71 +939,86 @@ class Measurement:
         except pint.DimensionalityError as error:
             raise IncomparableMeasurementError() from error
 
-    def __radd__(self, other: Any) -> Measurement:
+    def __radd__(self, other: object) -> Measurement:
         """
         Allow right-side addition so sum() treats 0 as the neutral element.
 
+        Nonzero left operands delegate to ``__add__`` and therefore raise
+        ``MeasurementOperandTypeError`` unless they are ``Measurement`` instances.
+
         Parameters:
-            other (Any): Left operand supplied by Python's arithmetic machinery; typically 0 when used with sum().
+            other (object): Left operand supplied by Python's arithmetic machinery; typically numeric zero when used with sum(). Bool is not treated as zero.
 
         Returns:
             Measurement: `self` if `other` is 0, otherwise the result of adding `other` to `self`.
         """
-        if other == 0:
+        if _is_numeric_scalar(other) and other == 0:
             return self
         return self.__add__(other)
 
-    def __rsub__(self, other: Any) -> Measurement:
+    def __rsub__(self, other: object) -> Measurement:
         """
         Support right-side subtraction.
 
+        Numeric zero returns the negated measurement. Nonzero non-Measurement
+        left operands raise ``MeasurementOperandTypeError``.
+
         Parameters:
-            other (Any): Left operand supplied by Python's arithmetic machinery; typically 0 when used with sum().
+            other (object): Left operand supplied by Python's arithmetic machinery; numeric zero produces a negated measurement. Bool is not treated as zero.
 
         Returns:
             Measurement: Result of subtracting `self` from `other`.
 
         Raises:
-            TypeError: If `other` is not a Measurement instance.
+            MeasurementOperandTypeError: If `other` is neither 0 nor a Measurement instance.
         """
-        if other == 0:
+        if _is_numeric_scalar(other) and other == 0:
             return self * -1
         if not isinstance(other, Measurement):
             raise MeasurementOperandTypeError("Subtraction")
         return other.__sub__(self)
 
-    def __rmul__(self, other: Any) -> Measurement:
+    def __rmul__(self, other: object) -> Measurement:
         """
         Support right-side multiplication.
 
         Parameters:
-            other (Any): Left operand supplied by Python's arithmetic machinery.
+            other (object): Left operand supplied by Python's arithmetic machinery.
 
         Returns:
             Measurement: Result of multiplying `other` by `self`.
         """
         return self.__mul__(other)
 
-    def __rtruediv__(self, other: Any) -> Measurement:
+    def __rtruediv__(self, other: object) -> Measurement:
         """
         Support right-side division.
 
+        Reverse division follows Python's reflected arithmetic boundary:
+        unsupported left operands raise ``MeasurementOperandTypeError``. Forward
+        division by unsupported non-measurement scalar-like operands raises
+        ``MeasurementScalarTypeError`` instead. Bool is not accepted as a scalar.
+        When the left operand is a ``Measurement``, the method returns
+        ``other.__truediv__(self)`` so all forward division currency, unit, and
+        zero-divisor rules apply with the operands reversed.
+
         Parameters:
-            other (Any): Left operand supplied by Python's arithmetic machinery.
+            other (object): Left operand supplied by Python's arithmetic machinery.
 
         Returns:
             Measurement: Result of dividing `other` by `self`.
 
         Raises:
-            TypeError: If `other` is not a Measurement instance.
+            MeasurementOperandTypeError: If `other` is not a Measurement instance or numeric scalar.
+            ZeroDivisionError: If this measurement has zero magnitude.
         """
-        if isinstance(other, (Decimal, float, int)):
+        if _is_numeric_scalar(other):
             if not isinstance(other, Decimal):
                 other = Decimal(str(other))
             quantity = self.quantity
-            scalar: Decimal | float = other
+            scalar: QuantityMagnitude = other
             if _unit_uses_offset(quantity):
-                quantity = _quantity_as_float(quantity)
+                quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
                 scalar = float(other)
             result_quantity = scalar / quantity
             return Measurement(
@@ -838,27 +1031,100 @@ class Measurement:
         return other.__truediv__(self)
 
     # Comparison Operators
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
+        """
+        Return whether this measurement equals another compatible measurement.
+
+        Args:
+            other: ``Measurement`` or string accepted by ``from_string``.
+
+        Returns:
+            ``True`` when magnitudes are equal after unit normalization. The
+            null-like values handled by ``_compare()`` return ``False``.
+
+        Raises:
+            UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
+            IncomparableMeasurementError: If units are incompatible.
+        """
         return self._compare(other, eq)
 
-    def __ne__(self, other: Any) -> bool:
+    def __ne__(self, other: object) -> bool:
+        """
+        Return whether this measurement differs from another compatible measurement.
+
+        This uses the same comparison path as ``__eq__`` with the ``!=``
+        operation; it is not implemented as ``not __eq__(other)``. The documented
+        null-like values therefore return ``False`` rather than the inverse of
+        equality.
+
+        Args:
+            other: ``Measurement`` or string accepted by ``from_string``.
+
+        Returns:
+            ``True`` when magnitudes differ after unit normalization. The
+            null-like values handled by ``_compare()`` return ``False`` rather
+            than ``True``.
+
+        Raises:
+            UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
+            IncomparableMeasurementError: If units are incompatible.
+        """
         return self._compare(other, ne)
 
-    def __lt__(self, other: Any) -> bool:
+    def __lt__(self, other: object) -> bool:
+        """
+        Return whether this measurement is less than another compatible measurement.
+
+        Args:
+            other: ``Measurement`` or string accepted by ``from_string``.
+
+        Returns:
+            ``True`` when this magnitude is smaller after unit normalization.
+
+        Raises:
+            UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
+            IncomparableMeasurementError: If units are incompatible.
+        """
         return self._compare(other, lt)
 
-    def __le__(self, other: Any) -> bool:
+    def __le__(self, other: object) -> bool:
+        """
+        Return whether this measurement is less than or equal to another measurement.
+
+        Args:
+            other: ``Measurement`` or string accepted by ``from_string``.
+
+        Returns:
+            ``True`` when this magnitude is smaller or equal after unit normalization.
+
+        Raises:
+            UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
+            IncomparableMeasurementError: If units are incompatible.
+        """
         return self._compare(other, le)
 
-    def __gt__(self, other: Any) -> bool:
+    def __gt__(self, other: object) -> bool:
+        """
+        Return whether this measurement is greater than another compatible measurement.
+
+        Args:
+            other: ``Measurement`` or string accepted by ``from_string``.
+
+        Returns:
+            ``True`` when this magnitude is larger after unit normalization.
+
+        Raises:
+            UnsupportedComparisonError: If ``other`` cannot be interpreted as a measurement.
+            IncomparableMeasurementError: If units are incompatible.
+        """
         return self._compare(other, gt)
 
-    def __ge__(self, other: Any) -> bool:
+    def __ge__(self, other: object) -> bool:
         """
         Check whether the measurement is greater than or equal to another value.
 
         Parameters:
-            other (Any): Measurement or compatible representation used in the comparison.
+            other (object): Measurement or compatible representation used in the comparison.
 
         Returns:
             bool: True when the measurement is greater than or equal to `other`.
@@ -871,9 +1137,27 @@ class Measurement:
 
     def __hash__(self) -> int:
         """
-        Compute a hash using the measurement's magnitude and unit.
+        Compute a hash using the measurement's canonical base magnitude and unit.
+
+        Hashing mirrors equality by converting to base units first. The base
+        magnitude is normalized to a Decimal and quantized to ``1e-9`` so
+        offset-unit comparisons that are equal within the documented tolerance
+        also hash consistently. Hash collisions remain possible, as with any
+        Python hash. Non-offset equality uses exact Decimal comparison after
+        conversion; quantization may introduce extra hash collisions but does not
+        make unequal measurements compare equal.
+        "Equivalent" means measurements for which the comparison methods report
+        equality; additional Pint simplifications only matter when they affect
+        that equality result.
+        For Decimal special values and Pint base-unit conversion failures,
+        hashing follows the same Decimal/Pint behavior described above.
 
         Returns:
-            int: Stable hash suitable for use in dictionaries and sets.
+            int: Stable hash suitable for use in dictionaries and sets. Measurements
+            that compare equal after unit conversion produce the same hash.
         """
-        return hash((self.magnitude, str(self.unit)))
+        quantity = self.quantity
+        if _unit_uses_offset(quantity):
+            quantity = cast(MeasurementQuantity, _quantity_as_float(quantity))
+        base_quantity = quantity.to_base_units()
+        return hash((_hash_decimal(base_quantity.magnitude), str(base_quantity.units)))

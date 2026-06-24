@@ -1,4 +1,14 @@
-"""General Manager package models."""
+"""Root Django model exports for the GeneralManager app.
+
+Importing `general_manager.models` exposes the concrete search and workflow
+models that belong to this Django app. The classes are imported from their
+canonical `general_manager.search.models` and `general_manager.workflow.models`
+modules and re-exported for Django model discovery and stable root-module
+imports.
+
+This module defines no public callables, accepts no application inputs, returns
+no application outputs, and wraps no import or Django app-registry errors.
+"""
 
 from general_manager.search.models import SearchIndexState
 from general_manager.workflow.models import (
@@ -8,10 +18,10 @@ from general_manager.workflow.models import (
     WorkflowOutbox,
 )
 
-__all__ = [
+__all__: tuple[str, ...] = (
     "SearchIndexState",
     "WorkflowDeliveryAttempt",
     "WorkflowEventRecord",
     "WorkflowExecutionRecord",
     "WorkflowOutbox",
-]
+)

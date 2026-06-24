@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from general_manager.public_api_registry import RULE_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from general_manager._types.rule import *  # noqa: F403
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     """
     Dynamically resolve a missing module attribute using the module's export registry.
 
@@ -23,7 +23,10 @@ def __getattr__(name: str) -> Any:
         name (str): The attribute name being accessed on the module.
 
     Returns:
-        The attribute value associated with `name` from the module's export registry, or a fallback value if the name cannot be resolved.
+        The attribute value associated with `name` from the module's export registry.
+
+    Raises:
+        MissingExportError: If `name` is not declared in this module's public exports.
     """
     return resolve_export(
         name,

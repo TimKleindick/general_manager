@@ -1,4 +1,12 @@
+from datetime import datetime
+import hashlib
+import inspect
+import json
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
+
+from general_manager.utils.json_encoder import CustomJSONEncoder
 from general_manager.utils.make_cache_key import make_cache_key
 
 
@@ -151,6 +159,28 @@ class TestMakeCacheKey(SimpleTestCase):
         result = make_cache_key(sample_function, args, kwargs)
         self.assertIsNotNone(result)
 
+    def test_make_cache_key_treats_none_kwargs_as_empty(self):
+        def sample_function(x=1):
+            return x
+
+        result1 = make_cache_key(sample_function, (), None)
+        result2 = make_cache_key(sample_function, (), {})
+
+        self.assertEqual(result1, result2)
+
+    def test_make_cache_key_preserves_falsey_mapping_kwargs(self):
+        class FalseyMapping(dict[str, object]):
+            def __bool__(self):
+                return False
+
+        def sample_function(x=1):
+            return x
+
+        result1 = make_cache_key(sample_function, (), FalseyMapping(x=2))
+        result2 = make_cache_key(sample_function, (), {})
+
+        self.assertNotEqual(result1, result2)
+
     def test_make_cache_key_with_none_args_and_kwargs(self):
         """
         Tests that make_cache_key generates a valid cache key when None values are used as arguments and keyword arguments.
@@ -213,6 +243,36 @@ class TestMakeCacheKey(SimpleTestCase):
 
         result = make_cache_key(sample_function, args, kwargs)
         self.assertIsNotNone(result)
+
+    def test_make_cache_key_uses_custom_json_encoder(self):
+        def sample_function(timestamp):
+            return timestamp
+
+        timestamp = datetime(2026, 6, 23, 12, 30, 0)
+        result = make_cache_key(sample_function, (timestamp,), {})
+
+        bound = inspect.signature(sample_function).bind_partial(timestamp)
+        bound.apply_defaults()
+        payload = {
+            "module": sample_function.__module__,
+            "qualname": sample_function.__qualname__,
+            "args": bound.arguments,
+        }
+        raw = json.dumps(payload, sort_keys=True, cls=CustomJSONEncoder).encode()
+        expected = hashlib.sha256(raw, usedforsecurity=False).hexdigest()
+
+        self.assertEqual(result, expected)
+
+    def test_make_cache_key_does_not_override_custom_encoder_default(self):
+        def sample_function(value):
+            return value
+
+        with patch("general_manager.utils.make_cache_key.json.dumps") as dumps:
+            dumps.return_value = "{}"
+            make_cache_key(sample_function, (object(),), {})
+
+        self.assertIs(dumps.call_args.kwargs["cls"], CustomJSONEncoder)
+        self.assertNotIn("default", dumps.call_args.kwargs)
 
     def test_make_cache_key_with_custom_object(self):
         """

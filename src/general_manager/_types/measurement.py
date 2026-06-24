@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Type-only imports for public API re-exports."""
+
+from __future__ import annotations
 
 __all__ = [
     "Measurement",

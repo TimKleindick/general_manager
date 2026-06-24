@@ -3,7 +3,13 @@ from typing import Any, Optional
 
 import pytest
 
-from general_manager.rule.handler import LenHandler, MaxHandler, MinHandler, SumHandler
+from general_manager.rule.handler import (
+    InvalidFunctionNodeError,
+    LenHandler,
+    MaxHandler,
+    MinHandler,
+    SumHandler,
+)
 
 
 class UnexpectedNodeTypeError(ValueError):
@@ -144,11 +150,86 @@ def test_len_handler_success(expr, op_symbol, var_values, expected):
     assert result == expected
 
 
+def test_len_handler_uses_supplied_comparator_in_chained_comparison():
+    node = ast.parse("1 < len(x) < 5", mode="eval").body
+    rule = DummyRule("<")
+
+    result = len_handler.handle(
+        node,
+        node.comparators[0],
+        node.comparators[1],
+        node.ops[1],
+        {"x": "abcdef"},
+        rule,  # type: ignore[arg-type]
+    )
+
+    assert result == {"x": "[x] (abcdef) is too long (max length 4)!"}
+
+
+def test_len_handler_not_equal_message():
+    node = ast.parse("len(x) != 3", mode="eval").body
+    rule = DummyRule("!=")
+
+    result = len_handler.handle(
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        {"x": "abc"},
+        rule,  # type: ignore[arg-type]
+    )
+
+    assert result == {"x": "[x] (abc) must not have a length of 3!"}
+
+
 def test_non_compare_node_returns_empty():
     # Example: a call node instead of a comparison node
     node = ast.parse("print('hallo')", mode="eval").body
     rule = DummyRule(">")
     assert len_handler.handle(node, None, None, None, {}, rule) == {}  # type: ignore
+
+
+def test_mismatched_function_call_returns_empty():
+    node = ast.parse("len(x) > 3", mode="eval").body
+    rule = DummyRule(">")
+
+    result = sum_handler.handle(
+        node,
+        node.left,  # type: ignore[attr-defined]
+        node.comparators[0],  # type: ignore[attr-defined]
+        node.ops[0],  # type: ignore[attr-defined]
+        {"x": [1, 2]},
+        rule,  # type: ignore[arg-type]
+    )
+
+    assert result == {}
+
+
+@pytest.mark.parametrize(
+    "handler, expr",
+    [
+        (len_handler, "len() > 0"),
+        (len_handler, "len(x, y) > 0"),
+        (len_handler, "len(x=x) > 0"),
+        (sum_handler, "sum() > 0"),
+        (sum_handler, "sum(x, y) > 0"),
+        (max_handler, "max(x=x) > 0"),
+        (min_handler, "min() > 0"),
+    ],
+)
+def test_function_handler_requires_one_positional_argument(handler, expr):
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule(">")
+
+    with pytest.raises(InvalidFunctionNodeError):
+        handler.handle(
+            node,
+            node.left,  # type: ignore[attr-defined]
+            node.comparators[0],  # type: ignore[attr-defined]
+            node.ops[0],  # type: ignore[attr-defined]
+            {"x": [1, 2], "y": [3]},
+            rule,
+        )
 
 
 @pytest.mark.parametrize(
@@ -544,7 +625,7 @@ def test_handler_none_value_raises(handler, expr, error_msg):
 # --- Tests for new custom exception classes ---
 def test_invalid_function_node_error():
     """Test that InvalidFunctionNodeError is raised for invalid AST nodes."""
-    from general_manager.rule.handler import InvalidFunctionNodeError, LenHandler
+    from general_manager.rule.handler import LenHandler
 
     handler = LenHandler()
     rule = DummyRule(">")
@@ -585,6 +666,25 @@ def test_invalid_len_threshold_error():
             rule,
         )
     assert "Invalid arguments for len function" in str(excinfo.value)
+
+
+def test_invalid_len_threshold_error_bool():
+    """Boolean thresholds are rejected rather than treated as integers."""
+    from general_manager.rule.handler import InvalidLenThresholdError
+
+    handler = LenHandler()
+    rule = DummyRule(">")
+    node = ast.parse("len(x) > True", mode="eval").body
+
+    with pytest.raises(InvalidLenThresholdError):
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [1, 2, 3]},
+            rule,
+        )
 
 
 def test_invalid_numeric_threshold_error_sum():
@@ -734,6 +834,25 @@ def test_numeric_iterable_error_sum_non_numeric():
     assert "sum expects an iterable of numbers" in str(excinfo.value)
 
 
+def test_numeric_iterable_error_sum_bool_is_not_numeric():
+    """Boolean aggregate values are rejected rather than summed as integers."""
+    from general_manager.rule.handler import NumericIterableError
+
+    handler = SumHandler()
+    rule = DummyRule(">")
+    node = ast.parse("sum(x) > 0", mode="eval").body
+
+    with pytest.raises(NumericIterableError):
+        handler.handle(
+            node,
+            node.left,  # type: ignore
+            node.comparators[0],  # type: ignore
+            node.ops[0],  # type: ignore
+            {"x": [True, False]},
+            rule,
+        )
+
+
 def test_numeric_iterable_error_max_non_numeric():
     """Test that NumericIterableError is raised when max receives non-numeric values."""
     from general_manager.rule.handler import NumericIterableError
@@ -794,3 +913,27 @@ def test_sum_handler_with_mixed_types():
             {"x": [1, 2, "three", 4]},
             rule,
         )
+
+
+@pytest.mark.parametrize(
+    "handler, expr, expected",
+    [
+        (sum_handler, "sum(x) != 3", {"x": "[x] (sum=6) must not be 3!"}),
+        (max_handler, "max(x) != 3", {"x": "[x] (max=3) must not be 3!"}),
+        (min_handler, "min(x) != 1", {"x": "[x] (min=1) must not be 1!"}),
+    ],
+)
+def test_aggregate_handler_not_equal_message(handler, expr, expected):
+    node = ast.parse(expr, mode="eval").body
+    rule = DummyRule("!=")
+
+    result = handler.handle(
+        node,
+        node.left,
+        node.comparators[0],
+        node.ops[0],
+        {"x": [1, 2, 3]},
+        rule,
+    )
+
+    assert result == expected

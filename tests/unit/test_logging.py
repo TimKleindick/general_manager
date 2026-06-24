@@ -16,7 +16,7 @@ from general_manager.cache.dependency_index import (
     generic_cache_invalidation,
     set_full_index,
 )
-from general_manager.logging import get_logger
+from general_manager.logging import BlankComponentError, build_logger_name, get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.base_permission import (
@@ -75,6 +75,22 @@ def test_get_logger_uses_general_manager_namespace() -> None:
     assert adapter.extra["component"] == "permission.base"
 
 
+def test_build_logger_name_validates_and_normalizes_components() -> None:
+    assert build_logger_name() == "general_manager"
+    assert build_logger_name("cache.dependency_index") == (
+        "general_manager.cache.dependency_index"
+    )
+    assert build_logger_name(" general_manager.cache ") == (
+        "general_manager.general_manager.cache"
+    )
+    assert build_logger_name("cache index") == "general_manager.cache_index"
+
+    with pytest.raises(BlankComponentError):
+        build_logger_name(" ... ")
+    with pytest.raises(TypeError, match="component must be a string or None"):
+        build_logger_name(1)  # type: ignore[arg-type]
+
+
 def test_adapter_enriches_log_records(caplog: pytest.LogCaptureFixture) -> None:
     adapter = get_logger("cache.dependency_index")
 
@@ -98,16 +114,18 @@ def test_adapter_merges_existing_extra_context(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     adapter = get_logger("interface.read_only")
+    extra = {"context": {"model": "Project", "count": 1}}
 
     with caplog.at_level(logging.INFO, logger="general_manager.interface.read_only"):
         adapter.info(
             "synced",
-            extra={"context": {"model": "Project"}},
+            extra=extra,
             context={"count": 5},
         )
 
     record = caplog.records[0]
     assert record.context == {"model": "Project", "count": 5}
+    assert extra["context"] == {"model": "Project", "count": 5}
 
 
 def test_general_manager_logging_for_create_and_queries() -> None:

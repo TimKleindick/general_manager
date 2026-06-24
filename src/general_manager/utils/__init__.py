@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from general_manager.public_api_registry import UTILS_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from general_manager._types.utils import *  # noqa: F403
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     """
     Resolve and return a lazily exported attribute from the module's public API.
 
@@ -23,7 +23,7 @@ def __getattr__(name: str) -> Any:
         name (str): The attribute name being accessed on the module.
 
     Returns:
-        Any: The resolved export object corresponding to `name` as defined by the module's public API mapping.
+        The resolved export object corresponding to `name` as defined by the module's public API mapping.
     """
     return resolve_export(
         name,

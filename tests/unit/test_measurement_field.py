@@ -170,6 +170,17 @@ class MeasurementFieldTests(TestCase):
         self.assertEqual(temperature.unit, "degree_Celsius")  # type: ignore[union-attr]
         self.assertAlmostEqual(float(temperature.magnitude), 25.0)  # type: ignore[union-attr]
 
+    def test_descriptor_falls_back_to_base_unit_for_unknown_stored_unit(self):
+        self.instance.length_value = Decimal("5")  # type: ignore
+        self.instance.length_unit = "not_a_unit"  # type: ignore
+
+        length = self.instance.length
+
+        self.assertIsNotNone(length)
+        self.assertEqual(length.magnitude, Decimal("5"))  # type: ignore[union-attr]
+        self.assertEqual(length.unit, "meter")  # type: ignore[union-attr]
+        self.assertEqual(self.instance.length_unit, "not_a_unit")  # type: ignore
+
     def test_offset_unit_base_unit_is_rejected(self):
         with self.assertRaises(InvalidMeasurementFieldBaseUnitError) as ctx:
             MeasurementField(base_unit="degC")
@@ -180,6 +191,65 @@ class MeasurementFieldTests(TestCase):
         field = self.TestModel._meta.get_field("temperature")
         prepared = field.get_prep_value(Measurement(70, "degF"))
         self.assertEqual(prepared, Decimal("294.2611111111"))
+
+    def test_get_prep_value_wraps_invalid_string_as_validation_error(self):
+        field = self.TestModel._meta.get_field("length")
+
+        with self.assertRaises(ValidationError):
+            field.get_prep_value("not_a_measurement")
+
+    def test_clean_runs_validators_once_for_measurement(self):
+        calls: list[Measurement] = []
+
+        def validator(value: Measurement) -> None:
+            calls.append(value)
+
+        field = MeasurementField(base_unit="kg", null=True, blank=True)
+        field.validators.append(validator)
+        measurement = Measurement(1, "kg")
+
+        cleaned = field.clean(measurement)
+
+        self.assertIs(cleaned, measurement)
+        self.assertEqual(calls, [measurement])
+
+    def test_clean_skips_validators_for_blank_value(self):
+        calls: list[object] = []
+
+        def validator(value: object) -> None:
+            calls.append(value)
+
+        field = MeasurementField(base_unit="kg", null=True, blank=True)
+        field.validators.append(validator)
+
+        cleaned = field.clean("")
+
+        self.assertEqual(cleaned, "")
+        self.assertEqual(calls, [])
+
+    def test_clean_returns_same_blank_container_when_blank_allowed(self):
+        field = MeasurementField(base_unit="kg", null=True, blank=True)
+        empty_list: list[object] = []
+        empty_dict: dict[object, object] = {}
+
+        self.assertIs(field.clean(empty_list), empty_list)
+        self.assertIs(field.clean(empty_dict), empty_dict)
+
+    def test_clean_rejects_non_empty_string_without_parsing(self):
+        field = MeasurementField(base_unit="kg", null=True, blank=True)
+
+        with self.assertRaises(ValidationError):
+            field.clean("100 g")
+
+    def test_to_python_is_passthrough(self):
+        field = MeasurementField(base_unit="kg", null=True, blank=True)
+        measurement = Measurement(1, "kg")
+        empty_list: list[object] = []
+
+        self.assertIs(field.to_python(measurement), measurement)
+        self.assertEqual(field.to_python("1 meter"), "1 meter")
+        self.assertEqual(field.to_python(""), "")
+        self.assertIs(field.to_python(empty_list), empty_list)
 
     def test_edge_case_very_large_value1(self):
         """
