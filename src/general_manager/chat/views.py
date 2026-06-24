@@ -31,6 +31,8 @@ from general_manager.chat.consumer import (
 from general_manager.chat.grounding import (
     build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
+    build_query_required_recovery_message,
+    should_recover_answer_without_query,
     should_recover_missing_tool_call,
 )
 from general_manager.chat.providers.base import (
@@ -172,8 +174,10 @@ async def _run_provider_turn(
     messages: list[Message],
     transport: str,
     tool_retries: int = 0,
+    tool_calls: list[dict[str, Any]] | None = None,
     recovered_missing_tools: bool = False,
 ) -> list[dict[str, Any]]:
+    tool_calls = list(tool_calls or [])
     events: list[dict[str, Any]] = []
     assistant_chunks: list[str] = []
     settings = get_chat_settings()
@@ -197,6 +201,7 @@ async def _run_provider_turn(
                     "args": event.args,
                 }
             )
+            tool_calls.append({"name": event.name, "args": dict(event.args)})
             result = execute_chat_tool(
                 event.name, event.args, ScopeChatContext.from_scope(scope)
             )
@@ -290,6 +295,8 @@ async def _run_provider_turn(
                     messages=messages,
                     transport=transport,
                     tool_retries=next_retries,
+                    tool_calls=tool_calls,
+                    recovered_missing_tools=recovered_missing_tools,
                 )
             )
             return events
@@ -321,6 +328,34 @@ async def _run_provider_turn(
                         messages=messages,
                         transport=transport,
                         tool_retries=tool_retries,
+                        tool_calls=tool_calls,
+                        recovered_missing_tools=True,
+                    )
+                if (
+                    recover_missing_tools
+                    and not recovered_missing_tools
+                    and should_recover_answer_without_query(
+                        user_text=_last_user_text(messages),
+                        assistant_text=assistant_message,
+                        tool_calls=tool_calls,
+                    )
+                ):
+                    messages.append(
+                        Message(
+                            role="system",
+                            content=build_query_required_recovery_message(
+                                _last_user_text(messages)
+                            ),
+                        )
+                    )
+                    return await _run_provider_turn(
+                        scope=scope,
+                        conversation=conversation,
+                        provider=provider,
+                        messages=messages,
+                        transport=transport,
+                        tool_retries=tool_retries,
+                        tool_calls=tool_calls,
                         recovered_missing_tools=True,
                     )
                 if recover_missing_tools:
@@ -353,6 +388,7 @@ async def _run_provider_turn(
                     messages=messages,
                     transport=transport,
                     tool_retries=tool_retries,
+                    tool_calls=tool_calls,
                     recovered_missing_tools=True,
                 )
             enforce_chat_rate_limit(

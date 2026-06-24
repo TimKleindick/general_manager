@@ -53,12 +53,34 @@ def test_schema_only_data_answer_triggers_query_recovery() -> None:
     )
 
 
+def test_recover_answer_without_query_for_path_only_record_answer() -> None:
+    assert should_recover_answer_without_query(
+        user_text=(
+            "Find records in SyntheticManager08 related to the first "
+            "SyntheticManager01 item."
+        ),
+        assistant_text="I found a path, but no records yet.",
+        tool_calls=[{"name": "find_path"}],
+    )
+
+
 def test_answer_after_query_does_not_trigger_query_recovery() -> None:
     assert (
         should_recover_answer_without_query(
             user_text="Which projects use cobalt?",
             assistant_text="Apollo uses cobalt.",
             tool_calls=[{"name": "query", "args": {"manager": "ProjectManager"}}],
+        )
+        is False
+    )
+
+
+def test_mutation_tool_does_not_trigger_query_recovery() -> None:
+    assert (
+        should_recover_answer_without_query(
+            user_text="Create records in PartManager.",
+            assistant_text="Created the requested record.",
+            tool_calls=[{"name": "mutate", "args": {"mutation": "createPart"}}],
         )
         is False
     )

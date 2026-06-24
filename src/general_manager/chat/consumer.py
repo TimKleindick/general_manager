@@ -16,6 +16,8 @@ from general_manager.chat.errors import public_chat_error
 from general_manager.chat.grounding import (
     build_empty_response_recovery_message,
     build_missing_tool_recovery_message,
+    build_query_required_recovery_message,
+    should_recover_answer_without_query,
     should_recover_missing_tool_call,
 )
 from general_manager.chat.providers.base import (
@@ -332,8 +334,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         history: list[dict[str, str]],
         *,
         tool_retries: int,
+        tool_calls: list[dict[str, Any]] | None = None,
         recovered_missing_tools: bool = False,
     ) -> None:
+        tool_calls = list(tool_calls or [])
         assistant_chunks: list[str] = []
         self._provider_task = asyncio.current_task()
         recover_missing_tools = bool(
@@ -362,11 +366,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                             }
                         )
                         return
+                    tool_calls.append({"name": event.name, "args": dict(event.args)})
                     should_resume = await self._handle_tool_call(
                         event,
                         messages,
                         history,
                         tool_retries=tool_retries,
+                        tool_calls=tool_calls,
+                        recovered_missing_tools=recovered_missing_tools,
                     )
                     if not should_resume:
                         return
@@ -396,6 +403,32 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                                 messages,
                                 history,
                                 tool_retries=tool_retries,
+                                tool_calls=tool_calls,
+                                recovered_missing_tools=True,
+                            )
+                            return
+                        if (
+                            recover_missing_tools
+                            and not recovered_missing_tools
+                            and should_recover_answer_without_query(
+                                user_text=_last_user_text(messages),
+                                assistant_text=assistant_message,
+                                tool_calls=tool_calls,
+                            )
+                        ):
+                            messages.append(
+                                Message(
+                                    role="system",
+                                    content=build_query_required_recovery_message(
+                                        _last_user_text(messages)
+                                    ),
+                                )
+                            )
+                            await self._stream_provider_turn(
+                                messages,
+                                history,
+                                tool_retries=tool_retries,
+                                tool_calls=tool_calls,
                                 recovered_missing_tools=True,
                             )
                             return
@@ -431,6 +464,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                             messages,
                             history,
                             tool_retries=tool_retries,
+                            tool_calls=tool_calls,
                             recovered_missing_tools=True,
                         )
                         return
@@ -459,7 +493,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         history: list[dict[str, str]],
         *,
         tool_retries: int,
+        tool_calls: list[dict[str, Any]] | None = None,
+        recovered_missing_tools: bool = False,
     ) -> bool:
+        tool_calls = list(tool_calls or [])
         emit_chat_audit_event(
             "tool_call",
             {
@@ -596,6 +633,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             messages,
             history,
             tool_retries=next_tool_retries,
+            tool_calls=tool_calls,
+            recovered_missing_tools=recovered_missing_tools,
         )
         return True
 

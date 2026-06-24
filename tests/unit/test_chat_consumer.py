@@ -134,6 +134,43 @@ class _EmptyAfterToolRecoveryProvider:
         yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
 
 
+class _PathOnlyRecordRecoveryProvider:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            yield ToolCallEvent(
+                id="path-1",
+                name="find_path",
+                args={
+                    "from_manager": "SyntheticManager01",
+                    "to_manager": "SyntheticManager08",
+                },
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        if len(self.calls) == 2:
+            yield TextChunkEvent(content="I found a path, but no records yet.")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+            return
+        if len(self.calls) == 3:
+            yield ToolCallEvent(
+                id="query-1",
+                name="query",
+                args={
+                    "manager": "SyntheticManager08",
+                    "query": {"fields": ["name"]},
+                },
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=3, output_tokens=3))
+            return
+        yield TextChunkEvent(content="Found record: Recovered Synthetic Row.")
+        yield DoneEvent(usage=TokenUsage(input_tokens=4, output_tokens=4))
+
+
 def _deny_permission(*_args: object, **_kwargs: object) -> bool:
     return False
 
@@ -824,6 +861,83 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 message.role == "system"
                 and "previous tool result is not a final answer" in message.content
                 for message in recovery_messages
+            )
+
+        asyncio.run(run())
+
+    def test_receive_json_recovers_path_only_record_answer_by_requiring_query(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        provider = _PathOnlyRecordRecoveryProvider()
+        consumer.provider = provider
+        consumer.channel_name = "chat.path-query-grounding"
+
+        def execute_tool(name, args, context):  # type: ignore[no-untyped-def]
+            del args, context
+            if name == "find_path":
+                return {
+                    "path": ["synthetic01", "synthetic08"],
+                    "from_manager": "SyntheticManager01",
+                    "to_manager": "SyntheticManager08",
+                }
+            if name == "query":
+                return {"rows": [{"name": "Recovered Synthetic Row"}]}
+            raise AssertionError(name)
+
+        async def run() -> None:
+            with (
+                override_settings(
+                    GENERAL_MANAGER={
+                        "CHAT": {
+                            "recover_missing_tool_calls": True,
+                        }
+                    }
+                ),
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=execute_tool,
+                ),
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "message",
+                        "text": (
+                            "Find records in SyntheticManager08 related to the first "
+                            "SyntheticManager01 item."
+                        ),
+                    }
+                )
+
+            sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
+            assert {
+                "type": "text_chunk",
+                "content": "I found a path, but no records yet.",
+            } not in sent_messages
+            assert sent_messages[-2] == {
+                "type": "text_chunk",
+                "content": "Found record: Recovered Synthetic Row.",
+            }
+            assert sent_messages[-1] == {
+                "type": "done",
+                "usage": {"input_tokens": 4, "output_tokens": 4},
+            }
+            assert provider.calls[2][-1].content
+            assert (
+                "Schema and path tools are not data queries"
+                in provider.calls[2][-1].content
             )
 
         asyncio.run(run())

@@ -72,6 +72,11 @@ def _tool_decision_section() -> list[str]:
             "fields."
         ),
         (
+            "- If find_path returns a non-empty path for a record question, call "
+            "query on the destination manager before answering; do not say there "
+            "is no path."
+        ),
+        (
             "4. For data questions, call every needed tool before writing any "
             "answer text. Do not interleave text and tool calls."
         ),

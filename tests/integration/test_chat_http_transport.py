@@ -118,7 +118,7 @@ class HttpMissingToolRecoveryProvider:
 
     def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         del tools
-        type(self).calls.append(messages)
+        type(self).calls.append(list(messages))
 
         async def _stream():
             from general_manager.chat.providers.base import (
@@ -133,6 +133,53 @@ class HttpMissingToolRecoveryProvider:
                 return
             yield TextChunkEvent(content="Steel and Cobalt from query results.")
             yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+
+        return _stream()
+
+
+class HttpPathOnlyRecordRecoveryProvider:
+    calls: ClassVar[list[object]] = []
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        type(self).calls.append(messages)
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+                ToolCallEvent,
+            )
+
+            if len(type(self).calls) == 1:
+                yield ToolCallEvent(
+                    id="path-1",
+                    name="find_path",
+                    args={
+                        "from_manager": "SyntheticManager01",
+                        "to_manager": "SyntheticManager08",
+                    },
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            if len(type(self).calls) == 2:
+                yield TextChunkEvent(content="I found a path, but no records yet.")
+                yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+                return
+            if len(type(self).calls) == 3:
+                yield ToolCallEvent(
+                    id="query-1",
+                    name="query",
+                    args={
+                        "manager": "SyntheticManager08",
+                        "query": {"fields": ["name"]},
+                    },
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=3, output_tokens=3))
+                return
+            yield TextChunkEvent(content="Found record: Recovered Synthetic Row.")
+            yield DoneEvent(usage=TokenUsage(input_tokens=4, output_tokens=4))
 
         return _stream()
 
@@ -608,3 +655,62 @@ class ChatHttpTransportTests(TestCase):
         recovery_messages = HttpMissingToolRecoveryProvider.calls[1]
         assert recovery_messages[-1].role == "system"
         assert "Do not answer from memory" in recovery_messages[-1].content
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "url": "/chat/",
+                "recover_missing_tool_calls": True,
+            }
+        }
+    )
+    def test_http_chat_recovers_path_only_record_answer_by_requiring_query(
+        self,
+    ) -> None:
+        HttpPathOnlyRecordRecoveryProvider.calls = []
+
+        def execute_tool(name, args, context):  # type: ignore[no-untyped-def]
+            del args, context
+            if name == "find_path":
+                return {
+                    "path": ["synthetic01", "synthetic08"],
+                    "from_manager": "SyntheticManager01",
+                    "to_manager": "SyntheticManager08",
+                }
+            if name == "query":
+                return {"rows": [{"name": "Recovered Synthetic Row"}]}
+            raise AssertionError(name)
+
+        with (
+            patch(
+                "general_manager.chat.views.import_provider",
+                return_value=HttpPathOnlyRecordRecoveryProvider,
+            ),
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                side_effect=execute_tool,
+            ),
+        ):
+            response = self.client.post(
+                "/chat/",
+                data=json.dumps(
+                    {
+                        "text": (
+                            "Find records in SyntheticManager08 related to the first "
+                            "SyntheticManager01 item."
+                        )
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert "Recovered Synthetic Row" in payload["answer"]
+        assert "I found a path, but no records yet." not in payload["answer"]
+        assert {
+            "type": "text_chunk",
+            "content": "I found a path, but no records yet.",
+        } not in payload["events"]
