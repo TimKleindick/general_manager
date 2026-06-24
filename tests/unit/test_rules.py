@@ -227,6 +227,26 @@ class RuleTests(TestCase):
             ):
                 Rule(func)
 
+    def test_rule_handlers_setting_must_be_sequence_of_paths(self):
+        """Invalid RULE_HANDLERS container shapes fail during Rule construction."""
+
+        invalid_values = [
+            "tests.unit.test_rules.CustomLenHandler",
+            {"handler": "tests.unit.test_rules.CustomLenHandler"},
+            123,
+        ]
+
+        def func(item: DummyObject) -> bool:
+            return item.value > 1
+
+        for value in invalid_values:
+            with (
+                self.subTest(value=value),
+                override_settings(GENERAL_MANAGER={"RULE_HANDLERS": value}),
+                self.assertRaises(InvalidRuleHandlerConfigurationError),
+            ):
+                Rule(func)
+
     def test_rule_with_floats(self):
         """
         Verifies that a Rule comparing a float field produces a failing evaluation and the correct error message.
@@ -385,6 +405,19 @@ class RuleTests(TestCase):
         self.assertEqual(
             rule.get_error_message(),
             {"username": "[username] (abcdef) is too long (max length 4)!"},
+        )
+
+    def test_rule_with_chained_len_comparison_reports_lower_bound_from_right_call(self):
+        def func(item: DummyObject) -> bool:
+            return 1 < len(item.username) < 5
+
+        x = DummyObject(username="a")
+        rule = Rule(func)
+
+        self.assertFalse(rule.evaluate(x))
+        self.assertEqual(
+            rule.get_error_message(),
+            {"username": "[username] (a) is too short (min length 2)!"},
         )
 
     def test_rule_with_lists(self):

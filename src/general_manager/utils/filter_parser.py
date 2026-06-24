@@ -218,8 +218,10 @@ def apply_lookup(value_to_check: object, lookup: str, filter_value: object) -> b
     ``contains`` evaluates ``filter_value in value_to_check``. ``in`` accepts
     non-string containers such as lists, tuples, sets, and ranges; strings and
     bytes are rejected as membership containers to avoid accidental substring
-    filtering. Rich comparisons that raise ``TypeError`` or return
-    ``NotImplemented`` evaluate to ``False``.
+    filtering. Rich comparisons follow Python's normal dispatch: if the left
+    operand returns ``NotImplemented``, the reflected method on the right
+    operand may still satisfy the lookup. Comparisons that ultimately raise
+    ``TypeError`` evaluate to ``False``.
 
     Args:
         value_to_check: Candidate value read from the object being filtered.
@@ -298,11 +300,11 @@ def _compare(
     method_name: Literal["__lt__", "__le__", "__gt__", "__ge__"],
     filter_value: object,
 ) -> bool:
-    comparison = {
-        "__lt__": lt,
-        "__le__": le,
-        "__gt__": gt,
-        "__ge__": ge,
+    comparison: Callable[[object, object], object] = {
+        "__lt__": cast(Callable[[object, object], object], lt),
+        "__le__": cast(Callable[[object, object], object], le),
+        "__gt__": cast(Callable[[object, object], object], gt),
+        "__ge__": cast(Callable[[object, object], object], ge),
     }[method_name]
     try:
         result = comparison(value_to_check, filter_value)

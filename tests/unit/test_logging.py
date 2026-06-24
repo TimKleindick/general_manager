@@ -118,10 +118,14 @@ def test_adapter_validates_context_type() -> None:
 def test_disabled_adapter_log_skips_context_validation() -> None:
     adapter = get_logger("apps.disabled")
     previous_level = adapter.logger.level
+    previous_disabled = adapter.logger.disabled
     adapter.logger.setLevel(logging.INFO)
+    adapter.logger.disabled = True
     try:
-        adapter.debug("dropped debug", context="user=1")  # type: ignore[arg-type]
+        assert adapter.logger.disabled
+        adapter.info("dropped info", context="user=1")  # type: ignore[arg-type]
     finally:
+        adapter.logger.disabled = previous_disabled
         adapter.logger.setLevel(previous_level)
 
 
