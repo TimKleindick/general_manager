@@ -30,6 +30,30 @@ def parse_tool_arguments(arguments: Any) -> dict[str, Any]:
     return {}
 
 
+class StreamingToolCallBuilder:
+    """Accumulate streamed tool-call name and JSON argument fragments."""
+
+    def __init__(self, *, call_id: str) -> None:
+        self.call_id = call_id
+        self.name_parts: list[str] = []
+        self.argument_parts: list[str] = []
+
+    def append(self, *, name: Any = None, arguments: Any = None) -> None:
+        if isinstance(name, str) and name:
+            self.name_parts.append(name)
+        if isinstance(arguments, str) and arguments:
+            self.argument_parts.append(arguments)
+        elif isinstance(arguments, dict):
+            self.argument_parts = [json.dumps(arguments)]
+
+    def build(self) -> ToolCallEvent | None:
+        name = "".join(self.name_parts).strip()
+        if not name:
+            return None
+        args = parse_tool_arguments("".join(self.argument_parts))
+        return ToolCallEvent(id=self.call_id, name=name, args=args)
+
+
 def get_attr(value: Any, *path: str) -> Any:
     """Resolve a nested attribute path, returning None when absent."""
     current = value
@@ -45,6 +69,7 @@ __all__ = [
     "ChatEvent",
     "DoneEvent",
     "Message",
+    "StreamingToolCallBuilder",
     "TextChunkEvent",
     "TokenUsage",
     "ToolCallEvent",
