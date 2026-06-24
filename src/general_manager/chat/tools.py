@@ -107,6 +107,20 @@ class MutationNotAllowedError(ValueError):
         super().__init__(f"Mutation '{mutation}' is not allowed.")
 
 
+class InvalidChatMutationNameError(ValueError):
+    """Raised when a chat mutation identifier is malformed."""
+
+    def __init__(self, mutation: str) -> None:
+        super().__init__(f"Invalid chat mutation name: {mutation}")
+
+
+class InvalidChatMutationInputKeyError(ValueError):
+    """Raised when a chat mutation input key identifier is malformed."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"Invalid chat mutation input key: {key}")
+
+
 class MutationAuthenticationRequiredError(ValueError):
     """Raised when an anonymous user attempts a chat mutation."""
 
@@ -261,6 +275,19 @@ def _graphql_literal(value: Any) -> str:
         inner = ", ".join(_graphql_literal(item) for item in value)
         return "[" + inner + "]"
     return str(value)
+
+
+def _validate_mutation_input_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, inner_value in value.items():
+            key_text = str(key)
+            if _GRAPHQL_IDENTIFIER_RE.fullmatch(_camelize(key_text)) is None:
+                raise InvalidChatMutationInputKeyError(key_text)
+            _validate_mutation_input_keys(inner_value)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            _validate_mutation_input_keys(item)
 
 
 def _build_selection(fields: Sequence[Any]) -> str:
@@ -578,6 +605,9 @@ def mutate(
 ) -> dict[str, Any]:
     """Execute an allow-listed GraphQL mutation for an authenticated user."""
     settings = get_chat_settings()
+    if _GRAPHQL_IDENTIFIER_RE.fullmatch(mutation) is None:
+        raise InvalidChatMutationNameError(mutation)
+    _validate_mutation_input_keys(input)
     allowed_mutations = set(settings["allowed_mutations"])
     if mutation not in allowed_mutations:
         raise MutationNotAllowedError(mutation)
