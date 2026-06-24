@@ -94,6 +94,20 @@ def test_no_query_recovery_for_find_path_without_result() -> None:
     )
 
 
+def test_no_query_recovery_when_metadata_precedes_empty_find_path_result() -> None:
+    assert (
+        should_recover_answer_without_query(
+            user_text="Find records in TargetManager related to SourceManager.",
+            assistant_text="I cannot continue from that path result.",
+            tool_calls=[
+                {"name": "search_managers", "result": [{"manager": "TargetManager"}]},
+                {"name": "find_path", "result": {"path": []}},
+            ],
+        )
+        is False
+    )
+
+
 def test_answer_after_query_does_not_trigger_query_recovery() -> None:
     assert (
         should_recover_answer_without_query(
