@@ -5,7 +5,8 @@ import ast
 import inspect
 import re
 import textwrap
-from collections.abc import Iterable
+from collections.abc import Container, Iterable, Mapping, Sequence, Sized
+from operator import eq, ge, gt, le, lt, ne
 from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 from decimal import Decimal
 
@@ -25,6 +26,25 @@ GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
 
 NOTEXISTENT = object()
 logger = get_logger("rule.engine")
+
+_COMPARISON_EVALUATORS: dict[type[ast.cmpop], Callable[[object, object], bool]] = {
+    ast.Lt: cast(Callable[[object, object], bool], lt),
+    ast.LtE: cast(Callable[[object, object], bool], le),
+    ast.Gt: cast(Callable[[object, object], bool], gt),
+    ast.GtE: cast(Callable[[object, object], bool], ge),
+    ast.Eq: cast(Callable[[object, object], bool], eq),
+    ast.NotEq: cast(Callable[[object, object], bool], ne),
+}
+_REVERSED_COMPARISON_OPS: dict[type[ast.cmpop], type[ast.cmpop]] = {
+    ast.Lt: ast.Gt,
+    ast.LtE: ast.GtE,
+    ast.Gt: ast.Lt,
+    ast.GtE: ast.LtE,
+    ast.Eq: ast.Eq,
+    ast.NotEq: ast.NotEq,
+    ast.Is: ast.Is,
+    ast.IsNot: ast.IsNot,
+}
 
 
 class NonexistentAttributeError(AttributeError):
@@ -140,7 +160,14 @@ class Rule(Generic[GeneralManagerType]):
             self._handlers[inst.function_name] = inst
         from general_manager.conf import get_setting
 
-        handler_paths = cast(Iterable[object], get_setting("RULE_HANDLERS", []))
+        handler_paths_setting = get_setting("RULE_HANDLERS", [])
+        if (
+            not isinstance(handler_paths_setting, Sequence)
+            or isinstance(handler_paths_setting, (str, bytes, bytearray))
+            or isinstance(handler_paths_setting, Mapping)
+        ):
+            raise InvalidRuleHandlerConfigurationError("RULE_HANDLERS")
+        handler_paths = cast(Sequence[object], handler_paths_setting)
         for path in handler_paths:
             path = str(path)
             imported_handler = import_string(path)
@@ -448,11 +475,28 @@ class Rule(Generic[GeneralManagerType]):
             for cmp in comparisons:
                 current_left, rights, ops = cmp.left, cmp.comparators, cmp.ops
                 for right, op in zip(rights, ops, strict=False):
+                    handler_left = current_left
+                    handler_right = right
+                    handler_op = op
+                    call_node = current_left
+                    if not isinstance(call_node, ast.Call) and isinstance(
+                        right, ast.Call
+                    ):
+                        call_node = right
+                        handler_left = right
+                        handler_right = current_left
+                        handler_op = self._reverse_comparison_op(op)
+
+                    leg_result = self._evaluate_comparison_leg(current_left, right, op)
+
                     # Special handler?
-                    if isinstance(current_left, ast.Call):
-                        fn = self._get_node_name(current_left.func)
+                    if isinstance(call_node, ast.Call):
+                        fn = self._get_node_name(call_node.func)
                         handler = self._handlers.get(fn)
                         if handler:
+                            if leg_result is True:
+                                current_left = right
+                                continue
                             logger.debug(
                                 "rule handler invoked",
                                 context={
@@ -463,7 +507,12 @@ class Rule(Generic[GeneralManagerType]):
                             )
                             errors.update(
                                 handler.handle(
-                                    cmp, current_left, right, op, var_values, self
+                                    cmp,
+                                    handler_left,
+                                    handler_right,
+                                    handler_op,
+                                    var_values,
+                                    self,
                                 )
                             )
                             current_left = right
@@ -495,6 +544,41 @@ class Rule(Generic[GeneralManagerType]):
         # No comparisons present → fall back to a generic message
         combo = ", ".join(f"[{v}]" for v in self._variables)
         return {v: f"{combo} combination is not valid" for v in self._variables}
+
+    @staticmethod
+    def _reverse_comparison_op(op: ast.cmpop) -> ast.cmpop:
+        return _REVERSED_COMPARISON_OPS.get(type(op), type(op))()
+
+    def _evaluate_comparison_leg(
+        self, left: ast.expr, right: ast.expr, op: ast.cmpop
+    ) -> bool | None:
+        left_value = self._eval_node(left)
+        right_value = self._eval_node(right)
+        if left_value is None or right_value is None:
+            return None
+
+        evaluator = _COMPARISON_EVALUATORS.get(type(op))
+        if evaluator is not None:
+            try:
+                return evaluator(left_value, right_value)
+            except TypeError:
+                return None
+
+        if isinstance(op, ast.Is):
+            return left_value is right_value
+        if isinstance(op, ast.IsNot):
+            return left_value is not right_value
+        if isinstance(op, ast.In):
+            try:
+                return left_value in cast(Container[object], right_value)
+            except TypeError:
+                return None
+        if isinstance(op, ast.NotIn):
+            try:
+                return left_value not in cast(Container[object], right_value)
+            except TypeError:
+                return None
+        return None
 
     def _get_op_symbol(self, op: Optional[ast.cmpop]) -> str:
         if op is None:
@@ -576,8 +660,37 @@ class Rule(Generic[GeneralManagerType]):
                 if node.id in self._last_args:
                     return self._last_args[node.id]
                 return self._func.__globals__.get(node.id)
+            if isinstance(node, ast.Call):
+                return self._eval_known_call(node)
             if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
                 operand = self._eval_node(node.operand)
                 if isinstance(operand, (int, float, Decimal)):
                     return -operand
+        return None
+
+    def _eval_known_call(self, node: ast.Call) -> Optional[object]:
+        if len(node.args) != 1 or node.keywords:
+            return None
+
+        function_name = self._get_node_name(node.func)
+        value = self._eval_node(node.args[0])
+        try:
+            if function_name == "len":
+                if not isinstance(value, Sized):
+                    return None
+                return len(value)
+            if function_name == "sum":
+                if not isinstance(value, Iterable):
+                    return None
+                return sum(cast(Iterable[int | float], value))
+            if function_name == "max":
+                if not isinstance(value, Iterable):
+                    return None
+                return max(cast(Iterable[int | float], value))
+            if function_name == "min":
+                if not isinstance(value, Iterable):
+                    return None
+                return min(cast(Iterable[int | float], value))
+        except (TypeError, ValueError):
+            return None
         return None
