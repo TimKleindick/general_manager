@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "CustomJSONEncoder",
     "PathMap",
+    "UnknownInputFieldError",
     "args_to_kwargs",
     "camel_to_snake",
     "create_filter_function",
@@ -18,6 +19,7 @@ __all__ = [
 
 from general_manager.utils.json_encoder import CustomJSONEncoder
 from general_manager.utils.path_mapping import PathMap
+from general_manager.utils.filter_parser import UnknownInputFieldError
 from general_manager.utils.args_to_kwargs import args_to_kwargs
 from general_manager.utils.format_string import camel_to_snake
 from general_manager.utils.filter_parser import create_filter_function

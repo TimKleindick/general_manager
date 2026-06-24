@@ -3,7 +3,7 @@ from __future__ import annotations
 """Utility helpers for building lazy-loading public package APIs."""
 
 from importlib import import_module
-from typing import Any, Iterable, Mapping, MutableMapping, overload
+from typing import Iterable, Mapping, MutableMapping, cast, overload
 
 from general_manager.logging import get_logger
 
@@ -48,19 +48,26 @@ def resolve_export(
     *,
     module_all: Iterable[str],
     module_map: ModuleMap,
-    module_globals: MutableMapping[str, Any],
-) -> Any:
+    module_globals: MutableMapping[str, object],
+) -> object:
     """
     Resolve and cache a lazily-loaded export for a package __init__ module.
+
+    ``module_map`` values may be target module path strings or
+    ``(module_path, attribute_name)`` tuples. String targets use the requested
+    public ``name`` as the target attribute name. Tuple targets use the supplied
+    attribute name instead.
 
     Parameters:
         name (str): The public export name to resolve.
         module_all (Iterable[str]): Iterable of names declared in the module's __all__; used to validate that `name` is an allowed export.
-        module_map (ModuleMap): Mapping from public export names to target module paths or (module path, attribute) pairs used to locate the actual object.
-        module_globals (MutableMapping[str, Any]): The module's globals dict; the resolved value will be stored here under `name`.
+        module_map: Mapping from public export names to target module paths or
+            ``(module_path, attribute_name)`` pairs used to locate the actual
+            object.
+        module_globals: The module's globals dict; the resolved value will be stored here under `name`.
 
     Returns:
-        Any: The resolved attribute value for `name`.
+        The resolved attribute value for `name`.
 
     Raises:
         MissingExportError: If `name` is not present in `module_all`.
@@ -73,7 +80,7 @@ def resolve_export(
                 "export": name,
             },
         )
-        raise MissingExportError(module_globals["__name__"], name)
+        raise MissingExportError(cast(str, module_globals["__name__"]), name)
     module_path, attr_name = _normalize_target(name, module_map[name])
     module = import_module(module_path)
     value = getattr(module, attr_name)
@@ -93,7 +100,7 @@ def resolve_export(
 def build_module_dir(
     *,
     module_all: Iterable[str],
-    module_globals: MutableMapping[str, Any],
+    module_globals: MutableMapping[str, object],
 ) -> list[str]:
     """Return a sorted directory listing for a package __init__ module."""
     return sorted(list(module_globals.keys()) + list(module_all))

@@ -1,9 +1,12 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from datetime import datetime
+import ast
 from general_manager.rule.rule import (
+    InvalidRuleHandlerConfigurationError,
     Rule,
 )
 from typing import cast
+from general_manager.rule.handler import BaseRuleHandler
 
 
 class DummyObject:
@@ -14,7 +17,216 @@ class DummyObject:
             setattr(self, key, value)
 
 
+class CustomLenHandler(BaseRuleHandler):
+    """Test handler that replaces the built-in len handler."""
+
+    function_name = "len"
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {"custom": "custom len handler"}
+
+
+class FirstCustomSumHandler(BaseRuleHandler):
+    """First test handler for duplicate custom-handler registration order."""
+
+    function_name = "sum"
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {"custom": "first sum handler"}
+
+
+class SecondCustomSumHandler(BaseRuleHandler):
+    """Second test handler for duplicate custom-handler registration order."""
+
+    function_name = "sum"
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {"custom": "second sum handler"}
+
+
+class MissingFunctionNameHandler(BaseRuleHandler):
+    """Handler with no dispatch key."""
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {}
+
+
+class EmptyFunctionNameHandler(BaseRuleHandler):
+    """Handler with an empty dispatch key."""
+
+    function_name = ""
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {}
+
+
+class NoneFunctionNameHandler(BaseRuleHandler):
+    """Handler with a non-string dispatch key."""
+
+    function_name = None
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {}
+
+
+class NumericFunctionNameHandler(BaseRuleHandler):
+    """Handler with a numeric dispatch key."""
+
+    function_name = 123
+
+    def handle(
+        self,
+        node: ast.AST,
+        left: ast.expr | None,
+        right: ast.expr | None,
+        op: ast.cmpop | None,
+        var_values: dict[str, object | None],
+        rule: object,
+    ) -> dict[str, str]:
+        return {}
+
+
+class NotARuleHandler:
+    """Importable class without the BaseRuleHandler contract."""
+
+    pass
+
+
 class RuleTests(TestCase):
+    @override_settings(
+        GENERAL_MANAGER={
+            "RULE_HANDLERS": ["tests.unit.test_rules.CustomLenHandler"],
+        }
+    )
+    def test_custom_rule_handler_replaces_builtin_by_function_name(self):
+        """Later custom handlers replace built-ins with the same function_name."""
+
+        def func(item: DummyObject) -> bool:
+            return len(item.name) > 3
+
+        rule = Rule(func)
+        result = rule.evaluate(DummyObject(name="abc"))
+
+        self.assertFalse(result)
+        self.assertEqual(rule.get_error_message(), {"custom": "custom len handler"})
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "RULE_HANDLERS": [
+                "tests.unit.test_rules.FirstCustomSumHandler",
+                "tests.unit.test_rules.SecondCustomSumHandler",
+            ],
+        }
+    )
+    def test_later_custom_rule_handler_replaces_earlier_custom_handler(self):
+        """Custom handlers are registered in order, with later duplicates winning."""
+
+        def func(item: DummyObject) -> bool:
+            return sum(item.values) > 10
+
+        rule = Rule(func)
+        result = rule.evaluate(DummyObject(values=[1, 2]))
+
+        self.assertFalse(result)
+        self.assertEqual(rule.get_error_message(), {"custom": "second sum handler"})
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "RULE_HANDLERS": ["tests.unit.test_rules.NotARuleHandler"],
+        }
+    )
+    def test_custom_rule_handler_must_subclass_base_handler(self):
+        """Invalid custom handler classes fail during Rule construction."""
+
+        def func(item: DummyObject) -> bool:
+            return item.value > 1
+
+        with self.assertRaises(InvalidRuleHandlerConfigurationError):
+            Rule(func)
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "RULE_HANDLERS": ["tests.unit.test_rules.missing_handler"],
+        }
+    )
+    def test_custom_rule_handler_invalid_path_propagates_import_error(self):
+        """Invalid handler import paths surface Django import errors."""
+
+        def func(item: DummyObject) -> bool:
+            return item.value > 1
+
+        with self.assertRaises(ImportError):
+            Rule(func)
+
+    def test_custom_rule_handler_function_name_must_be_non_empty_string(self):
+        """Invalid handler dispatch keys fail deliberately during Rule construction."""
+
+        invalid_paths = [
+            "tests.unit.test_rules.MissingFunctionNameHandler",
+            "tests.unit.test_rules.EmptyFunctionNameHandler",
+            "tests.unit.test_rules.NoneFunctionNameHandler",
+            "tests.unit.test_rules.NumericFunctionNameHandler",
+        ]
+
+        def func(item: DummyObject) -> bool:
+            return item.value > 1
+
+        for path in invalid_paths:
+            with (
+                self.subTest(path=path),
+                override_settings(GENERAL_MANAGER={"RULE_HANDLERS": [path]}),
+                self.assertRaises(InvalidRuleHandlerConfigurationError),
+            ):
+                Rule(func)
+
     def test_rule_with_floats(self):
         """
         Verifies that a Rule comparing a float field produces a failing evaluation and the correct error message.

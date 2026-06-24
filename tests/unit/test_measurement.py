@@ -31,6 +31,16 @@ class MeasurementTestCase(TestCase):
         with self.assertRaises(ValueError):
             Measurement("invalid", "meter")
 
+    def test_bool_is_not_valid_numeric_magnitude(self):
+        """Bool is not accepted as a numeric measurement magnitude."""
+
+        from general_manager.measurement.measurement import (
+            InvalidMeasurementInitializationError,
+        )
+
+        with self.assertRaises(InvalidMeasurementInitializationError):
+            Measurement(True, "meter")
+
     def test_currency_conversion(self):
         """
         Tests conversion of a currency `Measurement` from EUR to USD using a specified exchange rate and verifies the converted value and unit.
@@ -310,6 +320,19 @@ class MeasurementTestCase(TestCase):
         self.assertNotEqual(hash(m1), hash(m3))
         self.assertNotEqual(hash(m1), hash(Measurement(10, "second")))
         self.assertNotEqual(hash(m1), hash("not a measurement"))
+
+    def test_hash_matches_equality_for_compatible_units(self):
+        """Equivalent measurements must produce the same hash after unit normalization."""
+
+        equivalent_pairs = [
+            (Measurement(1, "kilogram"), Measurement(1000, "gram")),
+            (Measurement(25, "degC"), Measurement(298.15, "K")),
+        ]
+
+        for left, right in equivalent_pairs:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(left, right)
+                self.assertEqual(hash(left), hash(right))
 
     def test_percentage_values(self):
         """
@@ -594,6 +617,22 @@ class MeasurementTestCase(TestCase):
         self.assertIn(
             "Division is only allowed with Measurement or numeric", str(ctx.exception)
         )
+
+    def test_bool_is_not_valid_scalar_operand(self):
+        """Bool operands are rejected instead of being treated as integer scalars."""
+
+        from general_manager.measurement.measurement import (
+            MeasurementOperandTypeError,
+            MeasurementScalarTypeError,
+        )
+
+        m = Measurement(10, "meter")
+        with self.assertRaises(MeasurementScalarTypeError):
+            _ = m * True
+        with self.assertRaises(MeasurementScalarTypeError):
+            _ = m / False
+        with self.assertRaises(MeasurementOperandTypeError):
+            _ = False + m
 
     def test_unsupported_comparison_error(self):
         """Test that UnsupportedComparisonError is raised for non-measurement comparisons."""

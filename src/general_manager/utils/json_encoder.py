@@ -1,28 +1,30 @@
-"""Custom JSON encoder capable of rendering GeneralManager objects."""
+"""JSON encoding helpers for GeneralManager cache and payload utilities."""
 
-from datetime import datetime, date, time
+from datetime import date, datetime, time
 import json
+
 from general_manager.manager.general_manager import GeneralManager
 
 
 class CustomJSONEncoder(json.JSONEncoder):
-    """Serialise complex objects that appear within GeneralManager payloads."""
+    """JSON encoder for values commonly found in GeneralManager payloads.
+
+    Dates, datetimes, and times are emitted with `isoformat()`.
+    `GeneralManager` instances are represented as
+    `<ClassName>(**<identification>)`. Values supported by the standard JSON
+    encoder keep the normal `json.JSONEncoder` behavior. Unsupported values fall
+    back to `str(value)` instead of raising `TypeError`.
+    """
 
     def default(self, o: object) -> object:
+        """Return a JSON-compatible value for `o`.
+
+        Raises:
+            Exceptions raised by `isoformat()`, `GeneralManager.identification`,
+            or `str(o)` are allowed to propagate.
         """
-        Convert unsupported objects into JSON-friendly representations.
-
-        Parameters:
-            o (Any): Object to encode.
-
-        Returns:
-            Any: JSON-serialisable representation of the object.
-        """
-
-        # Serialize datetime objects as ISO strings
         if isinstance(o, (datetime, date, time)):
             return o.isoformat()
-        # Handle GeneralManager instances
         if isinstance(o, GeneralManager):
             return f"{o.__class__.__name__}(**{o.identification})"
         try:
