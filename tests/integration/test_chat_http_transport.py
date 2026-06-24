@@ -185,6 +185,32 @@ class ChatHttpTransportTests(TestCase):
         ]
         assert ChatMessage.objects.count() == 0
 
+    def test_http_records_token_usage_without_double_counting_request(self) -> None:
+        with (
+            patch(
+                "general_manager.chat.views.import_provider",
+                return_value=HttpIntegrationProvider,
+            ),
+            patch(
+                "general_manager.chat.views.enforce_chat_rate_limit",
+                return_value=None,
+            ) as limit,
+        ):
+            response = self.client.post(
+                "/chat/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        assert limit.call_count == 2
+        assert limit.call_args_list[0].kwargs == {}
+        assert limit.call_args_list[1].kwargs == {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "count_request": False,
+        }
+
     def test_sse_and_confirm_round_trip_resume_pending_mutation(self) -> None:
         with patch(
             "general_manager.chat.views.import_provider",

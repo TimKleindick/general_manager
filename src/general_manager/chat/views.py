@@ -330,6 +330,7 @@ async def _run_provider_turn(
                 scope,
                 input_tokens=event.usage.input_tokens,
                 output_tokens=event.usage.output_tokens,
+                count_request=False,
             )
             events.append(
                 {
