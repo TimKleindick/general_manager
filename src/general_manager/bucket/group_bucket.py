@@ -1,13 +1,18 @@
 """Grouping bucket implementation for aggregating GeneralManager instances."""
 
 from __future__ import annotations
-from typing import Any, Generator, Generic, Type, cast
+from collections.abc import Generator, Hashable, Mapping
+from typing import Generic, cast
 from general_manager.manager.group_manager import GroupManager
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
 
+type GroupLookup = dict[str, object]
+type GroupByValue = tuple[tuple[str, object], ...]
+type GroupIdentity = tuple[tuple[str, Hashable], ...]
 
-def _freeze_group_value(value: Any) -> Any:
+
+def _freeze_group_value(value: object) -> Hashable:
     """Return a hashable identity for values used to distinguish groups."""
     if isinstance(value, GeneralManager):
         return (
@@ -26,11 +31,27 @@ def _freeze_group_value(value: Any) -> Any:
         return tuple(
             sorted(
                 (
-                    _freeze_group_value(key),
-                    _freeze_group_value(item),
-                )
-                for key, item in value.items()
-            )
+                    (
+                        _freeze_group_value(key),
+                        _freeze_group_value(item),
+                    )
+                    for key, item in value.items()
+                ),
+                key=repr,
+            ),
+        )
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted(
+                (
+                    (
+                        _freeze_group_value(key),
+                        _freeze_group_value(item),
+                    )
+                    for key, item in value.items()
+                ),
+                key=repr,
+            ),
         )
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_group_value(item) for item in value)
@@ -40,11 +61,11 @@ def _freeze_group_value(value: Any) -> Any:
 
 
 def _group_filter_kwargs(
-    manager_class: Type[GeneralManagerType],
-    group_by_value: tuple[tuple[str, Any], ...],
-) -> dict[str, Any]:
+    manager_class: type[GeneralManagerType],
+    group_by_value: GroupByValue,
+) -> GroupLookup:
     """Translate grouped manager values into backend-neutral relation lookups."""
-    filters: dict[str, Any] = {}
+    filters: GroupLookup = {}
     get_attribute_types = getattr(
         manager_class.Interface,
         "get_attribute_types",
@@ -52,7 +73,7 @@ def _group_filter_kwargs(
     )
     attributes = get_attribute_types() if callable(get_attribute_types) else {}
     for key, value in group_by_value:
-        attribute_info = cast(dict[str, Any], attributes.get(key, {}))
+        attribute_info = cast(Mapping[str, object], attributes.get(key, {}))
         filter_key = attribute_info.get("filter_lookup", key)
         if isinstance(value, GeneralManager):
             filters.update(
@@ -62,7 +83,7 @@ def _group_filter_kwargs(
                 }
             )
             continue
-        filters[filter_key] = value
+        filters[str(filter_key)] = value
     return filters
 
 
@@ -126,16 +147,24 @@ class GroupBucketManagerMismatchError(ValueError):
         )
 
 
+class GroupBucketKeysMismatchError(ValueError):
+    """Raised when grouping buckets use different grouping keys."""
+
+    def __init__(self, first_keys: tuple[str, ...], second_keys: tuple[str, ...]) -> None:
+        """Initialize the mismatch error with both grouping key tuples."""
+        super().__init__(f"Cannot combine group keys {first_keys} and {second_keys}.")
+
+
 class GroupItemNotFoundError(ValueError):
     """Raised when a grouped manager matching the provided criteria cannot be found."""
 
-    def __init__(self, manager_name: str, criteria: dict[str, Any]) -> None:
+    def __init__(self, manager_name: str, criteria: Mapping[str, object]) -> None:
         """
         Initialize an error indicating a grouped manager matching the provided lookup criteria could not be found.
 
         Parameters:
             manager_name (str): Name of the manager type searched for.
-            criteria (dict[str, Any]): Lookup criteria used to locate the manager; included in the error message.
+            criteria: Lookup criteria used to locate the manager; included in the error message.
         """
         super().__init__(f"Cannot find {manager_name} with {criteria}.")
 
@@ -172,7 +201,7 @@ class GroupBucket(Generic[GeneralManagerType]):
 
     def __init__(
         self,
-        manager_class: Type[GeneralManagerType],
+        manager_class: type[GeneralManagerType],
         group_by_keys: tuple[str, ...],
         data: Bucket[GeneralManagerType],
     ) -> None:
@@ -192,8 +221,8 @@ class GroupBucket(Generic[GeneralManagerType]):
             ValueError: If a group-by key is not a valid manager attribute.
         """
         self._manager_class = manager_class
-        self.filters: dict[str, Any] = {}
-        self.excludes: dict[str, Any] = {}
+        self.filters: GroupLookup = {}
+        self.excludes: GroupLookup = {}
         self.__check_group_by_arguments(group_by_keys)
         self._group_by_keys = group_by_keys
         self._data: list[GroupManager[GeneralManagerType]] = (
@@ -203,13 +232,15 @@ class GroupBucket(Generic[GeneralManagerType]):
 
     def __eq__(self, other: object) -> bool:
         """
-        Compare two grouping buckets for equality.
+        Compare by unordered group set, manager class, and grouping keys.
 
         Parameters:
             other (object): Object compared against the current bucket.
 
         Returns:
-            bool: True when grouped data, manager class, and grouping keys match.
+            bool: True when both buckets contain the same set of groups and use
+                the same manager class and grouping-key tuple. Group order is
+                not part of equality.
         """
         if not isinstance(other, self.__class__):
             return False
@@ -251,15 +282,12 @@ class GroupBucket(Generic[GeneralManagerType]):
         Returns:
             list[GroupManager[GeneralManagerType]]: A list of GroupManager objects, one per unique tuple of group-by key values; groups are produced in order sorted by the string representation of their key tuples.
         """
-        group_by_values: dict[
-            tuple[tuple[str, Any], ...],
-            tuple[tuple[str, Any], ...],
-        ] = {}
+        group_by_values: dict[GroupIdentity, GroupByValue] = {}
         for entry in data:
-            group_by_value = tuple(
+            group_by_value: GroupByValue = tuple(
                 (arg, getattr(entry, arg)) for arg in self._group_by_keys
             )
-            group_identity = tuple(
+            group_identity: GroupIdentity = tuple(
                 (arg, _freeze_group_value(value)) for arg, value in group_by_value
             )
             group_by_values.setdefault(group_identity, group_by_value)
@@ -290,6 +318,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         Raises:
             GroupBucketTypeMismatchError: If `other` is not a GroupBucket of the same class.
             GroupBucketManagerMismatchError: If `other` tracks a different manager class.
+            GroupBucketKeysMismatchError: If `other` uses different grouping keys.
         """
         if not isinstance(other, self.__class__):
             raise GroupBucketTypeMismatchError(self.__class__, type(other))
@@ -297,18 +326,25 @@ class GroupBucket(Generic[GeneralManagerType]):
             raise GroupBucketManagerMismatchError(
                 self._manager_class, other._manager_class
             )
+        if self._group_by_keys != other._group_by_keys:
+            raise GroupBucketKeysMismatchError(
+                self._group_by_keys,
+                other._group_by_keys,
+            )
         return GroupBucket(
             self._manager_class,
             self._group_by_keys,
             self._basis_data | other._basis_data,
         )
 
-    def __reduce__(self) -> str | tuple[Any, ...]:
+    def __reduce__(self) -> str | tuple[object, ...]:
         """
-        Provide pickling support by returning the constructor and arguments.
+        Provide pickling support with constructor and current basis data.
 
         Returns:
-            tuple[Any, ...]: Data allowing the group bucket to be reconstructed during unpickling.
+            tuple[object, ...]: ``(GroupBucket, (manager_class, group_by_keys,
+                basis_data))``, allowing unpickling to rebuild groups from the
+                stored basis bucket.
         """
         return (
             self.__class__,
@@ -324,7 +360,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         """
         yield from self._data
 
-    def filter(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
+    def filter(self, **kwargs: object) -> GroupBucket[GeneralManagerType]:
         """
         Return a grouped bucket filtered by the provided lookups.
 
@@ -341,7 +377,7 @@ class GroupBucket(Generic[GeneralManagerType]):
             new_basis_data,
         )
 
-    def exclude(self, **kwargs: Any) -> GroupBucket[GeneralManagerType]:
+    def exclude(self, **kwargs: object) -> GroupBucket[GeneralManagerType]:
         """
         Return a grouped bucket that excludes records matching the provided lookups.
 
@@ -400,7 +436,7 @@ class GroupBucket(Generic[GeneralManagerType]):
         """
         return self
 
-    def get(self, **kwargs: Any) -> GroupManager[GeneralManagerType]:
+    def get(self, **kwargs: object) -> GroupManager[GeneralManagerType]:
         """
         Retrieve the first GroupManager matching the provided lookups.
 

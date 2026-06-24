@@ -1,9 +1,9 @@
 """Database-backed bucket implementation for GeneralManager collections."""
 
 from __future__ import annotations
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable, Mapping
 from datetime import date, datetime
-from typing import Any, Generator, Type, TypeVar
+from typing import Generator, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db import models
@@ -16,8 +16,16 @@ from general_manager.cache.run_context import current_calculation_run_context
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.filter_parser import create_filter_function
 
-modelsModel = TypeVar("modelsModel", bound=models.Model)
 GeneralManagerType = TypeVar("GeneralManagerType", bound=GeneralManager)
+LookupValue = object
+FilterDefinitions = dict[str, list[LookupValue]]
+LookupMapping = dict[str, LookupValue]
+PythonFilterDefinition = tuple[str, LookupValue, str]
+QueryAnnotation = object
+QueryAnnotationCallable = Callable[
+    [models.QuerySet[models.Model]],
+    models.QuerySet[models.Model],
+]
 MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 
 
@@ -65,8 +73,8 @@ class DatabaseBucketSearchDateMismatchError(ValueError):
         Raised when attempting to combine buckets with different search dates.
 
         Parameters:
-            search_date (Any | None): The search date on the first bucket.
-            other_search_date (Any | None): The search date on the second bucket.
+            search_date (datetime | date | None): The search date on the first bucket.
+            other_search_date (datetime | date | None): The search date on the second bucket.
         """
         super().__init__(
             "Cannot combine buckets with different search_date values: "
@@ -153,17 +161,17 @@ class DuplicateDatabaseBucketSnapshotError(ValueError):
         )
 
 
-def _ensure_unique_primary_keys(primary_keys: tuple[Any, ...]) -> None:
+def _ensure_unique_primary_keys(primary_keys: tuple[LookupValue, ...]) -> None:
     if len(primary_keys) != len(set(primary_keys)):
         raise DuplicateDatabaseBucketSnapshotError()
 
 
 def _restore_database_bucket_from_primary_keys(
     model: type[models.Model],
-    manager_class: Type[GeneralManagerType],
-    primary_keys: tuple[Any, ...],
-    filter_definitions: dict[str, list[Any]],
-    exclude_definitions: dict[str, list[Any]],
+    manager_class: type[GeneralManagerType],
+    primary_keys: tuple[LookupValue, ...],
+    filter_definitions: FilterDefinitions,
+    exclude_definitions: FilterDefinitions,
     database_alias: str | None,
     search_date: datetime | date | None,
     sort_keys: tuple[str, ...] | None,
@@ -200,10 +208,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __init__(
         self,
-        data: models.QuerySet[modelsModel],
-        manager_class: Type[GeneralManagerType],
-        filter_definitions: dict[str, list[Any]] | None = None,
-        exclude_definitions: dict[str, list[Any]] | None = None,
+        data: models.QuerySet[models.Model],
+        manager_class: type[GeneralManagerType],
+        filter_definitions: FilterDefinitions | None = None,
+        exclude_definitions: FilterDefinitions | None = None,
         *,
         search_date: datetime | date | None = None,
         sort_keys: tuple[str, ...] | None = None,
@@ -213,11 +221,16 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Instantiate a database-backed bucket with optional filter state.
 
+        Filter and exclude definitions are copied into bucket-owned dictionaries,
+        so later mutations to caller-provided mappings do not change this
+        bucket. Pickle reconstruction restores through primary-key snapshots
+        rather than by serializing the queryset object.
+
         Parameters:
-            data (models.QuerySet[modelsModel]): Queryset providing the underlying data.
+            data (models.QuerySet[models.Model]): Queryset providing the underlying data.
             manager_class (type[GeneralManagerType]): GeneralManager subclass used to wrap rows.
-            filter_definitions (dict[str, list[Any]] | None): Pre-existing filter expressions captured from parent buckets.
-            exclude_definitions (dict[str, list[Any]] | None): Pre-existing exclusion expressions captured from parent buckets.
+            filter_definitions (FilterDefinitions | None): Pre-existing filter expressions captured from parent buckets.
+            exclude_definitions (FilterDefinitions | None): Pre-existing exclusion expressions captured from parent buckets.
             search_date (datetime | date | None): Optional timestamp applied when instantiating manager instances.
             sort_keys (tuple[str, ...] | None): Property names used by a previous bucket sort operation.
             sort_reverse (bool): Whether sorted keys should be interpreted in descending order for dependency tracking.
@@ -226,18 +239,28 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             None
         """
-        self._data = data
+        self._data: models.QuerySet[models.Model] = data
         self._manager_class = manager_class
-        self.filters = self._copy_filter_definitions(filter_definitions)
-        self.excludes = self._copy_filter_definitions(exclude_definitions)
+        self.filters: FilterDefinitions = self._copy_filter_definitions(
+            filter_definitions
+        )
+        self.excludes: FilterDefinitions = self._copy_filter_definitions(
+            exclude_definitions
+        )
         self._search_date = search_date
         self._sort_keys = sort_keys
         self._sort_reverse = sort_reverse
         self._run_scoped_cacheable = run_scoped_cacheable
 
-    def __reduce__(self) -> str | tuple[Any, ...]:
+    def __reduce__(self) -> str | tuple[object, ...]:
         """
         Preserve a result snapshot without serializing the queryset object.
+
+        Reducing a bucket records the effective filter/exclude dependencies,
+        materializes primary keys in queryset order, rejects duplicate primary
+        keys with `DuplicateDatabaseBucketSnapshotError`, and restores through
+        the original model default manager on the original database alias by
+        filtering those primary keys and preserving the snapshot order.
         """
         self._track_effective_dependencies()
         primary_keys = tuple(self._data.values_list("pk", flat=True))
@@ -257,7 +280,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             ),
         )
 
-    def _build_manager_from_primary_key(self, pk: Any) -> GeneralManagerType:
+    def _build_manager_from_primary_key(self, pk: object) -> GeneralManagerType:
         if self._search_date is None:
             return self._manager_class(pk)
         return self._manager_class(pk, search_date=self._search_date)
@@ -290,19 +313,20 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return manager_hydrate(instance, search_date=self._search_date)
         return self._build_manager_from_primary_key(instance.pk)
 
-    def _build_manager(self, value: Any) -> GeneralManagerType:
+    def _build_manager(self, value: LookupValue) -> GeneralManagerType:
         if isinstance(value, models.Model):
             return self._build_manager_from_instance(value)
         return self._build_manager_from_primary_key(value)
 
     @staticmethod
     def _copy_filter_definitions(
-        definitions: dict[str, Any] | None,
-    ) -> dict[str, list[Any]]:
+        definitions: Mapping[str, LookupValue | list[LookupValue] | tuple[LookupValue, ...]]
+        | None,
+    ) -> FilterDefinitions:
         """
         Return a copy of filter/exclude definitions without sharing nested lists.
         """
-        copied: dict[str, list[Any]] = {}
+        copied: FilterDefinitions = {}
         for key, values in (definitions or {}).items():
             if isinstance(values, list):
                 copied[key] = list(values)
@@ -314,8 +338,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     @staticmethod
     def _normalize_dependency_mapping(
-        definitions: dict[str, Any],
-    ) -> dict[str, Any]:
+        definitions: Mapping[str, LookupValue],
+    ) -> LookupMapping:
         return {
             key: values[0]
             if isinstance(values, (list, tuple)) and len(values) == 1
@@ -331,6 +355,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         alias, manager class, model, search date, and sort state can safely
         distinguish equivalent terminal results. Unsupported or risky query
         forms return ``None`` so callers fall back to normal ORM evaluation.
+        Bypass cases include select-for-update queries, combined queries,
+        distinct queries, prefetch-related lookups, deferred field loading, and
+        SQL generation errors from empty, invalid, or incompatible querysets.
 
         Returns:
             tuple[Hashable, ...] | None: Cache key components for equivalent
@@ -374,7 +401,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return super()._bucket_index_source_signature()
         return ("database", query_signature)
 
-    def _get_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
+    def _get_run_scoped_primary_keys(self) -> tuple[LookupValue, ...] | None:
         """
         Load or reuse a bounded primary-key snapshot for this bucket.
 
@@ -385,7 +412,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         ``None`` so terminal operations continue through the database.
 
         Returns:
-            tuple[Any, ...] | None: Cached or newly materialized primary keys,
+            tuple[object, ...] | None: Cached or newly materialized primary keys,
             or ``None`` when run-scoped reuse is unavailable.
         """
         context = current_calculation_run_context()
@@ -396,7 +423,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return None
         cached = context.get_orm_bucket_result(signature)
         if cached is not None:
-            return cached  # type: ignore[return-value]
+            return cast(tuple[LookupValue, ...], cached)
 
         if self._data.ordered:
             primary_keys = tuple(
@@ -426,7 +453,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return None
         cached = context.get_orm_bucket_rows(signature)
         if cached is not None:
-            return cached  # type: ignore[return-value]
+            return cast(tuple[models.Model, ...], cached)
 
         rows = tuple(self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1])
         if len(rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
@@ -436,7 +463,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         context.set_orm_bucket_result(signature, primary_keys)
         return rows
 
-    def _peek_run_scoped_primary_keys(self) -> tuple[Any, ...] | None:
+    def _peek_run_scoped_primary_keys(self) -> tuple[LookupValue, ...] | None:
         """
         Return an already cached primary-key snapshot without evaluating the ORM.
 
@@ -445,7 +472,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         materialization on their own.
 
         Returns:
-            tuple[Any, ...] | None: Cached primary keys for this bucket, or
+            tuple[object, ...] | None: Cached primary keys for this bucket, or
             ``None`` when no snapshot exists.
         """
         context = current_calculation_run_context()
@@ -457,7 +484,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         cached = context.get_orm_bucket_result(signature)
         if cached is None:
             return None
-        return cached  # type: ignore[return-value]
+        return cast(tuple[LookupValue, ...], cached)
 
     def _peek_run_scoped_rows(self) -> tuple[models.Model, ...] | None:
         """Return cached model rows without evaluating the ORM."""
@@ -470,10 +497,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         cached = context.get_orm_bucket_rows(signature)
         if cached is None:
             return None
-        return cached  # type: ignore[return-value]
+        return cast(tuple[models.Model, ...], cached)
 
     @staticmethod
-    def _snapshot_get_primary_key(kwargs: dict[str, Any]) -> Any | None:
+    def _snapshot_get_primary_key(kwargs: Mapping[str, LookupValue]) -> LookupValue | None:
         """
         Extract the primary key from a snapshot-safe ``get()`` lookup.
 
@@ -483,10 +510,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         ORM path.
 
         Parameters:
-            kwargs (dict[str, Any]): Lookup arguments passed to ``get()``.
+            kwargs (Mapping[str, object]): Lookup arguments passed to ``get()``.
 
         Returns:
-            Any | None: Requested primary key when the lookup is snapshot-safe,
+            object | None: Requested primary key when the lookup is snapshot-safe,
             otherwise ``None``.
         """
         if len(kwargs) != 1:
@@ -533,6 +560,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Iterate over manager instances corresponding to the queryset rows.
 
+        Safe run-scoped row snapshots are reused when present. Otherwise cached
+        primary-key snapshots are reused when available, and the queryset is
+        iterated as trusted ORM rows when possible. Rows are trusted only when
+        they match the interface model, are not deferred, and historical buckets
+        expose history state. Untrusted rows fall back to primary-key manager
+        construction. `search_date` is passed through when managers are built
+        from primary keys or trusted rows.
+
         Yields:
             GeneralManagerType: Manager instance for each primary key in the queryset.
         """
@@ -566,6 +601,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Raises:
             DatabaseBucketTypeMismatchError: If `other` is not a DatabaseBucket of the same class and not a compatible GeneralManager.
             DatabaseBucketManagerMismatchError: If `other` is a DatabaseBucket but uses a different manager class.
+            DatabaseBucketSearchDateMismatchError: If both buckets target the same manager but have different search dates.
         """
         if isinstance(other, GeneralManager) and other.__class__ == self._manager_class:
             return self.__or__(
@@ -595,17 +631,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
     def __merge_filter_definitions(
-        self, basis: dict[str, list[Any]], **kwargs: Any
-    ) -> dict[str, list[Any]]:
+        self, basis: FilterDefinitions, **kwargs: LookupValue
+    ) -> FilterDefinitions:
         """
         Merge stored filter definitions with additional lookup values.
 
         Parameters:
-            basis (dict[str, list[Any]]): Existing lookup definitions copied into the result.
+            basis (FilterDefinitions): Existing lookup definitions copied into the result.
             **kwargs: New lookups whose values are appended to the result mapping.
 
         Returns:
-            dict[str, list[Any]]: Combined mapping of lookups to value lists.
+            FilterDefinitions: Combined mapping of lookups to value lists.
         """
         kwarg_filter = self._copy_filter_definitions(basis)
         for key, value in kwargs.items():
@@ -616,8 +652,8 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     def __parse_filter_definitions(
         self,
-        **kwargs: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], list[tuple[str, Any, str]]]:
+        **kwargs: LookupValue,
+    ) -> tuple[dict[str, QueryAnnotation], LookupMapping, list[PythonFilterDefinition]]:
         """
         Split provided filter kwargs into three parts: query annotations required by properties, ORM-compatible lookup mappings, and Python-evaluated filter specifications.
 
@@ -626,16 +662,16 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
         Returns:
             tuple:
-                - annotations (dict[str, Any]): Mapping from property name to its `query_annotation` (callable or annotation object) for properties that require ORM annotations.
-                - orm_kwargs (dict[str, list[Any]]): Mapping of ORM lookup strings (e.g., "field__lookup") to their values to be passed to the queryset.
-                - python_filters (list[tuple[str, Any, str]]): List of tuples (lookup, value, root_property_name) for properties that must be evaluated in Python.
+                - annotations (dict[str, object]): Mapping from property name to its `query_annotation` (callable or annotation object) for properties that require ORM annotations.
+                - orm_kwargs (dict[str, object]): Mapping of ORM lookup strings (e.g., "field__lookup") to their values to be passed to the queryset.
+                - python_filters (list[tuple[str, object, str]]): List of tuples (lookup, value, root_property_name) for properties that must be evaluated in Python.
 
         Raises:
             NonFilterablePropertyError: If a lookup targets a property that is not allowed to be filtered.
         """
-        annotations: dict[str, Any] = {}
-        orm_kwargs: dict[str, Any] = {}
-        python_filters: list[tuple[str, Any, str]] = []
+        annotations: dict[str, QueryAnnotation] = {}
+        orm_kwargs: LookupMapping = {}
+        python_filters: list[PythonFilterDefinition] = []
         properties = self._manager_class.Interface.get_graph_ql_properties()
 
         for k, v in kwargs.items():
@@ -655,19 +691,21 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         return annotations, orm_kwargs, python_filters
 
     def __parse_python_filters(
-        self, query_set: models.QuerySet, python_filters: list[tuple[str, Any, str]]
-    ) -> list[int]:
+        self,
+        query_set: models.QuerySet[models.Model],
+        python_filters: list[PythonFilterDefinition],
+    ) -> list[object]:
         """
         Evaluate Python-only filters and return the primary keys that satisfy them.
 
         Parameters:
-            query_set (models.QuerySet): Queryset to inspect.
-            python_filters (list[tuple[str, Any, str]]): Filters requiring Python evaluation, each containing the lookup, value, and property root.
+            query_set (models.QuerySet[models.Model]): Queryset to inspect.
+            python_filters (list[tuple[str, object, str]]): Filters requiring Python evaluation, each containing the lookup, value, and property root.
 
         Returns:
-            list[int]: Primary keys of rows that meet all Python-evaluated filters.
+            list[object]: Primary keys of rows that meet all Python-evaluated filters.
         """
-        ids: list[int] = []
+        ids: list[object] = []
         for obj in query_set:
             inst = self._build_manager_from_instance(obj)
             keep = True
@@ -678,15 +716,23 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     keep = False
                     break
             if keep:
-                ids.append(obj.pk)
+                ids.append(cast(object, obj.pk))
         return ids
 
-    def filter(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
+    def filter(self, **kwargs: LookupValue) -> DatabaseBucket[GeneralManagerType]:
         """
         Return a new DatabaseBucket refined by the given Django-style lookup expressions.
 
+        ``search_date`` is a reserved kwarg consumed by the bucket and preserved
+        on the returned bucket. Remaining kwargs are split between ORM lookups,
+        query-annotated properties, and Python-only property filters. Python-only
+        property filters evaluate the candidate rows in Python and narrow the
+        queryset by the matching primary keys. Stored filter definitions are
+        copied before the new lookups are appended, so parent and child buckets
+        do not share nested lookup lists.
+
         Parameters:
-            **kwargs (Any): Django-style lookup expressions to apply to the underlying queryset.
+            **kwargs (object): Django-style lookup expressions to apply to the underlying queryset, plus optional reserved `search_date`.
 
         Returns:
             DatabaseBucket[GeneralManagerType]: New bucket containing items matching the existing state combined with the provided lookups.
@@ -694,20 +740,24 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Raises:
             NonFilterablePropertyError: If a provided property is not filterable for this manager.
             InvalidQueryAnnotationTypeError: If a query-annotation callback returns a non-QuerySet.
-            QuerysetFilteringError: If the ORM rejects the filter arguments or filtering fails.
+            QuerysetFilteringError: If Django raises `FieldError`, `TypeError`, or `ValueError` while applying ORM filters.
         """
-        search_date = kwargs.pop("search_date", self._search_date)
+        search_date = cast(
+            datetime | date | None,
+            kwargs.pop("search_date", self._search_date),
+        )
         annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
         qs = self._data
         if annotations:
-            other_annotations: dict[str, Any] = {}
+            other_annotations: dict[str, QueryAnnotation] = {}
             for key, value in annotations.items():
                 if not callable(value):
                     other_annotations[key] = value
                     continue
-                qs = value(qs)
+                query_annotation = cast(QueryAnnotationCallable, value)
+                qs = query_annotation(qs)
             if not isinstance(qs, models.QuerySet):
                 raise InvalidQueryAnnotationTypeError()
             qs = qs.annotate(**other_annotations)
@@ -732,37 +782,50 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
 
-    def exclude(self, **kwargs: Any) -> DatabaseBucket[GeneralManagerType]:
+    def exclude(self, **kwargs: LookupValue) -> DatabaseBucket[GeneralManagerType]:
         """
         Produce a bucket that excludes rows matching the provided Django-style lookup expressions.
 
         Accepts ORM lookups, query annotation entries, and Python-only filters; annotation callables will be applied to the underlying queryset as needed.
+        ``search_date`` is a reserved kwarg consumed by the bucket and preserved on the returned bucket.
+        Python-only property filters evaluate candidate rows in Python and then exclude the matching primary keys.
+        Stored exclude definitions are copied before new lookups are appended,
+        so parent and child buckets do not share nested lookup lists.
 
         Parameters:
-            **kwargs (Any): Django-style lookup expressions, annotation entries, or property-based filters used to identify records to exclude.
+            **kwargs (object): Django-style lookup expressions, annotation entries, or property-based filters used to identify records to exclude.
 
         Returns:
             DatabaseBucket[GeneralManagerType]: A new bucket whose queryset omits rows matching the provided lookups.
 
         Raises:
+            NonFilterablePropertyError: If a provided property is not filterable for this manager.
             InvalidQueryAnnotationTypeError: If an annotation callable is applied and does not return a Django QuerySet.
+            QuerysetFilteringError: If Django raises `FieldError`, `TypeError`, or `ValueError` while applying ORM excludes.
         """
-        search_date = kwargs.pop("search_date", self._search_date)
+        search_date = cast(
+            datetime | date | None,
+            kwargs.pop("search_date", self._search_date),
+        )
         annotations, orm_kwargs, python_filters = self.__parse_filter_definitions(
             **kwargs
         )
         qs = self._data
         if annotations:
-            other_annotations: dict[str, Any] = {}
+            other_annotations: dict[str, QueryAnnotation] = {}
             for key, value in annotations.items():
                 if not callable(value):
                     other_annotations[key] = value
                     continue
-                qs = value(qs)
+                query_annotation = cast(QueryAnnotationCallable, value)
+                qs = query_annotation(qs)
             if not isinstance(qs, models.QuerySet):
                 raise InvalidQueryAnnotationTypeError()
             qs = qs.annotate(**other_annotations)
-        qs = qs.exclude(**orm_kwargs)
+        try:
+            qs = qs.exclude(**orm_kwargs)
+        except (FieldError, TypeError, ValueError) as error:
+            raise QuerysetFilteringError(error) from error
 
         if python_filters:
             ids = self.__parse_python_filters(qs, python_filters)
@@ -783,6 +846,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
     def first(self) -> GeneralManagerType | None:
         """
         Return the first row in the queryset as a manager instance.
+
+        Reuses safe cached row snapshots or primary-key snapshots when present;
+        otherwise delegates to queryset `first()`.
 
         Returns:
             GeneralManagerType | None: First manager instance if available.
@@ -807,6 +873,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Return the last row in the queryset as a manager instance.
 
+        Reuses safe cached row snapshots or primary-key snapshots when present;
+        otherwise delegates to queryset `last()`.
+
         Returns:
             GeneralManagerType | None: Last manager instance if available.
         """
@@ -830,18 +899,24 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Count the number of rows represented by the bucket.
 
+        A safe run-scoped primary-key snapshot is reused when present; otherwise
+        this delegates to the queryset count.
+
         Returns:
-            int: Number of queryset rows.
+            int: Number of represented rows.
         """
         self._track_effective_dependencies()
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             return len(primary_keys)
-        return self._data.count()
+        return int(self._data.count())
 
     def all(self) -> DatabaseBucket[GeneralManagerType]:
         """
-        Return a bucket materialising the queryset without further filtering.
+        Return a new lazy bucket wrapping ``self._data.all()``.
+
+        Filter definitions, exclusion definitions, search date, sort metadata,
+        and run-scoped cacheability are preserved on the returned bucket.
 
         Returns:
             DatabaseBucket[GeneralManagerType]: Bucket encapsulating `self._data.all()`.
@@ -857,12 +932,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             run_scoped_cacheable=self._run_scoped_cacheable,
         )
 
-    def get(self, **kwargs: Any) -> GeneralManagerType:
+    def get(self, **kwargs: LookupValue) -> GeneralManagerType:
         """
         Retrieve a single manager instance matching the provided lookups.
 
+        When a run-scoped row or primary-key snapshot is already available and
+        the lookup is exactly one `pk` or `id` value, the snapshot is used before
+        falling back to queryset ``get()``. Snapshot lookups preserve the
+        queryset's `DoesNotExist` and `MultipleObjectsReturned` behavior.
+
         Parameters:
-            **kwargs (Any): Field lookups resolved via `QuerySet.get`.
+            **kwargs (object): Field lookups resolved via `QuerySet.get`.
 
         Returns:
             GeneralManagerType: Manager instance wrapping the matched model.
@@ -901,6 +981,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Access manager instances by index or obtain a sliced bucket.
 
+        Slices return a lazy DatabaseBucket. Scalar indexes return a manager
+        instance; when a run-scoped snapshot path is used, negative scalar
+        indexes raise ValueError. Otherwise normal Django queryset indexing
+        exceptions propagate.
+
         Parameters:
             item (int | slice): Index of the desired row or slice object describing a range.
 
@@ -935,14 +1020,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Return the number of rows represented by the bucket.
 
+        A safe run-scoped primary-key snapshot is reused when present; otherwise
+        this delegates to the queryset count.
+
         Returns:
-            int: Size of the queryset.
+            int: Number of represented rows.
         """
         self._track_effective_dependencies()
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             return len(primary_keys)
-        return self._data.count()
+        return int(self._data.count())
 
     def __str__(self) -> str:
         """
@@ -966,6 +1054,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Determine whether the provided instance belongs to the bucket.
 
+        Manager instances are matched by ``identification["id"]`` and Django
+        models by ``pk``. Missing identifiers return False. A safe run-scoped
+        primary-key snapshot is used when present; otherwise the bucket performs
+        a targeted queryset ``exists()`` lookup.
+
         Parameters:
             item (GeneralManagerType | models.Model): Manager or model instance whose primary key is checked.
 
@@ -984,24 +1077,24 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         primary_keys = self._peek_run_scoped_primary_keys()
         if primary_keys is not None:
             return pk in primary_keys
-        return self._data.filter(pk=pk).exists()
+        return bool(self._data.filter(pk=pk).exists())
 
     def sort(
         self,
-        key: tuple[str] | str,
+        key: tuple[str, ...] | str,
         reverse: bool = False,
-    ) -> DatabaseBucket:
+    ) -> DatabaseBucket[GeneralManagerType]:
         """
         Return a new DatabaseBucket ordered by the given property name(s).
 
-        Accepts a single property name or a tuple of property names. Properties with ORM annotations are applied at the database level; properties without ORM annotations are evaluated in Python and the resulting records are re-ordered while preserving a queryset result. Stable ordering and preservation of manager wrapping are maintained.
+        Accepts a single property name or a tuple of property names. Properties with ORM annotations are applied at the database level; properties without ORM annotations are evaluated in Python and the resulting records are re-ordered while preserving a queryset result. Python-only sorts materialize candidate rows, sort them in memory, then preserve that materialized order with a Django `Case` annotation. Stable ordering and preservation of manager wrapping are maintained.
 
         Parameters:
             key (str | tuple[str, ...]): Property name or sequence of property names to sort by, applied in order of appearance.
             reverse (bool): If True, sort each specified key in descending order.
 
         Returns:
-            DatabaseBucket: A new bucket whose underlying queryset is ordered according to the requested keys.
+            DatabaseBucket[GeneralManagerType]: A new bucket whose underlying queryset is ordered according to the requested keys.
 
         Raises:
             NonSortablePropertyError: If any requested property is not marked as sortable on the manager's GraphQL properties.
@@ -1011,7 +1104,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if isinstance(key, str):
             key = (key,)
         properties = self._manager_class.Interface.get_graph_ql_properties()
-        annotations: dict[str, Any] = {}
+        annotations: dict[str, QueryAnnotation] = {}
         python_keys: list[str] = []
         qs = self._data
         for k in key:
@@ -1021,7 +1114,11 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                     raise NonSortablePropertyError(k, self._manager_class.__name__)
                 if prop.query_annotation is not None:
                     if callable(prop.query_annotation):
-                        qs = prop.query_annotation(qs)
+                        query_annotation = cast(
+                            QueryAnnotationCallable,
+                            prop.query_annotation,
+                        )
+                        qs = query_annotation(qs)
                     else:
                         annotations[k] = prop.query_annotation
                 else:
@@ -1076,8 +1173,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """
         Return an empty bucket sharing the same manager class.
 
+        Preserves copied filter/exclude state, search date, sort metadata, and
+        run-scoped cacheability from `all()` before replacing the queryset with
+        `QuerySet.none()`.
+
         Returns:
-            DatabaseBucket[GeneralManagerType]: Empty bucket retaining filter and exclude state.
+            DatabaseBucket[GeneralManagerType]: Empty bucket retaining manager and query context.
         """
         own = self.all()
         own._data = own._data.none()

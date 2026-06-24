@@ -1,14 +1,10 @@
 """Helpers for caching GeneralManager computations with dependency tracking."""
 
+from collections.abc import Callable, Iterable
 from functools import wraps
 from typing import (
-    Any,
-    Callable,
-    Iterable,
     Literal,
-    Optional,
     Protocol,
-    Set,
     TypeVar,
     cast,
     overload,
@@ -45,35 +41,24 @@ from general_manager.utils.make_cache_key import make_cache_key
 
 
 class CacheBackend(Protocol):
-    def get(self, key: str, default: Optional[Any] = None) -> Any:
-        """
-        Retrieve a value from the cache, falling back to a default.
+    """Minimal cache backend protocol used by `cached`.
 
-        Parameters:
-            key (str): Cache key identifying the stored entry.
-            default (Any | None): Value returned when the key is absent.
+    Implementations must behave like Django cache backends for single-key
+    `get()` and `set()` operations. Stored values are intentionally typed as
+    `object` because decorated functions may return any Python value accepted by
+    the configured backend serializer.
+    """
 
-        Returns:
-            Any: Cached value when available; otherwise, `default`.
-        """
+    def get(self, key: str, default: object = None) -> object:
+        """Return the cached value for `key`, or `default` when absent."""
         ...
 
-    def set(self, key: str, value: Any, timeout: Optional[int] = None) -> None:
-        """
-        Store a value in the cache with an optional expiration timeout.
-
-        Parameters:
-            key (str): Cache key identifying the stored entry.
-            value (Any): Object written to the cache.
-            timeout (int | None): Expiration in seconds; `None` stores the value indefinitely.
-
-        Returns:
-            None
-        """
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
+        """Store `value` under `key` with an optional backend timeout."""
         ...
 
 
-RecordFn = Callable[[str, Set[Dependency]], None]
+RecordFn = Callable[[str, set[Dependency]], None]
 FuncT = TypeVar("FuncT", bound=Callable[..., object])
 CacheScope = Literal["dependency", "run", "timeout", "none"]
 
@@ -105,7 +90,7 @@ def cached(func: FuncT) -> FuncT: ...
 @overload
 def cached(
     func: None = None,
-    timeout: Optional[int] = None,
+    timeout: int | None = None,
     cache_backend: CacheBackend = django_cache,
     record_fn: RecordFn = record_dependencies,
     *,
@@ -115,14 +100,14 @@ def cached(
 
 def cached(
     func: FuncT | None = None,
-    timeout: Optional[int] = None,
+    timeout: int | None = None,
     cache_backend: CacheBackend = django_cache,
     record_fn: RecordFn = record_dependencies,
     *,
     cache: CacheScope = "run",
 ) -> FuncT | Callable[[FuncT], FuncT]:
     """
-    Decorator for caching a function call.
+    Decorate a callable with one of GeneralManager's cache strategies.
 
     By default, cached values are scoped to the active
     :class:`~general_manager.cache.run_context.CalculationRunContext` and are
@@ -132,29 +117,46 @@ def cached(
     cache-backend storage with time-based expiry; dependency recording is
     ignored for timeout-cached values.
 
+    The decorator supports both ``@cached`` and ``@cached(...)`` forms and
+    preserves the wrapped function's type signature for static type checkers.
+    Cache keys are built from the wrapped callable plus positional and keyword
+    arguments through :func:`general_manager.utils.make_cache_key.make_cache_key`.
+
     Parameters:
-        func (Callable[..., object] | None): Function being decorated when used
-            as ``@cached``. Leave unset when using ``@cached(...)``.
-        timeout (int | None): Expiration in seconds for timeout-cached values.
-            Required when ``cache`` is ``"timeout"`` and invalid with any other
-            ``CacheScope``.
-        cache_backend (CacheBackend): Backend used to read and write cached results.
-        record_fn (RecordFn): Callback invoked to persist dependency metadata when
-            ``cache`` is ``"dependency"``. Defaults to
-            :func:`~general_manager.cache.dependency_index.record_dependencies`.
-        cache (CacheScope): Cache storage strategy. ``"run"`` memoizes for the active run,
-            ``"dependency"`` stores in ``cache_backend`` with dependency tracking,
-            ``"timeout"`` stores in ``cache_backend`` with time-based expiry, and
-            ``"none"`` disables caching.
+        func: Function being decorated when used as ``@cached``. Leave unset
+            when using ``@cached(...)``.
+        timeout: Expiration in seconds for timeout-cached values. Required when
+            ``cache`` is ``"timeout"`` and invalid with any other cache mode.
+            The decorator validates only presence/absence; accepted value ranges
+            are delegated to the configured backend.
+        cache_backend: Backend used to read and write dependency or timeout
+            cached results. ``cache="run"`` and ``cache="none"`` do not use it.
+        record_fn: Callback invoked with ``(cache_key, dependencies)`` when
+            ``cache`` is ``"dependency"`` and the default dependency publisher
+            is not batching the write in a run context.
+        cache: Cache storage strategy. ``"run"`` memoizes for the active run,
+            ``"dependency"`` stores in ``cache_backend`` with dependency
+            tracking, ``"timeout"`` stores in ``cache_backend`` with
+            time-based expiry, and ``"none"`` disables caching.
 
     Returns:
-        Callable: Decorated function or decorator that wraps the target function
-            with caching behaviour.
+        The decorated callable when ``func`` is supplied, otherwise a decorator
+        that wraps the target function with the selected caching behaviour.
 
     Raises:
-        ValueError: Raised for invalid ``cache``/``timeout`` combinations, including
-            unsupported ``CacheScope`` values, missing ``timeout`` for
-            ``cache="timeout"``, and ``timeout`` supplied for non-timeout cache modes.
+        UnsupportedCacheScopeError: If ``cache`` is not one of
+            ``"dependency"``, ``"run"``, ``"timeout"``, or ``"none"`` at
+            runtime.
+        CacheTimeoutConfigurationError: If ``cache="timeout"`` has no timeout
+            or a timeout is supplied for another cache mode.
+        Cache backend errors: Propagated from ``cache_backend.get`` or
+            ``cache_backend.set`` for dependency and timeout scopes.
+        Exception: Exceptions raised by the wrapped callable, dependency
+            tracking, dependency publication, compute lease acquisition/waiting,
+            or custom ``record_fn`` callbacks propagate unless the dependency
+            publisher reports ``CachePublishAborted``. In that case, the fresh
+            function result is returned without publishing a dependency cache
+            entry.
         DependencyLockTimeoutError: Propagated from ``record_fn`` (i.e.
             :func:`~general_manager.cache.dependency_index.record_dependencies`) when the
             dependency-index lock cannot be acquired within the configured timeout. The cached
@@ -237,7 +239,7 @@ def cached(
                 key,
                 sentinel=_SENTINEL,
             )
-            if cached_hit is not _SENTINEL:
+            if isinstance(cached_hit, DependencyCacheHit):
                 return return_cached_hit(cached_hit, "cache hit")
 
             lease = acquire_compute_lease(key)
@@ -247,7 +249,7 @@ def cached(
                     key,
                     sentinel=_SENTINEL,
                 )
-                if cached_hit is not _SENTINEL:
+                if isinstance(cached_hit, DependencyCacheHit):
                     return return_cached_hit(
                         cached_hit,
                         "cache hit after waiting for dependency publish",
@@ -261,7 +263,7 @@ def cached(
                     key,
                     sentinel=_SENTINEL,
                 )
-                if cached_hit is not _SENTINEL:
+                if isinstance(cached_hit, DependencyCacheHit):
                     return return_cached_hit(cached_hit, "cache hit")
 
                 started_generation = get_dependency_generation()

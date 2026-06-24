@@ -95,6 +95,21 @@ class RecordingRaisingDummy:
         raise ValueError("boom")
 
 
+class NestedDataChangeDummy:
+    """Test helper whose data-change method invokes another data-change method."""
+
+    @data_change
+    def outer(self):
+        """Invoke an inner data-change method before returning."""
+        self.inner()
+        return self
+
+    @data_change
+    def inner(self):
+        """Return this instance from a nested data-change method."""
+        return self
+
+
 class ClassMethodWrappedDummy:
     """Test helper for manually wrapping a classmethod object."""
 
@@ -234,6 +249,34 @@ class DataChangeSignalTests(TestCase):
 
         self.assertEqual(barrier_states, [True])
         self.assertEqual(enqueued_keys, [("cache-key",)])
+
+    def test_nested_data_change_rewarm_keys_enqueue_after_outer_barrier(self):
+        """Nested data-change calls enqueue rewarm keys after the outer exit."""
+        barrier_states: list[tuple[str, bool]] = []
+        enqueued_keys: list[tuple[str, ...]] = []
+
+        def record_rewarm_key(sender, **kwargs):
+            """Record one pending cache key for each post-change action."""
+            del sender
+            action = kwargs["action"]
+            barrier_states.append((action, is_dependency_data_change_active()))
+            record_invalidated_cache_keys_for_graphql_rewarm((f"{action}-key",))
+
+        def enqueue_rewarm(cache_keys):
+            """Capture the final rewarm batch after all barriers close."""
+            enqueued_keys.append(tuple(cache_keys))
+            self.assertFalse(is_dependency_data_change_active())
+            return True
+
+        post_data_change.connect(record_rewarm_key, weak=False)
+        with patch(
+            "general_manager.api.graphql_warmup.enqueue_graphql_recipe_warmup",
+            side_effect=enqueue_rewarm,
+        ):
+            NestedDataChangeDummy().outer()
+
+        self.assertEqual(barrier_states, [("inner", True), ("outer", True)])
+        self.assertEqual(enqueued_keys, [("inner-key", "outer-key")])
 
     def test_data_change_supports_wrapped_classmethod_object(self):
         """The wrapper can invoke a raw classmethod object."""

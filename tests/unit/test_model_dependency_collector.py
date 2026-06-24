@@ -93,6 +93,19 @@ class TestModelDependencyCollector(SimpleTestCase):
         }
         self.assertEqual(deps, expected)
 
+    def test_collect_ignores_repeated_cyclic_containers(self):
+        gm = FakeGM("root")
+        nested: dict[str, object] = {"manager": gm}
+        nested["self"] = nested
+        repeating = [nested, nested]
+
+        deps = list(ModelDependencyCollector.collect(repeating))
+
+        self.assertEqual(
+            deps,
+            [("FakeGM", "identification", serialize_dependency_identifier("root"))],
+        )
+
     def test_add_args_collects_args_and_nested_attributes(self):
         # GM with nested attribute child (another GM)
         """
