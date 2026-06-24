@@ -227,6 +227,80 @@ class ChatQueryToolTests(SimpleTestCase):
         assert "items { density name }" in query_text
         assert "*" not in query_text
 
+    def test_query_rejects_field_selection_injection(self) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Invalid chat query field"):
+            query(
+                manager="PartManager",
+                filters={},
+                fields=["name } } mutation Dangerous { createPart { success } } #"],
+            )
+
+    def test_query_rejects_unknown_scalar_field_when_schema_is_indexed(
+        self,
+    ) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Unknown chat query field: missing"):
+            query(manager="PartManager", filters={}, fields=["missing"])
+
+    def test_query_rejects_unknown_filter_when_schema_filter_exists(self) -> None:
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            name = graphene.String()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Unknown chat query filter: status"):
+            query(manager="PartManager", filters={"status": "active"}, fields=["name"])
+
+    def test_query_allows_valid_nested_relation_selection(self) -> None:
+        class MaterialType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+            material = graphene.Field(MaterialType)
+
+        GraphQL.graphql_type_registry = {
+            "PartManager": PartType,
+            "MaterialManager": MaterialType,
+        }
+        GraphQL.manager_registry.setdefault("MaterialManager", self.PartManager)
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt", "material": {"name": "Steel"}}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={},
+            fields=["name", {"material": ["name"]}],
+        )
+
+        assert result["data"] == [{"name": "Bolt", "material": {"name": "Steel"}}]
+        assert "material { name }" in str(schema.calls[0]["query"])
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {

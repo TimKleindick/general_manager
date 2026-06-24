@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from contextlib import nullcontext
+import re
 from typing import Any, Protocol
 
 from django.db import connection
@@ -19,6 +20,9 @@ from general_manager.chat.schema_index import (
 )
 from general_manager.chat.settings import get_chat_settings
 from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_INPUT_SCHEMAS
+
+
+_GRAPHQL_IDENTIFIER_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
 
 
 class ChatToolContext(Protocol):
@@ -50,6 +54,27 @@ class InvalidNestedFieldSelectionError(TypeError):
 
     def __init__(self) -> None:
         super().__init__("Nested field selections must be sequences.")
+
+
+class InvalidChatQueryFieldError(ValueError):
+    """Raised when a chat query field identifier is malformed."""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(f"Invalid chat query field: {field}")
+
+
+class UnknownChatQueryFieldError(ValueError):
+    """Raised when a chat query field is not present in the indexed schema."""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(f"Unknown chat query field: {field}")
+
+
+class UnknownChatQueryFilterError(ValueError):
+    """Raised when a chat query filter is not present in the indexed schema."""
+
+    def __init__(self, filter_name: str) -> None:
+        super().__init__(f"Unknown chat query filter: {filter_name}")
 
 
 class ManagerNotChatExposedError(ValueError):
@@ -245,6 +270,50 @@ def _build_selection(fields: Sequence[Any]) -> str:
     return " ".join(selections)
 
 
+def _relation_targets_by_name(summary: Mapping[str, Any]) -> dict[str, str]:
+    targets: dict[str, str] = {}
+    for relation in summary.get("relations", []):
+        if not isinstance(relation, Mapping):
+            continue
+        name = relation.get("name")
+        target = relation.get("target")
+        if isinstance(name, str) and isinstance(target, str):
+            targets[name] = target
+    return targets
+
+
+def _validate_chat_query_field_identifier(field: Any) -> str:
+    if not isinstance(field, str) or _GRAPHQL_IDENTIFIER_RE.match(field) is None:
+        raise InvalidChatQueryFieldError(str(field))
+    return field
+
+
+def _validate_chat_query_fields(manager: str | None, fields: Sequence[Any]) -> None:
+    summary = get_manager_schema_summary(manager) if manager is not None else None
+    scalar_fields = set(summary.get("fields", [])) if summary is not None else set()
+    relation_targets = _relation_targets_by_name(summary) if summary is not None else {}
+
+    for field in fields:
+        if isinstance(field, str):
+            if field == "*":
+                continue
+            field_name = _validate_chat_query_field_identifier(field)
+            if summary is not None and field_name not in scalar_fields:
+                raise UnknownChatQueryFieldError(field_name)
+            continue
+        if isinstance(field, Mapping):
+            for name, nested in field.items():
+                relation_name = _validate_chat_query_field_identifier(name)
+                target_manager = relation_targets.get(relation_name)
+                if summary is not None and target_manager is None:
+                    raise UnknownChatQueryFieldError(relation_name)
+                if not isinstance(nested, Sequence):
+                    raise InvalidNestedFieldSelectionError()
+                _validate_chat_query_fields(target_manager, list(nested))
+            continue
+        raise InvalidFieldSelectionError()
+
+
 def _normalize_fields(manager: str, fields: Sequence[Any]) -> list[Any]:
     normalized: list[Any] = []
     summary = get_manager_schema_summary(manager)
@@ -295,6 +364,18 @@ def _normalize_filters(manager: str, filters: Mapping[str, Any]) -> dict[str, An
     }
 
 
+def _validate_chat_query_filters(manager: str, filters: Mapping[str, Any]) -> None:
+    summary = get_manager_schema_summary(manager)
+    indexed_filters = set(summary.get("filters", [])) if summary is not None else set()
+    for filter_name in filters:
+        if (
+            not isinstance(filter_name, str)
+            or _GRAPHQL_IDENTIFIER_RE.match(filter_name) is None
+            or (indexed_filters and filter_name not in indexed_filters)
+        ):
+            raise UnknownChatQueryFilterError(str(filter_name))
+
+
 def _get_authenticated_user(context: ChatToolContext | None) -> Any:
     user = getattr(context, "user", None)
     if user is None or not bool(getattr(user, "is_authenticated", False)):
@@ -326,13 +407,15 @@ def query(
     list_field_name = _list_query_field_name(manager)
     arguments: list[str] = []
     if filters:
-        arguments.append(
-            f"filter: {_graphql_literal(_normalize_filters(manager, filters))}"
-        )
+        normalized_filters = _normalize_filters(manager, filters)
+        _validate_chat_query_filters(manager, normalized_filters)
+        arguments.append(f"filter: {_graphql_literal(normalized_filters)}")
     if page_size is not None:
         arguments.append(f"pageSize: {page_size}")
     argument_block = f"({', '.join(arguments)})" if arguments else ""
-    selection = _build_selection(_normalize_fields(manager, fields))
+    normalized_fields = _normalize_fields(manager, fields)
+    _validate_chat_query_fields(manager, normalized_fields)
+    selection = _build_selection(normalized_fields)
     query_text = (
         "query ChatQuery { "
         f"{list_field_name}{argument_block} "
