@@ -276,7 +276,11 @@ class CapabilityEvaluationContext:
     ) -> None:
         if isinstance(batch_result, Mapping):
             normalized = {
-                _instance_identity(instance): bool(value)
+                (
+                    instance
+                    if isinstance(instance, str)
+                    else _instance_identity(instance)
+                ): bool(value)
                 for instance, value in batch_result.items()
             }
             for instance in instances:

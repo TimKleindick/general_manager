@@ -172,7 +172,7 @@ class SearchIndexer:
         configuration/import/constructor errors from registry resolution
         propagate.
         """
-        self.backend = backend or get_search_backend()
+        self.backend = get_search_backend() if backend is None else backend
 
     def index_instance(self, instance: GeneralManager) -> None:
         """

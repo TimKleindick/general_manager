@@ -188,8 +188,12 @@ def collect_index_settings(index_name: str) -> SearchIndexSettings:
             if field_config.name not in searchable_fields:
                 searchable_fields.append(field_config.name)
             if field_config.boost is not None:
-                existing = field_boosts.get(field_config.name, 1.0)
-                field_boosts[field_config.name] = max(existing, field_config.boost)
+                existing = field_boosts.get(field_config.name)
+                field_boosts[field_config.name] = (
+                    field_config.boost
+                    if existing is None
+                    else max(existing, field_config.boost)
+                )
         for filter_field in index_config.filters:
             filterable_fields.add(filter_field)
         for sort_field in index_config.sorts:

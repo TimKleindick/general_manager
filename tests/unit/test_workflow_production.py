@@ -749,7 +749,7 @@ class WorkflowProductionEngineTests(TestCase):
         resumed = engine.resume(record.execution_id, {})
 
         assert resumed.state == "completed"
-        assert resumed.metadata == {"existing": True}
+        assert resumed.metadata == {"existing": True, "resume_signal": {}}
 
     def test_celery_workflow_engine_cancel_rejects_completed_state(self) -> None:
         engine = CeleryWorkflowEngine()
@@ -821,6 +821,20 @@ class WorkflowProductionEngineTests(TestCase):
         record.refresh_from_db()
         assert record.state == "completed"
         assert record.metadata["resume_signal"] == {"step": "signal"}
+
+    def test_resume_execution_task_preserves_empty_signal(self) -> None:
+        record = WorkflowExecutionRecord.objects.create(
+            execution_id="exec-resume-empty-signal-task",
+            workflow_id="wf-resume-empty-signal-task",
+            state="waiting",
+            input_data={},
+            metadata={"existing": True},
+        )
+
+        assert resume_execution_task(record.execution_id, {}) is True
+        record.refresh_from_db()
+        assert record.state == "completed"
+        assert record.metadata == {"existing": True, "resume_signal": {}}
 
     def test_cancel_execution_task_rejects_terminal_state(self) -> None:
         record = WorkflowExecutionRecord.objects.create(

@@ -63,6 +63,7 @@ def _get_default_permissions() -> dict[permission_type, list[str]]:
             defaults[action] = (
                 list(configured_permissions)
                 if isinstance(configured_permissions, Iterable)
+                and not isinstance(configured_permissions, str | bytes | bytearray)
                 else [str(configured_permissions)]
             )
     return defaults

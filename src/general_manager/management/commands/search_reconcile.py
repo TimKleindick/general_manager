@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 
 from django.core.management.base import BaseCommand, CommandError
@@ -80,13 +81,13 @@ class Command(BaseCommand):
             InvalidSearchReconcileOptionError: If programmatic option values are invalid.
             Exception: Reconciliation service and sleep interruption errors propagate.
         """
-        once = bool(options.get("once"))
-        watch = bool(options.get("watch"))
+        once = _bool_option(options.get("once", False), "once")
+        watch = _bool_option(options.get("watch", False), "watch")
         if once == watch:
             raise InvalidSearchReconcileModeError()
 
         interval = _positive_float_option(options.get("interval", 60.0), "interval")
-        force = bool(options.get("force"))
+        force = _bool_option(options.get("force", False), "force")
         max_states = _positive_int_option(options.get("max_states"), "max_states")
 
         while True:
@@ -110,10 +111,20 @@ def _positive_float_option(value: object, option_name: str) -> float:
         raise InvalidSearchReconcileOptionError(option_name)
     if isinstance(value, int | float | str):
         try:
-            return max(1.0, float(value))
+            parsed = float(value)
         except ValueError as exc:
             raise InvalidSearchReconcileOptionError(option_name) from exc
+        if not math.isfinite(parsed):
+            raise InvalidSearchReconcileOptionError(option_name)
+        return max(1.0, parsed)
     raise InvalidSearchReconcileOptionError(option_name)
+
+
+def _bool_option(value: object, option_name: str) -> bool:
+    """Validate a boolean command option supplied by Django or direct callers."""
+    if not isinstance(value, bool):
+        raise InvalidSearchReconcileOptionError(option_name)
+    return value
 
 
 def _positive_int_option(value: object, option_name: str) -> int | None:

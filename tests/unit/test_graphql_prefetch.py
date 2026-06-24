@@ -43,6 +43,11 @@ class FakeManager:
     Interface = FakeInterface
 
 
+class InterfaceWithoutGraphQLPropertiesManager:
+    class Interface:
+        pass
+
+
 def _info(query: str) -> SimpleNamespace:
     document = parse(query)
     operation = next(
@@ -131,6 +136,29 @@ class GraphQLPrefetchSelectionTests(SimpleTestCase):
         selected = collect_selected_graphql_property_names(
             info,
             object,
+            root_field="items",
+        )
+
+        self.assertEqual(selected, set())
+
+    def test_manager_interface_without_graphql_properties_selects_no_properties(
+        self,
+    ) -> None:
+        info = _info(
+            """
+            query {
+                taxCalculationList {
+                    items {
+                        calculatedTax { value unit }
+                    }
+                }
+            }
+            """
+        )
+
+        selected = collect_selected_graphql_property_names(
+            info,
+            InterfaceWithoutGraphQLPropertiesManager,
             root_field="items",
         )
 
@@ -227,10 +255,7 @@ class GraphQLPrefetchPlanningTests(SimpleTestCase):
             )
 
         self.assertEqual(set(plans), {"same-cache-key"})
-        self.assertIn(
-            plans["same-cache-key"].property_name,
-            {"computed_value", "other_computed_value"},
-        )
+        self.assertEqual(plans["same-cache-key"].property_name, "computed_value")
 
 
 class GraphQLPrefetchExecutionTests(SimpleTestCase):

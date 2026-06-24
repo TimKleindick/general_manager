@@ -163,6 +163,21 @@ class MutationPermission:
                         )
                     )
             return
+        if not data:
+            is_allowed = Permission.check_permission("__mutate__")
+            if is_audit_enabled:
+                emit_permission_audit_event(
+                    PermissionAuditEvent(
+                        action="mutation",
+                        attributes=("__mutate__",),
+                        granted=is_allowed,
+                        user=resolved_user,
+                        manager=class_name,
+                        permissions=Permission.describe_permissions("__mutate__"),
+                    )
+                )
+            if not is_allowed:
+                errors.append("Mutation permission denied for attribute '__mutate__'")
         for key in data:
             is_allowed = Permission.check_permission(key)
             if is_audit_enabled:

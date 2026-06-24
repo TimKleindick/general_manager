@@ -134,7 +134,9 @@ def search_reconcile_interval_seconds(django_settings: object = settings) -> int
         "SEARCH_RECONCILE_INTERVAL_SECONDS",
         getattr(django_settings, "SEARCH_RECONCILE_INTERVAL_SECONDS", 60),
     )
-    if isinstance(raw, bool | int | float | str):
+    if isinstance(raw, bool):
+        return 60
+    if isinstance(raw, int | float | str):
         try:
             return max(1, int(raw))
         except (TypeError, ValueError):

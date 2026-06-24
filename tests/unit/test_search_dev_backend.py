@@ -57,6 +57,11 @@ class DevSearchBackendTests(SimpleTestCase):
         result = self.backend.search("global", "", filters={"tags__in": "a"})
         assert result.total == 0
 
+    def test_filter_groups_reject_scalar_sequences(self) -> None:
+        result = self.backend.search("global", "", filters="status")
+
+        assert result.total == 0
+
     def test_search_sorting(self) -> None:
         """Sort search results by a stored document field."""
         result = self.backend.search("global", "", sort_by="name", sort_desc=True)

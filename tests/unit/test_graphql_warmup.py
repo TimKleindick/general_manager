@@ -91,6 +91,40 @@ class DependencyWarmUpObject:
             return {"score": DependencyWarmUpObject.score}
 
 
+class AlternateWarmUpObject:
+    """Second timeout-backed manager for shared property-name filtering tests."""
+
+    calls = 0
+
+    def __init__(self, id: int) -> None:
+        """Store identification for recipe reconstruction."""
+        self.identification = {"id": id}
+        self.id = id
+
+    def __str__(self) -> str:
+        """Return a deterministic representation for cache-key generation."""
+        return f"AlternateWarmUpObject(**{{'id': {self.id}}})"
+
+    @classmethod
+    def all(cls) -> list["AlternateWarmUpObject"]:
+        """Return one warm-up candidate."""
+        return [cls(1)]
+
+    @graph_ql_property(cache="timeout", timeout=300, warm_up=True)
+    def score(self) -> int:
+        """Return a computed score and count evaluations."""
+        type(self).calls += 1
+        return self.id * 20
+
+    class Interface:
+        """Expose the warmable GraphQL property for tests."""
+
+        @staticmethod
+        def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
+            """Return GraphQL properties declared on the test manager."""
+            return {"score": AlternateWarmUpObject.score}
+
+
 class FailingWarmUpObject:
     """Warm-up manager whose property raises during evaluation."""
 
@@ -216,6 +250,27 @@ class InvalidIdentificationWarmUpObject:
             return {"score": InvalidIdentificationWarmUpObject.score}
 
 
+class NonStringIdentificationKeyWarmUpObject(InvalidIdentificationWarmUpObject):
+    """Warm-up manager with non-string identification mapping keys."""
+
+    def __init__(self) -> None:
+        """Store invalid non-string identification keys."""
+        self.identification = {1: "not-a-kwarg"}
+
+    @classmethod
+    def all(cls) -> list["NonStringIdentificationKeyWarmUpObject"]:
+        """Return one warm-up candidate with invalid identification keys."""
+        return [cls()]
+
+    class Interface:
+        """Expose the warmable GraphQL property for invalid key tests."""
+
+        @staticmethod
+        def get_graph_ql_properties() -> dict[str, GraphQLProperty]:
+            """Return GraphQL properties declared on the test manager."""
+            return {"score": NonStringIdentificationKeyWarmUpObject.score}
+
+
 class GraphQLWarmUpExecutorTests(SimpleTestCase):
     """Verify all-entry warm-up, recipe warm-up, and enqueue behavior."""
 
@@ -224,6 +279,7 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         cache.clear()
         WarmUpObject.calls = 0
         DependencyWarmUpObject.calls = 0
+        AlternateWarmUpObject.calls = 0
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_executes_property_for_each_all_entry_and_records_recipes(
@@ -235,6 +291,19 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         self.assertEqual(summary.evaluated, 2)
         self.assertEqual(WarmUpObject.calls, 2)
         self.assertEqual(len(graphql_warmup_recipe_keys()), 2)
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
+    def test_warm_up_reuses_generator_property_names_for_each_manager(self) -> None:
+        names = (name for name in ["score"])
+
+        summary = warm_up_graphql_properties(
+            [WarmUpObject, AlternateWarmUpObject],
+            property_names=names,
+        )
+
+        self.assertEqual(summary.evaluated, 3)
+        self.assertEqual(WarmUpObject.calls, 2)
+        self.assertEqual(AlternateWarmUpObject.calls, 1)
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_recipe_reconstructs_instance_and_executes_property(self) -> None:
@@ -429,6 +498,12 @@ class GraphQLWarmUpExecutorTests(SimpleTestCase):
         """Invalid instance identification raises a deliberate TypeError."""
         with self.assertRaises(TypeError):
             warm_up_graphql_properties([InvalidIdentificationWarmUpObject])
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
+    def test_warm_up_rejects_non_string_identification_keys(self) -> None:
+        """Recipe identification keys must be valid kwargs."""
+        with self.assertRaises(TypeError):
+            warm_up_graphql_properties([NonStringIdentificationKeyWarmUpObject])
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_ENABLED": True})
     def test_warm_up_dependency_recipe_reconstructs_and_executes_property(self) -> None:

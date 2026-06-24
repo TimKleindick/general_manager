@@ -239,7 +239,7 @@ class RemoteInvalidationClient:
             payload = json.loads(raw_message)
         else:
             payload = raw_message
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Mapping):
             raise RemoteInvalidationConfigurationError.invalid_payload()
         return url, cast(Mapping[str, object], payload)
 

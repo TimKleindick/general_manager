@@ -138,6 +138,35 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
             else:
                 testing_asgi.custom_application = original_application
 
+    @override_settings(ASGI_APPLICATION="tests.testing_asgi.application")
+    def test_ensure_remote_invalidation_route_preserves_existing_mapped_routes(
+        self,
+    ) -> None:
+        """Merge remote routes into the existing websocket router."""
+
+        class Project:
+            class RemoteAPI:
+                enabled = True
+                base_path = "/remote"
+                resource_name = "projects"
+                allow_update = True
+                websocket_invalidation = True
+
+        existing_route = re_path(
+            r"^existing/$",
+            lambda _scope, _receive, _send: None,
+        )
+        testing_asgi.websocket_urlpatterns[:] = []
+        testing_asgi.application.application_mapping["websocket"] = AuthMiddlewareStack(
+            URLRouter([existing_route])
+        )
+
+        ensure_remote_invalidation_route([Project])
+
+        router = _unwrap_websocket_router()
+        self.assertIn(existing_route, router.routes)
+        self.assertEqual(len(router.routes), 2)
+
     def test_emit_remote_invalidation_serializes_identification_values(self) -> None:
         class Project:
             class RemoteAPI:

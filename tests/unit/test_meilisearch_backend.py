@@ -480,6 +480,35 @@ def test_meilisearch_backend_search_payload_precedence_sort_and_defaults() -> No
     assert result.hits[1].id == "original"
 
 
+def test_meilisearch_backend_search_uses_empty_filter_expression_as_provided() -> None:
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    backend.search("index", "Alpha", filters={"status": "ready"}, filter_expression="")
+
+    assert "filter" not in index.search_payloads[0]
+
+
+def test_meilisearch_backend_applies_empty_settings_lists() -> None:
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    backend.ensure_index(
+        "test-index",
+        {
+            "searchable_fields": [],
+            "filterable_fields": [],
+            "sortable_fields": [],
+        },
+    )
+
+    assert index.settings == [
+        {"searchableAttributes": []},
+        {"filterableAttributes": []},
+        {"sortableAttributes": []},
+    ]
+
+
 def test_meilisearch_backend_lists_original_document_ids_by_type() -> None:
     """List original document IDs for the requested type labels."""
     index = _FakeIndex()

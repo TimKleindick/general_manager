@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import re
 from uuid import uuid4
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Callable, Mapping, Protocol, TYPE_CHECKING, cast
+from typing import Callable, Protocol, TYPE_CHECKING, cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -175,19 +175,32 @@ class RemoteAPIConfig:
     allow_delete: bool
     websocket_invalidation: bool
     protocol_version: str
+    has_identifier: bool = True
     identifier_type: type[object] | None = None
+
+
+def _identifier_input_field(manager_cls: type["GeneralManager"]) -> object | None:
+    interface = getattr(manager_cls, "Interface", None)
+    if interface is None:
+        return None
+    input_fields = getattr(interface, "input_fields", None)
+    if not isinstance(input_fields, Mapping):
+        return None
+    return input_fields.get("id")
+
+
+def _has_identifier_field(manager_cls: type["GeneralManager"]) -> bool:
+    interface = getattr(manager_cls, "Interface", None)
+    if interface is None:
+        return False
+    input_fields = getattr(interface, "input_fields", None)
+    return isinstance(input_fields, Mapping) and "id" in input_fields
 
 
 def _extract_identifier_type(
     manager_cls: type["GeneralManager"],
 ) -> type[object] | None:
-    interface = getattr(manager_cls, "Interface", None)
-    if interface is None:
-        return None
-    input_fields = getattr(interface, "input_fields", None)
-    if input_fields is None:
-        return None
-    id_field = input_fields.get("id")
+    id_field = _identifier_input_field(manager_cls)
     return cast(type[object] | None, getattr(id_field, "type", None))
 
 
@@ -241,6 +254,7 @@ def get_remote_api_config(
             getattr(remote_api, "websocket_invalidation", False)
         ),
         protocol_version=str(getattr(remote_api, "protocol_version", "v1")),
+        has_identifier=_has_identifier_field(manager_cls),
         identifier_type=_extract_identifier_type(manager_cls),
     )
     if not any(
@@ -324,6 +338,7 @@ def add_remote_api_urls(manager_classes: list[type["GeneralManager"]]) -> None:
             )
         if (
             any((config.allow_detail, config.allow_update, config.allow_delete))
+            and config.has_identifier
             and (route_prefix, "item") not in existing
         ):
             detail_route = path(

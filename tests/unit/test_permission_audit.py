@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -810,3 +811,28 @@ class PermissionAuditTests(TransactionTestCase):
 
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
+
+    def test_file_logger_no_worker_close_ignores_later_records(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "audit.log"
+            logger = FileAuditLogger.__new__(FileAuditLogger)
+            logger._path = path
+            logger._batch_size = 1
+            logger._flush_interval = 0.1
+            logger._use_worker = False
+            logger._closed = Event()
+            logger._queue = None
+            logger._worker = None
+            logger._path.parent.mkdir(parents=True, exist_ok=True)
+            event = PermissionAuditEvent(
+                action="read",
+                attributes=("field",),
+                granted=True,
+                user=self.user,
+                manager="TestManager",
+            )
+
+            logger.close()
+            logger.record(event)
+
+            self.assertFalse(path.exists())

@@ -6,7 +6,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 import threading
 import time
 import uuid
@@ -314,7 +314,7 @@ def _read_index(
     value = cache_backend.get(index_key, frozenset())
     if not isinstance(value, frozenset):
         return frozenset()
-    return cast(frozenset[str], value)
+    return frozenset(member for member in value if isinstance(member, str))
 
 
 def _write_index(

@@ -104,12 +104,14 @@ def _normalize_mutation_kwargs_for_manager(
     for key in list(kwargs.keys()):
         if key.endswith("_list") and not key.endswith("_id_list"):
             base_key = key.removesuffix("_list")
-            if base_key in attribute_types:
+            type_info = attribute_types.get(key)
+            relation_type = type_info["type"] if type_info is not None else None
+            if safe_issubclass(relation_type, GeneralManager):
                 normalized.setdefault(f"{base_key}_id_list", normalized[key])
                 normalized.pop(key, None)
                 continue
 
-        if key.startswith("_") and not key.endswith("_id"):
+        if not key.endswith("_id"):
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
             if safe_issubclass(relation_type, GeneralManager):

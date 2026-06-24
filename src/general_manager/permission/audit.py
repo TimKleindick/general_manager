@@ -345,9 +345,11 @@ class _BufferedAuditLogger:
         Calls after the first close are ignored. Synchronous loggers created with
         `use_worker=False` have no worker to close.
         """
-        if self._closed.is_set() or not self._use_worker:
+        if self._closed.is_set():
             return
         self._closed.set()
+        if not self._use_worker:
+            return
         if self._queue is None or self._worker is None:
             return
         self._queue.put(self._SENTINEL)
@@ -360,8 +362,7 @@ class _BufferedAuditLogger:
         For worker-backed loggers this closes the worker, so later `record()`
         calls are ignored. For synchronous loggers it is a no-op.
         """
-        if self._use_worker:
-            self.close()
+        self.close()
 
     def _worker_loop(self) -> None:
         if self._queue is None:

@@ -387,9 +387,12 @@ def _int_setting(django_settings: object, key: str, default: int) -> int:
     raw = config.get(key, getattr(django_settings, key, default))
     if isinstance(raw, bool | int | float | str):
         try:
-            return max(1, int(raw))
+            parsed = int(raw)
         except (TypeError, ValueError):
             return default
+        if parsed <= 0:
+            return default
+        return parsed
     return default
 
 

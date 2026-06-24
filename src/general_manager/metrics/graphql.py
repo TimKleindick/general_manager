@@ -265,19 +265,15 @@ def _get_settings() -> GraphQLMetricsSettings:
     backend = str(get_setting("GRAPHQL_METRICS_BACKEND", "prometheus"))
     resolver_timing = bool(get_setting("GRAPHQL_METRICS_RESOLVER_TIMING", False))
     allowlist_raw = get_setting("GRAPHQL_METRICS_OPERATION_ALLOWLIST", None)
-    max_operation_length = int(
-        cast(
-            IntCoercible,
-            get_setting(
-                "GRAPHQL_METRICS_MAX_OPERATION_LENGTH", DEFAULT_MAX_OPERATION_LENGTH
-            ),
-        )
+    max_operation_length = _positive_int_setting(
+        get_setting(
+            "GRAPHQL_METRICS_MAX_OPERATION_LENGTH", DEFAULT_MAX_OPERATION_LENGTH
+        ),
+        DEFAULT_MAX_OPERATION_LENGTH,
     )
-    max_label_length = int(
-        cast(
-            IntCoercible,
-            get_setting("GRAPHQL_METRICS_MAX_LABEL_LENGTH", DEFAULT_MAX_LABEL_LENGTH),
-        )
+    max_label_length = _positive_int_setting(
+        get_setting("GRAPHQL_METRICS_MAX_LABEL_LENGTH", DEFAULT_MAX_LABEL_LENGTH),
+        DEFAULT_MAX_LABEL_LENGTH,
     )
     unknown_policy = str(
         get_setting(
@@ -295,6 +291,18 @@ def _get_settings() -> GraphQLMetricsSettings:
         max_label_length=max_label_length,
         unknown_operation_policy=unknown_policy,
     )
+
+
+def _positive_int_setting(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(cast(IntCoercible, value))
+    except (TypeError, ValueError):
+        return default
+    if parsed <= 0:
+        return default
+    return parsed
 
 
 def graphql_metrics_enabled() -> bool:

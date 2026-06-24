@@ -9,7 +9,7 @@ from general_manager.apps import GeneralmanagerConfig
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
-from general_manager.search.config import IndexConfig
+from general_manager.search.config import FieldConfig, IndexConfig
 from general_manager.search.registry import (
     collect_index_settings,
     get_filterable_fields,
@@ -84,7 +84,7 @@ class Project(GeneralManager):
         indexes: ClassVar[list[IndexConfig]] = [
             IndexConfig(
                 name="global",
-                fields=["name"],
+                fields=[FieldConfig("name", boost=0.5)],
                 filters=["status"],
                 sorts=["name"],
                 boost=1.5,
@@ -126,6 +126,11 @@ class SearchRegistryTests(SimpleTestCase):
         assert "name" in settings.searchable_fields
         assert "status" in settings.filterable_fields
         assert "name" in settings.sortable_fields
+
+    def test_collect_index_settings_preserves_boosts_below_one(self) -> None:
+        settings = collect_index_settings("global")
+
+        assert settings.field_boosts["name"] == 0.5
 
     def test_iter_index_configs(self) -> None:
         entries = list(iter_index_configs("global"))

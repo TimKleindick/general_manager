@@ -326,6 +326,12 @@ class DevSearchBackend:
             bool: `true` if the document matches the filters, `false` otherwise.
         """
         if not isinstance(filters, Mapping):
+            if not isinstance(filters, Sequence) or isinstance(
+                filters, str | bytes | bytearray
+            ):
+                return False
+            if not all(isinstance(group, Mapping) for group in filters):
+                return False
             return any(self._passes_filters(document, group) for group in filters)
         for key, value in filters.items():
             if "__" in key:

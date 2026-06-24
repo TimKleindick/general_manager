@@ -157,8 +157,8 @@ def observe_outbox_claim_batch(size: int) -> None:
     catch exceptions raised by the installed metrics backend.
 
     Raises:
-        TypeError: If `status` is not a string at runtime and metrics are
-            enabled.
+        TypeError: If `size` does not support numeric comparison at runtime and
+            metrics are enabled.
     """
     if not _METRICS_AVAILABLE or _outbox_claim_batch_size is None:
         return
@@ -222,7 +222,7 @@ def increment_delivery_attempt(*, status: str) -> None:
     catch exceptions raised by the installed metrics backend.
 
     Raises:
-        TypeError: If `state` is not a string at runtime and metrics are
+        TypeError: If `status` is not a string at runtime and metrics are
             enabled.
     """
     if not _METRICS_AVAILABLE or _delivery_attempt_total is None:

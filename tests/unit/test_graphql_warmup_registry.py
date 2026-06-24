@@ -333,6 +333,12 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
 
         self.assertEqual(graphql_warmup_recipe_keys(), ())
 
+    def test_invalid_index_members_are_discarded(self) -> None:
+        """Malformed index members are ignored before callers sort keys."""
+        cache.set(RECIPE_INDEX_KEY, frozenset(("valid-key", 42)))
+
+        self.assertEqual(graphql_warmup_recipe_keys(), ("valid-key",))
+
     def test_recipe_keys_include_stale_index_members(self) -> None:
         """The main index listing does not validate backing recipe payloads."""
         cache.set(RECIPE_INDEX_KEY, frozenset(("missing",)))

@@ -435,6 +435,31 @@ class WorkflowCoreTests(SimpleTestCase):
         assert registry.publish(event) is True
         assert handled == ["evt-dup-clamped-retries"]
 
+    def test_event_registry_allows_distinct_bound_method_instances(self) -> None:
+        handled: list[str] = []
+        registry = InMemoryEventRegistry()
+
+        class Handler:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def handle(self, event: WorkflowEvent) -> None:
+                handled.append(f"{self.label}:{event.event_id}")
+
+        first = Handler("a")
+        second = Handler("b")
+        registry.register("invoice.created", handler=first.handle)
+        registry.register("invoice.created", handler=second.handle)
+
+        event = WorkflowEvent(
+            event_id="evt-bound-methods",
+            event_type="invoice.created",
+            payload={"invoice_id": 202},
+        )
+
+        assert registry.publish(event) is True
+        assert handled == ["a:evt-bound-methods", "b:evt-bound-methods"]
+
     def test_event_registry_bounds_seen_event_cache(self) -> None:
         handled: list[str] = []
         registry = InMemoryEventRegistry(max_seen_event_ids=2)
@@ -542,6 +567,29 @@ class WorkflowCoreTests(SimpleTestCase):
 
         assert first.execution_id == second.execution_id
         assert second.output_data == {"seen": 1}
+
+    def test_local_engine_does_not_reuse_failed_correlation_id(self) -> None:
+        engine = LocalWorkflowEngine()
+        attempts = 0
+
+        def handler(_payload: dict[str, object]) -> dict[str, object]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("boom")
+            return {"attempt": attempts}
+
+        workflow = WorkflowDefinition(
+            workflow_id="wf-local-failed-correlation",
+            handler=handler,
+        )
+
+        first = engine.start(workflow, {"value": 1}, correlation_id="corr-local")
+        second = engine.start(workflow, {"value": 2}, correlation_id="corr-local")
+
+        assert first.state == "failed"
+        assert second.state == "completed"
+        assert first.execution_id != second.execution_id
 
     def test_local_engine_reserves_correlation_id_during_inflight_start(self) -> None:
         engine = LocalWorkflowEngine()

@@ -179,6 +179,9 @@ class MissingManagerIdentifierError(ValueError):
         super().__init__("id is required.")
 
 
+_BIG_INT_ERROR_VALUE_UNSET = object()
+
+
 class InvalidBigIntScalarValueError(TypeError):
     """Internal scalar error for BigInt values rejected before ``int(...)``.
 
@@ -187,13 +190,20 @@ class InvalidBigIntScalarValueError(TypeError):
     import path.
     """
 
-    def __init__(self, value: object | None = None) -> None:
-        if value is None:
+    def __init__(self, value: object = _BIG_INT_ERROR_VALUE_UNSET) -> None:
+        if value is _BIG_INT_ERROR_VALUE_UNSET:
             super().__init__("BigIntScalar cannot accept boolean values.")
         else:
             super().__init__(
                 f"BigIntScalar cannot coerce {type(value).__name__} values."
             )
+
+
+class InvalidReadPermissionConfigurationError(TypeError):
+    """Raised when a manager declares an unusable GraphQL Permission class."""
+
+    def __init__(self, manager_name: str) -> None:
+        super().__init__(f"{manager_name}.Permission must be callable when set.")
 
 
 # ---------------------------------------------------------------------------
@@ -572,4 +582,6 @@ def get_read_permission_filter(
             requires_instance_check=True,
             instance_check_reasons=("no_prefilter_backend",),
         )
+    if permission_attribute is not None:
+        raise InvalidReadPermissionConfigurationError(generalManagerClass.__name__)
     return ReadPermissionPlan(filters=[], requires_instance_check=False)

@@ -457,6 +457,13 @@ def log_read_authorization_summary(
     )
 
 
+class InvalidPaginationValueError(ValueError):
+    """Raised when pagination arguments cannot produce a valid page."""
+
+    def __init__(self) -> None:
+        super().__init__("pagination values must be non-negative")
+
+
 def apply_pagination(
     queryset: Bucket[GeneralManager] | GroupBucket[GeneralManager],
     page: int | None,
@@ -467,12 +474,17 @@ def apply_pagination(
 
     Returns the full queryset when neither ``page`` nor ``page_size`` is
     given. Defaults to page 1 / size 10 when only one parameter is provided.
-    Falsey explicit values such as ``page=0`` or ``page_size=0`` also fall back
-    through those defaults for slicing.
+    Negative ``page`` or ``page_size`` values raise ``ValueError`` before
+    slicing. Falsey explicit values such as ``page=0`` or ``page_size=0`` also
+    fall back through those defaults for slicing.
     The returned object keeps the same bucket/group-bucket shape as the slice
     operation exposes. Slice errors from the bucket implementation propagate
     unchanged.
     """
+    if page is not None and page < 0:
+        raise InvalidPaginationValueError
+    if page_size is not None and page_size < 0:
+        raise InvalidPaginationValueError
     if page is not None or page_size is not None:
         page = page or 1
         page_size = page_size or 10

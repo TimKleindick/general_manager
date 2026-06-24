@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 from typing import ClassVar
 
 from django.test import SimpleTestCase
@@ -108,6 +109,13 @@ class SearchUtilsTests(SimpleTestCase):
         first = normalize_identification({"b": 2, "a": 1})
         second = normalize_identification({"a": 1, "b": 2})
         assert first == second
+
+    def test_normalize_identification_materializes_mapping_implementations(
+        self,
+    ) -> None:
+        assert normalize_identification(MappingProxyType({"b": 2, "a": 1})) == (
+            '{"a": 1, "b": 2}'
+        )
 
     def test_normalize_identification_uses_str_for_non_json_values(self) -> None:
         assert normalize_identification({"day": date(2026, 6, 23)}) == (

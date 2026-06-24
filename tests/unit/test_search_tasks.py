@@ -50,6 +50,11 @@ class SearchReconcileSettingsTests(SimpleTestCase):
         """Fall back to the default interval when the setting is invalid."""
         assert search_reconcile_interval_seconds() == 60
 
+    @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": False})
+    def test_search_reconcile_interval_seconds_falls_back_for_bool(self) -> None:
+        """Boolean values are invalid interval settings."""
+        assert search_reconcile_interval_seconds() == 60
+
     @override_settings(GENERAL_MANAGER={"SEARCH_RECONCILE_INTERVAL_SECONDS": 0})
     def test_search_reconcile_interval_seconds_uses_minimum_for_zero(self) -> None:
         """Clamp a zero reconciliation interval to one second."""

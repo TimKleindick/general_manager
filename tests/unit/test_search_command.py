@@ -7,6 +7,10 @@ from io import StringIO
 from django.core.management import call_command
 from django.test import SimpleTestCase
 
+from general_manager.management.commands.search_index import (
+    Command,
+    InvalidSearchIndexCommandOptionError,
+)
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.search.config import IndexConfig
 from tests.utils.simple_manager_interface import BaseTestInterface
@@ -22,6 +26,12 @@ class DummyManager(GeneralManager):
 
 
 class SearchCommandTests(SimpleTestCase):
+    def test_search_index_rejects_non_bool_programmatic_reindex(self) -> None:
+        command = Command()
+
+        with self.assertRaises(InvalidSearchIndexCommandOptionError):
+            command.handle(indexes=[], reindex="false", managers=[])
+
     @patch("general_manager.management.commands.search_index.get_index_names")
     @patch("general_manager.management.commands.search_index.iter_searchable_managers")
     @patch("general_manager.management.commands.search_index.get_search_backend")

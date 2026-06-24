@@ -226,7 +226,7 @@ def _normalize_mutation_arguments(
 
 def _sequence_argument(value: object) -> Sequence[object]:
     """Return a GraphQL list argument as a sequence for manager normalization."""
-    if isinstance(value, Sequence):
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return value
     return (value,)
 

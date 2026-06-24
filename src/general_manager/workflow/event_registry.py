@@ -132,6 +132,10 @@ class _EventHandlerRegistration:
 
 
 def _callable_path(value: object) -> str:
+    bound_self = getattr(value, "__self__", None)
+    bound_func = getattr(value, "__func__", None)
+    if bound_self is not None and bound_func is not None:
+        return f"{_callable_path(bound_func)}@{id(bound_self)}"
     module = getattr(value, "__module__", "")
     if not isinstance(module, str):
         module = ""

@@ -205,9 +205,12 @@ def warm_up_graphql_properties(
     total_evaluated = 0
     total_failed = 0
     total_recipes = 0
+    selected_property_names = (
+        tuple(property_names) if property_names is not None else None
+    )
 
     for manager_class in classes:
-        properties = warmable_graphql_properties(manager_class, property_names)
+        properties = warmable_graphql_properties(manager_class, selected_property_names)
         if not properties:
             continue
         manager_path = _manager_path(manager_class)
@@ -470,6 +473,8 @@ def _identification_for(instance: object) -> GraphQLWarmUpIdentification:
     """Return a serializable recipe identification mapping for one instance."""
     identification = getattr(instance, "identification", {})
     if not isinstance(identification, Mapping):
+        raise _InvalidIdentificationError
+    if any(not isinstance(key, str) for key in identification):
         raise _InvalidIdentificationError
     return dict(cast(Mapping[str, object], identification))
 

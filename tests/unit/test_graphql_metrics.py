@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import builtins
 import math
-import unittest
 from collections.abc import Awaitable
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from django.test import SimpleTestCase, override_settings
+from django.test import override_settings
 from graphql.error import GraphQLError
 
 from general_manager.metrics.graphql import (
@@ -29,61 +27,82 @@ from general_manager.metrics.graphql import (
 )
 
 
-class GraphQLMetricsNormalizationTests(SimpleTestCase):
-    def test_operation_name_defaults_to_unknown(self) -> None:
-        self.assertEqual(normalize_operation_name(None), "unknown")
-        self.assertEqual(normalize_operation_name(""), "unknown")
+def test_operation_name_defaults_to_unknown() -> None:
+    assert normalize_operation_name(None) == "unknown"
+    assert normalize_operation_name("") == "unknown"
 
-    @override_settings(GENERAL_MANAGER_GRAPHQL_METRICS_MAX_OPERATION_LENGTH=4)
-    def test_operation_name_truncates(self) -> None:
-        self.assertEqual(normalize_operation_name("LongName"), "Long")
 
-    @override_settings(
-        GENERAL_MANAGER_GRAPHQL_METRICS_OPERATION_ALLOWLIST=["Allowed", "Allowed_2"]
-    )
-    def test_operation_name_allowlist(self) -> None:
-        self.assertEqual(normalize_operation_name("Allowed"), "Allowed")
-        self.assertEqual(normalize_operation_name("Allowed 2"), "Allowed_2")
-        self.assertEqual(normalize_operation_name("NotAllowed"), "unknown")
+@override_settings(GENERAL_MANAGER_GRAPHQL_METRICS_MAX_OPERATION_LENGTH=4)
+def test_operation_name_truncates() -> None:
+    assert normalize_operation_name("LongName") == "Long"
 
-    @override_settings(
+
+@override_settings(
+    GENERAL_MANAGER_GRAPHQL_METRICS_OPERATION_ALLOWLIST=["Allowed", "Allowed_2"]
+)
+def test_operation_name_allowlist() -> None:
+    assert normalize_operation_name("Allowed") == "Allowed"
+    assert normalize_operation_name("Allowed 2") == "Allowed_2"
+    assert normalize_operation_name("NotAllowed") == "unknown"
+
+
+@override_settings(
+    GENERAL_MANAGER_GRAPHQL_METRICS_OPERATION_ALLOWLIST=["Allowed"],
+    GENERAL_MANAGER_GRAPHQL_METRICS_UNKNOWN_OPERATION_POLICY="hash",
+)
+def test_operation_name_hash_policy() -> None:
+    hashed = normalize_operation_name("NotAllowed")
+    assert hashed.startswith("op_")
+    assert hashed != "unknown"
+
+
+def test_operation_name_hash_policy_respects_max_length() -> None:
+    with override_settings(
         GENERAL_MANAGER_GRAPHQL_METRICS_OPERATION_ALLOWLIST=["Allowed"],
         GENERAL_MANAGER_GRAPHQL_METRICS_UNKNOWN_OPERATION_POLICY="hash",
-    )
-    def test_operation_name_hash_policy(self) -> None:
-        hashed = normalize_operation_name("NotAllowed")
-        self.assertTrue(hashed.startswith("op_"))
-        self.assertNotEqual(hashed, "unknown")
+        GENERAL_MANAGER_GRAPHQL_METRICS_MAX_OPERATION_LENGTH=6,
+    ):
+        assert len(normalize_operation_name("NotAllowed")) == 6
 
-    def test_operation_name_hash_policy_respects_max_length(self) -> None:
-        with self.settings(
-            GENERAL_MANAGER_GRAPHQL_METRICS_OPERATION_ALLOWLIST=["Allowed"],
-            GENERAL_MANAGER_GRAPHQL_METRICS_UNKNOWN_OPERATION_POLICY="hash",
-            GENERAL_MANAGER_GRAPHQL_METRICS_MAX_OPERATION_LENGTH=6,
-        ):
-            self.assertEqual(len(normalize_operation_name("NotAllowed")), 6)
 
-    def test_operation_name_normalization_strips_and_ascii_normalizes(self) -> None:
-        self.assertEqual(normalize_operation_name("  Müller Query!! "), "Muller_Query")
-        self.assertEqual(normalize_operation_name("!!!"), "unknown")
+@pytest.mark.parametrize("value", [0, -1, False, "bad"])
+def test_operation_name_invalid_max_length_settings_use_default(value: object) -> None:
+    with override_settings(GENERAL_MANAGER_GRAPHQL_METRICS_MAX_OPERATION_LENGTH=value):
+        assert normalize_operation_name("LongName") == "LongName"
 
-    def test_operation_type_resolution(self) -> None:
-        query = "query MetricsQuery { __typename }"
-        self.assertEqual(resolve_operation_type(query, "MetricsQuery"), "query")
 
-    def test_operation_type_resolution_ambiguous_document_returns_unknown(self) -> None:
-        query = "query A { __typename } mutation B { __typename }"
-        self.assertEqual(resolve_operation_type(query, None), "unknown")
+@pytest.mark.parametrize("value", [0, -1, False, "bad"])
+def test_field_name_invalid_max_length_settings_use_default(value: object) -> None:
+    with override_settings(GENERAL_MANAGER_GRAPHQL_METRICS_MAX_LABEL_LENGTH=value):
+        assert normalize_field_name("Query.long field name") == "Query.long_field_name"
 
-    def test_normalize_operation_type_accepts_nonstandard_values(self) -> None:
-        self.assertEqual(normalize_operation_type("live query"), "live_query")
 
-    def test_error_code_normalization(self) -> None:
-        self.assertEqual(normalize_error_code("BAD_USER_INPUT"), "BAD_USER_INPUT")
-        self.assertEqual(normalize_error_code(None), "unknown")
+def test_operation_name_normalization_strips_and_ascii_normalizes() -> None:
+    assert normalize_operation_name("  Müller Query!! ") == "Muller_Query"
+    assert normalize_operation_name("!!!") == "unknown"
 
-    def test_field_name_normalization(self) -> None:
-        self.assertEqual(normalize_field_name("Query.my field"), "Query.my_field")
+
+def test_operation_type_resolution() -> None:
+    query = "query MetricsQuery { __typename }"
+    assert resolve_operation_type(query, "MetricsQuery") == "query"
+
+
+def test_operation_type_resolution_ambiguous_document_returns_unknown() -> None:
+    query = "query A { __typename } mutation B { __typename }"
+    assert resolve_operation_type(query, None) == "unknown"
+
+
+def test_normalize_operation_type_accepts_nonstandard_values() -> None:
+    assert normalize_operation_type("live query") == "live_query"
+
+
+def test_error_code_normalization() -> None:
+    assert normalize_error_code("BAD_USER_INPUT") == "BAD_USER_INPUT"
+    assert normalize_error_code(None) == "unknown"
+
+
+def test_field_name_normalization() -> None:
+    assert normalize_field_name("Query.my field") == "Query.my_field"
 
 
 class RecordingResolverBackend:
@@ -312,7 +331,13 @@ def test_resolver_timing_middleware_records_and_reraises_sync_error(
     assert len(backend.durations) == 1
 
 
-def test_resolver_timing_middleware_records_async_success(monkeypatch) -> None:
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_resolver_timing_middleware_records_async_success(
+    monkeypatch,
+    anyio_backend: str,
+) -> None:
+    del anyio_backend
     backend = RecordingResolverBackend()
     middleware = GraphQLResolverTimingMiddleware()
     info = SimpleNamespace(parent_type=SimpleNamespace(name="Query"), field_name="ping")
@@ -325,14 +350,18 @@ def test_resolver_timing_middleware_records_async_success(monkeypatch) -> None:
         return "pong"
 
     result = middleware.resolve(resolve_async, None, info)
-    assert asyncio.run(cast(Awaitable[object], result)) == "pong"
+    assert await cast(Awaitable[object], result) == "pong"
     assert backend.errors == []
     assert len(backend.durations) == 1
 
 
-def test_resolver_timing_middleware_records_and_reraises_async_error(
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_resolver_timing_middleware_records_and_reraises_async_error(
     monkeypatch,
+    anyio_backend: str,
 ) -> None:
+    del anyio_backend
     backend = RecordingResolverBackend()
     middleware = GraphQLResolverTimingMiddleware()
     info = SimpleNamespace(parent_type=SimpleNamespace(name="Query"), field_name="ping")
@@ -346,11 +375,7 @@ def test_resolver_timing_middleware_records_and_reraises_async_error(
 
     result = middleware.resolve(raise_async_error, None, info)
     with pytest.raises(RuntimeError):
-        asyncio.run(cast(Awaitable[object], result))
+        await cast(Awaitable[object], result)
 
     assert backend.errors == ["Query.ping"]
     assert len(backend.durations) == 1
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -154,17 +154,17 @@ class MeilisearchBackend:
         searchable_fields = self._string_sequence_setting(settings, "searchable_fields")
         filterable_fields = self._string_sequence_setting(settings, "filterable_fields")
         sortable_fields = self._string_sequence_setting(settings, "sortable_fields")
-        if searchable_fields:
+        if searchable_fields is not None:
             task = index.update_settings(
                 {"searchableAttributes": list(searchable_fields)}
             )
             self._wait_for_task(task)
-        if filterable_fields:
+        if filterable_fields is not None:
             task = index.update_settings(
                 {"filterableAttributes": list(filterable_fields)}
             )
             self._wait_for_task(task)
-        if sortable_fields:
+        if sortable_fields is not None:
             task = index.update_settings({"sortableAttributes": list(sortable_fields)})
             self._wait_for_task(task)
 
@@ -317,7 +317,11 @@ class MeilisearchBackend:
             "limit": limit,
             "offset": offset,
         }
-        filter_expr = filter_expression or self._build_filter_expression(filters, types)
+        filter_expr = (
+            filter_expression
+            if filter_expression is not None
+            else self._build_filter_expression(filters, types)
+        )
         if filter_expr:
             payload["filter"] = filter_expr
         if sort_by:
@@ -629,11 +633,13 @@ class MeilisearchBackend:
     def _string_sequence_setting(
         settings: Mapping[str, object],
         key: str,
-    ) -> list[str]:
+    ) -> list[str] | None:
         """Return a string list from a backend setting value."""
-        value = settings.get(key, ())
+        value = settings.get(key)
+        if value is None:
+            return None
         if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-            return []
+            return None
         return [str(item) for item in value]
 
     @staticmethod

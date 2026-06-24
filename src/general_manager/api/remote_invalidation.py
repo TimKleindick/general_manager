@@ -8,7 +8,7 @@ import json
 from importlib import import_module
 import re
 from uuid import UUID, uuid4
-from collections.abc import Callable, Coroutine, Mapping, MutableSequence
+from collections.abc import Callable, Coroutine, Mapping, MutableSequence, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 from urllib.parse import parse_qs
@@ -346,6 +346,12 @@ def ensure_remote_invalidation_route(
     if websocket_patterns is None:
         websocket_patterns = []
         cast(_AsgiModuleRoutes, asgi_module).websocket_urlpatterns = websocket_patterns
+    application = getattr(asgi_module, attr_name, None)
+    if application is None:
+        return
+    for route in _websocket_application_routes(application):
+        if route not in websocket_patterns:
+            websocket_patterns.append(route)
     registry = build_remote_api_registry(manager_classes)
     for config in registry.values():
         if not config.websocket_invalidation:
@@ -377,9 +383,6 @@ def ensure_remote_invalidation_route(
             config.resource_name,
         )
         websocket_patterns.append(websocket_route)
-    application = getattr(asgi_module, attr_name, None)
-    if application is None:
-        return
     if hasattr(application, "application_mapping"):
         mapped_application = cast(_ApplicationMapping, application)
         mapped_application.application_mapping["websocket"] = AuthMiddlewareStack(
@@ -475,3 +478,21 @@ def _websocket_patterns(
     if not isinstance(value, MutableSequence):
         return None
     return value
+
+
+def _websocket_application_routes(application: object) -> list[object]:
+    """Return routes already installed in a Channels websocket router."""
+    if not hasattr(application, "application_mapping"):
+        return []
+    websocket_app = cast(_ApplicationMapping, application).application_mapping.get(
+        "websocket"
+    )
+    router = websocket_app
+    seen: set[int] = set()
+    while router is not None and id(router) not in seen:
+        seen.add(id(router))
+        routes = getattr(router, "routes", None)
+        if isinstance(routes, Sequence) and not isinstance(routes, str | bytes):
+            return list(routes)
+        router = getattr(router, "inner", None)
+    return []

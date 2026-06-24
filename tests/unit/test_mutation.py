@@ -4,7 +4,8 @@ import graphene
 from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser, User
 
-from general_manager.api.mutation import graph_ql_mutation
+from general_manager.api.graphql_mutations import _normalize_mutation_kwargs_for_manager
+from general_manager.api.mutation import _sequence_argument, graph_ql_mutation
 from general_manager.api.graphql import GraphQL
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
@@ -756,6 +757,60 @@ def test_mutation_permission_global_gate_allows_fields_without_specific_gate() -
         __mutate__: ClassVar[List[str]] = ["public"]
 
     assert GlobalOnlyPermission.check({"value": 1}, AnonymousUser()) is None
+
+
+def test_mutation_permission_empty_payload_checks_global_gate() -> None:
+    """Empty payloads still need the class-level mutation gate."""
+
+    class DenyEmptyPayloadPermission(MutationPermission):
+        __mutate__: ClassVar[List[str]] = ["isAdmin"]
+
+    try:
+        DenyEmptyPayloadPermission.check({}, AnonymousUser())
+    except PermissionCheckError as exc:
+        assert "Mutation permission denied for attribute '__mutate__'" in str(exc)
+    else:
+        raise AssertionError
+
+
+def test_sequence_argument_treats_text_as_scalar() -> None:
+    assert _sequence_argument("abc") == ("abc",)
+    assert _sequence_argument(b"abc") == (b"abc",)
+    assert _sequence_argument(bytearray(b"abc")) == (bytearray(b"abc"),)
+
+
+def test_normalize_mutation_kwargs_maps_canonical_relation_inputs() -> None:
+    class Owner(GeneralManager):
+        pass
+
+    class Member(GeneralManager):
+        pass
+
+    class Project:
+        class Interface:
+            @staticmethod
+            def get_attribute_types() -> dict[str, dict[str, object]]:
+                return {
+                    "owner": {
+                        "type": Owner,
+                        "is_derived": False,
+                    },
+                    "owner_id": {
+                        "type": int,
+                        "is_derived": False,
+                    },
+                    "member_list": {
+                        "type": Member,
+                        "is_derived": False,
+                    },
+                }
+
+    normalized = _normalize_mutation_kwargs_for_manager(
+        Project,
+        {"owner": "1", "member_list": ["2"]},
+    )
+
+    assert normalized == {"owner_id": "1", "member_id_list": ["2"]}
 
 
 def test_mutation_permission_missing_mutate_denies() -> None:

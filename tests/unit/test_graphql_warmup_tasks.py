@@ -47,6 +47,27 @@ class GraphQLWarmUpBeatScheduleTests(SimpleTestCase):
         self.assertEqual(entry["schedule"], 13.0)
         self.assertEqual(entry["options"], {"queue": "graphql.warmup"})
 
+    @override_settings(
+        GENERAL_MANAGER={
+            "GRAPHQL_WARMUP_BEAT_ENABLED": True,
+            "GRAPHQL_WARMUP_BEAT_INTERVAL_SECONDS": 0,
+        }
+    )
+    def test_configure_graphql_warmup_beat_schedule_uses_default_for_zero(
+        self,
+    ) -> None:
+        """Non-positive beat intervals fall back to the documented default."""
+        fake_conf = SimpleNamespace(beat_schedule={})
+        fake_app = SimpleNamespace(conf=fake_conf)
+        with (
+            patch("general_manager.api.graphql_warmup_tasks.CELERY_AVAILABLE", True),
+            patch("general_manager.api.graphql_warmup_tasks.current_app", fake_app),
+        ):
+            configure_graphql_warmup_beat_schedule_from_settings()
+
+        entry = fake_conf.beat_schedule[GRAPHQL_WARMUP_BEAT_SCHEDULE_KEY]
+        self.assertEqual(entry["schedule"], 60.0)
+
     @override_settings(GENERAL_MANAGER={"GRAPHQL_WARMUP_BEAT_ENABLED": True})
     def test_configure_graphql_warmup_beat_schedule_preserves_existing_entries(
         self,

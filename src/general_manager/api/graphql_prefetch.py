@@ -34,12 +34,6 @@ class _GraphQLPropertyInterface(Protocol):
     def get_graph_ql_properties(cls) -> Mapping[str, GraphQLProperty]: ...
 
 
-class _GraphQLPropertyManager(Protocol):
-    """Manager/class shape exposing an interface with GraphQL properties."""
-
-    Interface: type[_GraphQLPropertyInterface]
-
-
 def _get_graphql_properties(
     manager_class: type[object],
 ) -> Mapping[str, GraphQLProperty]:
@@ -47,8 +41,11 @@ def _get_graphql_properties(
     interface_cls = getattr(manager_class, "Interface", None)
     if interface_cls is None:
         return {}
-    provider = cast(_GraphQLPropertyManager, manager_class)
-    return provider.Interface.get_graph_ql_properties()
+    raw_getter = getattr(interface_cls, "get_graph_ql_properties", None)
+    if not callable(raw_getter):
+        return {}
+    get_properties = cast(Callable[[], Mapping[str, GraphQLProperty]], raw_getter)
+    return get_properties()
 
 
 def normalize_graphql_name(name: str) -> str:
@@ -169,8 +166,8 @@ def plan_dependency_cache_prefetches(
     """Build dependency-cache key plans for selected readable properties.
 
     ``instances`` is materialized once so one-shot iterables can be reused for
-    multiple selected properties. ``property_names`` is converted to a set, so
-    duplicates collapse and one-shot property-name iterables are consumed once.
+    multiple selected properties. ``property_names`` is materialized in caller
+    order so duplicate dependency-cache keys keep the first selected property.
     ``instances`` are expected to be materialized ``GeneralManager`` instances
     from the returned GraphQL page; non-manager objects are outside the generated
     resolver contract even if a custom call path can build cache keys for them.
@@ -187,7 +184,7 @@ def plan_dependency_cache_prefetches(
     """
     available_properties = _get_graphql_properties(manager_class)
     instance_list = list(instances)
-    selected = set(property_names)
+    selected = tuple(dict.fromkeys(property_names))
     plans: dict[str, DependencyCachePrefetchPlan] = {}
 
     for property_name in selected:

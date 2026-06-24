@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
@@ -29,7 +29,7 @@ TERMINAL_WORKFLOW_STATES: tuple[WorkflowState, ...] = (
 )
 
 
-type WorkflowPayload = Mapping[str, object]
+type WorkflowPayload = dict[str, object]
 type WorkflowHandler = Callable[[WorkflowPayload], WorkflowPayload | None]
 
 

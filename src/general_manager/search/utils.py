@@ -38,7 +38,7 @@ def normalize_identification(identification: Mapping[str, object]) -> str:
         ValueError: Propagated from `json.dumps()` for invalid JSON encoding
             inputs.
     """
-    return json.dumps(identification, sort_keys=True, default=str)
+    return json.dumps(dict(identification), sort_keys=True, default=str)
 
 
 def build_document_id(type_label: str, identification: Mapping[str, object]) -> str:

@@ -24,7 +24,7 @@ from general_manager.workflow.engine import (
 from general_manager.workflow.tasks import CELERY_AVAILABLE, execute_workflow_handler
 from general_manager.workflow.telemetry import increment_execution_state
 
-WorkflowPayload = Mapping[str, object]
+WorkflowPayload = dict[str, object]
 WorkflowPayloadDict = dict[str, object]
 WorkflowHandler = Callable[[WorkflowPayload], WorkflowPayload | None]
 
@@ -35,13 +35,13 @@ class _WorkflowExecutionRecord(Protocol):
     execution_id: str
     workflow_id: str
     state: str
-    input_data: WorkflowPayload
-    output_data: WorkflowPayload | None
+    input_data: Mapping[str, object]
+    output_data: Mapping[str, object] | None
     correlation_id: str | None
     started_at: datetime | None
     ended_at: datetime | None
     error: str | None
-    metadata: WorkflowPayload
+    metadata: Mapping[str, object]
 
 
 def _handler_path(workflow: WorkflowDefinition) -> str | None:
@@ -65,13 +65,13 @@ def _to_execution(record: _WorkflowExecutionRecord) -> WorkflowExecution:
         execution_id=record.execution_id,
         workflow_id=record.workflow_id,
         state=cast(WorkflowState, record.state),
-        input_data=record.input_data,
-        output_data=record.output_data,
+        input_data=dict(record.input_data),
+        output_data=None if record.output_data is None else dict(record.output_data),
         correlation_id=record.correlation_id,
         started_at=record.started_at,
         ended_at=record.ended_at,
         error=record.error,
-        metadata=record.metadata,
+        metadata=dict(record.metadata),
     )
 
 
@@ -326,8 +326,9 @@ class CeleryWorkflowEngine:
 
         The update is applied inline and immediately changes the persisted state
         from `waiting` to `completed`; it does not enqueue a Celery task. A
-        falsey `signal` is ignored. A truthy signal is copied into
-        `metadata["resume_signal"]`. Output data is not changed.
+        ``signal=None`` leaves metadata unchanged. Any explicit mapping,
+        including an empty one, is copied into ``metadata["resume_signal"]``.
+        Output data is not changed.
 
         Raises:
             WorkflowExecutionNotFoundError: If `execution_id` is unknown.
@@ -356,7 +357,7 @@ class CeleryWorkflowEngine:
                     expected_states=("waiting",),
                 )
             metadata = dict(record.metadata)
-            if signal:
+            if signal is not None:
                 metadata["resume_signal"] = dict(signal)
             record.metadata = metadata
             record.state = "completed"

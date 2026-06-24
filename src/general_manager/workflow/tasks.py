@@ -391,7 +391,7 @@ def resume_execution_task(
         if execution.state != "waiting":
             return False
         metadata = dict(execution.metadata)
-        if signal:
+        if signal is not None:
             metadata["resume_signal"] = dict(signal)
         execution.metadata = metadata
         execution.state = "completed"

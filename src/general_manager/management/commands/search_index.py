@@ -20,11 +20,11 @@ logger = get_logger("search.command")
 
 
 class InvalidSearchIndexCommandOptionError(TypeError):
-    """Raised when repeatable `search_index` options contain non-string values."""
+    """Raised when `search_index` options have invalid programmatic values."""
 
     def __init__(self) -> None:
         """Build the command option validation error message."""
-        super().__init__("search_index repeatable options must contain strings")
+        super().__init__("search_index options have invalid values")
 
 
 class Command(BaseCommand):
@@ -77,7 +77,7 @@ class Command(BaseCommand):
             Exception: Backend configuration, index setup, manager discovery, and reindexing errors propagate.
         """
         index_names = _string_options(options.get("indexes"))
-        reindex = bool(options.get("reindex"))
+        reindex = _bool_option(options.get("reindex", False))
         manager_filters = set(_string_options(options.get("managers")))
 
         backend = get_search_backend()
@@ -136,3 +136,10 @@ def _string_options(value: object) -> tuple[str, ...]:
         if all(isinstance(item, str) for item in items):
             return items
     raise InvalidSearchIndexCommandOptionError()
+
+
+def _bool_option(value: object) -> bool:
+    """Validate a boolean Django command option."""
+    if not isinstance(value, bool):
+        raise InvalidSearchIndexCommandOptionError()
+    return value

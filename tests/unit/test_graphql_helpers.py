@@ -247,6 +247,18 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert [item.identification["id"] for item in first_page] == [0, 1, 2, 3, 4]
 
+    def test_apply_pagination_rejects_negative_values(self) -> None:
+        queryset = SimpleBucket(
+            _DummyManager,
+            [_DummyManager(id=value) for value in range(3)],
+        )
+
+        with pytest.raises(ValueError, match="pagination values"):
+            apply_pagination(queryset, page=-1, page_size=10)
+
+        with pytest.raises(ValueError, match="pagination values"):
+            apply_pagination(queryset, page=1, page_size=-10)
+
     def test_measurement_scalar_invalid(self) -> None:
         """
         Verify that serializing a non-measurement string with MeasurementScalar raises an InvalidMeasurementValueError.
@@ -383,6 +395,9 @@ class GraphQLHelperTests(SimpleTestCase):
         with pytest.raises(TypeError, match="BigIntScalar cannot coerce object"):
             BigIntScalar.serialize(object())
 
+        with pytest.raises(TypeError, match="BigIntScalar cannot coerce NoneType"):
+            BigIntScalar.serialize(None)
+
     def test_bigint_scalar_parse_literal(self) -> None:
         string_node = StringValueNode(value="9223372036854775807")
         int_node = IntValueNode(value="9223372036854775807")
@@ -428,6 +443,16 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert plan.filters == []
         assert plan.requires_instance_check is False
+
+    def test_permission_filter_helper_rejects_invalid_permission_attribute(
+        self,
+    ) -> None:
+        class InvalidPermissionManager(GeneralManager):
+            Interface = _DummyInterface
+            Permission = object()
+
+        with pytest.raises(TypeError, match="Permission"):
+            get_read_permission_filter(InvalidPermissionManager, _Info())
 
     def test_handle_graphql_error_preserves_explicit_graphql_error(self) -> None:
         error = GraphQLError("explicit", extensions={"code": "CUSTOM"})

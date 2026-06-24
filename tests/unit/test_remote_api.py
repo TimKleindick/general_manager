@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -58,6 +59,25 @@ class RemoteAPIRegistryTests(SimpleTestCase):
         DummyManager.Interface.input_fields = {}
 
         self.assertIsNone(_extract_identifier_type(DummyManager))
+
+    def test_missing_identifier_field_marks_item_routes_unavailable(self) -> None:
+        class Project:
+            class Interface:
+                input_fields: ClassVar[dict[str, object]] = {}
+
+            class RemoteAPI:
+                enabled = True
+                base_path = "/internal/gm"
+                resource_name = "projects"
+                allow_detail = True
+                allow_update = True
+                allow_delete = True
+
+        config = get_remote_api_config(Project)
+
+        self.assertIsNotNone(config)
+        assert config is not None
+        self.assertFalse(config.has_identifier)
 
     def test_duplicate_base_path_and_resource_name_is_rejected(self) -> None:
         class FirstProject(GeneralManager):
