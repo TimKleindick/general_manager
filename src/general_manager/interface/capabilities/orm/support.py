@@ -219,9 +219,7 @@ class OrmPersistenceSupportCapability(BaseCapability):
                 models.QuerySet[models.Model],
                 target_history_model.history.as_of(
                     interface_instance._search_date
-                ).filter(
-                    pk__in=related_ids
-                ),
+                ).filter(pk__in=related_ids),
             )
 
         return cast(models.QuerySet[models.Model], queryset)
@@ -751,8 +749,8 @@ class OrmQueryCapability(BaseCapability):
             queryset_base = cast(
                 models.QuerySet[models.Model],
                 support.get_manager(
-                interface_cls,
-                only_active=False,
+                    interface_cls,
+                    only_active=False,
                 ).all(),
             )
         if search_date is not None and search_date <= timezone.now() - timedelta(
@@ -850,8 +848,8 @@ def get_support_capability(
     return cast(
         OrmPersistenceSupportCapability,
         interface_cls.require_capability(
-        "orm_support",
-        expected_type=OrmPersistenceSupportCapability,
+            "orm_support",
+            expected_type=OrmPersistenceSupportCapability,
         ),
     )
 
@@ -897,13 +895,15 @@ def _history_capability_for(
     return cast(
         OrmHistoryCapability,
         interface_cls.require_capability(
-        "history",
-        expected_type=OrmHistoryCapability,
+            "history",
+            expected_type=OrmHistoryCapability,
         ),
     )
 
 
-def _orm_instance_cache_key(interface_instance: OrmInterfaceInstance) -> tuple[object, ...]:
+def _orm_instance_cache_key(
+    interface_instance: OrmInterfaceInstance,
+) -> tuple[object, ...]:
     interface_cls = interface_instance.__class__
     support = get_support_capability(interface_cls)
     only_active = not is_soft_delete_enabled(interface_cls)

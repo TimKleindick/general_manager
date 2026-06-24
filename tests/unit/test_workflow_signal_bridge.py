@@ -39,7 +39,9 @@ def test_workflow_signal_bridge_enabled_ignores_non_mapping_general_manager() ->
     assert workflow_signal_bridge_enabled(django_settings) is False
 
 
-def test_connect_workflow_signal_bridge_configures_registry_and_connects_signal() -> None:
+def test_connect_workflow_signal_bridge_configures_registry_and_connects_signal() -> (
+    None
+):
     registry = InMemoryEventRegistry()
 
     with (
@@ -66,10 +68,10 @@ def test_disconnect_workflow_signal_bridge_disconnects_by_dispatch_uid() -> None
     )
 
 
-def test_configure_workflow_signal_bridge_from_settings_connects_or_disconnects() -> None:
-    enabled_settings = SimpleNamespace(
-        GENERAL_MANAGER={"WORKFLOW_SIGNAL_BRIDGE": True}
-    )
+def test_configure_workflow_signal_bridge_from_settings_connects_or_disconnects() -> (
+    None
+):
+    enabled_settings = SimpleNamespace(GENERAL_MANAGER={"WORKFLOW_SIGNAL_BRIDGE": True})
     disabled_settings = SimpleNamespace(
         GENERAL_MANAGER={"WORKFLOW_SIGNAL_BRIDGE": False}
     )

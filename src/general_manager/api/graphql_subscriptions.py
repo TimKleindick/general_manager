@@ -66,7 +66,9 @@ def get_channel_layer_safe(strict: bool = False) -> BaseChannelLayer | None:
     return layer
 
 
-def group_name(manager_class: type[GeneralManager], identification: Identification) -> str:
+def group_name(
+    manager_class: type[GeneralManager], identification: Identification
+) -> str:
     """
     Build a deterministic channel-group name for a specific manager instance.
 
@@ -126,7 +128,9 @@ async def channel_listener(
     """
     try:
         while True:
-            message = cast(SubscriptionMessage, await channel_layer.receive(channel_name))
+            message = cast(
+                SubscriptionMessage, await channel_layer.receive(channel_name)
+            )
             if message.get("type") != "gm.subscription.event":
                 continue
             action = cast(str | None, message.get("action"))
@@ -152,7 +156,9 @@ async def channel_message_listener(
     """
     try:
         while True:
-            message = cast(SubscriptionMessage, await channel_layer.receive(channel_name))
+            message = cast(
+                SubscriptionMessage, await channel_layer.receive(channel_name)
+            )
             if message.get("type") != "gm.subscription.event":
                 continue
             if message.get("action") is not None:

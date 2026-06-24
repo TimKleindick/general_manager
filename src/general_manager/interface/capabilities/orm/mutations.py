@@ -289,7 +289,9 @@ class OrmCreateCapability(BaseCapability):
             """
             local_kwargs = dict(kwargs)
             creator_id = cast(int | None, local_kwargs.pop("creator_id", None))
-            history_comment = cast(str | None, local_kwargs.pop("history_comment", None))
+            history_comment = cast(
+                str | None, local_kwargs.pop("history_comment", None)
+            )
             normalized_simple, normalized_many = _normalize_payload(
                 interface_cls, local_kwargs
             )
@@ -373,7 +375,9 @@ class OrmUpdateCapability(BaseCapability):
             """
             local_kwargs = dict(kwargs)
             creator_id = cast(int | None, local_kwargs.pop("creator_id", None))
-            history_comment = cast(str | None, local_kwargs.pop("history_comment", None))
+            history_comment = cast(
+                str | None, local_kwargs.pop("history_comment", None)
+            )
             normalized_simple, normalized_many = _normalize_payload(
                 interface_instance.__class__, local_kwargs
             )
@@ -467,7 +471,9 @@ class OrmDeleteCapability(BaseCapability):
             """
             local_kwargs = dict(kwargs)
             creator_id = cast(int | None, local_kwargs.pop("creator_id", None))
-            history_comment = cast(str | None, local_kwargs.pop("history_comment", None))
+            history_comment = cast(
+                str | None, local_kwargs.pop("history_comment", None)
+            )
             support = get_support_capability(interface_instance.__class__)
             manager = support.get_manager(
                 interface_instance.__class__,
@@ -617,7 +623,9 @@ def _normalize_payload(
     handler = interface_cls.get_capability_handler("validation")
     if handler is not None and hasattr(handler, "normalize_payload"):
         normalizing_handler = cast(OrmValidationCapability, handler)
-        return normalizing_handler.normalize_payload(interface_cls, payload=dict(payload))
+        return normalizing_handler.normalize_payload(
+            interface_cls, payload=dict(payload)
+        )
     support = get_support_capability(interface_cls)
     normalizer = support.get_payload_normalizer(interface_cls)
     payload_copy = dict(payload)

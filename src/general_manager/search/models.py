@@ -38,8 +38,8 @@ class SearchIndexState(models.Model):
     initialized_at: models.DateTimeField[datetime | None] = models.DateTimeField(
         null=True, blank=True
     )
-    last_reconciled_at: models.DateTimeField[datetime | None] = (
-        models.DateTimeField(null=True, blank=True)
+    last_reconciled_at: models.DateTimeField[datetime | None] = models.DateTimeField(
+        null=True, blank=True
     )
     dirty_since: models.DateTimeField[datetime | None] = models.DateTimeField(
         null=True, blank=True
@@ -56,13 +56,11 @@ class SearchIndexState(models.Model):
     claimed_at: models.DateTimeField[datetime | None] = models.DateTimeField(
         null=True, blank=True
     )
-    claim_expires_at: models.DateTimeField[datetime | None] = (
-        models.DateTimeField(null=True, blank=True)
+    claim_expires_at: models.DateTimeField[datetime | None] = models.DateTimeField(
+        null=True, blank=True
     )
     last_error: models.TextField[str] = models.TextField(blank=True, default="")
-    created_at: models.DateTimeField[datetime] = models.DateTimeField(
-        auto_now_add=True
-    )
+    created_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now_add=True)
     updated_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now=True)
 
     class Meta:

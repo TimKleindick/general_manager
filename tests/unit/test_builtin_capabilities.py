@@ -182,7 +182,9 @@ def test_capability_teardown_converts_custom_registry_to_plain_dict() -> None:
     read_capability.teardown(interface_cls)
 
     assert type(interface_cls._capability_handlers) is dict
-    assert interface_cls._capability_handlers == {"create": inherited_handlers["create"]}
+    assert interface_cls._capability_handlers == {
+        "create": inherited_handlers["create"]
+    }
 
 
 @pytest.mark.parametrize(

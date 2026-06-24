@@ -4,7 +4,11 @@ from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 from graphql import parse
-from graphql.language.ast import FieldNode, FragmentDefinitionNode, OperationDefinitionNode
+from graphql.language.ast import (
+    FieldNode,
+    FragmentDefinitionNode,
+    OperationDefinitionNode,
+)
 
 from general_manager.api.graphql_prefetch import (
     DependencyCachePrefetchPlan,

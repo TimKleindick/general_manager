@@ -146,9 +146,7 @@ def workflow_max_retries(django_settings: SettingsLike = settings) -> int:
     Values are parsed with `int(...)`, clamped to at least 0, and default to 3
     when missing or invalid.
     """
-    return _bounded_int(
-        django_settings, "WORKFLOW_MAX_RETRIES", default=3, minimum=0
-    )
+    return _bounded_int(django_settings, "WORKFLOW_MAX_RETRIES", default=3, minimum=0)
 
 
 def workflow_retry_backoff_seconds(django_settings: SettingsLike = settings) -> int:

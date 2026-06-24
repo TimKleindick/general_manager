@@ -37,8 +37,7 @@ class Command(BaseCommand):
         processed = publish_outbox_batch()
         self.stdout.write(
             self.style.SUCCESS(
-                f"Dispatched {processed} {self._record_label(processed)} "
-                "for routing."
+                f"Dispatched {processed} {self._record_label(processed)} for routing."
             )
         )
 

@@ -404,7 +404,7 @@ class GraphQLHelperTests(SimpleTestCase):
                     filters=[{"filter": {"status": "public"}}],
                     requires_instance_check=False,
                     instance_check_reasons=("custom",),
-            )
+                )
 
             def get_permission_filter(self):
                 pytest.fail("legacy filter fallback should not run")

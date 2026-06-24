@@ -53,9 +53,9 @@ class _SharedTask(Protocol):
     """Typed subset of Celery's shared_task decorator."""
 
     @overload
-    def __call__(self, func: Callable[_P, _R], **kwargs: object) -> _TaskCallable[
-        _P, _R
-    ]: ...
+    def __call__(
+        self, func: Callable[_P, _R], **kwargs: object
+    ) -> _TaskCallable[_P, _R]: ...
 
     @overload
     def __call__(

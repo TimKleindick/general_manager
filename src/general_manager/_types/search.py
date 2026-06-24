@@ -45,7 +45,9 @@ from general_manager.search.indexer import SearchIndexer
 from general_manager.search.backend import SearchResult
 from general_manager.search.backends.typesense import TypesenseBackend
 from general_manager.search.backend_registry import configure_search_backend
-from general_manager.search.backend_registry import configure_search_backend_from_settings
+from general_manager.search.backend_registry import (
+    configure_search_backend_from_settings,
+)
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.config import iter_index_names
 from general_manager.search.config import resolve_search_config

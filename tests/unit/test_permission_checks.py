@@ -247,7 +247,9 @@ class PermissionFunctionsTests(TestCase):
                     "exclude": {"status": "archived"},
                 }
 
-            @register_permission("filterAndExclude", permission_filter=filter_and_exclude)
+            @register_permission(
+                "filterAndExclude", permission_filter=filter_and_exclude
+            )
             def _filter_and_exclude_permission(
                 _instance, _user, _config: list[str]
             ) -> bool:

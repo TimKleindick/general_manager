@@ -198,9 +198,9 @@ class RequestBucket(Bucket[GeneralManagerType]):
             self._data = tuple(
                 self._manager_class(
                     **self._interface_cls.extract_identification(payload)
+                )
+                for payload in self._raw_items
             )
-            for payload in self._raw_items
-        )
         else:
             self._data = tuple(cast(tuple[GeneralManagerType, ...], state["items"]))
         for manager, payload in zip(self._data, self._raw_items, strict=False):

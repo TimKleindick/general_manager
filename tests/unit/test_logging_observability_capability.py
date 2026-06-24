@@ -182,7 +182,9 @@ def test_logging_observability_records_selected_payload_metadata() -> None:
         "ignored": "not logged as metadata",
     }
 
-    capability.before_operation(operation="demo.payload", target=PlainTarget(), payload=payload)
+    capability.before_operation(
+        operation="demo.payload", target=PlainTarget(), payload=payload
+    )
 
     fake_logger.debug.assert_called_once_with(
         "interface operation start",

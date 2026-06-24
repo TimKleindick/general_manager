@@ -255,9 +255,7 @@ class ExistingModelResolutionCapability(BaseCapability):
             manager_factory = (
                 factory_candidate if isinstance(factory_candidate, type) else None
             )
-            factory_definition = manager_factory or getattr(
-                interface, "Factory", None
-            )
+            factory_definition = manager_factory or getattr(interface, "Factory", None)
             attrs["Factory"] = self.build_factory(
                 name=name,
                 interface_cls=concrete_interface,

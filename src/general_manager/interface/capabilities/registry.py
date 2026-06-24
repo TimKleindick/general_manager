@@ -105,7 +105,9 @@ class CapabilityRegistry:
         """
         self._instances[interface_cls] = tuple(capabilities)
 
-    def instances(self, interface_cls: type["InterfaceBase"]) -> tuple["Capability", ...]:
+    def instances(
+        self, interface_cls: type["InterfaceBase"]
+    ) -> tuple["Capability", ...]:
         """
         Retrieve the concrete capability objects associated with the given interface.
 

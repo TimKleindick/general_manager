@@ -59,8 +59,7 @@ class WorkflowMigrationConstraintTests(SimpleTestCase):
 
     def test_correlation_constraint_states_are_frozen_in_migration(self) -> None:
         migration_module = importlib.import_module(
-            "general_manager.migrations."
-            "0003_workflow_execution_correlation_constraint"
+            "general_manager.migrations.0003_workflow_execution_correlation_constraint"
         )
         migration_states = cast(
             "tuple[str, str, str, str]",

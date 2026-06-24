@@ -97,7 +97,9 @@ class FakeDependencyCachePartialSetManyBackend(FakeDependencyCacheBackend):
         return sorted(self.failed_keys & payloads.keys())
 
 
-def cache_entry(cache_backend: FakeDependencyCacheBackend, key: str) -> DependencyCacheEntry:
+def cache_entry(
+    cache_backend: FakeDependencyCacheBackend, key: str
+) -> DependencyCacheEntry:
     payload = cache_backend.get(key)
     assert isinstance(payload, DependencyCacheEntry)
     return payload

@@ -534,7 +534,9 @@ class BasePermission(ABC):
         if isinstance(user, SimpleLazyObject):
             wrapped = getattr(user, "_wrapped", empty)
             if wrapped is empty:
-                setup = cast(Callable[[], None], object.__getattribute__(user, "_setup"))
+                setup = cast(
+                    Callable[[], None], object.__getattribute__(user, "_setup")
+                )
                 setup()
                 wrapped = getattr(user, "_wrapped", empty)
             user = wrapped

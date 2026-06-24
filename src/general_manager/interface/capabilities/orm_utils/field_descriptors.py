@@ -793,7 +793,7 @@ def _general_manager_many_accessor(
     source_model: type[models.Model],
     relation_field_name: str | None = None,
     relation_filter_name: str | None = None,
-    ) -> DescriptorAccessor:
+) -> DescriptorAccessor:
     """
     Create an accessor that returns a manager filtered to objects related to the given source model instance.
 

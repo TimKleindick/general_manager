@@ -158,7 +158,9 @@ def test_calculation_core_capability_bundle_entries_are_ordered():
 def test_database_capability_bundle_entries_are_ordered():
     """ORM-backed bundles expose the expected ordered capability names."""
     assert ORM_PERSISTENCE_CAPABILITIES.label == "orm_persistence_core"
-    assert tuple(entry.handler.name for entry in ORM_PERSISTENCE_CAPABILITIES.entries) == (
+    assert tuple(
+        entry.handler.name for entry in ORM_PERSISTENCE_CAPABILITIES.entries
+    ) == (
         "orm_support",
         "orm_lifecycle",
         "soft_delete",
@@ -186,7 +188,9 @@ def test_database_capability_bundle_entries_are_ordered():
     )
 
     assert EXISTING_MODEL_CAPABILITIES.label == "existing_model_core"
-    assert tuple(entry.handler.name for entry in EXISTING_MODEL_CAPABILITIES.entries) == (
+    assert tuple(
+        entry.handler.name for entry in EXISTING_MODEL_CAPABILITIES.entries
+    ) == (
         "orm_support",
         "orm_lifecycle",
         "soft_delete",
@@ -219,7 +223,9 @@ def test_database_capability_bundle_entries_are_ordered():
 def test_remote_manager_capability_bundle_entries_are_ordered():
     """The remote-manager bundle exposes the expected ordered capability names."""
     assert REMOTE_MANAGER_CAPABILITIES.label == "remote_manager"
-    assert tuple(entry.handler.name for entry in REMOTE_MANAGER_CAPABILITIES.entries) == (
+    assert tuple(
+        entry.handler.name for entry in REMOTE_MANAGER_CAPABILITIES.entries
+    ) == (
         "request_lifecycle",
         "read",
         "validation",
@@ -244,7 +250,9 @@ def test_request_capability_bundle_entries_are_ordered():
     )
 
     assert REQUEST_MUTATION_CAPABILITIES.label == "request_mutation"
-    assert tuple(entry.handler.name for entry in REQUEST_MUTATION_CAPABILITIES.entries) == (
+    assert tuple(
+        entry.handler.name for entry in REQUEST_MUTATION_CAPABILITIES.entries
+    ) == (
         "create",
         "update",
         "delete",

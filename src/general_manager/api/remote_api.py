@@ -178,7 +178,9 @@ class RemoteAPIConfig:
     identifier_type: type[object] | None = None
 
 
-def _extract_identifier_type(manager_cls: type["GeneralManager"]) -> type[object] | None:
+def _extract_identifier_type(
+    manager_cls: type["GeneralManager"],
+) -> type[object] | None:
     interface = getattr(manager_cls, "Interface", None)
     if interface is None:
         return None
@@ -490,7 +492,9 @@ def _remote_api_error_payload(
     )
 
 
-def _apply_ordering(bucket: RemoteAPIBucket, ordering: RemoteOrdering) -> RemoteAPIBucket:
+def _apply_ordering(
+    bucket: RemoteAPIBucket, ordering: RemoteOrdering
+) -> RemoteAPIBucket:
     if ordering is None:
         return bucket
     ordering_values = [ordering] if isinstance(ordering, str) else list(ordering)
@@ -617,7 +621,7 @@ def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
                         error="Method not allowed.",
                         error_code="method_not_allowed",
                         status=405,
-                )
+                    )
                 manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
                 detail_manager = manager_cls(id=_coerce_identifier(config, identifier))
                 return _success_payload(

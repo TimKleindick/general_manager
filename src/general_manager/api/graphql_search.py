@@ -60,9 +60,7 @@ GraphQLSearchFilterInput = (
     GraphQLFilterMapping | str | list[GraphQLSearchFilterItem] | None
 )
 NormalizedFilterPlan = dict[str, GraphQLFilterMapping]
-PermissionBackendFilters = (
-    list[GraphQLFilterMapping] | GraphQLFilterMapping | None
-)
+PermissionBackendFilters = list[GraphQLFilterMapping] | GraphQLFilterMapping | None
 GrapheneFieldType = object
 GrapheneReadMapper = Callable[
     [type, str, Mapping[str, object] | None],

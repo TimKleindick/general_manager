@@ -138,7 +138,9 @@ GeneralManagerT = TypeVar("GeneralManagerT", bound=GeneralManager)
 GraphQLFieldMap = dict[str, object]
 GraphQLFilterMapping = dict[str, object]
 GraphQLFilterInput = Mapping[str, object] | str | None
-GraphQLSearchFilterInput = GraphQLFilterMapping | str | list[GraphQLFilterMapping] | None
+GraphQLSearchFilterInput = (
+    GraphQLFilterMapping | str | list[GraphQLFilterMapping] | None
+)
 GraphQLIdentification = dict[str, object]
 GraphQLResolver = Callable[..., object]
 GraphQLListGetter = Callable[[object, bool], Bucket[GeneralManager] | None]
@@ -161,7 +163,9 @@ class GraphQL:
     _page_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
-    graphql_filter_type_registry: ClassVar[dict[str, type[graphene.InputObjectType]]] = {}
+    graphql_filter_type_registry: ClassVar[
+        dict[str, type[graphene.InputObjectType]]
+    ] = {}
     graphql_capability_type_registry: ClassVar[
         dict[str, type[graphene.ObjectType]]
     ] = {}
@@ -1293,9 +1297,7 @@ class GraphQL:
                 AsyncIterator[SubscriptionEvent]: An asynchronous iterator that first yields a snapshot event and then yields update events; each event's `item` is the manager instance or `None` if it could not be instantiated.
             """
             identification_copy = deepcopy(identification)
-            property_names = cls._subscription_property_names(
-                info, generalManagerClass
-            )
+            property_names = cls._subscription_property_names(info, generalManagerClass)
             try:
                 instance, dependency_records = await asyncio.to_thread(
                     cls._instantiate_manager,

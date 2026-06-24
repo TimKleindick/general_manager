@@ -51,6 +51,7 @@ class RemoteManagerQueryPayload(TypedDict):
     page_size: NotRequired[object]
     operation: NotRequired[str]
 
+
 __all__ = [
     "RemoteManagerLookupMap",
     "RemoteManagerLookupValues",

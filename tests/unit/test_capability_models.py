@@ -6,7 +6,9 @@ from collections.abc import Mapping
 
 import pytest
 
-from general_manager.interface.manifests import capability_models as capability_models_module
+from general_manager.interface.manifests import (
+    capability_models as capability_models_module,
+)
 from general_manager.interface.manifests.capability_models import (
     CapabilityPlan,
     CapabilityConfig,

@@ -8,7 +8,15 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Protocol, SupportsIndex, SupportsInt, TypeAlias, cast
+from typing import (
+    ClassVar,
+    Literal,
+    Protocol,
+    SupportsIndex,
+    SupportsInt,
+    TypeAlias,
+    cast,
+)
 
 from graphql import get_operation_ast, parse
 from graphql.error import GraphQLError

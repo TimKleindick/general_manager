@@ -30,9 +30,7 @@ class WorkflowEventRecord(models.Model):
     )
     payload: models.JSONField[WorkflowJSONPayload] = models.JSONField(default=dict)
     metadata: models.JSONField[WorkflowJSONPayload] = models.JSONField(default=dict)
-    created_at: models.DateTimeField[datetime] = models.DateTimeField(
-        auto_now_add=True
-    )
+    created_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = (
@@ -85,12 +83,8 @@ class WorkflowOutbox(models.Model):
         max_length=64, null=True, blank=True
     )
     attempts: models.PositiveIntegerField[int] = models.PositiveIntegerField(default=0)
-    last_error: models.TextField[str | None] = models.TextField(
-        null=True, blank=True
-    )
-    created_at: models.DateTimeField[datetime] = models.DateTimeField(
-        auto_now_add=True
-    )
+    last_error: models.TextField[str | None] = models.TextField(null=True, blank=True)
+    created_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now_add=True)
     updated_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -127,9 +121,7 @@ class WorkflowExecutionRecord(models.Model):
     `WorkflowExecution` DTOs or raising state-transition errors.
     """
 
-    execution_id: models.CharField[str] = models.CharField(
-        max_length=128, unique=True
-    )
+    execution_id: models.CharField[str] = models.CharField(max_length=128, unique=True)
     workflow_id: models.CharField[str] = models.CharField(max_length=255)
     state: models.CharField[str] = models.CharField(max_length=32)
     input_data: models.JSONField[WorkflowJSONPayload] = models.JSONField(default=dict)
@@ -147,9 +139,7 @@ class WorkflowExecutionRecord(models.Model):
     )
     error: models.TextField[str | None] = models.TextField(null=True, blank=True)
     metadata: models.JSONField[WorkflowJSONPayload] = models.JSONField(default=dict)
-    created_at: models.DateTimeField[datetime] = models.DateTimeField(
-        auto_now_add=True
-    )
+    created_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now_add=True)
     updated_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -209,15 +199,11 @@ class WorkflowDeliveryAttempt(models.Model):
         max_length=24, choices=STATUSES, default=STATUS_PENDING
     )
     attempts: models.PositiveIntegerField[int] = models.PositiveIntegerField(default=0)
-    last_error: models.TextField[str | None] = models.TextField(
-        null=True, blank=True
-    )
+    last_error: models.TextField[str | None] = models.TextField(null=True, blank=True)
     last_traceback: models.TextField[str | None] = models.TextField(
         null=True, blank=True
     )
-    created_at: models.DateTimeField[datetime] = models.DateTimeField(
-        auto_now_add=True
-    )
+    created_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now_add=True)
     updated_at: models.DateTimeField[datetime] = models.DateTimeField(auto_now=True)
 
     class Meta:
