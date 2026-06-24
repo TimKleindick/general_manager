@@ -4,18 +4,45 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, cast
+from typing import Callable, Literal, Protocol, cast
 
 from general_manager.logging import get_logger
 
 logger = get_logger("permission.graphql_capabilities")
 
 CapabilityAction = Literal["create", "update", "delete"]
-CapabilityPayload = Mapping[str, Any] | Callable[[Any, Any], Mapping[str, Any]]
-ObjectCapabilityEvaluator = Callable[[Any, Any], bool]
+CapabilityPayload = (
+    Mapping[str, object] | Callable[[object, object], Mapping[str, object]]
+)
+ObjectCapabilityEvaluator = Callable[[object, object], bool]
 BatchCapabilityEvaluator = Callable[
-    [Sequence[Any], Any], Mapping[Any, bool] | Sequence[bool]
+    [Sequence[object], object], Mapping[object, bool] | Sequence[bool]
 ]
+CapabilityContextMap = dict[int, "CapabilityEvaluationContext"]
+
+
+class ManagerPermissionProtocol(Protocol):
+    """Permission methods used by permission-backed capability previews."""
+
+    @staticmethod
+    def check_create_permission(
+        payload: Mapping[str, object], target: type[object], user: object
+    ) -> None: ...
+
+    @staticmethod
+    def check_update_permission(
+        payload: Mapping[str, object], instance: object, user: object
+    ) -> None: ...
+
+    @staticmethod
+    def check_delete_permission(instance: object, user: object) -> None: ...
+
+
+class MutationPermissionProtocol(Protocol):
+    """Custom mutation permission method used by mutation capability previews."""
+
+    @staticmethod
+    def check(payload: dict[str, object], user: object) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +88,7 @@ def object_capability(
 
 
 def permission_capability(
-    target: type[Any],
+    target: type[object],
     action: CapabilityAction,
     *,
     name: str | None = None,
@@ -84,11 +111,11 @@ def permission_capability(
     """
     capability_name = name or _default_capability_name(action, target)
 
-    def evaluator(instance: Any, user: Any) -> bool:
+    def evaluator(instance: object, user: object) -> bool:
         permission_class = getattr(target, "Permission", None)
         if not isinstance(permission_class, type):
             return True
-        permission = cast(Any, permission_class)
+        permission = cast(ManagerPermissionProtocol, permission_class)
         resolved_payload = _resolve_payload(payload, instance, user)
         try:
             if action == "create":
@@ -109,7 +136,7 @@ def permission_capability(
 
 
 def mutation_capability(
-    mutation: Any,
+    mutation: object,
     *,
     name: str | None = None,
     payload: CapabilityPayload | None = None,
@@ -128,15 +155,16 @@ def mutation_capability(
     """
     capability_name = name or _lower_camel(getattr(mutation, "__name__", "mutation"))
 
-    def evaluator(instance: Any, user: Any) -> bool:
+    def evaluator(instance: object, user: object) -> bool:
         permission = getattr(mutation, "_general_manager_mutation_permission", None)
         if permission is None and hasattr(mutation, "check"):
             permission = mutation
         if permission is None:
             return True
+        permission_checker = cast(MutationPermissionProtocol, permission)
         resolved_payload = _resolve_payload(payload, instance, user)
         try:
-            permission.check(dict(resolved_payload), user)
+            permission_checker.check(dict(resolved_payload), user)
         except PermissionError:
             return False
         return True
@@ -151,7 +179,7 @@ def mutation_capability(
 class CapabilityEvaluationContext:
     """Operation-scoped cache for GraphQL permission capability evaluation."""
 
-    def __init__(self, *, user: Any | None = None) -> None:
+    def __init__(self, *, user: object | None = None) -> None:
         from django.contrib.auth.models import AnonymousUser
 
         from general_manager.permission.base_permission import BasePermission
@@ -163,8 +191,22 @@ class CapabilityEvaluationContext:
         )
         self._cache: dict[tuple[str, str, str, str], bool] = {}
 
-    def evaluate(self, declaration: GraphQLPermissionCapability, instance: Any) -> bool:
-        """Evaluate a capability and cache deny-on-error results for the operation."""
+    def evaluate(
+        self, declaration: GraphQLPermissionCapability, instance: object
+    ) -> bool:
+        """
+        Evaluate a capability and cache fail-closed results for the operation.
+
+        Parameters:
+            declaration (GraphQLPermissionCapability): Capability declaration to
+                evaluate.
+            instance (object): Resolved manager object or current-user provider
+                object whose capability field is being resolved.
+
+        Returns:
+            bool: The evaluator result coerced to `bool`; `False` when the
+                evaluator raises.
+        """
         cache_key = self._cache_key(declaration, instance)
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -186,9 +228,15 @@ class CapabilityEvaluationContext:
     def warm(
         self,
         declarations: Sequence[GraphQLPermissionCapability],
-        instances: Sequence[Any],
+        instances: Sequence[object],
     ) -> None:
-        """Warm cached capability values for a page of instances when possible."""
+        """
+        Warm cached capability values for a page of instances when possible.
+
+        Batch evaluators may return a sequence aligned with `instances` or a
+        mapping keyed by instance object or instance identity. Exceptions are
+        logged and cached as `False` for every missing instance.
+        """
         if not instances:
             return
         for declaration in declarations:
@@ -223,8 +271,8 @@ class CapabilityEvaluationContext:
     def _store_batch_result(
         self,
         declaration: GraphQLPermissionCapability,
-        instances: Sequence[Any],
-        batch_result: Mapping[Any, bool] | Sequence[bool],
+        instances: Sequence[object],
+        batch_result: Mapping[object, bool] | Sequence[bool],
     ) -> None:
         if isinstance(batch_result, Mapping):
             normalized = {
@@ -244,7 +292,7 @@ class CapabilityEvaluationContext:
     def _cache_key(
         self,
         declaration: GraphQLPermissionCapability,
-        instance: Any,
+        instance: object,
     ) -> tuple[str, str, str, str]:
         return (
             instance.__class__.__module__ + "." + instance.__class__.__qualname__,
@@ -255,9 +303,14 @@ class CapabilityEvaluationContext:
 
 
 def get_graphql_capabilities(
-    manager_class: type[Any],
+    manager_class: type[object],
 ) -> tuple[GraphQLPermissionCapability, ...]:
-    """Return validated GraphQL capability declarations for a manager class."""
+    """
+    Return valid GraphQL capability declarations for a manager class.
+
+    Non-`GraphQLPermissionCapability` entries on
+    `Permission.graphql_capabilities` are ignored.
+    """
     permission_class = getattr(manager_class, "Permission", None)
     declarations = getattr(permission_class, "graphql_capabilities", ()) or ()
     return tuple(
@@ -267,25 +320,33 @@ def get_graphql_capabilities(
     )
 
 
-def get_capability_context(info: Any) -> CapabilityEvaluationContext:
-    """Return the operation-scoped capability context for a GraphQL resolver."""
+def get_capability_context(info: object) -> CapabilityEvaluationContext:
+    """
+    Return the operation-scoped capability context for a GraphQL resolver.
+
+    The context is stored on `info.context` under a private attribute keyed by
+    GraphQL operation identity. If the request context cannot accept attributes,
+    a fresh uncached context is returned for that resolver call.
+    """
     request_context = getattr(info, "context", None)
     user = getattr(request_context, "user", None)
     operation_key = id(getattr(info, "operation", None))
     storage_name = "_general_manager_graphql_capability_contexts"
-    contexts = getattr(request_context, storage_name, None)
-    if contexts is None:
-        contexts = {}
+    raw_contexts = getattr(request_context, storage_name, None)
+    if raw_contexts is None:
+        contexts: CapabilityContextMap = {}
         try:
             setattr(request_context, storage_name, contexts)
         except Exception:  # noqa: BLE001
             return CapabilityEvaluationContext(user=user)
+    else:
+        contexts = cast(CapabilityContextMap, raw_contexts)
     if operation_key not in contexts:
         contexts[operation_key] = CapabilityEvaluationContext(user=user)
     return contexts[operation_key]
 
 
-def clear_capability_context(info: Any) -> None:
+def clear_capability_context(info: object) -> None:
     """Discard cached capability values for the current GraphQL operation."""
     request_context = getattr(info, "context", None)
     operation_key = id(getattr(info, "operation", None))
@@ -297,9 +358,9 @@ def clear_capability_context(info: Any) -> None:
 
 def _resolve_payload(
     payload: CapabilityPayload | None,
-    instance: Any,
-    user: Any,
-) -> dict[str, Any]:
+    instance: object,
+    user: object,
+) -> dict[str, object]:
     if payload is None:
         return {}
     if callable(payload):
@@ -307,7 +368,7 @@ def _resolve_payload(
     return dict(payload)
 
 
-def _default_capability_name(action: str, target: type[Any]) -> str:
+def _default_capability_name(action: str, target: type[object]) -> str:
     return _lower_camel(f"{action}_{target.__name__}")
 
 
@@ -320,7 +381,7 @@ def _object_capability_description(name: str) -> str:
 
 def _permission_capability_description(
     action: CapabilityAction,
-    target: type[Any],
+    target: type[object],
 ) -> str:
     manager_name = getattr(target, "__name__", "manager")
     return (
@@ -330,7 +391,7 @@ def _permission_capability_description(
     )
 
 
-def _mutation_capability_description(mutation: Any) -> str:
+def _mutation_capability_description(mutation: object) -> str:
     mutation_name = getattr(mutation, "__name__", "mutation")
     return (
         f"Whether the current user would pass the {mutation_name} mutation "
@@ -351,12 +412,12 @@ def _lower_camel(value: str) -> str:
     )
 
 
-def _instance_identity(instance: Any) -> str:
+def _instance_identity(instance: object) -> str:
     identification = getattr(instance, "identification", None)
     if isinstance(identification, Mapping):
         return repr(tuple(sorted(identification.items())))
     return repr(getattr(instance, "pk", getattr(instance, "id", id(instance))))
 
 
-def _user_identity(user: Any) -> str:
+def _user_identity(user: object) -> str:
     return repr(getattr(user, "pk", getattr(user, "id", None)))

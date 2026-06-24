@@ -1,9 +1,10 @@
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import Mock
+from typing import cast
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 from graphql import parse
+from graphql.language.ast import FieldNode, FragmentDefinitionNode, OperationDefinitionNode
 
 from general_manager.api.graphql_prefetch import (
     DependencyCachePrefetchPlan,
@@ -38,20 +39,24 @@ class FakeManager:
     Interface = FakeInterface
 
 
-def _info(query: str) -> Any:
+def _info(query: str) -> SimpleNamespace:
     document = parse(query)
     operation = next(
         definition
         for definition in document.definitions
-        if definition.kind == "operation_definition"
+        if isinstance(definition, OperationDefinitionNode)
     )
     fragments = {
         definition.name.value: definition
         for definition in document.definitions
-        if definition.kind == "fragment_definition"
+        if isinstance(definition, FragmentDefinitionNode)
     }
     return SimpleNamespace(
-        field_nodes=list(operation.selection_set.selections),
+        field_nodes=[
+            cast(FieldNode, selection)
+            for selection in operation.selection_set.selections
+            if isinstance(selection, FieldNode)
+        ],
         fragments=fragments,
     )
 
@@ -101,6 +106,27 @@ class GraphQLPrefetchSelectionTests(SimpleTestCase):
         selected = collect_selected_graphql_property_names(
             info,
             FakeManager,
+            root_field="items",
+        )
+
+        self.assertEqual(selected, set())
+
+    def test_manager_without_interface_selects_no_properties(self) -> None:
+        info = _info(
+            """
+            query {
+                taxCalculationList {
+                    items {
+                        calculatedTax { value unit }
+                    }
+                }
+            }
+            """
+        )
+
+        selected = collect_selected_graphql_property_names(
+            info,
+            object,
             root_field="items",
         )
 
@@ -182,6 +208,26 @@ class GraphQLPrefetchPlanningTests(SimpleTestCase):
             {"computed_value", "other_computed_value"},
         )
 
+    def test_duplicate_cache_keys_keep_first_planned_property(self) -> None:
+        instance = PlannedObject(1)
+
+        def repeated_key(_getter: object, _args: object, _kwargs: object) -> str:
+            return "same-cache-key"
+
+        with patch("general_manager.api.graphql_prefetch.make_cache_key", repeated_key):
+            plans = plan_dependency_cache_prefetches(
+                [instance],
+                PlannedObject,
+                ("computed_value", "other_computed_value"),
+                can_read_field=lambda _instance, _field_name: True,
+            )
+
+        self.assertEqual(set(plans), {"same-cache-key"})
+        self.assertIn(
+            plans["same-cache-key"].property_name,
+            {"computed_value", "other_computed_value"},
+        )
+
 
 class GraphQLPrefetchExecutionTests(SimpleTestCase):
     def test_prefetch_reads_many_and_stores_hits_in_current_context(self) -> None:
@@ -209,6 +255,36 @@ class GraphQLPrefetchExecutionTests(SimpleTestCase):
 
         reader.assert_called_once_with(cache_backend, ("cache-key",))
 
+    def test_prefetch_stores_extra_reader_hits(self) -> None:
+        planned_hit = DependencyCacheHit(value=42, dependencies=frozenset())
+        extra_hit = DependencyCacheHit(value=99, dependencies=frozenset())
+        reader = Mock(
+            return_value={
+                "cache-key": planned_hit,
+                "extra-cache-key": extra_hit,
+            }
+        )
+        plan = DependencyCachePrefetchPlan(
+            cache_key="cache-key",
+            instance=PlannedObject(1),
+            property_name="computed_value",
+        )
+
+        with CalculationRunContext() as context:
+            hits = prefetch_dependency_cache_hits(
+                {"cache-key": plan},
+                reader=reader,
+            )
+
+            self.assertEqual(
+                hits,
+                {"cache-key": planned_hit, "extra-cache-key": extra_hit},
+            )
+            self.assertEqual(
+                context.get_dependency_cache_hit("extra-cache-key"),
+                extra_hit,
+            )
+
     def test_prefetch_without_context_skips_reader(self) -> None:
         reader = Mock(return_value={})
         plan = DependencyCachePrefetchPlan(
@@ -222,6 +298,15 @@ class GraphQLPrefetchExecutionTests(SimpleTestCase):
             cache_backend=object(),
             reader=reader,
         )
+
+        self.assertEqual(hits, {})
+        reader.assert_not_called()
+
+    def test_prefetch_with_empty_plans_skips_reader(self) -> None:
+        reader = Mock(return_value={})
+
+        with CalculationRunContext():
+            hits = prefetch_dependency_cache_hits({}, reader=reader)
 
         self.assertEqual(hits, {})
         reader.assert_not_called()

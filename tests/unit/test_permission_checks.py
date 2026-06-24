@@ -8,6 +8,7 @@ from django.test import TestCase
 from django.utils.crypto import get_random_string
 
 from general_manager.permission import permission_functions, register_permission
+from general_manager.permission.permission_checks import PermissionFilter
 
 
 class PermissionFunctionsTests(TestCase):
@@ -163,7 +164,9 @@ class PermissionFunctionsTests(TestCase):
     def test_register_permission_decorator(self) -> None:
         dummy_instance = MagicMock()
 
-        def custom_filter(user: AnonymousUser | AbstractUser, config: list[str]):
+        def custom_filter(
+            user: AnonymousUser | AbstractUser, config: list[str]
+        ) -> PermissionFilter:
             return {
                 "filter": {
                     "custom_flag": config[0] if config else getattr(user, "id", None)
@@ -191,10 +194,8 @@ class PermissionFunctionsTests(TestCase):
             )
 
             with self.assertRaises(ValueError):
-
-                @register_permission("customPermission")
-                def _duplicate_permission(instance, user, config):
-                    return False
+                duplicate_decorator = register_permission("customPermission")
+                duplicate_decorator(_custom_permission)
 
         finally:
             permission_functions.pop("customPermission", None)
@@ -211,6 +212,7 @@ class PermissionFunctionsTests(TestCase):
 
             self.assertIn("simplePermission", permission_functions)
             permission_entry = permission_functions["simplePermission"]
+            self.assertTrue(callable(permission_entry["permission_filter"]))
             self.assertTrue(
                 permission_entry["permission_method"](dummy_instance, self.user, [])
             )
@@ -223,6 +225,50 @@ class PermissionFunctionsTests(TestCase):
             self.assertIsNone(permission_entry["permission_filter"](self.user, []))
         finally:
             permission_functions.pop("simplePermission", None)
+
+    def test_register_permission_accepts_filter_and_exclude_shapes(self) -> None:
+        """Permission filters may return filter keys, exclude keys, both, or None."""
+        try:
+
+            def exclude_only_filter(
+                _user: AnonymousUser | AbstractUser, _config: list[str]
+            ) -> PermissionFilter:
+                return {"exclude": {"status": "archived"}}
+
+            @register_permission("excludeOnly", permission_filter=exclude_only_filter)
+            def _exclude_only_permission(_instance, _user, _config: list[str]) -> bool:
+                return True
+
+            def filter_and_exclude(
+                _user: AnonymousUser | AbstractUser, _config: list[str]
+            ) -> PermissionFilter:
+                return {
+                    "filter": {"owner_id": self.user.id},
+                    "exclude": {"status": "archived"},
+                }
+
+            @register_permission("filterAndExclude", permission_filter=filter_and_exclude)
+            def _filter_and_exclude_permission(
+                _instance, _user, _config: list[str]
+            ) -> bool:
+                return True
+
+            self.assertEqual(
+                permission_functions["excludeOnly"]["permission_filter"](self.user, []),
+                {"exclude": {"status": "archived"}},
+            )
+            self.assertEqual(
+                permission_functions["filterAndExclude"]["permission_filter"](
+                    self.user, []
+                ),
+                {
+                    "filter": {"owner_id": self.user.id},
+                    "exclude": {"status": "archived"},
+                },
+            )
+        finally:
+            permission_functions.pop("excludeOnly", None)
+            permission_functions.pop("filterAndExclude", None)
 
     def test_public_permission_with_inactive_user(self) -> None:
         """Test public permission allows inactive users."""

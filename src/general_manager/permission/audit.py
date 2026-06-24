@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import atexit
 import json
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from threading import Event, Thread, Lock
-from typing import Any, Iterable, Mapping, Protocol, runtime_checkable, Literal
+from typing import Literal, Protocol, TypedDict, cast, runtime_checkable
 
 from django.apps import apps
 from django.db import connections, models
@@ -16,6 +17,31 @@ from django.utils import timezone
 
 
 AuditAction = Literal["create", "read", "update", "delete", "mutation"]
+type AuditMetadataValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | list[AuditMetadataValue]
+    | dict[str, AuditMetadataValue]
+)
+type AuditMetadata = Mapping[str, AuditMetadataValue]
+
+
+class SerializedAuditEvent(TypedDict):
+    """JSON-compatible representation written by the built-in audit loggers."""
+
+    timestamp: str
+    action: AuditAction
+    attributes: list[str]
+    granted: bool
+    bypassed: bool
+    manager: str | None
+    user_id: str | None
+    user: str | None
+    permissions: list[str]
+    metadata: dict[str, AuditMetadataValue] | None
 
 
 @dataclass(slots=True)
@@ -24,24 +50,27 @@ class PermissionAuditEvent:
     Payload describing a permission evaluation outcome.
 
     Attributes:
-        action (AuditAction): CRUD or mutation action that was evaluated.
-        attributes (tuple[str, ...]): Collection of attribute names covered by this evaluation.
-        granted (bool): True when the action was permitted.
-        user (Any): User object involved in the evaluation; consumers may extract ids.
-        manager (str | None): Name of the manager class (when applicable).
-        permissions (tuple[str, ...]): Permission expressions that were considered.
-        bypassed (bool): True when the decision relied on a superuser bypass.
-        metadata (Mapping[str, Any] | None): Optional additional context.
+        action: CRUD or mutation action that was evaluated.
+        attributes: Attribute names covered by this evaluation, in the order
+            the permission check reported them.
+        granted: True when the action was permitted.
+        user: User object involved in the evaluation. Built-in loggers store
+            `str(user.pk)` when a `pk` attribute exists, otherwise `repr(user)`.
+        manager: Name of the manager class when applicable.
+        permissions: Permission expressions that were considered.
+        bypassed: True when the decision relied on a superuser bypass.
+        metadata: Optional JSON-compatible context. Built-in file and database
+            loggers persist this mapping as-is after copying it to a plain dict.
     """
 
     action: AuditAction
     attributes: tuple[str, ...]
     granted: bool
-    user: Any
+    user: object
     manager: str | None
     permissions: tuple[str, ...] = ()
     bypassed: bool = False
-    metadata: Mapping[str, Any] | None = None
+    metadata: AuditMetadata | None = None
 
 
 @runtime_checkable
@@ -68,25 +97,37 @@ _SETTINGS_KEY = "GENERAL_MANAGER"
 _AUDIT_LOGGER_KEY = "AUDIT_LOGGER"
 
 
+class InvalidAuditLoggerOptionsError(TypeError):
+    """Raised when an AUDIT_LOGGER mapping uses non-mapping options."""
+
+    def __init__(self) -> None:
+        super().__init__("AUDIT_LOGGER options must be a mapping.")
+
+
 def configure_audit_logger(logger: AuditLogger | None) -> None:
     """
     Configure the audit logger used by permission checks.
 
     Parameters:
-        logger (AuditLogger | None): Concrete logger implementation. Passing ``None``
-            resets the logger to a no-op implementation.
+        logger: Concrete logger implementation. Passing `None` resets the
+            process-global logger to the built-in no-op implementation.
     """
     global _audit_logger
     _audit_logger = logger or _NOOP_LOGGER
 
 
 def get_audit_logger() -> AuditLogger:
-    """Return the currently configured audit logger."""
+    """
+    Return the currently configured audit logger.
+
+    The default and reset state is an internal no-op logger that satisfies the
+    `AuditLogger` protocol.
+    """
     return _audit_logger
 
 
 def audit_logging_enabled() -> bool:
-    """Return True when audit logging is active."""
+    """Return True when a non-no-op audit logger is currently configured."""
     return _audit_logger is not _NOOP_LOGGER
 
 
@@ -94,15 +135,20 @@ def emit_permission_audit_event(event: PermissionAuditEvent) -> None:
     """
     Forward an audit event to the configured logger when logging is enabled.
 
+    The disabled state is a no-op. When a logger is configured, this function
+    calls `logger.record(event)` directly and lets logger exceptions propagate to
+    the caller. Delivery ordering and threading are logger-specific; the built-in
+    buffered loggers enqueue events in call order.
+
     Parameters:
-        event (PermissionAuditEvent): Event payload to record.
+        event: Event payload to record.
     """
     if _audit_logger is _NOOP_LOGGER:
         return
     _audit_logger.record(event)
 
 
-def _serialize_event(event: PermissionAuditEvent) -> dict[str, Any]:
+def _serialize_event(event: PermissionAuditEvent) -> SerializedAuditEvent:
     """Convert an audit event into a JSON-serialisable mapping."""
     user_pk = getattr(event.user, "pk", None)
     user_id = None if user_pk is None else str(user_pk)
@@ -116,59 +162,90 @@ def _serialize_event(event: PermissionAuditEvent) -> dict[str, Any]:
         "user_id": user_id,
         "user": None if user_id is not None else repr(event.user),
         "permissions": list(event.permissions),
-        "metadata": event.metadata,
+        "metadata": None if event.metadata is None else dict(event.metadata),
     }
 
 
-def _resolve_logger_reference(value: Any) -> AuditLogger | None:
+def _instantiate_logger_reference(
+    value: object,
+    options: Mapping[str, object] | None = None,
+) -> object:
+    """Instantiate a logger class or factory while preserving logger instances."""
+    if isinstance(value, type):
+        factory = cast(Callable[..., object], value)
+        return factory(**dict(options or {}))
+    if callable(value) and not isinstance(value, AuditLogger):
+        factory = cast(Callable[..., object], value)
+        return factory(**dict(options or {}))
+    return value
+
+
+def _resolve_logger_reference(value: object) -> AuditLogger | None:
     """Resolve audit logger setting values into concrete logger instances."""
     if value is None:
         return None
     if isinstance(value, str):
         from django.utils.module_loading import import_string
 
-        resolved = import_string(value)
+        resolved: object = import_string(value)
     elif isinstance(value, Mapping):
         from django.utils.module_loading import import_string
 
-        class_path = value.get("class")
-        options = value.get("options", {})
-        if class_path is None:
+        config = cast(Mapping[str, object], value)
+        logger_reference = config.get("class")
+        options_value = config.get("options", {})
+        if logger_reference is None:
             return None
-        resolved = (
-            import_string(class_path) if isinstance(class_path, str) else class_path
+        if options_value is None:
+            options: Mapping[str, object] = {}
+        elif isinstance(options_value, Mapping):
+            options = cast(Mapping[str, object], options_value)
+        else:
+            raise InvalidAuditLoggerOptionsError
+        resolved_reference = (
+            import_string(logger_reference)
+            if isinstance(logger_reference, str)
+            else logger_reference
         )
-        if isinstance(resolved, type):
-            resolved = resolved(**options)
-        elif callable(resolved):
-            resolved = resolved(**options)
-        return resolved if hasattr(resolved, "record") else None
+        resolved = _instantiate_logger_reference(resolved_reference, options)
     else:
         resolved = value
 
-    if isinstance(resolved, type):
-        resolved = resolved()
-    elif callable(resolved) and not hasattr(resolved, "record"):
-        resolved = resolved()
+    resolved = _instantiate_logger_reference(resolved)
 
-    if resolved is None or not hasattr(resolved, "record"):
-        return None
-    return resolved  # type: ignore[return-value]
+    return resolved if isinstance(resolved, AuditLogger) else None
 
 
-def configure_audit_logger_from_settings(django_settings: Any) -> None:
+def configure_audit_logger_from_settings(django_settings: object) -> None:
     """
     Configure the audit logger based on Django settings.
 
-    Expects either ``settings.GENERAL_MANAGER['AUDIT_LOGGER']`` or a top-level
-    ``settings.AUDIT_LOGGER`` value pointing to an audit logger implementation
-    (instance, callable, or dotted import path).
+    `GENERAL_MANAGER["AUDIT_LOGGER"]` takes precedence over a top-level
+    `AUDIT_LOGGER` setting. Values may be:
+
+    - `None` or missing to reset to the no-op logger.
+    - An `AuditLogger` instance.
+    - A dotted import path to an `AuditLogger` instance, class, or factory.
+    - A zero-argument callable returning an `AuditLogger`.
+    - A mapping with `{"class": <path-or-callable>, "options": {...}}`; options
+      are passed as keyword arguments when constructing/calling the reference.
+
+    Import and constructor errors propagate. Resolved objects that do not satisfy
+    `AuditLogger` disable logging by resetting to the no-op logger.
+
+    Raises:
+        InvalidAuditLoggerOptionsError: If a mapping configuration provides an
+            `options` value that is not a mapping.
     """
-    config: Mapping[str, Any] | None = getattr(django_settings, _SETTINGS_KEY, None)
-    logger_setting: Any = None
-    if isinstance(config, Mapping):
-        logger_setting = config.get(_AUDIT_LOGGER_KEY)
-    if logger_setting is None:
+    config_candidate: object = getattr(django_settings, _SETTINGS_KEY, None)
+    logger_setting: object = None
+    if isinstance(config_candidate, Mapping):
+        config = cast(Mapping[str, object], config_candidate)
+        if _AUDIT_LOGGER_KEY in config:
+            logger_setting = config[_AUDIT_LOGGER_KEY]
+        else:
+            logger_setting = getattr(django_settings, _AUDIT_LOGGER_KEY, None)
+    else:
         logger_setting = getattr(django_settings, _AUDIT_LOGGER_KEY, None)
 
     logger_instance = _resolve_logger_reference(logger_setting)
@@ -179,7 +256,7 @@ _MODEL_CACHE: dict[str, type[models.Model]] = {}
 _MODEL_CACHE_LOCK = Lock()
 
 
-def _build_field_definitions() -> dict[str, models.Field[Any, Any]]:
+def _build_field_definitions() -> dict[str, object]:
     return {
         "created_at": models.DateTimeField(auto_now_add=True),
         "action": models.CharField(max_length=32),
@@ -207,7 +284,7 @@ def _get_audit_model(table_name: str) -> type[models.Model]:
                 _MODEL_CACHE[table_name] = model
                 return model
 
-        attrs: dict[str, Any] = _build_field_definitions()
+        attrs: dict[str, object] = _build_field_definitions()
         attrs["__module__"] = __name__
         attrs["Meta"] = type(
             "Meta",
@@ -224,7 +301,7 @@ def _get_audit_model(table_name: str) -> type[models.Model]:
 
 
 class _BufferedAuditLogger:
-    """Base class implementing a background worker that processes audit events in batches."""
+    """Base class implementing a background worker that processes events in batches."""
 
     _SENTINEL = object()
 
@@ -239,36 +316,56 @@ class _BufferedAuditLogger:
         self._flush_interval = flush_interval
         self._use_worker = use_worker
         self._closed = Event()
+        self._queue: SimpleQueue[PermissionAuditEvent | object] | None
+        self._worker: Thread | None
         if self._use_worker:
-            self._queue: SimpleQueue[PermissionAuditEvent | object] = SimpleQueue()
+            self._queue = SimpleQueue()
             self._worker = Thread(target=self._worker_loop, daemon=True)
             self._worker.start()
             atexit.register(self.close)
         else:
-            self._queue = None  # type: ignore[assignment]
-            self._worker = None  # type: ignore[assignment]
+            self._queue = None
+            self._worker = None
 
     def record(self, event: PermissionAuditEvent) -> None:
+        """Queue or synchronously persist an audit event unless the logger is closed."""
         if self._closed.is_set():
             return
         if not self._use_worker:
             self._handle_batch((event,))
             return
+        if self._queue is None:
+            return
         self._queue.put(event)
 
     def close(self) -> None:
+        """
+        Stop the worker after processing queued events.
+
+        Calls after the first close are ignored. Synchronous loggers created with
+        `use_worker=False` have no worker to close.
+        """
         if self._closed.is_set() or not self._use_worker:
             return
         self._closed.set()
+        if self._queue is None or self._worker is None:
+            return
         self._queue.put(self._SENTINEL)
         self._worker.join(timeout=2.0)
 
     def flush(self) -> None:
-        """Block until all queued events are processed."""
+        """
+        Block until queued events are processed.
+
+        For worker-backed loggers this closes the worker, so later `record()`
+        calls are ignored. For synchronous loggers it is a no-op.
+        """
         if self._use_worker:
             self.close()
 
     def _worker_loop(self) -> None:
+        if self._queue is None:
+            return
         pending: list[PermissionAuditEvent] = []
         while True:
             try:
@@ -290,7 +387,14 @@ class _BufferedAuditLogger:
 
 
 class FileAuditLogger(_BufferedAuditLogger):
-    """Persist audit events as newline-delimited JSON records in a file."""
+    """
+    Persist audit events as newline-delimited JSON records in a file.
+
+    The parent directory is created during initialization. Events are appended in
+    the built-in serialized shape. A background worker is used by default; call
+    `flush()` or `close()` during teardown to process queued events. After
+    closing, later `record()` calls are ignored.
+    """
 
     def __init__(
         self,
@@ -313,7 +417,14 @@ class FileAuditLogger(_BufferedAuditLogger):
 
 
 class DatabaseAuditLogger(_BufferedAuditLogger):
-    """Store audit events inside a dedicated database table using Django connections."""
+    """
+    Store audit events inside a dedicated database table using Django connections.
+
+    The table is created on demand if it is missing. Non-SQLite connections use
+    the background worker; SQLite writes synchronously to support in-memory test
+    databases. Call `flush()` or `close()` during teardown when the worker is
+    active. After closing, later `record()` calls are ignored.
+    """
 
     def __init__(
         self,

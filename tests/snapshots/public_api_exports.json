@@ -122,6 +122,18 @@
       "general_manager.api.graphql",
       "GraphQL"
     ],
+    "GraphQLPropertyReturnAnnotationError": [
+      "general_manager.api.property",
+      "GraphQLPropertyReturnAnnotationError"
+    ],
+    "GraphQLPropertyTimeoutConfigurationError": [
+      "general_manager.api.property",
+      "GraphQLPropertyTimeoutConfigurationError"
+    ],
+    "GraphQLPropertyWarmUpConfigurationError": [
+      "general_manager.api.property",
+      "GraphQLPropertyWarmUpConfigurationError"
+    ],
     "MeasurementScalar": [
       "general_manager.api.graphql",
       "MeasurementScalar"
@@ -560,6 +572,10 @@
       "general_manager.permission.graphql_capabilities",
       "GraphQLPermissionCapability"
     ],
+    "InvalidPermissionDataError": [
+      "general_manager.permission.permission_data_manager",
+      "InvalidPermissionDataError"
+    ],
     "ManagerBasedPermission": [
       "general_manager.permission.manager_based_permission",
       "ManagerBasedPermission"
@@ -575,6 +591,10 @@
     "PermissionAuditEvent": [
       "general_manager.permission.audit",
       "PermissionAuditEvent"
+    ],
+    "PermissionDataManager": [
+      "general_manager.permission.permission_data_manager",
+      "PermissionDataManager"
     ],
     "configure_audit_logger": [
       "general_manager.permission.audit",
@@ -609,6 +629,10 @@
     "BaseRuleHandler": [
       "general_manager.rule.handler",
       "BaseRuleHandler"
+    ],
+    "InvalidRuleHandlerConfigurationError": [
+      "general_manager.rule.rule",
+      "InvalidRuleHandlerConfigurationError"
     ],
     "Rule": [
       "general_manager.rule.rule",

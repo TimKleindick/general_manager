@@ -28,11 +28,12 @@ class RecordingCacheBackend:
         """Initialize in-memory state and call history."""
         self.store: dict[str, object] = {}
         self.events: list[tuple[str, str]] = []
+        self.timeouts: list[tuple[str, int | None]] = []
 
     def add(self, key: str, value: object, timeout: int | None = None) -> bool:
         """Add a value only when the key is absent."""
-        del timeout
         self.events.append(("add", key))
+        self.timeouts.append((key, timeout))
         if key in self.store:
             return False
         self.store[key] = value
@@ -148,6 +149,34 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
         self.assertEqual(graphql_warmup_recipe_keys(), ())
         self.assertEqual(due_timeout_graphql_warmup_recipe_keys(), ())
 
+    def test_register_overwrites_recipe_and_removes_stale_timeout_index(self) -> None:
+        """Re-registering a key replaces the payload and reconciles indexes."""
+        timeout_recipe = GraphQLWarmUpRecipe(
+            cache_key="same",
+            manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+            property_name="score",
+            identification={"id": 1},
+            cache="timeout",
+            timeout=300,
+            refresh_at=datetime(2026, 6, 19, tzinfo=UTC),
+        )
+        dependency_recipe = GraphQLWarmUpRecipe(
+            cache_key="same",
+            manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+            property_name="score",
+            identification={"id": 2},
+            cache="dependency",
+            timeout=None,
+            refresh_at=None,
+        )
+
+        register_graphql_warmup_recipe(timeout_recipe)
+        register_graphql_warmup_recipe(dependency_recipe)
+
+        self.assertEqual(get_graphql_warmup_recipe("same"), dependency_recipe)
+        self.assertEqual(graphql_warmup_recipe_keys(), ("same",))
+        self.assertEqual(due_timeout_graphql_warmup_recipe_keys(), ())
+
     def test_rejects_stale_recipe_versions(self) -> None:
         """Recipes from older schema versions are ignored."""
         recipe = GraphQLWarmUpRecipe(
@@ -219,6 +248,50 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
             frozenset(("first", "second")),
         )
 
+    def test_due_timeout_recipes_orders_by_refresh_time_then_cache_key(self) -> None:
+        """Due timeout keys are ordered deterministically."""
+        now = datetime(2026, 6, 19, tzinfo=UTC)
+        recipes = (
+            GraphQLWarmUpRecipe(
+                cache_key="b",
+                manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+                property_name="score",
+                identification={"id": 1},
+                cache="timeout",
+                timeout=300,
+                refresh_at=now - timedelta(seconds=1),
+            ),
+            GraphQLWarmUpRecipe(
+                cache_key="a",
+                manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+                property_name="score",
+                identification={"id": 2},
+                cache="timeout",
+                timeout=300,
+                refresh_at=now - timedelta(seconds=1),
+            ),
+            GraphQLWarmUpRecipe(
+                cache_key="older",
+                manager_path="tests.unit.test_graphql_warmup_registry.Manager",
+                property_name="score",
+                identification={"id": 3},
+                cache="timeout",
+                timeout=300,
+                refresh_at=now - timedelta(seconds=5),
+            ),
+        )
+        for recipe in recipes:
+            register_graphql_warmup_recipe(recipe)
+
+        self.assertEqual(
+            due_timeout_graphql_warmup_recipe_keys(now=now),
+            ("older", "a", "b"),
+        )
+        self.assertEqual(
+            due_timeout_graphql_warmup_recipe_keys(now=now, limit=0),
+            (),
+        )
+
     def test_recipe_lock_acquire_and_release_are_token_safe(self) -> None:
         """Recipe locks cannot be released by callers with the wrong token."""
         lock = acquire_graphql_warmup_recipe_lock("locked")
@@ -234,11 +307,37 @@ class GraphQLWarmUpRegistryTests(SimpleTestCase):
         assert next_lock is not None
         release_graphql_warmup_recipe_lock(next_lock)
 
+    def test_recipe_lock_timeout_is_cache_ttl(self) -> None:
+        """The public timeout argument is passed to cache.add as the TTL."""
+        cache_backend = RecordingCacheBackend()
+
+        lock = acquire_graphql_warmup_recipe_lock(
+            "ttl",
+            timeout=12,
+            cache_backend=cache_backend,
+        )
+
+        self.assertIsNotNone(lock)
+        self.assertIn(
+            ("add", "general_manager:graphql_warmup:lock:ttl"),
+            cache_backend.events,
+        )
+        self.assertIn(
+            ("general_manager:graphql_warmup:lock:ttl", 12),
+            cache_backend.timeouts,
+        )
+
     def test_invalid_index_payload_reads_as_empty(self) -> None:
         """Malformed index payloads are treated as empty indexes."""
         cache.set(RECIPE_INDEX_KEY, ["not", "a", "frozenset"])
 
         self.assertEqual(graphql_warmup_recipe_keys(), ())
+
+    def test_recipe_keys_include_stale_index_members(self) -> None:
+        """The main index listing does not validate backing recipe payloads."""
+        cache.set(RECIPE_INDEX_KEY, frozenset(("missing",)))
+
+        self.assertEqual(graphql_warmup_recipe_keys(), ("missing",))
 
     def test_recipe_registration_synchronizes_index_updates(self) -> None:
         """Recipe registration acquires an index lock before read-modify-write."""

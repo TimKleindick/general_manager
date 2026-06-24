@@ -11,13 +11,13 @@ module can be imported by ``graphql.py`` without creating a circular dependency.
 
 from __future__ import annotations
 
-from typing import Any, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
-import graphene  # type: ignore[import]
+import graphene
 
 from django.db.models import NOT_PROVIDED
 
-from general_manager.interface.base_interface import InterfaceBase
+from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.api.graphql_errors import (
@@ -30,12 +30,70 @@ from general_manager.api.graphql_errors import (
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
 
+type MutationPayload = dict[str, object]
+type MutationReturnDefaults = dict[str, object]
+
+
+class _UnsetHistoryComment:
+    """Sentinel for absent GraphQL ``history_comment`` input."""
+
+
+_HISTORY_COMMENT_UNSET = _UnsetHistoryComment()
+
+
+class _EditableGrapheneField(Protocol):
+    """Graphene field instance carrying GeneralManager's dynamic editability flag."""
+
+    editable: bool
+
+
+type GrapheneFieldMap = dict[str, _EditableGrapheneField]
+
+
+class _ManagerCreateMethod(Protocol):
+    """Callable shape used for generated GraphQL create mutations."""
+
+    def __call__(self, **kwargs: object) -> GeneralManager: ...
+
+
+class _ManagerUpdateMethod(Protocol):
+    """Callable shape used for generated GraphQL update mutations."""
+
+    def __call__(self, **kwargs: object) -> GeneralManager: ...
+
+
+class _ManagerDeleteMethod(Protocol):
+    """Callable shape used for generated GraphQL delete mutations."""
+
+    def __call__(self, **kwargs: object) -> None: ...
+
+
+def _pop_history_comment(
+    kwargs: MutationPayload,
+) -> str | None | _UnsetHistoryComment:
+    """Remove and return the GraphQL ``history_comment`` value from ``kwargs``.
+
+    Omitted values return the internal unset sentinel. Explicit GraphQL ``null``
+    returns ``None`` so callers can forward ``history_comment=None`` deliberately.
+    """
+    value = kwargs.pop("history_comment", _HISTORY_COMMENT_UNSET)
+    if isinstance(value, _UnsetHistoryComment):
+        return value
+    if value is None or isinstance(value, str):
+        return value
+    return cast(str, value)
+
 
 def _normalize_mutation_kwargs_for_manager(
     general_manager_class: type[GeneralManager],
-    kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """Normalize GraphQL relation aliases to the ORM mutation contract."""
+    kwargs: MutationPayload,
+) -> MutationPayload:
+    """Normalize GraphQL relation aliases to the ORM mutation contract.
+
+    GraphQL-facing relation inputs may arrive as ``field``/``field_list`` while
+    ORM mutation capabilities expect ``field_id``/``field_id_list`` for manager
+    relations. Unknown keys and already-normalized keys are preserved.
+    """
     interface_cls = getattr(general_manager_class, "Interface", None)
     if interface_cls is None:
         return dict(kwargs)
@@ -68,9 +126,16 @@ def _normalize_mutation_kwargs_for_manager(
 
 def _is_direct_relation_raw_id_alias(
     name: str,
-    attribute_types: dict[str, Any],
+    attribute_types: dict[str, AttributeTypedDict],
 ) -> bool:
-    """Return true when ``name`` is the raw ``*_id`` alias for a direct relation."""
+    """Return true when ``name`` is a raw relation id alias with a canonical field."""
+    if name.endswith("_id_list"):
+        relation_name = f"{name.removesuffix('_id_list')}_list"
+        relation_info = attribute_types.get(relation_name)
+        if relation_info is None:
+            return False
+        return safe_issubclass(relation_info["type"], GeneralManager)
+
     if not name.endswith("_id"):
         return False
 
@@ -85,32 +150,50 @@ def _is_direct_relation_raw_id_alias(
 
 
 def create_write_fields(
-    interface_cls: InterfaceBase,
+    interface_cls: type[InterfaceBase],
     *,
     require_fields: bool = True,
-) -> dict[str, Any]:
+) -> GrapheneFieldMap:
     """
-    Create Graphene input fields for writable attributes defined by an Interface.
+    Create Graphene input fields from interface attribute metadata.
 
-    Skips system fields (``changed_by``, ``created_at``, ``updated_at``),
-    attributes marked as derived, and raw ``*_id`` aliases for direct
-    relations already exposed by their canonical relation field.  For
-    attributes whose type is a
-    ``GeneralManager``, produces an ID field or a list of ID fields for names
-    ending with ``"_list"``.  Always includes an optional ``history_comment``
-    string field.
+    ``interface_cls`` must expose ``get_attribute_types()`` with
+    :class:`AttributeTypedDict` metadata. This helper skips system fields
+    (``changed_by``, ``created_at``, ``updated_at``), attributes marked as
+    derived, raw ``*_id`` aliases for direct relations already exposed by their
+    canonical relation field, and raw ``*_id_list`` aliases when the canonical
+    ``*_list`` relation is present. For a direct relation, the canonical field is
+    the non-``_id`` metadata entry whose ``relation_kind`` is ``"direct"`` and
+    whose ``is_derived`` flag is false. For a list relation, the canonical field
+    is the ``*_list`` metadata entry whose type is a ``GeneralManager`` subclass.
+
+    Non-editable attributes are still returned with ``editable=False``. Create
+    and update builders filter on that flag; delete keeps only constructor input
+    fields plus its explicit metadata arguments. ``_EditableGrapheneField`` is an
+    internal structural contract used by this module to annotate the dynamic flag
+    attached to otherwise untyped Graphene field instances.
+
+    The returned mapping keys are Python/interface metadata names such as
+    ``"owner"`` and ``"member_list"``; Graphene applies any schema-level
+    camel-casing later. For attributes whose type is a ``GeneralManager``, this
+    helper produces an ID field or a list of ID fields for names ending with
+    ``"_list"``. Later mutation resolvers normalize those canonical inputs to
+    ``"owner_id"`` and ``"member_id_list"`` before calling the ORM mutation
+    layer. Always includes an optional ``history_comment`` string field.
 
     Parameters:
         interface_cls: Interface providing attribute metadata used to build
             the input fields.
         require_fields: Whether generated fields should mirror interface
-            requiredness. Update mutations set this to ``False`` to support
-            partial updates.
+            requiredness. Create/delete helper calls use the default ``True``;
+            update mutations set this to ``False`` to support partial updates.
 
     Returns:
-        Mapping from attribute name to a Graphene input field instance.
+        Mapping from attribute name to a Graphene input field instance. Returned
+        fields carry a dynamic maintainer-facing ``editable`` flag used by the
+        generated mutation class builders.
     """
-    fields: dict[str, Any] = {}
+    fields: GrapheneFieldMap = {}
     attribute_types = interface_cls.get_attribute_types()
     for name, info in attribute_types.items():
         if name in ["changed_by", "created_at", "updated_at"]:
@@ -124,7 +207,7 @@ def create_write_fields(
         req = info["is_required"] if require_fields else False
         default = info["default"]
 
-        fld: Any
+        fld: object
         if safe_issubclass(typ, GeneralManager):
             if name.endswith("_list"):
                 fld = graphene.List(graphene.ID, required=req, default_value=default)
@@ -137,12 +220,14 @@ def create_write_fields(
             )
             fld = base_cls(required=req, default_value=default)
 
-        cast(Any, fld).editable = info["is_editable"]
-        fields[name] = fld
+        editable_field = cast(_EditableGrapheneField, fld)
+        editable_field.editable = info["is_editable"]
+        fields[name] = editable_field
 
     history_field = graphene.String()
-    cast(Any, history_field).editable = True
-    fields["history_comment"] = history_field
+    editable_history_field = cast(_EditableGrapheneField, history_field)
+    editable_history_field.editable = True
+    fields["history_comment"] = editable_history_field
 
     return fields
 
@@ -154,7 +239,7 @@ def create_write_fields(
 
 def generate_create_mutation_class(
     generalManagerClass: type[GeneralManager],
-    default_return_values: dict[str, Any],
+    default_return_values: MutationReturnDefaults,
 ) -> type[graphene.Mutation] | None:
     """
     Generate a Graphene Mutation class that creates instances of the given manager.
@@ -169,17 +254,17 @@ def generate_create_mutation_class(
         A Mutation class named ``Create<ManagerName>``, or ``None`` if the
         manager class does not define an ``Interface``.
     """
-    interface_cls: InterfaceBase | None = getattr(
+    interface_cls: type[InterfaceBase] | None = getattr(
         generalManagerClass, "Interface", None
     )
     if not interface_cls:
         return None
 
     def create_mutation(
-        self: Any,
+        self: object,
         info: GraphQLResolveInfo,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> MutationPayload:
         try:
             kwargs = {
                 field_name: value
@@ -187,9 +272,14 @@ def generate_create_mutation_class(
                 if value is not NOT_PROVIDED
             }
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
-            instance = generalManagerClass.create(
-                **kwargs, creator_id=info.context.user.id
-            )
+            history_comment = _pop_history_comment(kwargs)
+            create = cast(_ManagerCreateMethod, generalManagerClass.create)
+            create_kwargs = {"creator_id": info.context.user.id, **kwargs}
+            if isinstance(history_comment, _UnsetHistoryComment):
+                instance = create(**create_kwargs)
+            else:
+                create_kwargs["history_comment"] = history_comment
+                instance = create(**create_kwargs)
         except HANDLED_MANAGER_ERRORS as error:
             raise handle_graph_ql_error(error) from error
         return {"success": True, generalManagerClass.__name__: instance}
@@ -217,10 +307,15 @@ def generate_create_mutation_class(
 
 def generate_update_mutation_class(
     generalManagerClass: type[GeneralManager],
-    default_return_values: dict[str, Any],
+    default_return_values: MutationReturnDefaults,
 ) -> type[graphene.Mutation] | None:
     """
     Generate a Graphene Mutation class that updates instances of the given manager.
+
+    The generated mutation is named ``Update<ManagerName>``. It always requires
+    an ``id`` argument, marks generated write fields optional for partial
+    updates, filters Graphene ``NOT_PROVIDED`` sentinels, and forwards an
+    explicit ``history_comment`` value separately from the field payload.
 
     Parameters:
         generalManagerClass: The GeneralManager subclass to expose an update
@@ -232,17 +327,17 @@ def generate_update_mutation_class(
         A Mutation class named ``Update<ManagerName>``, or ``None`` if the
         manager class does not define an ``Interface``.
     """
-    interface_cls: InterfaceBase | None = getattr(
+    interface_cls: type[InterfaceBase] | None = getattr(
         generalManagerClass, "Interface", None
     )
     if not interface_cls:
         return None
 
     def update_mutation(
-        self: Any,
+        self: object,
         info: GraphQLResolveInfo,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> MutationPayload:
         manager_id = kwargs.pop("id", None)
         if manager_id is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
@@ -253,9 +348,16 @@ def generate_update_mutation_class(
                 if value is not NOT_PROVIDED
             }
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
-            instance = generalManagerClass(id=manager_id).update(
-                creator_id=info.context.user.id, **kwargs
+            history_comment = _pop_history_comment(kwargs)
+            update = cast(
+                _ManagerUpdateMethod, generalManagerClass(id=manager_id).update
             )
+            update_kwargs = {"creator_id": info.context.user.id, **kwargs}
+            if isinstance(history_comment, _UnsetHistoryComment):
+                instance = update(**update_kwargs)
+            else:
+                update_kwargs["history_comment"] = history_comment
+                instance = update(**update_kwargs)
         except HANDLED_MANAGER_ERRORS as error:
             raise handle_graph_ql_error(error) from error
         return {"success": True, generalManagerClass.__name__: instance}
@@ -288,10 +390,16 @@ def generate_update_mutation_class(
 
 def generate_delete_mutation_class(
     generalManagerClass: type[GeneralManager],
-    default_return_values: dict[str, Any],
+    default_return_values: MutationReturnDefaults,
 ) -> type[graphene.Mutation] | None:
     """
     Generate a Graphene Mutation class that deletes instances of the given manager.
+
+    The generated mutation is named ``Delete<ManagerName>``. It always requires
+    an ``id`` argument and exposes optional ``history_comment`` metadata for the
+    manager delete call. Additional constructor input fields may appear for
+    backward compatibility, but only ``id`` and ``history_comment`` are consumed
+    by the generated resolver.
 
     Parameters:
         generalManagerClass: The GeneralManager subclass to expose a delete
@@ -303,27 +411,35 @@ def generate_delete_mutation_class(
         A Mutation class named ``Delete<ManagerName>``, or ``None`` if the
         manager class does not define an ``Interface``.
     """
-    interface_cls: InterfaceBase | None = getattr(
+    interface_cls: type[InterfaceBase] | None = getattr(
         generalManagerClass, "Interface", None
     )
     if not interface_cls:
         return None
 
     def delete_mutation(
-        self: Any,
+        self: object,
         info: GraphQLResolveInfo,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        **kwargs: object,
+    ) -> MutationPayload:
         manager_id = kwargs.pop("id", None)
         if manager_id is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
+        history_comment = _pop_history_comment(kwargs)
         try:
-            instance = generalManagerClass(id=manager_id).delete(
-                creator_id=info.context.user.id
+            delete = cast(
+                _ManagerDeleteMethod, generalManagerClass(id=manager_id).delete
             )
+            if isinstance(history_comment, _UnsetHistoryComment):
+                delete(creator_id=info.context.user.id)
+            else:
+                delete(
+                    creator_id=info.context.user.id,
+                    history_comment=history_comment,
+                )
         except HANDLED_MANAGER_ERRORS as error:
             raise handle_graph_ql_error(error) from error
-        return {"success": True, generalManagerClass.__name__: instance}
+        return {"success": True, generalManagerClass.__name__: None}
 
     return type(
         f"Delete{generalManagerClass.__name__}",
@@ -337,6 +453,7 @@ def generate_delete_mutation_class(
                 {
                     # Always include id so the resolver can locate the instance.
                     "id": graphene.ID(required=True),
+                    "history_comment": graphene.String(),
                     **{
                         field_name: field
                         for field_name, field in create_write_fields(

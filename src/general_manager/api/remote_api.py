@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import re
 from uuid import uuid4
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Mapping, TYPE_CHECKING, cast
+from typing import Callable, Mapping, Protocol, TYPE_CHECKING, cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.http import HttpRequest, HttpResponse, JsonResponse
-from django.urls import path
+from django.urls import URLPattern, path
 
 from general_manager.logging import get_logger
 
@@ -22,6 +23,68 @@ if TYPE_CHECKING:
 logger = get_logger("api.remote")
 
 _SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+RemoteAPIView = Callable[[HttpRequest], HttpResponse]
+RemoteAPIItemView = Callable[[HttpRequest, str], HttpResponse]
+RemoteAPIRouteKey = tuple[str, str]
+type RemoteJSONPayload = dict[str, object]
+type RemoteJSONList = list[RemoteJSONPayload]
+type RemoteOrdering = str | Iterable[str] | None
+
+
+class RemoteAPIBucket(Protocol):
+    """Bucket operations used by RemoteAPI query endpoints."""
+
+    def filter(self, **kwargs: object) -> "RemoteAPIBucket":
+        """Return a bucket restricted by lookup keyword arguments."""
+        ...
+
+    def exclude(self, **kwargs: object) -> "RemoteAPIBucket":
+        """Return a bucket excluding lookup keyword matches."""
+        ...
+
+    def sort(self, key: str, reverse: bool = False) -> "RemoteAPIBucket":
+        """Return a bucket sorted by one field."""
+        ...
+
+    def count(self) -> int:
+        """Return the number of matching items before pagination."""
+        ...
+
+    def __getitem__(self, item: slice) -> "RemoteAPIBucket":
+        """Return a sliced bucket."""
+        ...
+
+    def __iter__(self) -> Iterator["GeneralManager"]:
+        """Yield manager instances for serialization."""
+        ...
+
+
+class RemoteAPIMutableManager(Protocol):
+    """Manager instance operations used by item RemoteAPI endpoints."""
+
+    def update(self, **kwargs: object) -> "GeneralManager":
+        """Apply update payload values and return the updated manager."""
+        ...
+
+    def delete(self) -> None:
+        """Delete the manager instance."""
+        ...
+
+
+class RemoteAPIManagerClass(Protocol):
+    """Manager class operations used by RemoteAPI endpoints."""
+
+    def __call__(self, **kwargs: object) -> "GeneralManager":
+        """Construct a manager from keyword identification values."""
+        ...
+
+    def create(self, **kwargs: object) -> "GeneralManager":
+        """Create a manager from request payload values."""
+        ...
+
+    def all(self) -> RemoteAPIBucket:
+        """Return a bucket for query endpoints."""
+        ...
 
 
 class RemoteAPIConfigurationError(ValueError):
@@ -81,9 +144,27 @@ class RemoteAPIRequestError(ValueError):
     def malformed_json(cls) -> "RemoteAPIRequestError":
         return cls("Malformed JSON in request body.")
 
+    @classmethod
+    def non_object_json(cls) -> "RemoteAPIRequestError":
+        return cls("JSON request body must decode to an object.")
+
 
 @dataclass(frozen=True, slots=True)
 class RemoteAPIConfig:
+    """Normalized opt-in REST exposure settings for one manager.
+
+    `get_remote_api_config()` creates this value from a manager's nested
+    `RemoteAPI` declaration. `base_path` defaults to `/gm` and is normalized to
+    lowercase slug path segments with one leading slash and no trailing slash;
+    root, empty, double-slash, and non-slug paths are rejected. `resource_name`
+    is required when enabled, surrounding slashes are stripped before slug
+    validation, `protocol_version` defaults to `"v1"`, at least one operation
+    flag must be true, and websocket invalidation requires at least one mutation
+    operation. `identifier_type` is extracted from the interface `id` input when
+    available and item views coerce URL identifiers only when it is exactly
+    `int`; every other type leaves identifiers as strings.
+    """
+
     manager_cls: type["GeneralManager"]
     base_path: str
     resource_name: str
@@ -94,10 +175,10 @@ class RemoteAPIConfig:
     allow_delete: bool
     websocket_invalidation: bool
     protocol_version: str
-    identifier_type: type[Any] | None = None
+    identifier_type: type[object] | None = None
 
 
-def _extract_identifier_type(manager_cls: type["GeneralManager"]) -> type[Any] | None:
+def _extract_identifier_type(manager_cls: type["GeneralManager"]) -> type[object] | None:
     interface = getattr(manager_cls, "Interface", None)
     if interface is None:
         return None
@@ -105,7 +186,7 @@ def _extract_identifier_type(manager_cls: type["GeneralManager"]) -> type[Any] |
     if input_fields is None:
         return None
     id_field = input_fields.get("id")
-    return cast(type[Any] | None, getattr(id_field, "type", None))
+    return cast(type[object] | None, getattr(id_field, "type", None))
 
 
 def _normalize_base_path(raw: str | None) -> str:
@@ -133,6 +214,12 @@ def _normalize_resource_name(raw: str | None, manager_name: str) -> str:
 def get_remote_api_config(
     manager_cls: type["GeneralManager"],
 ) -> RemoteAPIConfig | None:
+    """Return normalized RemoteAPI config for an enabled manager, if any.
+
+    Raises:
+        RemoteAPIConfigurationError: If the manager opts in with invalid path,
+            resource, operation, protocol, or websocket settings.
+    """
     remote_api = getattr(manager_cls, "RemoteAPI", None)
     if remote_api is None or not getattr(remote_api, "enabled", False):
         return None
@@ -176,6 +263,12 @@ def get_remote_api_config(
 def build_remote_api_registry(
     manager_classes: list[type["GeneralManager"]],
 ) -> dict[tuple[str, str], RemoteAPIConfig]:
+    """Build a registry keyed by `(base_path, resource_name)`.
+
+    Raises:
+        RemoteAPIConfigurationError: If two enabled managers expose the same
+            `(base_path, resource_name)` pair.
+    """
     registry: dict[tuple[str, str], RemoteAPIConfig] = {}
     for manager_cls in manager_classes:
         config = get_remote_api_config(manager_cls)
@@ -191,7 +284,23 @@ def build_remote_api_registry(
     return registry
 
 
+def _mark_remote_api_route(pattern: URLPattern, key: RemoteAPIRouteKey) -> URLPattern:
+    """Mark a generated URL pattern so it can be deduplicated or cleared later."""
+    vars(pattern)["_general_manager_remote_api"] = True
+    vars(pattern)["_general_manager_remote_api_key"] = key
+    return pattern
+
+
 def add_remote_api_urls(manager_classes: list[type["GeneralManager"]]) -> None:
+    """Append generated RemoteAPI URL patterns to the configured root URLconf.
+
+    Generated routes are added in query, item, then create order when the
+    corresponding operation is enabled. Existing generated routes with the same
+    route key are skipped, so repeated startup registration is idempotent.
+    Duplicate exposures are rejected while the registry is built before any new
+    route from that registry pass is appended. If `settings.ROOT_URLCONF` is not
+    set, this helper returns without changes.
+    """
     root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
     if not root_url_conf_path:
         return
@@ -208,9 +317,9 @@ def add_remote_api_urls(manager_classes: list[type["GeneralManager"]]) -> None:
                 f"{route_prefix}/query",
                 _build_query_view(config),
             )
-            query_route._general_manager_remote_api = True
-            query_route._general_manager_remote_api_key = (route_prefix, "query")
-            urlconf.urlpatterns.append(query_route)
+            urlconf.urlpatterns.append(
+                _mark_remote_api_route(query_route, (route_prefix, "query"))
+            )
         if (
             any((config.allow_detail, config.allow_update, config.allow_delete))
             and (route_prefix, "item") not in existing
@@ -219,20 +328,21 @@ def add_remote_api_urls(manager_classes: list[type["GeneralManager"]]) -> None:
                 f"{route_prefix}/<str:identifier>",
                 _build_item_view(config),
             )
-            detail_route._general_manager_remote_api = True
-            detail_route._general_manager_remote_api_key = (route_prefix, "item")
-            urlconf.urlpatterns.append(detail_route)
+            urlconf.urlpatterns.append(
+                _mark_remote_api_route(detail_route, (route_prefix, "item"))
+            )
         if config.allow_create and (route_prefix, "create") not in existing:
             create_route = path(
                 route_prefix,
                 _build_create_view(config),
             )
-            create_route._general_manager_remote_api = True
-            create_route._general_manager_remote_api_key = (route_prefix, "create")
-            urlconf.urlpatterns.append(create_route)
+            urlconf.urlpatterns.append(
+                _mark_remote_api_route(create_route, (route_prefix, "create"))
+            )
 
 
 def clear_remote_api_urls() -> None:
+    """Remove only URL patterns marked as generated RemoteAPI routes."""
     root_url_conf_path = getattr(settings, "ROOT_URLCONF", None)
     if not root_url_conf_path:
         return
@@ -253,16 +363,24 @@ def _check_protocol_version(request: HttpRequest, config: RemoteAPIConfig) -> No
         )
 
 
-def _parse_json_body(request: HttpRequest) -> dict[str, Any]:
+def _parse_json_body(request: HttpRequest) -> RemoteJSONPayload:
+    """Decode a JSON request body into an object mapping.
+
+    Empty bodies produce an empty mapping. Malformed JSON and valid JSON values
+    other than objects raise `RemoteAPIRequestError`.
+    """
     if not request.body:
         return {}
     try:
-        return json.loads(request.body.decode("utf-8"))
+        body = json.loads(request.body.decode("utf-8"))
     except json.JSONDecodeError as error:
         raise RemoteAPIRequestError.malformed_json() from error
+    if not isinstance(body, dict):
+        raise RemoteAPIRequestError.non_object_json()
+    return cast(RemoteJSONPayload, body)
 
 
-def _coerce_identifier(config: RemoteAPIConfig, identifier: str) -> Any:
+def _coerce_identifier(config: RemoteAPIConfig, identifier: str) -> object:
     return int(identifier) if config.identifier_type is int else identifier
 
 
@@ -280,21 +398,21 @@ def _request_id(
     return f"gm-{prefix}-{uuid4()}"
 
 
-def _serialize_manager(manager: "GeneralManager") -> dict[str, Any]:
+def _serialize_manager(manager: "GeneralManager") -> RemoteJSONPayload:
     return dict(manager)
 
 
 def _success_payload(
     *,
-    items: list[dict[str, Any]],
+    items: RemoteJSONList,
     config: RemoteAPIConfig,
     request_id: str,
     total_count: int | None = None,
     status: int = 200,
-    metadata_extra: Mapping[str, Any] | None = None,
+    metadata_extra: Mapping[str, object] | None = None,
 ) -> JsonResponse:
-    payload: dict[str, Any] = {"items": items}
-    metadata: dict[str, Any] = {
+    payload: RemoteJSONPayload = {"items": items}
+    metadata: RemoteJSONPayload = {
         "protocol_version": config.protocol_version,
         "request_id": request_id,
     }
@@ -315,9 +433,9 @@ def _error_payload(
     error: str,
     error_code: str,
     status: int,
-    details: Mapping[str, Any] | None = None,
+    details: Mapping[str, object] | None = None,
 ) -> JsonResponse:
-    payload: dict[str, Any] = {
+    payload: RemoteJSONPayload = {
         "error": error,
         "error_code": error_code,
         "metadata": {
@@ -372,9 +490,7 @@ def _remote_api_error_payload(
     )
 
 
-def _apply_ordering(
-    bucket: Any, ordering: str | list[str] | tuple[str, ...] | None
-) -> Any:
+def _apply_ordering(bucket: RemoteAPIBucket, ordering: RemoteOrdering) -> RemoteAPIBucket:
     if ordering is None:
         return bucket
     ordering_values = [ordering] if isinstance(ordering, str) else list(ordering)
@@ -388,7 +504,19 @@ def _apply_ordering(
     return ordered_bucket
 
 
-def _build_query_view(config: RemoteAPIConfig):
+def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
+    """Return the `POST <base_path>/<resource_name>/query` view.
+
+    The view validates the `X-General-Manager-Protocol-Version` header, requires
+    `POST`, starts with `manager_cls.all()`, accepts an object body containing
+    optional `filters`, `excludes`, `ordering`, `page`, and `page_size`, applies
+    truthy `filters` and `excludes`, applies ordering, computes `total_count`,
+    and then slices only for positive integer pagination. The success envelope
+    includes `items`, `metadata.protocol_version`, `metadata.request_id`,
+    response `X-Request-ID`, query-control metadata extras, and `total_count`.
+    Errors are converted into sanitized JSON envelopes with an `X-Request-ID`.
+    """
+
     def view(request: HttpRequest) -> HttpResponse:
         request_id = _request_id(request, prefix="query")
         if request.method != "POST":
@@ -401,18 +529,19 @@ def _build_query_view(config: RemoteAPIConfig):
             )
         try:
             _check_protocol_version(request, config)
+            manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
             body = _parse_json_body(request)
             filters = body.get("filters", {})
             excludes = body.get("excludes", {})
             ordering = body.get("ordering")
             page = body.get("page")
             page_size = body.get("page_size")
-            bucket: Any = config.manager_cls.all()
+            bucket = manager_cls.all()
             if filters:
-                bucket = bucket.filter(**filters)
+                bucket = bucket.filter(**cast(Mapping[str, object], filters))
             if excludes:
-                bucket = bucket.exclude(**excludes)
-            bucket = _apply_ordering(bucket, ordering)
+                bucket = bucket.exclude(**cast(Mapping[str, object], excludes))
+            bucket = _apply_ordering(bucket, cast(RemoteOrdering, ordering))
             total_count = bucket.count()
             if (
                 isinstance(page, int)
@@ -457,7 +586,19 @@ def _build_query_view(config: RemoteAPIConfig):
     return view
 
 
-def _build_item_view(config: RemoteAPIConfig):
+def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
+    """Return the item `GET`/`PATCH`/`DELETE` view for one URL identifier.
+
+    `GET`, `PATCH`, and `DELETE` each respect the matching allow flag. The URL
+    identifier is coerced through the configured identifier type, currently
+    converting to `int` only when the interface `id` input type is exactly
+    `int`; coercion failures are mapped to remote error envelopes. Disabled
+    operations and unsupported methods return HTTP 405 without constructing a
+    manager. `PATCH` requires an object JSON body and calls
+    `manager.update(**payload)`. `DELETE` calls `manager.delete()`. Successful
+    responses use the standard envelope; delete returns an empty item list.
+    """
+
     def view(request: HttpRequest, identifier: str) -> HttpResponse:
         method = (request.method or "").upper()
         request_prefix = "detail" if method == "GET" else method.lower() or "item"
@@ -476,10 +617,11 @@ def _build_item_view(config: RemoteAPIConfig):
                         error="Method not allowed.",
                         error_code="method_not_allowed",
                         status=405,
-                    )
-                manager = config.manager_cls(id=_coerce_identifier(config, identifier))
+                )
+                manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
+                detail_manager = manager_cls(id=_coerce_identifier(config, identifier))
                 return _success_payload(
-                    items=[_serialize_manager(manager)],
+                    items=[_serialize_manager(detail_manager)],
                     config=config,
                     request_id=request_id,
                 )
@@ -492,9 +634,13 @@ def _build_item_view(config: RemoteAPIConfig):
                         error_code="method_not_allowed",
                         status=405,
                     )
-                manager = config.manager_cls(id=_coerce_identifier(config, identifier))
+                manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
+                update_manager = cast(
+                    RemoteAPIMutableManager,
+                    manager_cls(id=_coerce_identifier(config, identifier)),
+                )
                 payload = _parse_json_body(request)
-                updated = manager.update(**payload)
+                updated = update_manager.update(**payload)
                 return _success_payload(
                     items=[_serialize_manager(updated)],
                     config=config,
@@ -509,8 +655,12 @@ def _build_item_view(config: RemoteAPIConfig):
                         error_code="method_not_allowed",
                         status=405,
                     )
-                manager = config.manager_cls(id=_coerce_identifier(config, identifier))
-                manager.delete()
+                manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
+                delete_manager = cast(
+                    RemoteAPIMutableManager,
+                    manager_cls(id=_coerce_identifier(config, identifier)),
+                )
+                delete_manager.delete()
                 return _success_payload(
                     items=[],
                     config=config,
@@ -545,7 +695,16 @@ def _build_item_view(config: RemoteAPIConfig):
     return view
 
 
-def _build_create_view(config: RemoteAPIConfig):
+def _build_create_view(config: RemoteAPIConfig) -> RemoteAPIView:
+    """Return the `POST <base_path>/<resource_name>` create view.
+
+    The view validates the protocol header, requires `POST`, requires an object
+    JSON body, calls the manager create operation, and returns the standard
+    envelope with HTTP 201. Disabled or unsupported methods return HTTP 405
+    without calling `manager_cls.create()`. Errors are converted into sanitized
+    JSON envelopes with an `X-Request-ID`.
+    """
+
     def view(request: HttpRequest) -> HttpResponse:
         request_id = _request_id(request, prefix="create")
         if request.method != "POST":
@@ -558,8 +717,9 @@ def _build_create_view(config: RemoteAPIConfig):
             )
         try:
             _check_protocol_version(request, config)
+            manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
             payload = _parse_json_body(request)
-            manager = config.manager_cls.create(**payload)
+            manager = manager_cls.create(**payload)
             return _success_payload(
                 items=[_serialize_manager(manager)],
                 config=config,

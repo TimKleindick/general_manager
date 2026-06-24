@@ -197,10 +197,24 @@ class BasePermissionTests(TestCase):
         result = self.permission_obj.validate_permission_string("dummy:pass&dummy:fail")
         self.assertFalse(result)
 
+    def test_validate_permission_string_short_circuits_on_false(self):
+        """A denied fragment should stop later permission lookups."""
+        result = self.permission_obj.validate_permission_string(
+            "dummy:fail&nonexistent:whatever"
+        )
+        self.assertFalse(result)
+
     def test_validate_permission_string_invalid_permission(self):
         """Test validate_permission_string with an invalid permission string; should raise ValueError."""
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PermissionNotFoundError) as ctx:
             self.permission_obj.validate_permission_string("nonexistent:whatever")
+        self.assertEqual(ctx.exception.permission, "nonexistent:whatever")
+
+    def test_validate_permission_string_empty_permission(self):
+        """An empty permission string tries to resolve the empty permission name."""
+        with self.assertRaises(PermissionNotFoundError) as ctx:
+            self.permission_obj.validate_permission_string("")
+        self.assertEqual(ctx.exception.permission, "")
 
     def test_check_permission(self):
         """Test the concrete check_permission implementation."""

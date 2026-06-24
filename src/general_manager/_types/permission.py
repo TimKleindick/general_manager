@@ -10,10 +10,12 @@ __all__ = [
     "DatabaseAuditLogger",
     "FileAuditLogger",
     "GraphQLPermissionCapability",
+    "InvalidPermissionDataError",
     "ManagerBasedPermission",
     "MutationPermission",
     "OverrideManagerPermission",
     "PermissionAuditEvent",
+    "PermissionDataManager",
     "configure_audit_logger",
     "configure_audit_logger_from_settings",
     "mutation_capability",
@@ -23,21 +25,19 @@ __all__ = [
     "register_permission",
 ]
 
-from general_manager.permission.manager_based_permission import (
-    AdditiveManagerPermission,
-)
+from general_manager.permission.manager_based_permission import AdditiveManagerPermission
 from general_manager.permission.audit import AuditLogger
 from general_manager.permission.base_permission import BasePermission
 from general_manager.permission.graphql_capabilities import CapabilityEvaluationContext
 from general_manager.permission.audit import DatabaseAuditLogger
 from general_manager.permission.audit import FileAuditLogger
 from general_manager.permission.graphql_capabilities import GraphQLPermissionCapability
+from general_manager.permission.permission_data_manager import InvalidPermissionDataError
 from general_manager.permission.manager_based_permission import ManagerBasedPermission
 from general_manager.permission.mutation_permission import MutationPermission
-from general_manager.permission.manager_based_permission import (
-    OverrideManagerPermission,
-)
+from general_manager.permission.manager_based_permission import OverrideManagerPermission
 from general_manager.permission.audit import PermissionAuditEvent
+from general_manager.permission.permission_data_manager import PermissionDataManager
 from general_manager.permission.audit import configure_audit_logger
 from general_manager.permission.audit import configure_audit_logger_from_settings
 from general_manager.permission.graphql_capabilities import mutation_capability

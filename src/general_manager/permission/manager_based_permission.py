@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Literal, Optional
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from general_manager.permission.base_permission import (
     BasePermission,
+    PermissionConstraint,
     ReadPermissionPlan,
     ReadPermissionReason,
     UserLike,
@@ -43,7 +44,7 @@ def _get_default_permissions() -> dict[permission_type, list[str]]:
     raw_defaults = (
         gm_config.get(_DEFAULT_PERMISSIONS_KEY) if isinstance(gm_config, dict) else None
     )
-    configured_defaults: Mapping[str, Any] | None = None
+    configured_defaults: Mapping[str, object] | None = None
     if isinstance(raw_defaults, Mapping):
         configured_defaults = raw_defaults
 
@@ -59,12 +60,22 @@ def _get_default_permissions() -> dict[permission_type, list[str]]:
         if configured_permissions is None:
             configured_permissions = configured_defaults.get(action)
         if configured_permissions is not None:
-            defaults[action] = list(configured_permissions)
+            defaults[action] = (
+                list(configured_permissions)
+                if isinstance(configured_permissions, Iterable)
+                else [str(configured_permissions)]
+            )
     return defaults
 
 
 class InvalidBasedOnConfigurationError(ValueError):
-    """Raised when the configured `__based_on__` attribute is missing or invalid."""
+    """Raised when the configured `__based_on__` attribute is missing or invalid.
+
+    Instance-level delegated permissions require the configured attribute to
+    exist. Missing attributes raise this error; class-level contexts instead
+    defer to row-level instance checks because no concrete delegated object is
+    available yet.
+    """
 
     def __init__(self, attribute_name: str) -> None:
         super().__init__(
@@ -73,7 +84,11 @@ class InvalidBasedOnConfigurationError(ValueError):
 
 
 class InvalidBasedOnTypeError(TypeError):
-    """Raised when the `__based_on__` attribute does not resolve to a GeneralManager."""
+    """Raised when the `__based_on__` attribute does not resolve to a GeneralManager.
+
+    The delegated object must be a ``GeneralManager`` instance or manager class
+    after any dictionary/id coercion through the configured manager field type.
+    """
 
     def __init__(self, attribute_name: str) -> None:
         super().__init__(f"Based on object {attribute_name} is not a GeneralManager.")
@@ -93,7 +108,7 @@ class notExistent:
 class _ConfiguredManagerPermission(BasePermission):
     """Shared manager-based permission implementation with pluggable merge semantics."""
 
-    __based_on__: ClassVar[Optional[str]] = None
+    __based_on__: ClassVar[str | None] = None
     __read__: ClassVar[list[str]] = _FALLBACK_DEFAULT_PERMISSIONS["read"]
     __create__: ClassVar[list[str]] = _FALLBACK_DEFAULT_PERMISSIONS["create"]
     __update__: ClassVar[list[str]] = _FALLBACK_DEFAULT_PERMISSIONS["update"]
@@ -108,7 +123,7 @@ class _ConfiguredManagerPermission(BasePermission):
     _read_instance_result: bool | None
     _is_class_context: bool
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
         cls._explicit_permission_attrs = frozenset(
@@ -139,8 +154,8 @@ class _ConfiguredManagerPermission(BasePermission):
 
     def __init__(
         self,
-        instance: PermissionDataManager | GeneralManager,
-        request_user: UserLike,
+        instance: PermissionDataManager[GeneralManager] | GeneralManager,
+        request_user: UserLike | object,
     ) -> None:
         from general_manager.manager.general_manager import GeneralManager
 
@@ -172,7 +187,7 @@ class _ConfiguredManagerPermission(BasePermission):
 
         self.__attribute_permissions = self.__get_attribute_permissions()
         self.__based_on_permission = self.__get_based_on_permission()
-        self.__overall_results: Dict[permission_type, Optional[bool]] = {
+        self.__overall_results: dict[permission_type, bool | None] = {
             "create": None,
             "read": None,
             "update": None,
@@ -180,7 +195,7 @@ class _ConfiguredManagerPermission(BasePermission):
         }
         self._read_instance_result = None
 
-    def __get_based_on_permission(self) -> Optional[BasePermission]:
+    def __get_based_on_permission(self) -> BasePermission | None:
         from general_manager.manager.general_manager import GeneralManager
         from general_manager.permission.permission_data_manager import (
             PermissionDataManager,
@@ -233,16 +248,19 @@ class _ConfiguredManagerPermission(BasePermission):
         if Permission is None or not issubclass(Permission, BasePermission):
             return None
 
-        return Permission(
-            instance=basis_object,
-            request_user=self.request_user,
+        return cast(
+            BasePermission,
+            Permission(
+                instance=basis_object,
+                request_user=self.request_user,
+            ),
         )
 
     @staticmethod
     def _merge_filter_group_parts(
-        delegated_part: dict[str, Any],
-        local_part: dict[str, Any],
-    ) -> tuple[dict[str, Any], bool]:
+        delegated_part: dict[str, object],
+        local_part: dict[str, object],
+    ) -> tuple[dict[str, object], bool]:
         """Merge representable filters; conflicting keys fall back to instance checks."""
         merged = dict(delegated_part)
         had_conflict = False
@@ -400,7 +418,7 @@ class _ConfiguredManagerPermission(BasePermission):
 
     def get_permission_filter(
         self,
-    ) -> list[dict[Literal["filter", "exclude"], dict[str, str]]]:
+    ) -> list[PermissionConstraint]:
         return self.get_read_permission_plan().filters
 
     def can_read_instance(self) -> bool:
@@ -420,7 +438,16 @@ class _ConfiguredManagerPermission(BasePermission):
         return result
 
     def get_read_permission_plan(self) -> ReadPermissionPlan:
-        """Return read prefilters plus whether row-level checks must still run."""
+        """Return read prefilters plus whether row-level checks must still run.
+
+        Delegated ``__based_on__`` filters and local read filters are combined
+        as alternative constraint groups. Delegated filter and exclude keys are
+        prefixed with ``"<based_on>__"`` before merging. The returned plan marks
+        row-level instance checks as required for unfilterable read rules,
+        class-level delegated contexts that lack a concrete object, and filter
+        key conflicts while merging delegated and local constraints. Reason
+        labels are sorted for deterministic diagnostics.
+        """
         if self._is_superuser():
             return ReadPermissionPlan(
                 filters=[{"filter": {}, "exclude": {}}],
@@ -429,9 +456,7 @@ class _ConfiguredManagerPermission(BasePermission):
         __based_on__ = self.__based_on__
         requires_instance_check = False
         instance_check_reasons: set[ReadPermissionReason] = set()
-        delegated_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]] = [
-            {"filter": {}, "exclude": {}}
-        ]
+        delegated_filters: list[PermissionConstraint] = [{"filter": {}, "exclude": {}}]
         if self.__based_on_permission is not None:
             delegated_plan_method = getattr(
                 self.__based_on_permission,
@@ -487,7 +512,7 @@ class _ConfiguredManagerPermission(BasePermission):
             requires_instance_check = True
             instance_check_reasons.add("based_on_class_context")
 
-        local_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]] = []
+        local_filters: list[PermissionConstraint] = []
         for permission in self._read_permissions:
             permission_filter, is_filterable = self._get_permission_filter_info(
                 permission
@@ -501,7 +526,7 @@ class _ConfiguredManagerPermission(BasePermission):
         if not local_filters:
             local_filters = [{"filter": {}, "exclude": {}}]
 
-        combined_filters: list[dict[Literal["filter", "exclude"], dict[str, Any]]] = []
+        combined_filters: list[PermissionConstraint] = []
         for delegated_filter_group in delegated_filters:
             for local_filter_group in local_filters:
                 combined_filter, filter_conflict = self._merge_filter_group_parts(

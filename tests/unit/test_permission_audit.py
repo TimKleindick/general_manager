@@ -568,6 +568,32 @@ class PermissionAuditTests(TransactionTestCase):
         logger = get_audit_logger()
         self.assertIsInstance(logger, _NoOpAuditLogger)
 
+    def test_configure_audit_logger_from_settings_nested_none_disables(self) -> None:
+        """Nested GENERAL_MANAGER audit config takes precedence over top-level settings."""
+        from general_manager.permission.audit import _NoOpAuditLogger
+
+        class DummySettings:
+            GENERAL_MANAGER: ClassVar[dict[str, object]] = {"AUDIT_LOGGER": None}
+            AUDIT_LOGGER = DummyAuditLogger()
+
+        configure_audit_logger_from_settings(DummySettings)
+        logger = get_audit_logger()
+        self.assertIsInstance(logger, _NoOpAuditLogger)
+
+    def test_configure_audit_logger_from_settings_rejects_invalid_options(self) -> None:
+        """Mapping settings must pass constructor options as a mapping."""
+
+        class DummySettings:
+            GENERAL_MANAGER: ClassVar[dict[str, object]] = {
+                "AUDIT_LOGGER": {
+                    "class": "tests.unit.test_permission_audit.DummyAuditLogger",
+                    "options": ["not", "a", "mapping"],
+                }
+            }
+
+        with self.assertRaisesRegex(TypeError, "AUDIT_LOGGER options"):
+            configure_audit_logger_from_settings(DummySettings)
+
     def test_configure_audit_logger_with_none_resets(self) -> None:
         """Test configuring with None resets to no-op logger."""
         from general_manager.permission.audit import _NoOpAuditLogger

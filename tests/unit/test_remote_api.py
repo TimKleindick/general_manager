@@ -568,6 +568,22 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             "wss://example.test/gm/ws/projects?version=v1",
         )
 
+    def test_websocket_url_uses_ws_for_plain_http_base_url(self) -> None:
+        class RemoteProject(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    base_url = "http://example.test"
+                    remote_manager = "projects"
+                    protocol_version = "v1"
+
+        self.assertEqual(
+            RemoteProject.Interface.get_websocket_invalidation_url(),
+            "ws://example.test/gm/ws/projects?version=v1",
+        )
+
     def test_websocket_url_preserves_base_url_path_prefix(self) -> None:
         class RemoteProject(GeneralManager):
             class Interface(RemoteManagerInterface):
@@ -585,6 +601,25 @@ class RemoteManagerInterfaceValidationTests(SimpleTestCase):
             RemoteProject.Interface.get_query_operation("detail").path,
             "/internal/gm/projects/{id}",
         )
+        self.assertEqual(
+            RemoteProject.Interface.get_websocket_invalidation_url(),
+            "wss://example.test/api/internal/gm/ws/projects?version=v1",
+        )
+
+    def test_websocket_url_strips_trailing_slash_from_base_url_path_prefix(
+        self,
+    ) -> None:
+        class RemoteProject(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    base_url = "https://example.test/api/"
+                    base_path = "/internal/gm"
+                    remote_manager = "projects"
+                    protocol_version = "v1"
+
         self.assertEqual(
             RemoteProject.Interface.get_websocket_invalidation_url(),
             "wss://example.test/api/internal/gm/ws/projects?version=v1",
