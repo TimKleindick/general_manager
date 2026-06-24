@@ -14,6 +14,13 @@ from general_manager.chat.models import ChatMessage, ChatPendingConfirmation
 from tests import test_urls
 
 
+GENERIC_CHAT_ERROR_EVENT = {
+    "type": "error",
+    "message": "Chat request failed.",
+    "code": "chat_error",
+}
+
+
 class HttpIntegrationProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -207,6 +214,72 @@ class ChatHttpTransportTests(TestCase):
             }
         ]
 
+    def test_http_invalid_json_body_returns_generic_error_event(self) -> None:
+        self.client.raise_request_exception = False
+
+        with patch("general_manager.chat.views.emit_chat_error") as chat_error:
+            response = self.client.post(
+                "/chat/",
+                data='{"text": ',
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["events"] == [GENERIC_CHAT_ERROR_EVENT]
+        assert "Expecting value" not in response.content.decode()
+        chat_error.assert_called_once()
+        assert isinstance(chat_error.call_args.kwargs["error"], json.JSONDecodeError)
+        assert chat_error.call_args.kwargs["context"] == {
+            "transport": "http",
+            "path": "/chat/",
+        }
+
+    def test_http_missing_text_preserves_bad_message_event(self) -> None:
+        response = self.client.post(
+            "/chat/",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["events"] == [
+            {
+                "type": "error",
+                "message": "Message text is required.",
+                "code": "bad_message",
+            }
+        ]
+
+    def test_sse_setup_errors_return_generic_error_event(self) -> None:
+        self.client.raise_request_exception = False
+        original_error = RuntimeError("secret setup detail")
+
+        with (
+            patch(
+                "general_manager.chat.views._conversation_for_request",
+                side_effect=original_error,
+            ),
+            patch("general_manager.chat.views.emit_chat_error") as chat_error,
+        ):
+            response = self.client.post(
+                "/chat/stream/",
+                data=json.dumps({"text": "hello"}),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        body = b"".join(response.streaming_content).decode()
+        assert body == f"data: {json.dumps(GENERIC_CHAT_ERROR_EVENT)}\n\n"
+        assert "secret setup detail" not in body
+        chat_error.assert_called_once()
+        assert chat_error.call_args.kwargs["error"] is original_error
+        assert chat_error.call_args.kwargs["context"] == {
+            "transport": "sse",
+            "path": "/chat/stream/",
+        }
+
     def test_http_post_rejects_confirmed_mutations(self) -> None:
         with patch(
             "general_manager.chat.views.import_provider",
@@ -359,6 +432,40 @@ class ChatHttpTransportTests(TestCase):
         assert "secret confirm detail" not in confirm.content.decode()
         chat_error.assert_called_once()
         assert chat_error.call_args.kwargs["error"] is original_error
+
+    def test_confirm_invalid_json_body_returns_generic_error_event(self) -> None:
+        self.client.raise_request_exception = False
+
+        with patch("general_manager.chat.views.emit_chat_error") as chat_error:
+            response = self.client.post(
+                "/chat/confirm/",
+                data='{"confirmed": ',
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["events"] == [GENERIC_CHAT_ERROR_EVENT]
+        assert "Expecting value" not in response.content.decode()
+        chat_error.assert_called_once()
+        assert isinstance(chat_error.call_args.kwargs["error"], json.JSONDecodeError)
+        assert chat_error.call_args.kwargs["context"] == {
+            "transport": "http_confirm",
+            "path": "/chat/confirm/",
+        }
+
+    def test_confirm_bad_payload_preserves_bad_event(self) -> None:
+        response = self.client.post(
+            "/chat/confirm/",
+            data=json.dumps({"confirmation_id": "tool-create"}),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["events"] == [
+            {"type": "error", "message": "Unknown chat event.", "code": "bad_event"}
+        ]
 
     @override_settings(
         GENERAL_MANAGER={
