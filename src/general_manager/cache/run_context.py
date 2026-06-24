@@ -7,7 +7,7 @@ from collections.abc import Callable, Hashable, Iterable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TYPE_CHECKING, Optional, TypeVar, cast
 
 from general_manager.logging import get_logger
 
@@ -41,7 +41,19 @@ class BucketIndexRunCacheEntry:
 
 
 class CalculationRunContext:
-    """Cache calculation work for one request, graph, bulk operation, or task."""
+    """
+    Cache calculation work for one request, graph, bulk operation, or task.
+
+    Entering the context makes it available through
+    `current_calculation_run_context()`. Clean exits flush buffered
+    dependency-cache publications; exceptional exits discard them. In all cases
+    the active context token is reset and run-local values, dependency hits, and
+    pending publications are cleared before exit returns. Active context lookup
+    uses Python `contextvars`, so visibility follows normal context-variable
+    propagation for async tasks and does not automatically cross unrelated
+    threads. Nested `CalculationRunContext` instances replace the active context
+    for their nested block and restore the previous context on exit.
+    """
 
     def __init__(
         self,
@@ -50,6 +62,15 @@ class CalculationRunContext:
             DEFAULT_DEPENDENCY_CACHE_PUBLISH_BATCH_SIZE
         ),
     ) -> None:
+        """
+        Initialize empty run-local storage.
+
+        Parameters:
+            dependency_cache_publish_batch_size: Number of pending dependency
+                cache publications that triggers an automatic flush. Values
+                less than or equal to zero are accepted and make every buffered
+                publication flush immediately.
+        """
         self._values: dict[Hashable, object] = {}
         self._dependency_cache_hits: dict[str, DependencyCacheHit] = {}
         self._dependency_cache_pending_publications: dict[
@@ -57,10 +78,11 @@ class CalculationRunContext:
             PendingDependencyCachePublication,
         ] = {}
         self._dependency_cache_publish_batch_size = dependency_cache_publish_batch_size
-        self._token: Token[CalculationRunContext | None] | None = None
+        self._tokens: list[Token[CalculationRunContext | None]] = []
 
     def __enter__(self) -> "CalculationRunContext":
-        self._token = _active_context.set(self)
+        """Activate this context and return it for the `with` block."""
+        self._tokens.append(_active_context.set(self))
         return self
 
     def __exit__(
@@ -69,24 +91,57 @@ class CalculationRunContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """
+        Flush or discard buffered dependency-cache state and deactivate the context.
+
+        Re-entering the same context instance is supported: inner exits restore
+        the previous active context without flushing or clearing state, and only
+        the outermost exit performs publication cleanup and storage clearing.
+        Calling ``__exit__`` without a matching ``__enter__`` is a no-op.
+
+        Parameters:
+            exc_type: Exception type from the wrapped block, or `None` on a
+                clean exit.
+            exc_val: Exception instance from the wrapped block, or `None`.
+            exc_tb: Traceback from the wrapped block, or `None`.
+
+        Raises:
+            Exception: Errors from flushing/discarding dependency-cache
+                publications, lease release, or context-variable reset propagate
+                unchanged.
+        """
+        if not self._tokens:
+            return
+
+        token = self._tokens.pop()
+        is_outermost_exit = not self._tokens
         try:
-            if exc_type is None:
-                self.flush_dependency_cache_publications()
-            else:
-                self.discard_dependency_cache_publications()
+            if is_outermost_exit:
+                if exc_type is None:
+                    self.flush_dependency_cache_publications()
+                else:
+                    self.discard_dependency_cache_publications()
         finally:
-            if self._token is not None:
-                _active_context.reset(self._token)
-                self._token = None
-            self._values.clear()
-            self._dependency_cache_hits.clear()
-            self._dependency_cache_pending_publications.clear()
+            _active_context.reset(token)
+            if is_outermost_exit:
+                self._values.clear()
+                self._dependency_cache_hits.clear()
+                self._dependency_cache_pending_publications.clear()
 
     def get_or_set(self, key: Hashable, loader: Callable[[], T]) -> T:
-        """Return a cached value for key, loading it once per active context."""
+        """
+        Return a cached value for `key`, loading it at most once per context.
+
+        The first call for a missing key invokes `loader()` and stores its
+        return value. Later calls with the same key return the stored object,
+        even if they pass a different loader. Loader exceptions propagate and do
+        not store a value. The key may be any hashable value. `loader` is a
+        synchronous callable; coroutine objects are stored as ordinary return
+        values if a loader returns one.
+        """
         if key not in self._values:
             self._values[key] = loader()
-        return self._values[key]  # type: ignore[return-value]
+        return cast(T, self._values[key])
 
     def get(self, key: Hashable, default: object = None) -> object:
         """Return the stored value for key, or default when key is absent."""
@@ -100,7 +155,12 @@ class CalculationRunContext:
         self,
         hits: Mapping[str, DependencyCacheHit],
     ) -> None:
-        """Store dependency-cache hits prefetched for the active run."""
+        """
+        Merge prefetched dependency-cache hits into the active run.
+
+        Provided keys replace existing hits for the same cache key, while
+        omitted existing keys remain available.
+        """
         self._dependency_cache_hits.update(hits)
 
     def get_dependency_cache_hit(
@@ -115,7 +175,26 @@ class CalculationRunContext:
         self,
         entry: PendingDependencyCachePublication,
     ) -> None:
-        """Buffer a dependency-cache miss for guarded batch publication."""
+        """
+        Buffer a dependency-cache miss for guarded batch publication.
+
+        The buffered result is immediately visible through
+        `get_dependency_cache_hit()` in the same run. A later entry for the same
+        cache key replaces the previous one and releases the previous compute
+        lease when the lease token differs. The buffered hit also replaces any
+        prefetched hit for the same key. Reaching the configured batch size, or
+        using a batch size less than or equal to zero, flushes pending
+        publications immediately. `entry` is a
+        `PendingDependencyCachePublication` created by the dependency-cache
+        compute path; this context reads its `cache_key`, `result`,
+        `dependencies`, and `lease` fields but does not derive those values.
+
+        Raises:
+            Exception: Errors from `release_compute_lease()`,
+                `publish_dependency_cache_entries()`, or cache backend lease
+                operations propagate unchanged except `CachePublishAborted`,
+                which is handled by `flush_dependency_cache_publications()`.
+        """
         from general_manager.cache.dependency_cache import DependencyCacheHit
         from general_manager.cache.dependency_publish import release_compute_lease
 
@@ -136,7 +215,18 @@ class CalculationRunContext:
             self.flush_dependency_cache_publications()
 
     def flush_dependency_cache_publications(self) -> None:
-        """Publish buffered dependency-cache misses and release their leases."""
+        """
+        Publish buffered dependency-cache misses and release their leases.
+
+        `CachePublishAborted` is logged and swallowed because guarded publish
+        aborts are expected when backend generations changed. Leases are
+        released in a `finally` block for every entry submitted to the publish
+        attempt.
+
+        Raises:
+            Exception: Unexpected publish errors or lease-release errors
+                propagate unchanged.
+        """
         entries = tuple(self._dependency_cache_pending_publications.values())
         if not entries:
             return
@@ -160,7 +250,12 @@ class CalculationRunContext:
                 release_compute_lease(entry.lease)
 
     def discard_dependency_cache_publications(self) -> None:
-        """Drop buffered dependency-cache misses and release their leases."""
+        """
+        Drop buffered dependency-cache misses and release their leases.
+
+        Raises:
+            Exception: Lease-release errors propagate unchanged.
+        """
         entries = tuple(self._dependency_cache_pending_publications.values())
         if not entries:
             return
@@ -172,32 +267,32 @@ class CalculationRunContext:
             release_compute_lease(entry.lease)
 
     def discard_dependency_cache_state(self) -> None:
-        """Drop dependency-cache hits and buffered publications for this run."""
+        """Drop prefetched hits and buffered publications for this run."""
         try:
             self.discard_dependency_cache_publications()
         finally:
             self._dependency_cache_hits.clear()
 
     def discard_prefix(self, prefix: tuple[Hashable, ...]) -> None:
-        """Discard tuple keys that start with the supplied prefix."""
+        """Discard cached tuple keys whose leading items equal `prefix`."""
         for key in list(self._values):
             if isinstance(key, tuple) and key[: len(prefix)] == prefix:
                 del self._values[key]
 
     def get_orm_bucket_result(self, key: Hashable) -> object:
-        """Return a cached ORM bucket result for key, or None when absent."""
+        """Return a cached ORM bucket result for key, or `None` when absent."""
         return self.get((ORM_BUCKET_RESULT_PREFIX, key))
 
     def set_orm_bucket_result(self, key: Hashable, value: object) -> None:
-        """Store an ORM bucket result for the active run."""
+        """Store or overwrite an ORM bucket result for the active run."""
         self.set((ORM_BUCKET_RESULT_PREFIX, key), value)
 
     def get_orm_bucket_rows(self, key: Hashable) -> object:
-        """Return cached ORM bucket rows for key, or None when absent."""
+        """Return cached ORM bucket rows for key, or `None` when absent."""
         return self.get((ORM_BUCKET_ROW_RESULT_PREFIX, key))
 
     def set_orm_bucket_rows(self, key: Hashable, value: object) -> None:
-        """Store ORM bucket rows for the active run."""
+        """Store or overwrite ORM bucket rows for the active run."""
         self.set((ORM_BUCKET_ROW_RESULT_PREFIX, key), value)
 
     def clear_orm_bucket_results(self) -> None:
@@ -222,7 +317,14 @@ class CalculationRunContext:
         many: bool,
         max_rows: int | None,
     ) -> object:
-        """Return a cached bucket index and replay its source dependencies."""
+        """
+        Return a cached bucket index and replay its source dependencies.
+
+        Missing entries and entries under the same key that are not
+        `BucketIndexRunCacheEntry` return `None`. Cache hits replay the stored
+        dependencies through `DependencyTracker.track()` before returning the
+        cached value.
+        """
         entry = self.get(
             self._bucket_index_cache_key(source_signature, key_spec, many, max_rows)
         )
@@ -244,7 +346,7 @@ class CalculationRunContext:
         dependencies: Iterable["Dependency"],
         max_rows: int | None,
     ) -> None:
-        """Store a bucket index and the dependencies touched while building it."""
+        """Store a bucket index and freeze the dependencies touched while building it."""
         self.set(
             self._bucket_index_cache_key(source_signature, key_spec, many, max_rows),
             BucketIndexRunCacheEntry(
@@ -272,7 +374,16 @@ class CalculationRunContext:
         loader: Callable[[], Iterable[T]],
         index_by: Callable[[T], K],
     ) -> dict[K, T]:
-        """Load a working set once and index it by the supplied key function."""
+        """
+        Load a working set once and index it by the supplied key function.
+
+        The loader is evaluated only on the first call for `("index", key)`.
+        Rows sharing an index key overwrite earlier rows, matching normal
+        dictionary comprehension semantics in loader iteration order. Loader or
+        index-key exceptions propagate and do not store a value. Both callables
+        are synchronous; coroutine objects returned by them are treated as
+        ordinary row or key values.
+        """
         return self.get_or_set(
             ("index", key),
             lambda: {index_by(row): row for row in loader()},
@@ -285,7 +396,15 @@ class CalculationRunContext:
         loader: Callable[[], Iterable[T]],
         group_by: Callable[[T], K],
     ) -> dict[K, list[T]]:
-        """Load a working set once and group it by the supplied key function."""
+        """
+        Load a working set once and group rows by the supplied key function.
+
+        The loader is evaluated only on the first call for `("group_by", key)`.
+        Group and row order follows the loader's iteration order. Loader or
+        grouping-key exceptions propagate and do not store a value. Both
+        callables are synchronous; coroutine objects returned by them are
+        treated as ordinary row or key values.
+        """
 
         def load_groups() -> dict[K, list[T]]:
             grouped: defaultdict[K, list[T]] = defaultdict(list)
@@ -302,22 +421,29 @@ class CalculationRunContext:
         loader: Callable[[], Iterable[T]],
         index_by: Callable[[T], K],
     ) -> dict[K, list[T]]:
-        """Load a working set once and group rows sharing the same index key."""
+        """Alias `group_by()` for callers that think in multi-value indexes."""
         return self.group_by(key=key, loader=loader, group_by=index_by)
 
 
 def current_calculation_run_context() -> CalculationRunContext | None:
-    """Return the active calculation run context, if any."""
+    """Return the context active in the current context-variable scope, if any."""
     return _active_context.get()
 
 
 class ensure_calculation_run_context:
-    """Use the current run context or create one for the wrapped block."""
+    """
+    Use the current run context or create one for the wrapped block.
+
+    If a `CalculationRunContext` is already active, the manager returns it and
+    leaves lifecycle ownership to the outer context. Otherwise it creates,
+    enters, and later exits a temporary context.
+    """
 
     def __init__(self) -> None:
         self._owned_context: Optional[CalculationRunContext] = None
 
     def __enter__(self) -> CalculationRunContext:
+        """Return the active context, creating one when needed."""
         current = current_calculation_run_context()
         if current is not None:
             self._owned_context = None
@@ -331,5 +457,6 @@ class ensure_calculation_run_context:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """Exit the owned temporary context, if one was created."""
         if self._owned_context is not None:
             self._owned_context.__exit__(exc_type, exc_val, exc_tb)

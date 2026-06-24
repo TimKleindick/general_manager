@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Literal, Protocol, cast
 
 LookupOperator = Literal[
     "eq",
@@ -30,24 +31,60 @@ SUPPORTED_LOOKUP_OPERATORS = EXACT_OPERATORS | SCAN_OPERATORS
 UNDEFINED = object()
 
 
+type NormalizedDependencyValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | list[NormalizedDependencyValue]
+    | dict[str, NormalizedDependencyValue]
+)
+
+
+class SupportsDependencyComparison(Protocol):
+    """Protocol for values that support dependency range comparisons."""
+
+    def __lt__(self, other: object, /) -> bool:
+        """Return whether this value is less than the other value."""
+        ...
+
+    def __le__(self, other: object, /) -> bool:
+        """Return whether this value is less than or equal to the other value."""
+        ...
+
+    def __gt__(self, other: object, /) -> bool:
+        """Return whether this value is greater than the other value."""
+        ...
+
+    def __ge__(self, other: object, /) -> bool:
+        """Return whether this value is greater than or equal to the other value."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class LookupSpec:
+    """Parsed dependency lookup path and operator."""
+
     lookup: str
     attr_path: tuple[str, ...]
     operator: LookupOperator
 
 
-def normalize_dependency_value(value: Any) -> Any:
+def normalize_dependency_value(value: object) -> NormalizedDependencyValue:
     """Return a deterministic JSON-compatible representation for dependency data."""
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[object, object], value)
         return {
             str(key): normalize_dependency_value(val)
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+            for key, val in sorted(mapping.items(), key=lambda item: str(item[0]))
         }
     if isinstance(value, (list, tuple)):
-        return [normalize_dependency_value(item) for item in value]
-    if isinstance(value, set):
-        return [normalize_dependency_value(item) for item in sorted(value, key=str)]
+        sequence = cast(Sequence[object], value)
+        return [normalize_dependency_value(item) for item in sequence]
+    if isinstance(value, AbstractSet):
+        value_set = cast(AbstractSet[object], value)
+        return [normalize_dependency_value(item) for item in sorted(value_set, key=str)]
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, date):
@@ -57,17 +94,17 @@ def normalize_dependency_value(value: Any) -> Any:
     get_state = getattr(value, "__getstate__", None)
     if callable(get_state):
         state = get_state()
-        if isinstance(state, dict):
+        if isinstance(state, Mapping):
             return {"__state__": normalize_dependency_value(state)}
     return {"__repr__": repr(value)}
 
 
-def serialize_normalized_value(value: Any) -> str:
+def serialize_normalized_value(value: object) -> str:
     """Serialize dependency values in the canonical dependency format."""
     return json.dumps(normalize_dependency_value(value), sort_keys=True)
 
 
-def stable_value_hash(value: Any) -> str:
+def stable_value_hash(value: object) -> str:
     """Return a stable hash suitable for shard keys."""
     payload = serialize_normalized_value(value).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -86,15 +123,17 @@ def lookup_spec_from_key(lookup: str) -> LookupSpec:
     return LookupSpec(lookup=lookup, attr_path=parts, operator="eq")
 
 
-def parse_dependency_identifier(identifier: str) -> Any:
+def parse_dependency_identifier(identifier: str) -> object | None:
     """Parse a JSON-serialized dependency identifier, returning None on failure."""
     try:
-        return json.loads(identifier)
+        return cast(object, json.loads(identifier))
     except (json.JSONDecodeError, ValueError):
         return None
 
 
-def current_value_for_path(instance: object, attr_path: tuple[str, ...]) -> Any:
+def current_value_for_path(
+    instance: object, attr_path: tuple[str, ...]
+) -> object | None:
     """Resolve a nested attribute path from an instance."""
     current: object = instance
     for attr in attr_path:
@@ -104,23 +143,23 @@ def current_value_for_path(instance: object, attr_path: tuple[str, ...]) -> Any:
     return current
 
 
-def _json_loads_val_key(val_key: Any) -> Any:
+def _json_loads_val_key(val_key: object) -> object:
     if isinstance(val_key, str):
         try:
-            return json.loads(val_key)
+            return cast(object, json.loads(val_key))
         except (json.JSONDecodeError, ValueError):
             return val_key
     return val_key
 
 
-def _repr_marker(raw: Any) -> str | None:
-    if isinstance(raw, dict) and set(raw.keys()) == {"__repr__"}:
+def _repr_marker(raw: object) -> str | None:
+    if isinstance(raw, Mapping) and set(raw.keys()) == {"__repr__"}:
         marker = raw.get("__repr__")
         return marker if isinstance(marker, str) else None
     return None
 
 
-def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
+def _coerce_to_type(sample: object, raw: object) -> object | None:
     if sample is None:
         return None
     if isinstance(sample, datetime):
@@ -160,27 +199,33 @@ def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
             if normalized in {"false", "0", "no", "n", "f"}:
                 return False
         return None
-    if isinstance(raw, dict) and set(raw.keys()) == {"__state__"}:
+    if isinstance(raw, Mapping) and set(raw.keys()) == {"__state__"}:
         state = raw["__state__"]
-        if isinstance(state, dict):
+        if isinstance(state, Mapping):
+            state_mapping = cast(Mapping[str, object], state)
+            sample_constructor = cast(Callable[..., object], type(sample))
             try:
-                return type(sample)(**state)
+                return sample_constructor(**state_mapping)
             except (TypeError, ValueError):
-                if {"magnitude", "unit"} <= set(state):
+                if {"magnitude", "unit"} <= set(state_mapping):
                     try:
-                        return type(sample)(state["magnitude"], state["unit"])
+                        return sample_constructor(
+                            state_mapping["magnitude"],
+                            state_mapping["unit"],
+                        )
                     except (TypeError, ValueError):
                         return None
         return None
     try:
-        return type(sample)(raw)
+        sample_constructor = cast(Callable[[object], object], type(sample))
+        return sample_constructor(raw)
     except (TypeError, ValueError):
         if isinstance(raw, type(sample)):
             return raw
         return None
 
 
-def matches_lookup_value(operator: str, value: Any, stored_value: Any) -> bool:
+def matches_lookup_value(operator: str, value: object, stored_value: object) -> bool:
     """Return whether a runtime value matches a serialized dependency value."""
     if operator == "eq":
         literal_val = _json_loads_val_key(stored_value)
@@ -194,10 +239,15 @@ def matches_lookup_value(operator: str, value: Any, stored_value: Any) -> bool:
             return repr(value) == stored_value
         return value == comparable
     if operator == "in":
+        if not isinstance(stored_value, str | bytes | bytearray):
+            return False
         try:
-            sequence = json.loads(stored_value)
+            raw_sequence = json.loads(stored_value)
         except (json.JSONDecodeError, ValueError, TypeError):
             return False
+        if not isinstance(raw_sequence, list):
+            return False
+        sequence = cast(list[object], raw_sequence)
         for item in sequence:
             if item is None and value is None:
                 return True
@@ -216,13 +266,14 @@ def matches_lookup_value(operator: str, value: Any, stored_value: Any) -> bool:
         threshold = _coerce_to_type(value, _json_loads_val_key(stored_value))
         if threshold is None:
             return False
+        comparable = cast(SupportsDependencyComparison, value)
         if operator == "gt":
-            return value > threshold
+            return comparable > threshold
         if operator == "gte":
-            return value >= threshold
+            return comparable >= threshold
         if operator == "lt":
-            return value < threshold
-        return value <= threshold
+            return comparable < threshold
+        return comparable <= threshold
     if operator in {"contains", "startswith", "endswith", "regex"}:
         if value is None:
             return False

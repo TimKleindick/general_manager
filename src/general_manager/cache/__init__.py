@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from general_manager.public_api_registry import CACHE_EXPORTS
 from general_manager.utils.public_api import build_module_dir, resolve_export
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from general_manager._types.cache import *  # noqa: F403
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     """
     Resolve a public API export by attribute name for module-level dynamic access.
 
@@ -23,7 +23,7 @@ def __getattr__(name: str) -> Any:
         name (str): The attribute name being accessed on the module.
 
     Returns:
-        Any: The object exported under `name` from the module's cached public API, or raises AttributeError if not found.
+        The object exported under `name` from the module's cached public API, or raises AttributeError if not found.
     """
     return resolve_export(
         name,

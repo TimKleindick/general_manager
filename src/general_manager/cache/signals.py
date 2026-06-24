@@ -1,8 +1,10 @@
 """Signals and decorators for tracking GeneralManager data changes."""
 
+from __future__ import annotations
+
 from copy import deepcopy
 from django.dispatch import Signal
-from typing import Callable, TypeVar, ParamSpec, cast
+from typing import Callable, TypeVar, ParamSpec, cast, overload
 
 from functools import wraps
 
@@ -18,18 +20,53 @@ R = TypeVar("R")
 logger = get_logger("cache.signals")
 
 
-def data_change(func: Callable[P, R]) -> Callable[P, R]:
+@overload
+def data_change(func: Callable[P, R]) -> Callable[P, R]: ...
+
+
+@overload
+def data_change(func: classmethod[object, P, R]) -> Callable[P, R]: ...
+
+
+def data_change(
+    func: Callable[P, R] | classmethod[object, P, R],
+) -> Callable[P, R]:
     """
     Wrap a data-modifying function with pre- and post-change signal dispatching.
 
+    The wrapper preserves the wrapped callable's metadata with `functools.wraps`.
+    It opens a dependency-cache publish barrier before the mutation,
+    clears run-scoped ORM bucket/index caches, emits `pre_data_change`, invokes
+    the wrapped callable, then emits `post_data_change` with the changed
+    instance, previous instance, action name, identification, and copied
+    `_old_values` payload. GraphQL warm-up requeue keys collected during signal
+    handling are drained only after the outermost active data-change barrier has
+    closed; failed mutations drain pending keys but do not enqueue rewarm work.
+
     Parameters:
-        func (Callable[P, R]): Function that performs a data mutation.
+        func: Function that performs a data mutation. Methods named `create`
+            are treated as class-level creates; every other name is treated as
+            an instance mutation. Raw `classmethod` descriptor objects are
+            accepted for compatibility; normal class methods should still prefer
+            `@classmethod` outside `@data_change`.
 
     Returns:
-        Callable[P, R]: Wrapped function that sends `pre_data_change` and `post_data_change` signals.
-    """
+        Wrapped function that returns the wrapped callable's result.
 
-    @wraps(func)
+    Raises:
+        BaseException: Exceptions from the wrapped callable and signal
+            receivers propagate. Cleanup errors propagate when the wrapped
+            callable succeeded; if the wrapped callable already failed, cleanup
+            errors are logged and the original exception is re-raised. GraphQL
+            warm-up enqueue errors are logged and suppressed.
+    """
+    decorator_source = (
+        cast(Callable[P, R], func.__func__)
+        if isinstance(func, classmethod)
+        else func
+    )
+
+    @wraps(decorator_source)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         """
         Emit pre_data_change and post_data_change signals around the wrapped function call.
@@ -47,6 +84,7 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
             begin_dependency_data_change,
             drain_invalidated_cache_keys_for_graphql_rewarm,
             end_dependency_data_change,
+            is_dependency_data_change_active,
         )
         from general_manager.cache.run_context import current_calculation_run_context
 
@@ -121,7 +159,8 @@ def data_change(func: Callable[P, R]) -> Callable[P, R]:
                     else:
                         raise
             finally:
-                cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
+                if not is_dependency_data_change_active():
+                    cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
             if completed and cache_keys:
                 try:
                     from general_manager.api.graphql_warmup import (
