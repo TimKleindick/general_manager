@@ -719,6 +719,56 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_receive_json_confirm_errors_use_public_message(self) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _ConfirmResumeProvider()
+        consumer.channel_name = "chat.resume.error"
+        consumer._pending_confirmation = {
+            "id": "tool-err",
+            "mutation": "createPart",
+            "input": {"name": "Bolt"},
+            "messages": [SimpleNamespace(role="system", content="system prompt text")],
+            "history": [],
+            "expires_at": timezone.now() + timedelta(seconds=30),
+        }
+        original_error = RuntimeError("secret confirm detail")
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=original_error,
+                ),
+                patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "tool-err",
+                        "confirmed": True,
+                    }
+                )
+
+            error_event = mock_send_json.await_args_list[-1].args[0]
+            assert error_event == {
+                "type": "error",
+                "message": "Chat request failed.",
+                "code": "chat_error",
+            }
+            assert "secret confirm detail" not in str(error_event)
+            chat_error.assert_called_once()
+            assert chat_error.call_args.kwargs["error"] is original_error
+
+        asyncio.run(run())
+
     def test_receive_json_confirm_rejects_pending_mutation_and_resumes_with_cancellation(
         self,
     ) -> None:
