@@ -80,6 +80,68 @@ class _OpenAIClient:
         self.chat = SimpleNamespace(completions=_OpenAIChatCompletions())
 
 
+class _OpenAIFragmentedToolCompletions:
+    async def create(self, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        return _AsyncIterator(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            index=0,
+                            finish_reason=None,
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id="call-query",
+                                        function=SimpleNamespace(
+                                            name="query",
+                                            arguments='{"manager":"Part',
+                                        ),
+                                    )
+                                ],
+                            ),
+                        )
+                    ],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            index=0,
+                            finish_reason="tool_calls",
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id="call-query",
+                                        function=SimpleNamespace(
+                                            name=None,
+                                            arguments='Manager","fields":["name"]}',
+                                        ),
+                                    )
+                                ],
+                            ),
+                        )
+                    ],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[],
+                    usage=SimpleNamespace(prompt_tokens=3, completion_tokens=5),
+                ),
+            ]
+        )
+
+
+class _OpenAIFragmentedToolClient:
+    def __init__(self) -> None:
+        self.chat = SimpleNamespace(completions=_OpenAIFragmentedToolCompletions())
+
+
 class _AnthropicMessages:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -112,6 +174,48 @@ class _AnthropicMessages:
 class _AnthropicClient:
     def __init__(self) -> None:
         self.messages = _AnthropicMessages()
+
+
+class _AnthropicFragmentedMessages:
+    async def create(self, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        return _AsyncIterator(
+            [
+                SimpleNamespace(
+                    type="content_block_start",
+                    index=0,
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="tool-1",
+                        name="search_managers",
+                        input={},
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json='{"query":"part',
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(type="input_json_delta", partial_json='s"}'),
+                ),
+                SimpleNamespace(type="content_block_stop", index=0),
+                SimpleNamespace(
+                    type="message_delta",
+                    usage=SimpleNamespace(input_tokens=7, output_tokens=11),
+                ),
+            ]
+        )
+
+
+class _AnthropicFragmentedClient:
+    def __init__(self) -> None:
+        self.messages = _AnthropicFragmentedMessages()
 
 
 class _GeminiModels:
@@ -190,6 +294,34 @@ class AdditionalProviderTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_openai_provider_emits_tool_call_after_argument_fragments_complete(
+        self,
+    ) -> None:
+        client = _OpenAIFragmentedToolClient()
+
+        async def run() -> None:
+            with patch.object(
+                OpenAIProvider, "_build_async_client", return_value=client
+            ):
+                events = [
+                    event
+                    async for event in OpenAIProvider().complete(
+                        [Message(role="user", content="list parts")], []
+                    )
+                ]
+            tool_events = [
+                event for event in events if isinstance(event, ToolCallEvent)
+            ]
+            assert len(tool_events) == 1
+            assert tool_events[0].id == "call-query"
+            assert tool_events[0].name == "query"
+            assert tool_events[0].args == {
+                "manager": "PartManager",
+                "fields": ["name"],
+            }
+
+        asyncio.run(run())
+
     @override_settings(
         GENERAL_MANAGER={
             "CHAT": {
@@ -219,6 +351,31 @@ class AdditionalProviderTests(unittest.TestCase):
                 assert isinstance(events[2], DoneEvent)
                 assert events[2].usage.input_tokens == 7
                 assert events[2].usage.output_tokens == 11
+
+        asyncio.run(run())
+
+    def test_anthropic_provider_emits_tool_call_after_input_json_deltas_complete(
+        self,
+    ) -> None:
+        client = _AnthropicFragmentedClient()
+
+        async def run() -> None:
+            with patch.object(
+                AnthropicProvider, "_build_async_client", return_value=client
+            ):
+                events = [
+                    event
+                    async for event in AnthropicProvider().complete(
+                        [Message(role="user", content="parts")], []
+                    )
+                ]
+            tool_events = [
+                event for event in events if isinstance(event, ToolCallEvent)
+            ]
+            assert len(tool_events) == 1
+            assert tool_events[0].id == "tool-1"
+            assert tool_events[0].name == "search_managers"
+            assert tool_events[0].args == {"query": "parts"}
 
         asyncio.run(run())
 

@@ -10,8 +10,8 @@ from general_manager.chat.providers._shared import (
     ChatEvent,
     DoneEvent,
     Message,
+    StreamingToolCallBuilder,
     TextChunkEvent,
-    ToolCallEvent,
     TokenUsage,
     ToolDefinition,
     get_attr,
@@ -83,23 +83,50 @@ class AnthropicProvider(BaseLLMProvider):
             ],
         )
         usage = TokenUsage()
+        tool_call_builders: dict[int, StreamingToolCallBuilder] = {}
         async for event in stream:
             event_type = getattr(event, "type", None)
+            event_index = getattr(event, "index", 0)
+            block_index = event_index if isinstance(event_index, int) else 0
             if event_type == "content_block_delta":
-                text = get_attr(event, "delta", "text")
-                if isinstance(text, str) and text:
-                    yield TextChunkEvent(content=text)
+                delta = getattr(event, "delta", None)
+                if getattr(delta, "type", None) == "input_json_delta":
+                    builder = tool_call_builders.get(block_index)
+                    if builder is not None:
+                        builder.append(arguments=getattr(delta, "partial_json", None))
+                else:
+                    text = get_attr(event, "delta", "text")
+                    if isinstance(text, str) and text:
+                        yield TextChunkEvent(content=text)
             elif event_type == "content_block_start":
                 block = getattr(event, "content_block", None)
                 if getattr(block, "type", None) == "tool_use":
                     name = getattr(block, "name", None)
-                    args = getattr(block, "input", {})
-                    if isinstance(name, str) and isinstance(args, dict):
-                        yield ToolCallEvent(
-                            id=str(getattr(block, "id", name)),
-                            name=name,
-                            args=args,
-                        )
+                    call_id = getattr(block, "id", None)
+                    fallback_id = (
+                        name
+                        if isinstance(name, str) and name
+                        else f"anthropic-tool-{block_index}"
+                    )
+                    builder = StreamingToolCallBuilder(
+                        call_id=call_id
+                        if isinstance(call_id, str) and call_id
+                        else fallback_id
+                    )
+                    block_input = getattr(block, "input", None)
+                    builder.append(
+                        name=name,
+                        arguments=block_input
+                        if not (isinstance(block_input, dict) and not block_input)
+                        else None,
+                    )
+                    tool_call_builders[block_index] = builder
+            elif event_type == "content_block_stop":
+                builder = tool_call_builders.pop(block_index, None)
+                if builder is not None:
+                    tool_event = builder.build()
+                    if tool_event is not None:
+                        yield tool_event
             elif event_type == "message_delta":
                 event_usage = getattr(event, "usage", None)
                 if event_usage is not None:
@@ -107,6 +134,10 @@ class AnthropicProvider(BaseLLMProvider):
                         input_tokens=int(getattr(event_usage, "input_tokens", 0)),
                         output_tokens=int(getattr(event_usage, "output_tokens", 0)),
                     )
+        for block_index in sorted(tool_call_builders):
+            event = tool_call_builders[block_index].build()
+            if event is not None:
+                yield event
         yield DoneEvent(usage=usage)
 
 
