@@ -42,8 +42,8 @@ def iter_searchable_managers() -> Iterable[type[GeneralManager]]:
         preserving `GeneralManagerMeta.all_classes` order.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate for malformed
-        manager search configuration.
+        Exception: Errors from `resolve_search_config()` propagate for
+            malformed manager search configuration.
     """
     for manager_class in GeneralManagerMeta.all_classes:
         config = resolve_search_config(getattr(manager_class, "SearchConfig", None))
@@ -63,8 +63,8 @@ def get_search_config(
         manager does not define `SearchConfig`.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate for malformed
-        manager search configuration.
+        Exception: Errors from `resolve_search_config()` propagate for
+            malformed manager search configuration.
     """
     return resolve_search_config(getattr(manager_class, "SearchConfig", None))
 
@@ -85,8 +85,8 @@ def get_index_config(
         search config or no index with that name.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate through
-        `get_search_config()` for malformed manager search configuration.
+        Exception: Errors from `resolve_search_config()` propagate through
+            `get_search_config()` for malformed manager search configuration.
     """
     config = get_search_config(manager_class)
     if config is None:
@@ -112,8 +112,8 @@ def iter_index_configs(
         order.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate while searchable
-        managers are discovered.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     for manager_class in iter_searchable_managers():
         index_config = get_index_config(manager_class, index_name)
@@ -131,8 +131,8 @@ def get_type_label(manager_class: type[GeneralManager]) -> str:
         manager class name.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate through
-        `get_search_config()` for malformed manager search configuration.
+        Exception: Errors from `resolve_search_config()` propagate through
+            `get_search_config()` for malformed manager search configuration.
     """
     config = get_search_config(manager_class)
     if config and config.type_label:
@@ -152,8 +152,8 @@ def get_searchable_type_map() -> dict[str, type[GeneralManager]]:
         warning or error.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate while searchable
-        managers are discovered.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     return {get_type_label(manager): manager for manager in iter_searchable_managers()}
 
@@ -175,8 +175,8 @@ def collect_index_settings(index_name: str) -> SearchIndexSettings:
         included in `searchable_fields`.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate while searchable
-        managers are discovered.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     searchable_fields: list[str] = []
     filterable_fields: set[str] = {"type"}
@@ -211,8 +211,8 @@ def get_index_names() -> set[str]:
         Unique configured index name strings from every searchable manager.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate while searchable
-        managers are discovered.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     names: set[str] = set()
     for manager_class in iter_searchable_managers():
@@ -233,8 +233,8 @@ def get_filterable_fields(index_name: str) -> set[str]:
         `"type"` field.
 
     Raises:
-        Exceptions from `resolve_search_config()` propagate while searchable
-        managers are discovered.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     settings = collect_index_settings(index_name)
     return set(settings.filterable_fields)
@@ -254,8 +254,8 @@ def validate_filter_keys(index_name: str, filters: Mapping[str, object]) -> None
     Raises:
         InvalidFilterFieldError: If a base filter field is not configured as
             filterable for the given index.
-        Exceptions from `resolve_search_config()` propagate while searchable
-            managers are discovered.
+        Exception: Errors from `resolve_search_config()` propagate while
+            searchable managers are discovered.
     """
     allowed = get_filterable_fields(index_name)
     for key in filters.keys():

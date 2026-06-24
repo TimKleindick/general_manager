@@ -83,8 +83,9 @@ def lazy_measurement(
 
     Raises:
         ValueError: If `min_value > max_value`.
-        Exceptions from `Measurement` can be raised during evaluation when the
-        sampled magnitude or unit is not accepted by the measurement layer.
+        Exception: Errors from `Measurement` can be raised during evaluation
+            when the sampled magnitude or unit is not accepted by the
+            measurement layer.
     """
     _ensure_numeric_range(min_value, max_value)
     return _lazy_function(

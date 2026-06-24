@@ -250,21 +250,22 @@ class OrmCreateCapability(BaseCapability):
         """
         Create a new ORM model instance from the provided payload and persist it with optional creator and history metadata.
 
-        Parameters:
-                interface_cls (type[OrmInterfaceBase]): Interface class that defines the target model and capabilities.
-                *args: Ignored positional arguments kept for manager/capability
-                    signature compatibility. Passing positional values has no
-                    effect.
-                **kwargs: Field values used to construct the instance. Reserved
-                    metadata keys are `creator_id` and `history_comment`; all
-                    other keys are validated as model fields/attributes or
-                    many-to-many aliases such as `<relation>_id_list`.
+        Args:
+            interface_cls: Interface class that defines the target model and
+                capabilities.
+            *args: Ignored positional arguments kept for manager/capability
+                signature compatibility. Passing positional values has no
+                effect.
+            **kwargs: Field values used to construct the instance. Reserved
+                metadata keys are `creator_id` and `history_comment`; all other
+                keys are validated as model fields/attributes or many-to-many
+                aliases such as `<relation>_id_list`.
 
         Returns:
-                MutationResult: Capability-level result dictionary containing
-                    the new instance primary key as `{"id": pk}`. The
-                    GeneralManager layer consumes this result and returns the
-                    public manager instance from `Manager.create(...)`.
+            Capability-level result dictionary containing the new instance
+            primary key as `{"id": pk}`. The GeneralManager layer consumes this
+            result and returns the public manager instance from
+            `Manager.create(...)`.
 
         Raises:
             UnknownFieldError: If the normalized payload contains unknown keys.

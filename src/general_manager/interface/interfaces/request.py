@@ -250,10 +250,10 @@ class RequestInterface(InterfaceBase):
                 implement named request operations.
             RequestConfigurationError: If request planning fails for the
                 operation, filters, or transport setup.
-            Request planning errors from the active query capability, including
-                unknown filters, invalid filter values, unsupported excludes,
-                invalid request-fragment locations, and conflicting fragment
-                keys, propagate unchanged.
+            Exception: Request planning errors from the active query capability,
+                including unknown filters, invalid filter values, unsupported
+                excludes, invalid request-fragment locations, and conflicting
+                fragment keys, propagate unchanged.
         """
 
         handler = cls.require_capability("query")
