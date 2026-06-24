@@ -136,3 +136,18 @@ Treat the loop as an iteration driver:
 
 Do not relax product contracts to make a weaker local model pass. A contract
 change is valid only when the expected behavior was wrong for production.
+
+## Production hardening gates
+
+Before enabling chat for production traffic:
+
+- Run the deterministic chat suite:
+  `PYTHONPATH=src python -m pytest tests/unit/test_chat*.py tests/integration/test_chat*.py -q`
+- Run the full project suite:
+  `PYTHONPATH=src python -m pytest -q`
+- Run the local demo gate for stability:
+  `PYTHONPATH=src python scripts/run_chat_readiness_loop.py --gate tier0 --model glm-4.7-flash:q4_K_M --output-dir /tmp/gm-chat-readiness-tier0 --skip-tests`
+- Run the large-schema gate:
+  `PYTHONPATH=src python scripts/run_chat_readiness_loop.py --gate large --model glm-4.7-flash:q4_K_M --output-dir /tmp/gm-chat-readiness-large --skip-tests`
+
+A gate may pass with generic prompt/tool retries, but it must not pass with forbidden recovery or harness-synthesized answers.
