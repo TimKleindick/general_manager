@@ -60,7 +60,37 @@ def test_recover_answer_without_query_for_path_only_record_answer() -> None:
             "SyntheticManager01 item."
         ),
         assistant_text="I found a path, but no records yet.",
-        tool_calls=[{"name": "find_path"}],
+        tool_calls=[{"name": "find_path", "result": {"path": ["synthetic08"]}}],
+    )
+
+
+def test_recover_answer_without_query_for_successful_find_path_result() -> None:
+    assert should_recover_answer_without_query(
+        user_text="Find records in TargetManager related to SourceManager.",
+        assistant_text="I found a path, but no records yet.",
+        tool_calls=[{"name": "find_path", "result": ["target"]}],
+    )
+
+
+def test_no_query_recovery_after_empty_find_path_result() -> None:
+    assert (
+        should_recover_answer_without_query(
+            user_text="Find records in TargetManager related to SourceManager.",
+            assistant_text="No path was found between those managers.",
+            tool_calls=[{"name": "find_path", "result": {"path": []}}],
+        )
+        is False
+    )
+
+
+def test_no_query_recovery_for_find_path_without_result() -> None:
+    assert (
+        should_recover_answer_without_query(
+            user_text="Find records in TargetManager related to SourceManager.",
+            assistant_text="I found a path, but no records yet.",
+            tool_calls=[{"name": "find_path"}],
+        )
+        is False
     )
 
 

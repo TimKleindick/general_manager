@@ -184,6 +184,48 @@ class HttpPathOnlyRecordRecoveryProvider:
         return _stream()
 
 
+class HttpNoPathRecordProvider:
+    calls: ClassVar[list[object]] = []
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        type(self).calls.append(list(messages))
+
+        async def _stream():
+            from general_manager.chat.providers.base import (
+                DoneEvent,
+                TextChunkEvent,
+                TokenUsage,
+                ToolCallEvent,
+            )
+
+            if len(type(self).calls) == 1:
+                yield ToolCallEvent(
+                    id="path-1",
+                    name="find_path",
+                    args={
+                        "from_manager": "SourceManager",
+                        "to_manager": "TargetManager",
+                    },
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+                return
+            if len(type(self).calls) == 2:
+                yield TextChunkEvent(
+                    content="No path was found between those managers."
+                )
+                yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+                return
+            yield ToolCallEvent(
+                id="query-1",
+                name="query",
+                args={"manager": "TargetManager", "query": {"fields": ["name"]}},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=3, output_tokens=3))
+
+        return _stream()
+
+
 class _Result:
     def __init__(self, data=None, errors=None) -> None:
         self.data = data
@@ -714,3 +756,62 @@ class ChatHttpTransportTests(TestCase):
             "type": "text_chunk",
             "content": "I found a path, but no records yet.",
         } not in payload["events"]
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "url": "/chat/",
+                "recover_missing_tool_calls": True,
+            }
+        }
+    )
+    def test_http_chat_does_not_recover_after_empty_find_path_result(
+        self,
+    ) -> None:
+        HttpNoPathRecordProvider.calls = []
+        tool_names: list[str] = []
+
+        def execute_tool(name, args, context):  # type: ignore[no-untyped-def]
+            del args, context
+            tool_names.append(name)
+            if name == "find_path":
+                return {"path": []}
+            if name == "query":
+                return {"rows": [{"name": "Unexpected Row"}]}
+            raise AssertionError(name)
+
+        with (
+            patch(
+                "general_manager.chat.views.import_provider",
+                return_value=HttpNoPathRecordProvider,
+            ),
+            patch(
+                "general_manager.chat.views.execute_chat_tool",
+                side_effect=execute_tool,
+            ),
+        ):
+            response = self.client.post(
+                "/chat/",
+                data=json.dumps(
+                    {
+                        "text": (
+                            "Find records in TargetManager related to SourceManager."
+                        )
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert "No path was found between those managers." in payload["answer"]
+        assert tool_names == ["find_path"]
+        assert len(HttpNoPathRecordProvider.calls) == 2
+        assert not any(
+            message.role == "system"
+            and "Schema and path tools are not data queries" in message.content
+            for call_messages in HttpNoPathRecordProvider.calls
+            for message in call_messages
+        )

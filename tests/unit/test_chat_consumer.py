@@ -171,6 +171,36 @@ class _PathOnlyRecordRecoveryProvider:
         yield DoneEvent(usage=TokenUsage(input_tokens=4, output_tokens=4))
 
 
+class _NoPathRecordProvider:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del tools
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            yield ToolCallEvent(
+                id="path-1",
+                name="find_path",
+                args={
+                    "from_manager": "SourceManager",
+                    "to_manager": "TargetManager",
+                },
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        if len(self.calls) == 2:
+            yield TextChunkEvent(content="No path was found between those managers.")
+            yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
+            return
+        yield ToolCallEvent(
+            id="query-1",
+            name="query",
+            args={"manager": "TargetManager", "query": {"fields": ["name"]}},
+        )
+        yield DoneEvent(usage=TokenUsage(input_tokens=3, output_tokens=3))
+
+
 def _deny_permission(*_args: object, **_kwargs: object) -> bool:
     return False
 
@@ -938,6 +968,75 @@ class ChatConsumerMessageTests(unittest.TestCase):
             assert (
                 "Schema and path tools are not data queries"
                 in provider.calls[2][-1].content
+            )
+
+        asyncio.run(run())
+
+    def test_receive_json_does_not_recover_after_empty_find_path_result(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        provider = _NoPathRecordProvider()
+        consumer.provider = provider
+        consumer.channel_name = "chat.no-path-grounding"
+        tool_names: list[str] = []
+
+        def execute_tool(name, args, context):  # type: ignore[no-untyped-def]
+            del args, context
+            tool_names.append(name)
+            if name == "find_path":
+                return {"path": []}
+            if name == "query":
+                return {"rows": [{"name": "Unexpected Row"}]}
+            raise AssertionError(name)
+
+        async def run() -> None:
+            with (
+                override_settings(
+                    GENERAL_MANAGER={
+                        "CHAT": {
+                            "recover_missing_tool_calls": True,
+                        }
+                    }
+                ),
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.execute_chat_tool",
+                    side_effect=execute_tool,
+                ),
+            ):
+                await consumer.receive_json(
+                    {
+                        "type": "message",
+                        "text": (
+                            "Find records in TargetManager related to SourceManager."
+                        ),
+                    }
+                )
+
+            sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
+            assert {
+                "type": "text_chunk",
+                "content": "No path was found between those managers.",
+            } in sent_messages
+            assert tool_names == ["find_path"]
+            assert len(provider.calls) == 2
+            assert not any(
+                message.role == "system"
+                and "Schema and path tools are not data queries" in message.content
+                for call_messages in provider.calls
+                for message in call_messages
             )
 
         asyncio.run(run())

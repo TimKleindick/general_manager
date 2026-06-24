@@ -366,7 +366,6 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                             }
                         )
                         return
-                    tool_calls.append({"name": event.name, "args": dict(event.args)})
                     should_resume = await self._handle_tool_call(
                         event,
                         messages,
@@ -515,6 +514,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         )
         result = execute_chat_tool(
             event.name, event.args, ScopeChatContext.from_scope(self.scope)
+        )
+        tool_calls.append(
+            {"name": event.name, "args": dict(event.args), "result": result}
         )
         emit_chat_tool_called(
             user=self.scope.get("user"),
