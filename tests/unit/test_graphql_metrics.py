@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 import math
 from collections.abc import Awaitable
@@ -331,13 +332,9 @@ def test_resolver_timing_middleware_records_and_reraises_sync_error(
     assert len(backend.durations) == 1
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_resolver_timing_middleware_records_async_success(
+def test_resolver_timing_middleware_records_async_success(
     monkeypatch,
-    anyio_backend: str,
 ) -> None:
-    del anyio_backend
     backend = RecordingResolverBackend()
     middleware = GraphQLResolverTimingMiddleware()
     info = SimpleNamespace(parent_type=SimpleNamespace(name="Query"), field_name="ping")
@@ -349,19 +346,18 @@ async def test_resolver_timing_middleware_records_async_success(
     async def resolve_async(_root: object, _info: object) -> str:
         return "pong"
 
-    result = middleware.resolve(resolve_async, None, info)
-    assert await cast(Awaitable[object], result) == "pong"
+    async def run_test() -> None:
+        result = middleware.resolve(resolve_async, None, info)
+        assert await cast(Awaitable[object], result) == "pong"
+
+    asyncio.run(run_test())
     assert backend.errors == []
     assert len(backend.durations) == 1
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_resolver_timing_middleware_records_and_reraises_async_error(
+def test_resolver_timing_middleware_records_and_reraises_async_error(
     monkeypatch,
-    anyio_backend: str,
 ) -> None:
-    del anyio_backend
     backend = RecordingResolverBackend()
     middleware = GraphQLResolverTimingMiddleware()
     info = SimpleNamespace(parent_type=SimpleNamespace(name="Query"), field_name="ping")
@@ -373,9 +369,12 @@ async def test_resolver_timing_middleware_records_and_reraises_async_error(
     async def raise_async_error(_root: object, _info: object) -> object:
         raise RuntimeError("boom")
 
-    result = middleware.resolve(raise_async_error, None, info)
-    with pytest.raises(RuntimeError):
-        await cast(Awaitable[object], result)
+    async def run_test() -> None:
+        result = middleware.resolve(raise_async_error, None, info)
+        with pytest.raises(RuntimeError):
+            await cast(Awaitable[object], result)
+
+    asyncio.run(run_test())
 
     assert backend.errors == ["Query.ping"]
     assert len(backend.durations) == 1
