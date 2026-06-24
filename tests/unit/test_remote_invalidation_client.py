@@ -112,6 +112,15 @@ class RemoteInvalidationClientTests(TestCase):
         with self.assertRaises(RemoteInvalidationConfigurationError):
             RemoteInvalidationClient([LocalManager])
 
+    def test_rejects_non_class_interface_values(self) -> None:
+        class InvalidManager(GeneralManager):
+            pass
+
+        InvalidManager.Interface = object()
+
+        with self.assertRaises(RemoteInvalidationConfigurationError):
+            RemoteInvalidationClient([InvalidManager])
+
     def test_rejects_remote_managers_without_websocket_support(self) -> None:
         with self.assertRaises(RemoteInvalidationConfigurationError):
             RemoteInvalidationClient([RemoteTaskNoWebsocket])

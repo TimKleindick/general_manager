@@ -187,7 +187,9 @@ class RemoteInvalidationClient:
                 raise RemoteInvalidationConfigurationError.missing_interface(
                     manager_cls.__name__
                 )
-            if not issubclass(interface_cls, RemoteManagerInterface):
+            if not isinstance(interface_cls, type) or not issubclass(
+                interface_cls, RemoteManagerInterface
+            ):
                 raise RemoteInvalidationConfigurationError.non_remote_manager(
                     manager_cls.__name__
                 )
