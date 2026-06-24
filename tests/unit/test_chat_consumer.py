@@ -180,6 +180,14 @@ class _NoPathRecordProvider:
         self.calls.append(list(messages))
         if len(self.calls) == 1:
             yield ToolCallEvent(
+                id="search-1",
+                name="search_managers",
+                args={"query": "TargetManager SourceManager"},
+            )
+            yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
+            return
+        if len(self.calls) == 2:
+            yield ToolCallEvent(
                 id="path-1",
                 name="find_path",
                 args={
@@ -189,8 +197,8 @@ class _NoPathRecordProvider:
             )
             yield DoneEvent(usage=TokenUsage(input_tokens=1, output_tokens=1))
             return
-        if len(self.calls) == 2:
-            yield TextChunkEvent(content="No path was found between those managers.")
+        if len(self.calls) == 3:
+            yield TextChunkEvent(content="I cannot continue from that path result.")
             yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=2))
             return
         yield ToolCallEvent(
@@ -989,6 +997,8 @@ class ChatConsumerMessageTests(unittest.TestCase):
         def execute_tool(name, args, context):  # type: ignore[no-untyped-def]
             del args, context
             tool_names.append(name)
+            if name == "search_managers":
+                return [{"manager": "TargetManager"}, {"manager": "SourceManager"}]
             if name == "find_path":
                 return {"path": []}
             if name == "query":
@@ -1028,10 +1038,10 @@ class ChatConsumerMessageTests(unittest.TestCase):
             sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
             assert {
                 "type": "text_chunk",
-                "content": "No path was found between those managers.",
+                "content": "I cannot continue from that path result.",
             } in sent_messages
-            assert tool_names == ["find_path"]
-            assert len(provider.calls) == 2
+            assert tool_names == ["search_managers", "find_path"]
+            assert len(provider.calls) == 3
             assert not any(
                 message.role == "system"
                 and "Schema and path tools are not data queries" in message.content

@@ -38,16 +38,6 @@ PATH_FAILURE_STATUS_VALUES = frozenset(
     }
 )
 
-PATH_DENIAL_MARKERS = (
-    "no path",
-    "no relationship",
-    "no relation",
-    "path was not found",
-    "path wasn't found",
-    "relationship was not found",
-    "relationship wasn't found",
-)
-
 
 def should_recover_missing_tool_call(
     *,
@@ -84,7 +74,7 @@ def should_recover_answer_without_query(
     find_path_calls = [call for call in tool_calls if call.get("name") == "find_path"]
     if any(_find_path_result_has_path(call.get("result")) for call in find_path_calls):
         return True
-    if find_path_calls and _assistant_denies_path(assistant_text):
+    if find_path_calls:
         return False
 
     return any(
@@ -113,11 +103,6 @@ def _find_path_result_has_path(result: Any) -> bool:
             return _find_path_result_has_path(result["paths"])
         return False
     return False
-
-
-def _assistant_denies_path(assistant_text: str) -> bool:
-    normalized = assistant_text.strip().lower()
-    return any(marker in normalized for marker in PATH_DENIAL_MARKERS)
 
 
 def build_missing_tool_recovery_message(user_text: str) -> str:
