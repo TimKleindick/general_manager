@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import pickle
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import cast
 
 from django.test import SimpleTestCase
 
@@ -28,18 +29,18 @@ class PickleCache:
         self.get_calls: list[str] = []
         self.get_many_calls: list[tuple[str, ...]] = []
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         self.get_calls.append(key)
         cached_value = self.store.get(key, default)
         if cached_value is not default:
-            return _trusted_pickle_loads(cached_value)
+            return _trusted_pickle_loads(cast(bytes, cached_value))
         return default
 
-    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
         del timeout
         self.store[key] = pickle.dumps(value)
 
-    def get_many(self, keys: Iterable[str]) -> Mapping[str, Any]:
+    def get_many(self, keys: Iterable[str]) -> Mapping[str, object]:
         key_tuple = tuple(keys)
         self.get_many_calls.append(key_tuple)
         return {
@@ -54,14 +55,14 @@ class PickleCacheWithoutGetMany:
         self.store: dict[str, bytes] = {}
         self.get_calls: list[str] = []
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         self.get_calls.append(key)
         cached_value = self.store.get(key, default)
         if cached_value is not default:
-            return _trusted_pickle_loads(cached_value)
+            return _trusted_pickle_loads(cast(bytes, cached_value))
         return default
 
-    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
         del timeout
         self.store[key] = pickle.dumps(value)
 
@@ -83,7 +84,7 @@ class DependencyCacheEntryTests(SimpleTestCase):
         self.assertEqual(entry.dependencies, frozenset(dependencies))
 
     def test_reads_falsey_combined_values_as_hits(self) -> None:
-        values = [None, False, 0, [], {}]
+        values: list[object] = [None, False, 0, [], {}]
         dependencies: set[Dependency] = {("Project", "identification", '{"id": 1}')}
 
         for index, value in enumerate(values):

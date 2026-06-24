@@ -530,6 +530,40 @@ class BucketTests(SimpleTestCase):
 
         self.assertEqual(sorted(index), ["A", "B"])
 
+    def test_index_by_rejects_invalid_max_rows(self):
+        """Reject runtime row limits outside the int-or-None contract."""
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with self.assertRaises(TypeError):
+            bucket.index_by("code", max_rows=True)
+
+    def test_index_by_validates_max_rows_before_key_spec(self):
+        """Raise max_rows errors before validating the key spec."""
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with self.assertRaises(TypeError):
+            bucket.index_by(["code"], max_rows=True)  # type: ignore[arg-type]
+
+    def test_index_many_rejects_invalid_max_rows(self):
+        """Reject invalid grouped-index row limits before cache lookup."""
+        bucket = DummyBucket(self.manager_class, [DummyRow("A", "x", 1)])
+
+        with self.assertRaises(TypeError):
+            bucket.index_many("code", max_rows="1000")
+
+    def test_index_by_checks_guardrail_before_row_key_resolution(self):
+        """Raise row-limit errors before resolving the first row past the limit."""
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("A", "y", 2),
+            ],
+        )
+
+        with self.assertRaises(BucketIndexTooLargeError):
+            bucket.index_by("missing", max_rows=0)
+
     def test_index_by_rechecks_max_rows_after_unbounded_cache_hit(self):
         """Keep bounded and unbounded index lookups separated in the run cache."""
         bucket = DummyBucket(
@@ -545,3 +579,23 @@ class BucketTests(SimpleTestCase):
 
             with self.assertRaises(BucketIndexTooLargeError):
                 bucket.index_by("code", max_rows=1)
+
+    def test_index_by_retries_after_failed_build_inside_run_context(self):
+        """Avoid caching partial index state when construction raises."""
+        bucket = DummyBucket(
+            self.manager_class,
+            [
+                DummyRow("A", "x", 1),
+                DummyRow("A", "y", 2),
+            ],
+        )
+
+        with CalculationRunContext():
+            with self.assertRaises(DuplicateBucketIndexKeyError):
+                bucket.index_by("code")
+
+            bucket._data = [DummyRow("A", "x", 1), DummyRow("B", "y", 2)]
+
+            index = bucket.index_by("code")
+
+        self.assertEqual(sorted(index), ["A", "B"])

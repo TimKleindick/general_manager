@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import SimpleNamespace
-from typing import Any
 from unittest import mock
 
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 
 from general_manager.cache.dependency_matching import stable_value_hash
@@ -13,6 +13,7 @@ from general_manager.cache.dependency_shards import (
     ALL_RECORDS_VALUE,
     DEPENDENCY_SHARD_PREFIX,
     REVERSE_MEMBERSHIP_REGISTRY_KEY,
+    Dependency,
     ReverseDependencyMembership,
     all_records_shard_key,
     cache_set_members,
@@ -27,7 +28,6 @@ from general_manager.cache.dependency_shards import (
     reverse_membership_key,
     scan_lookup_shard_key,
 )
-from general_manager.cache.dependency_index import cache
 from general_manager.cache.dependency_index import (
     capture_old_values,
     generic_cache_invalidation,
@@ -45,7 +45,7 @@ TEST_CACHES = {
 
 class CountingShardCache:
     def __init__(self) -> None:
-        self.store: dict[str, Any] = {}
+        self.store: dict[str, object] = {}
         self.get_calls: list[str] = []
         self.get_many_calls: list[tuple[str, ...]] = []
         self.set_calls: list[str] = []
@@ -53,33 +53,33 @@ class CountingShardCache:
         self.delete_calls: list[str] = []
         self.delete_many_calls: list[tuple[str, ...]] = []
 
-    def _clone(self, value: Any) -> Any:
+    def _clone(self, value: object) -> object:
         if isinstance(value, set):
             return set(value)
         if isinstance(value, frozenset):
             return frozenset(value)
         return value
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         self.get_calls.append(key)
         if key in self.store:
             return self._clone(self.store[key])
         return default
 
-    def get_many(self, keys: Any) -> dict[str, Any]:
+    def get_many(self, keys: Iterable[str]) -> dict[str, object]:
         key_tuple = tuple(keys)
         self.get_many_calls.append(key_tuple)
         return {
             key: self._clone(self.store[key]) for key in key_tuple if key in self.store
         }
 
-    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
         self.set_calls.append(key)
         self.store[key] = self._clone(value)
 
     def set_many(
         self,
-        data: Mapping[str, Any],
+        data: Mapping[str, object],
         timeout: int | None = None,
     ) -> list[str]:
         payload = dict(data)
@@ -92,7 +92,7 @@ class CountingShardCache:
         self.delete_calls.append(key)
         self.store.pop(key, None)
 
-    def delete_many(self, keys: Any) -> None:
+    def delete_many(self, keys: Iterable[str]) -> None:
         key_tuple = tuple(keys)
         self.delete_many_calls.append(key_tuple)
         for key in key_tuple:
@@ -319,14 +319,16 @@ class DependencyShardKeyTests(TestCase):
         self,
     ) -> None:
         counting_cache = CountingShardCache()
-        dependencies = {
+        dependencies: set[Dependency] = {
             ("Project", "filter", json.dumps({"status": "open"})),
             ("Project", "filter", json.dumps({"priority": 3})),
             ("Project", "filter", json.dumps({"owner": "team-a"})),
             ("Project", "filter", json.dumps({"region": "emea"})),
             ("Project", "filter", json.dumps({"stage": "draft"})),
         }
-        entries = [(f"cache-{index}", dependencies) for index in range(25)]
+        entries: list[tuple[str, set[Dependency]]] = [
+            (f"cache-{index}", dependencies) for index in range(25)
+        ]
 
         with mock.patch(
             "general_manager.cache.dependency_shards.cache",
@@ -468,7 +470,7 @@ class DependencyShardKeyTests(TestCase):
             "all": {},
         }
         counting_cache.store["legacy-cache"] = "legacy-value"
-        entries = [
+        entries: list[tuple[str, set[Dependency]]] = [
             (
                 f"cache-{index}",
                 {("Project", "filter", json.dumps({"status": "open"}))},

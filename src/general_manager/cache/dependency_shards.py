@@ -1,11 +1,19 @@
-"""Cache-backed sharded dependency metadata for dependency-cached results."""
+"""Cache-backed sharded dependency metadata for dependency-cached results.
+
+Dependencies are `(manager_name, action, identifier)` tuples. `action` is one of
+`"filter"`, `"exclude"`, `"identification"`, `"request_query"`, or `"all"`.
+Composite dependencies are the subset of filter/exclude dependencies whose
+identifier serializes more than one lookup, and simple dependencies are all
+other dependency tuples retained in reverse metadata.
+"""
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable, Mapping
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Mapping
+from typing import Literal
 
 from django.core.cache import cache
 
@@ -32,6 +40,23 @@ SimpleDependency = tuple[str, DependencyAction, str]
 
 @dataclass(frozen=True, slots=True)
 class ReverseDependencyMembership:
+    """Reverse metadata describing where one cache key was registered.
+
+    Attributes:
+        cache_key: Application cache key being tracked.
+        shard_keys: Forward shard cache keys containing `cache_key`.
+        composite_dependencies: Filter/exclude dependency tuples that must be
+            re-evaluated after a candidate lookup changes.
+        simple_dependencies: Non-composite dependency tuples retained for
+            runtime invalidation checks. The default empty set is part of the
+            public construction contract.
+
+    Notes:
+        Read helpers treat only actual `ReverseDependencyMembership` instances
+        as valid reverse payloads. They do not validate or sanitize dependency
+        tuple members stored inside an otherwise valid instance.
+    """
+
     cache_key: str
     shard_keys: frozenset[str]
     composite_dependencies: frozenset[CompositeDependency]
@@ -51,7 +76,12 @@ def _hash_text(value: str) -> str:
 
 
 def reverse_membership_key(cache_key: str) -> str:
-    """Return the reverse metadata cache key for an application cache key."""
+    """Return the reverse metadata cache key for an application cache key.
+
+    The raw `cache_key` is SHA-256 hashed, so application key characters are not
+    embedded in the returned string. The format is
+    `general_manager:dependency:v1:reverse:{hash}`.
+    """
     return f"{DEPENDENCY_SHARD_PREFIX}:reverse:{_hash_text(cache_key)}"
 
 
@@ -60,9 +90,28 @@ def exact_lookup_shard_key(
     action: str,
     lookup: str,
     operator: str,
-    value: Any,
+    value: object,
 ) -> str:
-    """Return the shard key for an exact lookup/value dependency."""
+    """Return the shard key for an exact lookup/value dependency.
+
+    Args:
+        manager_name: Name of the manager class that owns the dependency.
+        action: Dependency action namespace, normally `"filter"` or `"exclude"`.
+        lookup: Normalized lookup attribute path.
+        operator: Lookup operator namespace. Exact dependencies use `"eq"`.
+        value: Dependency value to hash with GeneralManager's stable serializer.
+
+    Returns:
+        A deterministic cache key for cache entries depending on that exact
+        lookup value. The format is
+        `general_manager:dependency:v1:lookup:{manager}:{action}:{lookup}:`
+        `{operator}:{stable_value_hash(value)}`. Text inputs are interpolated as
+        provided; only `value` is normalized and hashed. Serialization rules and
+        errors are those of `stable_value_hash()`: mappings, sequences, sets,
+        dates, datetimes, JSON scalar values, mapping-shaped `__getstate__()`,
+        and `repr(...)` fallback are normalized deterministically before the
+        SHA-256 hash is computed.
+    """
     return (
         f"{DEPENDENCY_SHARD_PREFIX}:lookup:{manager_name}:{action}:"
         f"{lookup}:{operator}:{stable_value_hash(value)}"
@@ -75,7 +124,20 @@ def scan_lookup_shard_key(
     lookup: str,
     operator: str,
 ) -> str:
-    """Return the shard key for a lookup that must be predicate-scanned."""
+    """Return the shard key for a lookup that must be predicate-scanned.
+
+    Args:
+        manager_name: Name of the manager class that owns the dependency.
+        action: Dependency action namespace, normally `"filter"` or `"exclude"`.
+        lookup: Lookup string stored for the scan operator.
+        operator: Non-exact lookup operator, such as `"gte"` or `"contains"`.
+
+    Returns:
+        A deterministic cache key for cache entries that need runtime predicate
+        evaluation when this lookup changes. The format is
+        `general_manager:dependency:v1:scan:{manager}:{action}:{lookup}:`
+        `{operator}`. Text inputs are interpolated as provided.
+    """
     return f"{DEPENDENCY_SHARD_PREFIX}:scan:{manager_name}:{action}:{lookup}:{operator}"
 
 
@@ -84,43 +146,93 @@ def composite_lookup_shard_key(
     action: str,
     lookup: str,
 ) -> str:
-    """Return the shard key containing composite candidates for one lookup."""
+    """Return the shard key containing composite candidates for one lookup.
+
+    Args:
+        manager_name: Name of the manager class that owns the dependency.
+        action: Composite dependency action, either `"filter"` or `"exclude"`.
+        lookup: Normalized lookup attribute path that can affect the composite.
+
+    Returns:
+        A deterministic cache key for cache entries whose multi-lookup
+        dependency must be re-evaluated when the lookup changes. The format is
+        `general_manager:dependency:v1:composite_lookup:{manager}:{action}:`
+        `{lookup}`. Text inputs are interpolated as provided.
+    """
     return (
         f"{DEPENDENCY_SHARD_PREFIX}:composite_lookup:{manager_name}:{action}:{lookup}"
     )
 
 
 def all_records_shard_key(manager_name: str) -> str:
-    """Return the shard key for cache entries affected by any row change."""
+    """Return the shard key for cache entries affected by any row change.
+
+    Args:
+        manager_name: Name of the manager class that owns the dependency.
+
+    Returns:
+        A deterministic cache key for cache entries invalidated by every change
+        for that manager. The format is
+        `general_manager:dependency:v1:all:{manager}`. The manager name is
+        interpolated as provided.
+    """
     return f"{DEPENDENCY_SHARD_PREFIX}:all:{manager_name}"
 
 
 def request_query_shard_key(manager_name: str) -> str:
-    """Return the shard key for request-query cache entries for a manager."""
+    """Return the shard key for request-query cache entries for a manager.
+
+    Args:
+        manager_name: Name of the remote/request manager class.
+
+    Returns:
+        A deterministic cache key for request-query dependency candidates. The
+        format is `general_manager:dependency:v1:request_query:{manager}`. The
+        manager name is interpolated as provided.
+    """
     return f"{DEPENDENCY_SHARD_PREFIX}:request_query:{manager_name}"
 
 
 def lookup_registry_key(manager_name: str, action: str) -> str:
-    """Return the cache key that stores lookup names tracked for a manager/action."""
+    """Return the cache key that stores lookup names tracked for a manager/action.
+
+    Args:
+        manager_name: Name of the manager class.
+        action: Lookup action namespace, normally `"filter"` or `"exclude"`.
+
+    Returns:
+        The cache key for the set of lookup names tracked for that pair. The
+        format is `general_manager:dependency:v1:lookups:{manager}:{action}`.
+        Text inputs are interpolated as provided.
+    """
     return f"{DEPENDENCY_SHARD_PREFIX}:lookups:{manager_name}:{action}"
 
 
 def cache_set_members(key: str) -> set[str]:
-    """Read a cache-backed set."""
+    """Read string members from a cache-backed set-like value.
+
+    Args:
+        key: Cache key to read.
+
+    Returns:
+        String members from a cached set, frozenset, list, or tuple. Missing
+        values, `None`, and other payload types return an empty set. Non-string
+        members inside an accepted collection are dropped member-by-member.
+    """
     members = cache.get(key, set())
     if members is None:
         return set()
     return set(members)
 
 
-def _cache_get_many(keys: Iterable[str]) -> dict[str, Any]:
+def _cache_get_many(keys: Iterable[str]) -> dict[str, object]:
     key_tuple = tuple(dict.fromkeys(keys))
     if not key_tuple:
         return {}
     return dict(cache.get_many(key_tuple))
 
 
-def _cache_set_many(payloads: Mapping[str, Any]) -> None:
+def _cache_set_many(payloads: Mapping[str, object]) -> None:
     if payloads:
         cache.set_many(dict(payloads), None)
 
@@ -137,7 +249,7 @@ def _cache_delete_many(keys: Iterable[str]) -> None:
         cache.delete(key)
 
 
-def _cache_member_set(value: Any) -> set[str]:
+def _cache_member_set(value: object) -> set[str]:
     if value is None:
         return set()
     if isinstance(value, (set, frozenset, list, tuple)):
@@ -196,13 +308,13 @@ def _register_lookup(manager_name: str, action: str, lookup: str) -> None:
     _cache_set_add(lookup_registry_key(manager_name, action), lookup)
 
 
-def _cache_keys_from_member_collection(value: Any) -> set[str]:
+def _cache_keys_from_member_collection(value: object) -> set[str]:
     if not isinstance(value, (set, frozenset, list, tuple)):
         return set()
     return {member for member in value if isinstance(member, str)}
 
 
-def _legacy_dependency_cache_keys(legacy_index: Any) -> set[str]:
+def _legacy_dependency_cache_keys(legacy_index: object) -> set[str]:
     if not isinstance(legacy_index, dict):
         return set()
 
@@ -243,7 +355,20 @@ def _legacy_dependency_cache_keys(legacy_index: Any) -> set[str]:
 
 
 def clear_legacy_dependency_index() -> set[str]:
-    """Delete legacy full-index metadata and cache values referenced by it."""
+    """Delete legacy full-index metadata and cache values referenced by it.
+
+    Returns:
+        Cache keys found in the legacy index and submitted to `cache.delete()`
+        as stale cached values. The supported legacy schema has top-level
+        `"all"` manager sections, `"request_query"` manager/query sections, and
+        `"filter"` / `"exclude"` manager sections containing lookup maps plus
+        optional `"__cache_dependencies__"` cache-key maps. Malformed legacy
+        structures are non-dict section payloads, non-set-like member
+        collections, or non-string cache keys; malformed branches are skipped
+        member-by-member where possible and may produce an empty set after
+        deleting the index key. Delete failures or backend errors propagate from
+        Django's cache backend.
+    """
     legacy_index = cache.get(LEGACY_DEPENDENCY_INDEX_KEY, None)
     if legacy_index is None:
         return set()
@@ -421,14 +546,48 @@ def record_cache_dependencies(
     cache_key: str,
     dependencies: Iterable[Dependency],
 ) -> None:
-    """Record dependency metadata for one cache key in deterministic shards."""
+    """Record dependency metadata for one cache key in deterministic shards.
+
+    Args:
+        cache_key: Cache entry whose dependency metadata should be replaced.
+        dependencies: Dependency tuples in `(manager_name, action, identifier)`
+            form. Empty iterables are a no-op. A non-empty iterable has the same
+            replacement semantics as `record_many_cache_dependencies()`,
+            including writing empty reverse metadata when all supplied
+            dependencies normalize to no shards.
+    """
     record_many_cache_dependencies(((cache_key, dependencies),))
 
 
 def record_many_cache_dependencies(
     entries: Iterable[tuple[str, Iterable[Dependency]]],
 ) -> None:
-    """Record dependency metadata for many cache keys."""
+    """Record dependency metadata for many cache keys.
+
+    Args:
+        entries: `(cache_key, dependencies)` pairs. Duplicate cache keys and
+            duplicate dependencies are merged before the cache backend is
+            touched.
+
+    Behavior:
+        A non-empty dependency set replaces prior reverse membership for that
+        cache key, clears legacy full-index metadata once per batch, and writes
+        all shard/reverse updates with batched cache operations where possible.
+        Empty dependency iterables are ignored per cache key; repeated entries
+        for the same cache key are unioned as a Python set before writing, so an
+        empty repeated entry does not cancel a non-empty repeated entry. The
+        public type contract requires well-formed 3-tuples with string manager
+        names, typed actions, and string identifiers; callers that violate that
+        contract may receive normal Python unpacking/type errors. Within that
+        contract, unsupported actions, malformed filter/exclude JSON, and
+        non-mapping filter/exclude identifiers map to no shard. If every supplied
+        dependency for a cache key maps to no shard, the previous metadata is
+        still replaced with an empty reverse membership. Cache writes are not
+        atomic across shards; the order is legacy cleanup, previous-shard
+        removal, new shard/lookup-registry writes, then reverse metadata writes.
+        Backend errors and partial-write behavior propagate from Django's cache
+        backend.
+    """
     normalized: dict[str, set[Dependency]] = {}
     for cache_key, dependencies in entries:
         dependency_set = set(dependencies)
@@ -475,15 +634,26 @@ def record_many_cache_dependencies(
 
 
 def remove_cache_key_from_shards(cache_key: str) -> None:
-    """Remove a cache key from all shards using its reverse membership."""
+    """Remove a cache key from all shards using its reverse membership.
+
+    Args:
+        cache_key: Cache entry whose shard membership should be removed.
+
+    Behavior:
+        Missing reverse metadata or a payload that is not a
+        `ReverseDependencyMembership` is treated as already removed; the reverse
+        metadata key is deleted and removed from the reverse registry. Backend
+        errors and partial-write behavior propagate from Django's cache backend.
+    """
     reverse_key = reverse_membership_key(cache_key)
     reverse = cache.get(reverse_key)
     if not isinstance(reverse, ReverseDependencyMembership):
         cache.delete(reverse_key)
         _cache_set_discard(REVERSE_MEMBERSHIP_REGISTRY_KEY, reverse_key)
         return
-    for shard_key in reverse.shard_keys:
-        _cache_set_discard(shard_key, cache_key)
+    _cache_set_discard_many(
+        {shard_key: {cache_key} for shard_key in reverse.shard_keys}
+    )
     cache.delete(reverse_key)
     _cache_set_discard(REVERSE_MEMBERSHIP_REGISTRY_KEY, reverse_key)
 
@@ -493,10 +663,33 @@ def candidate_cache_keys_for_lookup(
     action: Literal["filter", "exclude"],
     lookup: str,
     *,
-    old_value: Any = VALUE_NOT_PROVIDED,
-    new_value: Any = VALUE_NOT_PROVIDED,
+    old_value: object = VALUE_NOT_PROVIDED,
+    new_value: object = VALUE_NOT_PROVIDED,
 ) -> set[str]:
-    """Return cache keys stored in shards that may be affected by a lookup change."""
+    """Return cache keys stored in shards that may be affected by a lookup change.
+
+    Args:
+        manager_name: Name of the changed manager class.
+        action: Dependency action to inspect, either `"filter"` or `"exclude"`.
+            Runtime callers are expected to honor this typed contract; the
+            helper does not perform additional action validation.
+        lookup: Changed lookup attribute path.
+        old_value: Optional previous value for exact-match shard candidates.
+            The sentinel `VALUE_NOT_PROVIDED` suppresses the exact old-value
+            lookup. `None` is a real dependency value and is hashed.
+        new_value: Optional current value for exact-match shard candidates. The
+            sentinel `VALUE_NOT_PROVIDED` suppresses the exact new-value lookup.
+            Serialization errors propagate from `stable_value_hash()`.
+
+    Returns:
+        Cache keys from exact, scan, composite, and all-records shards that may
+        need runtime dependency evaluation. Scan shards are queried for every
+        operator in `SCAN_OPERATORS` using both `{lookup}__{operator}` and the
+        normalized base lookup name. Exact old/new values are looked up only in
+        equality (`"eq"`) shards for the base lookup name returned by
+        `lookup_spec_from_key()`, which treats a supported operator suffix such
+        as `status__gte` as lookup path `status` plus operator `gte`.
+    """
     candidates = set()
     candidate_lookup = _lookup_name_for_candidate(lookup)
 
@@ -537,24 +730,62 @@ def candidate_cache_keys_for_lookup(
 
 
 def request_query_cache_keys(manager_name: str) -> set[str]:
-    """Return request-query cache keys for a manager."""
+    """Return request-query cache keys for a manager.
+
+    Args:
+        manager_name: Name of the manager class.
+
+    Returns:
+        Cache keys registered as request-query dependencies for that manager.
+        Missing or malformed shard payloads follow `cache_set_members()`
+        behavior.
+    """
     return cache_set_members(request_query_shard_key(manager_name))
 
 
 def all_records_cache_keys(manager_name: str) -> set[str]:
-    """Return all-records cache keys for a manager."""
+    """Return all-records cache keys for a manager.
+
+    Args:
+        manager_name: Name of the manager class.
+
+    Returns:
+        Cache keys registered as all-records dependencies for that manager.
+        Missing or malformed shard payloads follow `cache_set_members()`
+        behavior.
+    """
     return cache_set_members(all_records_shard_key(manager_name))
 
 
 def tracked_lookup_names(manager_name: str) -> set[str]:
-    """Return lookup attribute paths tracked for a manager across filter/exclude."""
+    """Return lookup attribute paths tracked for a manager across filter/exclude.
+
+    Args:
+        manager_name: Name of the manager class.
+
+    Returns:
+        Lookup attribute paths that should be read from changed manager
+        instances before sharded invalidation runs. Filter and exclude registries
+        are read independently; missing or malformed payloads on either side
+        contribute an empty set through `cache_set_members()`. Registered names
+        are normalized lookup attribute paths from `lookup_spec_from_key()`;
+        operator suffixes are stripped before registration.
+    """
     return cache_set_members(
         lookup_registry_key(manager_name, "filter")
     ) | cache_set_members(lookup_registry_key(manager_name, "exclude"))
 
 
 def reverse_memberships() -> tuple[ReverseDependencyMembership, ...]:
-    """Return all reverse memberships known to the shard store."""
+    """Return all reverse memberships known to the shard store.
+
+    Returns:
+        Valid reverse-membership payloads currently listed in the reverse
+        membership registry. Missing or malformed registry members are skipped.
+        A malformed registry payload contributes no reverse keys through
+        `cache_set_members()`. Dependency tuple members inside a valid
+        `ReverseDependencyMembership` are returned unchanged.
+    """
     memberships = []
     for reverse_key in cache_set_members(REVERSE_MEMBERSHIP_REGISTRY_KEY):
         reverse = cache.get(reverse_key)

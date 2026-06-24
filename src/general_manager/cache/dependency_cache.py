@@ -2,64 +2,97 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Protocol, TypeGuard
+from typing import Protocol, TypeGuard, cast
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import Dependency
 
 DEPENDENCY_CACHE_ENTRY_VERSION = 1
-_MISSING = object()
+
+
+class _MissingSentinel:
+    """Private marker for absent dependency-cache payloads."""
+
+
+_MISSING = _MissingSentinel()
 
 
 @dataclass(frozen=True, slots=True)
 class DependencyCacheEntry:
-    """Persisted dependency-cache payload stored at the main cache key."""
+    """Persisted dependency-cache payload stored at the main cache key.
+
+    Attributes:
+        version: Payload schema version. Unknown versions are treated as cache
+            misses by the readers.
+        value: Cached function result.
+        dependencies: Dependency set that must be replayed on cache hits and
+            used by invalidation metadata.
+    """
 
     version: int
-    value: Any
+    value: object
     dependencies: frozenset[Dependency]
 
 
 @dataclass(frozen=True, slots=True)
 class DependencyCacheHit:
-    """In-memory representation of a dependency-cache hit."""
+    """In-memory representation of a dependency-cache hit.
 
-    value: Any
+    `value` is the cached function result. `dependencies` are replayed into any
+    active `DependencyTracker` scope before the caller returns `value`.
+    """
+
+    value: object
     dependencies: frozenset[Dependency]
 
 
 class DependencyCacheBackend(Protocol):
-    def get(self, key: str, default: Any = None) -> Any:
-        """Return a cached value or *default* when absent."""
+    """Minimal cache backend shape for dependency-cache reads and writes."""
+
+    def get(self, key: str, default: object = None) -> object:
+        """Return a cached value or `default` when absent."""
         ...
 
-    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
         """Store a cached value."""
         ...
 
 
 class DependencyCacheGetManyBackend(DependencyCacheBackend, Protocol):
-    def get_many(self, keys: Iterable[str]) -> Mapping[str, Any]:
+    """Cache backend that can bulk-read dependency-cache payloads."""
+
+    def get_many(self, keys: Iterable[str]) -> Mapping[str, object]:
         """Return cached values for all found keys."""
         ...
 
 
 class DependencyCacheSetManyBackend(DependencyCacheBackend, Protocol):
+    """Cache backend that can bulk-write dependency-cache payloads."""
+
     def set_many(
         self,
-        data: Mapping[str, Any],
+        data: Mapping[str, object],
         timeout: int | None = None,
-    ) -> Any:
+    ) -> Iterable[str] | None:
         """Store cached values for many keys."""
         ...
 
 
 def make_dependency_cache_entry(
-    value: Any,
+    value: object,
     dependencies: Iterable[Dependency],
 ) -> DependencyCacheEntry:
-    """Build the current persisted dependency-cache payload."""
+    """Build the current persisted dependency-cache payload.
+
+    Args:
+        value: Cached function result to persist.
+        dependencies: Dependencies captured while computing the value.
+
+    Returns:
+        A versioned `DependencyCacheEntry` with dependencies frozen.
+    """
     return DependencyCacheEntry(
         version=DEPENDENCY_CACHE_ENTRY_VERSION,
         value=value,
@@ -71,9 +104,33 @@ def read_dependency_cache_hit(
     cache_backend: DependencyCacheBackend,
     cache_key: str,
     *,
-    sentinel: Any = _MISSING,
-) -> DependencyCacheHit | Any:
-    """Read one dependency-cache entry, including legacy split entries."""
+    sentinel: object = _MISSING,
+) -> DependencyCacheHit | object:
+    """Read one dependency-cache entry, including legacy split entries.
+
+    Combined entries store a `DependencyCacheEntry` at `cache_key`. Legacy split
+    entries store the cached value at `cache_key` and dependencies at
+    `{cache_key}:deps`. A present legacy value with a missing dependency key is
+    a hit with an empty dependency set. Legacy dependency payloads must be
+    iterable dependency tuples; falsey payloads become an empty dependency set.
+    Unknown future combined-entry versions are treated as misses and return
+    `sentinel`.
+
+    Args:
+        cache_backend: Backend used for value and legacy dependency reads.
+        cache_key: Main cache key to read.
+        sentinel: Object returned when no compatible cache hit exists.
+
+    Returns:
+        A `DependencyCacheHit` for combined or legacy entries, or `sentinel`
+        when the main key is absent or holds an unsupported future entry
+        version.
+
+    Raises:
+        Exception: Backend `get()` errors and errors while converting legacy
+            dependency payloads to `frozenset[Dependency]` propagate unchanged,
+            such as a truthy non-iterable legacy dependency payload.
+    """
     payload = cache_backend.get(cache_key, sentinel)
     if payload is sentinel:
         return sentinel
@@ -85,7 +142,7 @@ def read_dependency_cache_hit(
     dependency_payload = cache_backend.get(_legacy_deps_key(cache_key), ())
     return DependencyCacheHit(
         value=payload,
-        dependencies=frozenset(dependency_payload or ()),
+        dependencies=_legacy_dependency_set(dependency_payload),
     )
 
 
@@ -93,7 +150,29 @@ def read_many_dependency_cache_hits(
     cache_backend: DependencyCacheBackend,
     cache_keys: Iterable[str],
 ) -> dict[str, DependencyCacheHit]:
-    """Bulk-read dependency-cache hits for known keys."""
+    """Bulk-read dependency-cache hits for known keys.
+
+    Duplicate cache keys are collapsed while preserving first-seen order.
+    Backends with `get_many()` use one bulk read for main payloads and, when
+    legacy split entries are present, one additional bulk read for dependency
+    payloads. A present legacy value whose dependency key is absent from that
+    second bulk read is returned as a hit with an empty dependency set. Backends
+    without `get_many()` fall back to single-key reads. Missing main keys and
+    unknown future combined-entry versions are omitted.
+
+    Args:
+        cache_backend: Backend used for cache reads.
+        cache_keys: Cache keys to inspect.
+
+    Returns:
+        Mapping of cache keys that had compatible hits to their
+        `DependencyCacheHit` values.
+
+    Raises:
+        Exception: Backend `get()`/`get_many()` errors and legacy dependency
+            payload conversion errors propagate unchanged, such as a truthy
+            non-iterable legacy dependency payload.
+    """
     keys = tuple(dict.fromkeys(cache_keys))
     if not keys:
         return {}
@@ -120,13 +199,23 @@ def read_many_dependency_cache_hits(
         for deps_key, key in deps_keys.items():
             hits[key] = DependencyCacheHit(
                 value=payloads[key],
-                dependencies=frozenset(legacy_deps.get(deps_key, ()) or ()),
+                dependencies=_legacy_dependency_set(legacy_deps.get(deps_key, ())),
             )
     return hits
 
 
 def replay_dependency_cache_hit(hit: DependencyCacheHit) -> None:
-    """Replay cached dependencies into active dependency tracking scopes."""
+    """Replay cached dependencies into active dependency tracking scopes.
+
+    Args:
+        hit: Cache hit whose dependency tuples should be tracked.
+
+    Raises:
+        TypeError: Propagated from `DependencyTracker.track()` if a dependency
+            tuple has malformed value types.
+        ValueError: Propagated from `DependencyTracker.track()` if a dependency
+            tuple uses an unsupported operation.
+    """
     for class_name, operation, identifier in hit.dependencies:
         DependencyTracker.track(class_name, operation, identifier)
 
@@ -135,7 +224,13 @@ def _legacy_deps_key(cache_key: str) -> str:
     return f"{cache_key}:deps"
 
 
-def _combined_payload_to_hit(payload: Any) -> DependencyCacheHit | None | object:
+def _legacy_dependency_set(payload: object) -> frozenset[Dependency]:
+    return frozenset(cast(Iterable[Dependency], payload or ()))
+
+
+def _combined_payload_to_hit(
+    payload: object,
+) -> DependencyCacheHit | None | _MissingSentinel:
     if not isinstance(payload, DependencyCacheEntry):
         return None
     if payload.version != DEPENDENCY_CACHE_ENTRY_VERSION:
@@ -159,6 +254,6 @@ def _read_many_without_get_many(
     hits: dict[str, DependencyCacheHit] = {}
     for key in cache_keys:
         hit = read_dependency_cache_hit(cache_backend, key, sentinel=_MISSING)
-        if hit is not _MISSING:
+        if isinstance(hit, DependencyCacheHit):
             hits[key] = hit
     return hits

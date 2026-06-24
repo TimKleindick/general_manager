@@ -2,32 +2,32 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import pickle
-from typing import Any
+from typing import cast
 from unittest import mock
 
+from django.core.cache import cache, cache as coordination_cache
 from django.test import SimpleTestCase, override_settings
 
-from general_manager.cache import dependency_publish
 from general_manager.cache.dependency_cache import (
     DependencyCacheEntry,
     DependencyCacheHit,
 )
 from general_manager.cache.dependency_index import (
+    Dependency,
     begin_dependency_data_change,
-    cache,
     end_dependency_data_change,
     get_dependency_generation,
 )
 from general_manager.cache.dependency_shards import (
     cache_set_members,
     exact_lookup_shard_key,
+    record_many_cache_dependencies,
 )
 from general_manager.cache.dependency_publish import (
     CacheComputeLease,
     CachePublishAborted,
     PendingDependencyCachePublication,
     acquire_compute_lease,
-    coordination_cache,
     publish_dependency_cache_entries,
     publish_dependency_cache_entry,
     release_compute_lease,
@@ -50,13 +50,13 @@ class FakeDependencyCacheBackend:
         self.timeouts: dict[str, int | None] = {}
         self.set_order: list[str] = []
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         cached_value = self.store.get(key, default)
         if cached_value is not default:
-            return pickle.loads(cached_value)  # noqa: S301
+            return pickle.loads(cast(bytes, cached_value))  # noqa: S301
         return default
 
-    def set(self, key: str, value: Any, timeout: int | None = None) -> None:
+    def set(self, key: str, value: object, timeout: int | None = None) -> None:
         self.store[key] = pickle.dumps(value)
         self.timeouts[key] = timeout
         self.set_order.append(key)
@@ -65,11 +65,11 @@ class FakeDependencyCacheBackend:
 class FakeDependencyCacheSetManyBackend(FakeDependencyCacheBackend):
     def __init__(self) -> None:
         super().__init__()
-        self.set_many_calls: list[tuple[dict[str, Any], int | None]] = []
+        self.set_many_calls: list[tuple[dict[str, object], int | None]] = []
 
     def set_many(
         self,
-        data: Mapping[str, Any],
+        data: Mapping[str, object],
         timeout: int | None = None,
     ) -> None:
         payloads = dict(data)
@@ -82,11 +82,11 @@ class FakeDependencyCachePartialSetManyBackend(FakeDependencyCacheBackend):
     def __init__(self, failed_keys: set[str]) -> None:
         super().__init__()
         self.failed_keys = failed_keys
-        self.set_many_calls: list[tuple[dict[str, Any], int | None]] = []
+        self.set_many_calls: list[tuple[dict[str, object], int | None]] = []
 
     def set_many(
         self,
-        data: Mapping[str, Any],
+        data: Mapping[str, object],
         timeout: int | None = None,
     ) -> list[str]:
         payloads = dict(data)
@@ -95,6 +95,12 @@ class FakeDependencyCachePartialSetManyBackend(FakeDependencyCacheBackend):
             if key not in self.failed_keys:
                 self.set(key, value, timeout)
         return sorted(self.failed_keys & payloads.keys())
+
+
+def cache_entry(cache_backend: FakeDependencyCacheBackend, key: str) -> DependencyCacheEntry:
+    payload = cache_backend.get(key)
+    assert isinstance(payload, DependencyCacheEntry)
+    return payload
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -109,8 +115,8 @@ class TestDependencyPublish(SimpleTestCase):
         self,
         *,
         cache_key: str,
-        result: Any,
-        dependencies: set[tuple[str, str, str]],
+        result: object,
+        dependencies: set[Dependency],
         cache_backend: FakeDependencyCacheBackend,
         started_generation: int | None = None,
     ) -> PendingDependencyCachePublication:
@@ -167,21 +173,27 @@ class TestDependencyPublish(SimpleTestCase):
     def test_publish_records_dependencies_before_combined_entry(self) -> None:
         cache_backend = FakeDependencyCacheBackend()
         cache_key = "cache-a"
-        dependencies = {
+        dependencies: set[Dependency] = {
             ("Project", "filter", '{"name": "alpha"}'),
             ("Project", "identification", "1"),
         }
         events: list[str] = []
-        recorded_entries: list[tuple[str, set[tuple[str, str, str]]]] = []
+        recorded_entries: list[tuple[str, set[Dependency]]] = []
 
-        def record_many_fn(entries: Any) -> None:
+        def record_many_fn(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
             for key, dependency_set in entries:
                 recorded_entries.append((key, set(dependency_set)))
             events.append("record")
 
         original_set = cache_backend.set
 
-        def record_set_order(key: str, value: Any, timeout: int | None = None) -> None:
+        def record_set_order(
+            key: str,
+            value: object,
+            timeout: int | None = None,
+        ) -> None:
             events.append(f"set:{key}")
             original_set(key, value, timeout)
 
@@ -210,16 +222,18 @@ class TestDependencyPublish(SimpleTestCase):
     def test_batch_publish_records_shards_once_before_bulk_value_write(self) -> None:
         cache_backend = FakeDependencyCacheSetManyBackend()
         events: list[str] = []
-        original_record_many = dependency_publish.record_many_cache_dependencies
+        original_record_many = record_many_cache_dependencies
 
-        def record_many_shards(entries: Any) -> None:
+        def record_many_shards(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
             events.append("shards")
             original_record_many(entries)
 
         original_set_many = cache_backend.set_many
 
         def record_set_many(
-            data: Mapping[str, Any],
+            data: Mapping[str, object],
             timeout: int | None = None,
         ) -> None:
             events.append("set_many")
@@ -267,11 +281,11 @@ class TestDependencyPublish(SimpleTestCase):
             set(cache_backend.set_many_calls[0][0]), {"cache-a", "cache-b"}
         )
         self.assertEqual(
-            cache_backend.get("cache-a").value,
+            cache_entry(cache_backend, "cache-a").value,
             "alpha",
         )
         self.assertEqual(
-            cache_backend.get("cache-b").dependencies,
+            cache_entry(cache_backend, "cache-b").dependencies,
             frozenset({("Project", "identification", "2")}),
         )
 
@@ -296,8 +310,8 @@ class TestDependencyPublish(SimpleTestCase):
         )
 
         self.assertEqual(cache_backend.set_order, ["cache-a", "cache-b"])
-        self.assertEqual(cache_backend.get("cache-a").value, "alpha")
-        self.assertEqual(cache_backend.get("cache-b").value, "bravo")
+        self.assertEqual(cache_entry(cache_backend, "cache-a").value, "alpha")
+        self.assertEqual(cache_entry(cache_backend, "cache-b").value, "bravo")
 
     def test_batch_publish_retries_set_many_failures_individually(self) -> None:
         cache_backend = FakeDependencyCachePartialSetManyBackend({"cache-b"})
@@ -321,8 +335,8 @@ class TestDependencyPublish(SimpleTestCase):
 
         self.assertEqual(len(cache_backend.set_many_calls), 1)
         self.assertEqual(cache_backend.set_order, ["cache-a", "cache-b"])
-        self.assertEqual(cache_backend.get("cache-a").value, "alpha")
-        self.assertEqual(cache_backend.get("cache-b").value, "bravo")
+        self.assertEqual(cache_entry(cache_backend, "cache-a").value, "alpha")
+        self.assertEqual(cache_entry(cache_backend, "cache-b").value, "bravo")
 
     def test_batch_publish_skips_entries_from_stale_generations(self) -> None:
         cache_backend = FakeDependencyCacheSetManyBackend()
@@ -351,7 +365,7 @@ class TestDependencyPublish(SimpleTestCase):
         )
 
         self.assertIsNone(cache_backend.get("cache-stale"))
-        self.assertEqual(cache_backend.get("cache-current").value, "new")
+        self.assertEqual(cache_entry(cache_backend, "cache-current").value, "new")
 
     def test_batch_publish_aborts_without_writes_when_data_change_active(self) -> None:
         cache_backend = FakeDependencyCacheSetManyBackend()
@@ -379,7 +393,13 @@ class TestDependencyPublish(SimpleTestCase):
         started_generation = get_dependency_generation()
         begin_dependency_data_change()
         end_dependency_data_change()
-        recorded_entries: list[Any] = []
+        recorded_entries: list[tuple[str, set[Dependency]]] = []
+
+        def record_entries(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
+            for key, dependency_set in entries:
+                recorded_entries.append((key, set(dependency_set)))
 
         with self.assertRaises(CachePublishAborted):
             publish_dependency_cache_entry(
@@ -389,7 +409,7 @@ class TestDependencyPublish(SimpleTestCase):
                 cache_backend=cache_backend,
                 timeout=None,
                 started_generation=started_generation,
-                record_many_fn=recorded_entries.extend,
+                record_many_fn=record_entries,
             )
 
         self.assertEqual(recorded_entries, [])
@@ -397,7 +417,14 @@ class TestDependencyPublish(SimpleTestCase):
 
     def test_publish_aborts_without_writes_when_data_change_active(self) -> None:
         cache_backend = FakeDependencyCacheBackend()
-        recorded_entries: list[Any] = []
+        recorded_entries: list[tuple[str, set[Dependency]]] = []
+
+        def record_entries(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
+            for key, dependency_set in entries:
+                recorded_entries.append((key, set(dependency_set)))
+
         begin_dependency_data_change()
         try:
             with self.assertRaises(CachePublishAborted):
@@ -408,7 +435,7 @@ class TestDependencyPublish(SimpleTestCase):
                     cache_backend=cache_backend,
                     timeout=None,
                     started_generation=get_dependency_generation(),
-                    record_many_fn=recorded_entries.extend,
+                    record_many_fn=record_entries,
                 )
         finally:
             end_dependency_data_change()
@@ -421,7 +448,13 @@ class TestDependencyPublish(SimpleTestCase):
     ) -> None:
         cache_backend = FakeDependencyCacheBackend()
         started_generation = get_dependency_generation()
-        recorded_entries: list[Any] = []
+        recorded_entries: list[tuple[str, set[Dependency]]] = []
+
+        def record_entries(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
+            for key, dependency_set in entries:
+                recorded_entries.append((key, set(dependency_set)))
 
         with (
             mock.patch(
@@ -437,7 +470,7 @@ class TestDependencyPublish(SimpleTestCase):
                 cache_backend=cache_backend,
                 timeout=None,
                 started_generation=started_generation,
-                record_many_fn=recorded_entries.extend,
+                record_many_fn=record_entries,
             )
 
         self.assertEqual(
@@ -451,7 +484,13 @@ class TestDependencyPublish(SimpleTestCase):
     ) -> None:
         cache_backend = FakeDependencyCacheBackend()
         started_generation = get_dependency_generation()
-        recorded_entries: list[Any] = []
+        recorded_entries: list[tuple[str, set[Dependency]]] = []
+
+        def record_entries(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
+            for key, dependency_set in entries:
+                recorded_entries.append((key, set(dependency_set)))
 
         with (
             mock.patch(
@@ -467,7 +506,7 @@ class TestDependencyPublish(SimpleTestCase):
                 cache_backend=cache_backend,
                 timeout=None,
                 started_generation=started_generation,
-                record_many_fn=recorded_entries.extend,
+                record_many_fn=record_entries,
             )
 
         self.assertEqual(
@@ -524,7 +563,7 @@ class TestDependencyPublish(SimpleTestCase):
         attempts = 0
         original_get = cache_backend.get
 
-        def delayed_get(key: str, default: Any = None) -> Any:
+        def delayed_get(key: str, default: object = None) -> object:
             nonlocal attempts
             attempts += 1
             if attempts == 3:
@@ -587,7 +626,7 @@ class TestDependencyPublish(SimpleTestCase):
         recorded_cache_keys: list[str] = []
 
         def capture_record_many(
-            entries: Iterable[tuple[str, Iterable[dependency_publish.Dependency]]],
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
         ) -> None:
             recorded_cache_keys.extend(cache_key for cache_key, _ in entries)
 
@@ -616,9 +655,11 @@ class TestDependencyPublish(SimpleTestCase):
 
     def test_publish_single_entry_uses_custom_record_many_callback(self) -> None:
         cache_backend = FakeDependencyCacheBackend()
-        recorded: list[tuple] = []
+        recorded: list[tuple[str, Iterable[Dependency]]] = []
 
-        def fake_record_many(entries: Any) -> None:
+        def fake_record_many(
+            entries: Iterable[tuple[str, Iterable[Dependency]]],
+        ) -> None:
             recorded.extend(entries)
 
         publish_dependency_cache_entry(
@@ -639,7 +680,7 @@ class TestDependencyPublish(SimpleTestCase):
     def test_publish_single_entry_skips_record_when_dependencies_empty(self) -> None:
         """publish_dependency_cache_entry does not call record_many_fn for empty deps."""
         cache_backend = FakeDependencyCacheBackend()
-        recorded: list[Any] = []
+        recorded: list[tuple[str, Iterable[Dependency]]] = []
 
         publish_dependency_cache_entry(
             cache_key="cache-nodeps",

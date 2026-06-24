@@ -7,7 +7,7 @@ import random
 import time
 from contextvars import ContextVar
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Tuple, Type, cast
+from typing import TYPE_CHECKING, Callable, Iterable, Literal, Tuple, Type, cast
 
 from django.core.cache import cache
 from django.dispatch import receiver
@@ -17,7 +17,7 @@ from general_manager.cache.dependency_matching import (
     lookup_spec_from_key,
     matches_lookup_value,
     normalize_dependency_value,
-    parse_dependency_identifier,
+    parse_dependency_identifier as _parse_dependency_identifier,
     serialize_normalized_value,
 )
 from general_manager.cache.dependency_shards import (
@@ -295,14 +295,63 @@ def set_full_index(idx: dependency_index) -> None:
     cache.set(INDEX_KEY, idx, None)
 
 
-def _normalize_dependency_identifier(value: Any) -> Any:
+def _normalize_dependency_identifier(value: object) -> object:
     """Return a JSON-serializable representation for dependency tracking."""
     return normalize_dependency_value(value)
 
 
-def serialize_dependency_identifier(value: Any) -> str:
-    """Serialize dependency payloads using a deterministic literal-safe format."""
+def serialize_dependency_identifier(value: object) -> str:
+    """
+    Serialize dependency payloads into the canonical dependency identifier format.
+
+    Parameters:
+        value: Dependency payload captured from manager identification, filter
+            parameters, exclusion parameters, or request-query metadata.
+
+    Returns:
+        A deterministic JSON string. Normalization checks value categories in
+        this order: mappings, lists/tuples, sets, datetimes, dates, JSON scalar
+        values, mapping-shaped `__getstate__()`, then `repr(...)` fallback.
+        Mapping keys are coerced with Python's exact `str(key)` result and
+        ordered by that string form; sets are sorted by each member's string
+        form; lists and tuples keep their order; dates and datetimes serialize
+        with `isoformat()` including any timezone offset; scalars and `None`
+        keep their JSON meaning; mapping-shaped `__getstate__()` payloads are
+        stored under `{"__state__": ...}`; unsupported objects fall back to
+        `{"__repr__": repr(value)}`. The parser returns these normalized
+        JSON-compatible structures and does not rehydrate dates, datetimes, or
+        unsupported objects. The current string format is the direct
+        `json.dumps(..., sort_keys=True)` output of that normalized structure.
+        Dependency payloads should avoid mapping keys or set members that
+        collide after `str(...)`. If mapping keys normalize to the same string,
+        normalization keeps the last item after sorting by `str(key)`; equal sort
+        keys keep the input mapping's iteration order. Set members with
+        identical string forms have intentionally unspecified ordering, so their
+        byte-for-byte serialized output is not a public guarantee. Non-finite
+        floats follow Python's default `json.dumps()` spelling (`NaN`,
+        `Infinity`, or `-Infinity`), which is accepted by Python's parser but is
+        not portable strict JSON; dependency identifiers containing these values
+        are Python-cache metadata rather than strict JSON interchange values. If
+        `__getstate__()` exists but returns a non-mapping, the value uses the
+        same `repr(...)` fallback as other unsupported objects.
+    """
     return serialize_normalized_value(value)
+
+
+def parse_dependency_identifier(identifier: str) -> object | None:
+    """
+    Parse a serialized dependency identifier back into JSON-compatible data.
+
+    Parameters:
+        identifier: JSON string previously produced by
+            `serialize_dependency_identifier()`.
+
+    Returns:
+        The decoded JSON-compatible value, such as a mapping, sequence, scalar,
+        or `None` when `identifier` is malformed JSON. A valid serialized JSON
+        `null` payload also decodes to `None`.
+    """
+    return _parse_dependency_identifier(identifier)
 
 
 # -----------------------------------------------------------------------------
@@ -369,14 +418,110 @@ def record_dependencies(
     dependencies: Iterable[Dependency],
 ) -> None:
     """
-    Register a cache key as dependent on the given manager-level filters, exclusions, or identifications.
+    Register dependency-index metadata for one cache key.
+
+    Each dependency tuple is `(manager_name, action, identifier)`, where
+    `manager_name` is the GeneralManager class name that owns the tracked read,
+    `action` is one of `"filter"`, `"exclude"`, `"identification"`,
+    `"request_query"`, or `"all"`, and `identifier` is the serialized payload
+    for that action. Repeated calls for the same cache key replace that key's
+    previous sharded dependency metadata; duplicate tuples in one call collapse.
+    An empty dependency iterable is a no-op and does not clear existing metadata
+    for `cache_key`; call `remove_cache_key_from_index()` for explicit cleanup.
+    A non-empty iterable whose dependencies all normalize to no shards still
+    replaces prior metadata with an empty reverse entry.
 
     Parameters:
-        cache_key (str): The cache key to associate with the declared dependencies.
-        dependencies (Iterable[tuple[str, Literal["filter", "exclude", "identification"], str]]):
-            Iterable of tuples describing each dependency as (manager_name, action, identifier).
-            - For `filter` and `exclude`, `identifier` is a string representation of a mapping of lookups to values.
-            - For `identification`, `identifier` is the identifying value (treated as a lookup on `id`).
+        cache_key: Cache key to associate with the declared dependencies.
+        dependencies: Dependency tuples to store. For `"filter"` and
+            `"exclude"`, `identifier` must be a serialized mapping of lookup
+            names to expected values; malformed or non-mapping identifiers are
+            ignored rather than stored. `{}` tracks all records for the manager.
+            For `"identification"`, `identifier` is the serialized manager
+            identification payload. For `"request_query"` and `"all"`, the
+            identifier is stored as reverse metadata only; `"all"` invalidation
+            is keyed by the manager name and does not inspect the identifier, so
+            all `"all"` dependencies for the changed manager invalidate together.
+            Multiple `"all"` tuples with different identifiers for the same
+            cache key are retained as separate reverse metadata entries until a
+            later non-empty `record_dependencies()` call replaces that key's
+            metadata; the retained identifiers preserve the original dependency
+            tuple and have no invalidation meaning.
+
+    Invalidation:
+        `"request_query"` dependencies invalidate on any change for the same
+        manager name. `"identification"` dependencies invalidate when the changed
+        manager's current `identification` serializes exactly to the stored
+        identifier. `"all"` dependencies invalidate on any change for the same
+        manager name.
+
+    Notes:
+        Filter and exclude invalidation compare the serialized expected value
+        with the changed manager's before/after attribute values. Equality and
+        membership dependencies coerce JSON scalars, ISO dates/datetimes,
+        booleans, `{"__state__": ...}` mappings, and `{"__repr__": ...}`
+        markers back toward the runtime value being compared. Range operators
+        use the runtime value's ordering after coercion. String lookup operators
+        (`contains`, `startswith`, `endswith`, and `regex`) compare against
+        `str(runtime_value)`. Supported lookup suffixes are `gt`, `gte`, `lt`,
+        `lte`, `in`, `contains`, `startswith`, `endswith`, and `regex`; any
+        other suffix is treated as part of the nested attribute path and uses
+        equality matching. There is no escaping syntax for a final attribute
+        segment literally named like a supported suffix; `field__in` is always
+        the `in` lookup, not equality on `field.in`. Missing attributes resolve
+        to `None`. Filter dependencies invalidate when either the old or new
+        value matches because the changed object may enter or leave the cached
+        result. Exclude dependencies invalidate when match status changes because
+        that changes whether the object is excluded from the cached result. ISO
+        strings are not self-describing: an ISO-looking stored string compares as
+        a date/datetime when the runtime value is a date/datetime, and as a
+        string when the runtime value is a string. Date runtime values only
+        accept strings parsed by `date.fromisoformat()`; datetime-shaped strings
+        do not match date runtime values. Date values do not match datetime
+        runtime values. Datetime strings are parsed with
+        `datetime.fromisoformat()` after replacing a trailing `Z` with `+00:00`
+        and replacing the first space separator with `T`;
+        timezone-aware parsed values have timezone information removed when the
+        runtime value is naive, and naive parsed values receive the runtime
+        value's timezone when it is aware. Boolean runtime values accept
+        booleans, any integer via Python truthiness, and the strings `true`,
+        `1`, `yes`, `y`, `t`, `false`, `0`, `no`, `n`, and `f`
+        case-insensitively after trimming whitespace. Other runtime values
+        attempt `type(runtime_value)(stored_value)` coercion, so numeric strings
+        and non-finite floats follow that runtime type's constructor behavior.
+        `{"__state__": ...}` mappings are compared by constructing the runtime
+        value's type from keyword state, with a positional `(magnitude, unit)`
+        fallback; constructor failures do not match. `{"__repr__": ...}` markers
+        compare only with `repr(runtime_value)`. Lookup paths are `__`-separated
+        attribute names resolved with `getattr()`; there is no escaping syntax,
+        dict/list traversal, or callable invocation beyond normal property
+        access. `contains` means `stored_pattern in str(runtime_value)`, `in`
+        means the runtime value matches at least one item in the stored list,
+        and `regex` uses `re.search(stored_pattern, str(runtime_value))` without
+        flags; invalid regex patterns do not match. `startswith` and `endswith`
+        call `str(runtime_value).startswith(stored_pattern)` and
+        `str(runtime_value).endswith(stored_pattern)`. For string operators,
+        non-string expected values are coerced with `str(expected_value)` after
+        JSON parsing. For `in`, a stored expected value that is not a JSON list
+        is a non-match. For range operators, failed coercion is a non-match;
+        ordering exceptions from the runtime value propagate. Only documented
+        parse, constructor, and regex compilation failures are converted to
+        non-matches. Exceptions raised by attribute properties,
+        `str(runtime_value)`, `repr(runtime_value)`, or comparison operators
+        propagate to the invalidation caller.
+        An empty filter or exclude mapping (`{}`) is not evaluated as a normal
+        composite predicate; it records an all-records dependency for that
+        manager and invalidates on any change for that manager. Multi-lookup
+        identifiers are composite dependencies within their single
+        action: a `"filter"` identifier matches only when every lookup in that
+        identifier matches, and an `"exclude"` identifier also computes match
+        status by requiring every lookup in that identifier to match. The action
+        then controls invalidation: filters invalidate when old or new composite
+        status is true, while excludes invalidate when old and new composite
+        status differ. Malformed expected values inside an otherwise valid
+        mapping are treated as non-matches for that lookup, not as stored
+        dependency errors. Constructor coercion calls the runtime value's type;
+        constructors with side effects should not be used for dependency values.
 
     Raises:
         DependencyLockTimeoutError: If a lock cannot be acquired within the configured timeout while updating the index.
@@ -414,12 +559,15 @@ def record_many_dependencies(
 # -----------------------------------------------------------------------------
 def remove_cache_key_from_index(cache_key: str) -> None:
     """
-    Remove a cache key from all dependency mappings in the stored dependency index.
+    Remove a cache key from dependency-index metadata without deleting the value.
 
-    Acquires the dependency lock to update and persist the index; if the lock cannot be obtained within LOCK_TIMEOUT the operation fails.
+    Acquires the dependency lock to update and persist the index or sharded
+    index metadata. This is index-only cleanup; use `invalidate_cache_key()` or
+    `invalidate_and_remove_cache_keys()` when the cached value should also be
+    deleted.
 
     Parameters:
-        cache_key (str): The cache key to expunge from all recorded filter, exclude, and identification mappings.
+        cache_key: Cache key to expunge from all recorded dependency mappings.
 
     Raises:
         DependencyLockTimeoutError: If the dependency lock cannot be acquired within LOCK_TIMEOUT.
@@ -441,10 +589,15 @@ def remove_cache_key_from_index(cache_key: str) -> None:
 # -----------------------------------------------------------------------------
 def invalidate_cache_key(cache_key: str) -> None:
     """
-    Delete the cached result associated with the provided key.
+    Delete the cached value associated with the provided key.
+
+    This function only calls the configured cache backend's `delete()` for the
+    value key. It does not remove dependency-index metadata; call
+    `remove_cache_key_from_index()` separately, or use
+    `invalidate_and_remove_cache_keys()`, when both steps are required.
 
     Parameters:
-        cache_key (str): Key referencing the cached queryset.
+        cache_key: Key referencing the cached value.
 
     Returns:
         None
@@ -474,7 +627,6 @@ def _remove_cache_keys_from_index_locked(
             for lookup, lookup_map in list(model_section.items()):
                 if lookup == "__cache_dependencies__":
                     continue
-                lookup_map = cast(lookup_dependency_map, lookup_map)
                 for val_key, key_set in list(lookup_map.items()):
                     for cache_key in cache_keys:
                         if cache_key in key_set:
@@ -628,7 +780,7 @@ def _generic_cache_invalidation_locked(
     idx: dependency_index,
     manager_name: str,
     instance: GeneralManager,
-    old_relevant_values: dict[str, Any],
+    old_relevant_values: dict[str, object],
 ) -> set[str]:
     """
     Invalidate cache entries affected by a change while the dependency lock is held.
@@ -639,7 +791,7 @@ def _generic_cache_invalidation_locked(
         idx (dependency_index): Dependency index loaded by the public receiver.
         manager_name (str): Name of the manager class that emitted the signal.
         instance (GeneralManager): The manager instance that was changed.
-        old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
+        old_relevant_values (dict[str, object]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
     invalidated_request_query_keys = _invalidate_request_query_dependencies_locked(
         idx, manager_name
@@ -670,7 +822,7 @@ def _generic_cache_invalidation_locked(
         _remove_cache_keys_from_index_locked(idx, (cache_key,))
         invalidated_cache_keys.add(cache_key)
 
-    def _json_loads_val_key(val_key: Any) -> Any:
+    def _json_loads_val_key(val_key: object) -> object:
         if isinstance(val_key, str):
             try:
                 return json.loads(val_key)
@@ -678,13 +830,13 @@ def _generic_cache_invalidation_locked(
                 return val_key  # treat as opaque string
         return val_key
 
-    def _repr_marker(raw: Any) -> str | None:
+    def _repr_marker(raw: object) -> str | None:
         if isinstance(raw, dict) and set(raw.keys()) == {"__repr__"}:
             marker = raw.get("__repr__")
             return marker if isinstance(marker, str) else None
         return None
 
-    def _coerce_to_type(sample: Any, raw: Any) -> Any | None:
+    def _coerce_to_type(sample: object, raw: object) -> object | None:
         """
         Coerces a raw value to match the type and semantics of a sample value.
 
@@ -747,17 +899,18 @@ def _generic_cache_invalidation_locked(
                     return False
             return None
         try:
-            return type(sample)(raw)  # type: ignore
+            constructor = cast(Callable[[object], object], type(sample))
+            return constructor(raw)
         except (TypeError, ValueError):
             if isinstance(raw, type(sample)):
                 return raw
             return None
 
-    def matches(op: str, value: Any, val_key: Any) -> bool:
+    def matches(op: str, value: object, val_key: object) -> bool:
         """Evaluate whether a runtime value matches a stored lookup value."""
         return matches_lookup_value(op, value, val_key)
 
-    def current_value_for_path(path: list[str]) -> Any:
+    def current_value_for_path(path: list[str]) -> object | None:
         """
         Fetches the current value from the captured `instance` by following a sequence of attribute names.
 
@@ -849,7 +1002,7 @@ def _generic_cache_invalidation_locked(
         return False
 
     def bucket_membership_matches(
-        params: dict[str, Any],
+        params: dict[str, object],
         *,
         use_old_values: bool,
     ) -> bool:
@@ -861,7 +1014,7 @@ def _generic_cache_invalidation_locked(
         if not isinstance(filters, dict) or not isinstance(excludes, dict):
             return False
 
-        def value_for_lookup(attr_path: list[str]) -> Any:
+        def value_for_lookup(attr_path: list[str]) -> object | None:
             if use_old_values:
                 return old_relevant_values.get("__".join(attr_path))
             return current_value_for_path(attr_path)
@@ -927,9 +1080,7 @@ def _generic_cache_invalidation_locked(
         for lookup, lookup_map in list(model_section.items()):
             if lookup.startswith("__"):
                 if lookup == ALL_RECORDS_LOOKUP:
-                    for cache_keys in list(
-                        cast(lookup_dependency_map, lookup_map).values()
-                    ):
+                    for cache_keys in list(lookup_map.values()):
                         for ck in list(cache_keys):
                             logger.info(
                                 "invalidating cache key",
@@ -951,9 +1102,7 @@ def _generic_cache_invalidation_locked(
                     new_sort_value = current_value_for_path(attr_path)
                     if old_sort_value == new_sort_value:
                         continue
-                    for val_key, cache_keys in list(
-                        cast(lookup_dependency_map, lookup_map).items()
-                    ):
+                    for val_key, cache_keys in list(lookup_map.items()):
                         payload = _json_loads_val_key(val_key)
                         if not isinstance(payload, dict):
                             continue
@@ -982,7 +1131,6 @@ def _generic_cache_invalidation_locked(
                             _remove_cache_keys_from_index_locked(idx, (ck,))
                             invalidated_cache_keys.add(ck)
                 continue
-            lookup_map = cast(lookup_dependency_map, lookup_map)
             # 1) get operator and attribute path
             parts = lookup.split("__")
             if parts[-1] in (
@@ -1075,16 +1223,16 @@ def _generic_cache_invalidation_locked(
 def _generic_cache_invalidation_from_shards(
     manager_name: str,
     instance: GeneralManager,
-    old_relevant_values: dict[str, Any],
+    old_relevant_values: dict[str, object],
 ) -> set[str]:
-    def value_for_lookup(lookup: str, *, use_old_values: bool) -> Any:
+    def value_for_lookup(lookup: str, *, use_old_values: bool) -> object | None:
         spec = lookup_spec_from_key(lookup)
         lookup_name = "__".join(spec.attr_path)
         if use_old_values:
             return old_relevant_values.get(lookup_name)
         return resolve_current_value_for_path(instance, spec.attr_path)
 
-    def params_match(params: dict[str, Any], *, use_old_values: bool) -> bool:
+    def params_match(params: dict[str, object], *, use_old_values: bool) -> bool:
         for lookup, expected in params.items():
             spec = lookup_spec_from_key(str(lookup))
             expected_key = serialize_dependency_identifier(expected)
@@ -1229,7 +1377,7 @@ def _generic_cache_invalidation_from_shards(
 def generic_cache_invalidation(
     sender: type[GeneralManager],
     instance: GeneralManager,
-    old_relevant_values: dict[str, Any],
+    old_relevant_values: dict[str, object],
     **kwargs: object,
 ) -> None:
     """
@@ -1240,7 +1388,7 @@ def generic_cache_invalidation(
     Parameters:
         sender (type[GeneralManager]): Manager class that emitted the signal.
         instance (GeneralManager): The manager instance that was changed.
-        old_relevant_values (dict[str, Any]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
+        old_relevant_values (dict[str, object]): Mapping of lookup paths (joined by "__") to their values as captured before the change; used to compare old vs. new values for invalidation decisions.
     """
     manager_name = sender.__name__
     invalidated_cache_keys: set[str] = set()

@@ -13,6 +13,7 @@ from general_manager.bucket.database_bucket import (
     DatabaseBucket,
     DuplicateDatabaseBucketSnapshotError,
     MAX_RUN_SCOPED_BUCKET_RESULT_ROWS,
+    QuerysetFilteringError,
     _restore_database_bucket_from_primary_keys,
 )
 from general_manager.cache.cache_tracker import DependencyTracker
@@ -1165,6 +1166,13 @@ class DatabaseBucketTestCase(TestCase):
         """
         with self.assertRaises(ValueError):
             _ = self.bucket.filter(nonexistent_attr__gte=1)
+
+    def test_exclude_invalid_lookup_raises_filtering_error(self):
+        """
+        Excluding by an unknown attribute/property should use the same wrapper as filter().
+        """
+        with self.assertRaises(QuerysetFilteringError):
+            _ = self.bucket.exclude(nonexistent_attr__gte=1)
 
     def test_truthiness_and_bool_semantics(self):
         """

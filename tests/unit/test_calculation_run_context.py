@@ -12,6 +12,7 @@ from general_manager.cache.dependency_publish import (
 from general_manager.cache.run_context import (
     CalculationRunContext,
     current_calculation_run_context,
+    ensure_calculation_run_context,
 )
 
 
@@ -42,6 +43,10 @@ class CalculationFailed(RuntimeError):
     """Test exception used to exercise context cleanup."""
 
 
+class PublishFailed(RuntimeError):
+    """Test exception used to exercise cleanup after publish failure."""
+
+
 def raise_after_buffering(
     context: CalculationRunContext,
     entry: PendingDependencyCachePublication,
@@ -51,6 +56,47 @@ def raise_after_buffering(
 
 
 def test_context_is_active_only_inside_with_block() -> None:
+    assert current_calculation_run_context() is None
+
+
+def test_nested_calculation_run_context_restores_outer_context() -> None:
+    with CalculationRunContext() as outer:
+        outer.set("scope", "outer")
+
+        with CalculationRunContext() as inner:
+            assert current_calculation_run_context() is inner
+            assert inner.get("scope") is None
+            inner.set("scope", "inner")
+
+        assert current_calculation_run_context() is outer
+        assert outer.get("scope") == "outer"
+
+    assert current_calculation_run_context() is None
+
+
+def test_reentering_same_context_preserves_state_until_outer_exit() -> None:
+    context = CalculationRunContext()
+
+    with context as outer:
+        outer.set("answer", 42)
+
+        with context as inner:
+            assert inner is outer
+            assert current_calculation_run_context() is context
+            assert inner.get("answer") == 42
+
+        assert current_calculation_run_context() is context
+        assert outer.get("answer") == 42
+
+    assert current_calculation_run_context() is None
+    assert context.get("answer") is None
+
+
+def test_exit_without_enter_is_noop() -> None:
+    context = CalculationRunContext()
+
+    context.__exit__(None, None, None)
+
     assert current_calculation_run_context() is None
 
     with CalculationRunContext() as ctx:
@@ -72,6 +118,46 @@ def test_get_or_set_reuses_loaded_value_inside_context() -> None:
         assert ctx.get_or_set(("answer",), loader) == 42
 
     assert calls == 1
+
+
+def test_get_or_set_does_not_cache_failed_loader() -> None:
+    calls = 0
+
+    def loader() -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise CalculationFailed
+        return 42
+
+    with CalculationRunContext() as ctx:
+        with pytest.raises(CalculationFailed):
+            ctx.get_or_set(("answer",), loader)
+
+        assert ctx.get_or_set(("answer",), loader) == 42
+
+    assert calls == 2
+
+
+def test_ensure_calculation_run_context_reuses_active_context() -> None:
+    with CalculationRunContext() as outer:
+        with ensure_calculation_run_context() as inner:
+            assert inner is outer
+            inner.set("answer", 42)
+
+        assert current_calculation_run_context() is outer
+        assert outer.get("answer") == 42
+
+    assert current_calculation_run_context() is None
+
+
+def test_ensure_calculation_run_context_creates_context_when_absent() -> None:
+    assert current_calculation_run_context() is None
+
+    with ensure_calculation_run_context() as context:
+        assert current_calculation_run_context() is context
+
+    assert current_calculation_run_context() is None
 
 
 def test_public_storage_helpers_store_and_check_values() -> None:
@@ -147,6 +233,27 @@ def test_dependency_cache_publications_flush_on_clean_exit() -> None:
 
     publish_batch.assert_called_once_with((entry,))
     release_lease.assert_called_once_with(entry.lease)
+
+
+def test_context_cleans_state_when_flush_raises() -> None:
+    entry = make_pending_publication("cache-a")
+    context = CalculationRunContext()
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries",
+            side_effect=PublishFailed,
+        ),
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        pytest.raises(PublishFailed),
+    ):
+        with context:
+            context.set("answer", 42)
+            context.buffer_dependency_cache_publication(entry)
+
+    assert current_calculation_run_context() is None
+    assert context.get("answer") is None
+    assert context.get_dependency_cache_hit("cache-a", None) is None
 
 
 def test_dependency_cache_publications_discard_on_exception_and_release_leases() -> (
@@ -228,6 +335,23 @@ def test_dependency_cache_publication_guardrail_flushes_when_limit_is_reached() 
                 mock.call(first.lease),
                 mock.call(second.lease),
             ]
+
+
+def test_dependency_cache_publication_non_positive_batch_size_flushes_immediately() -> (
+    None
+):
+    entry = make_pending_publication("cache-a")
+
+    with (
+        mock.patch(
+            "general_manager.cache.dependency_publish.publish_dependency_cache_entries"
+        ) as publish_batch,
+        mock.patch("general_manager.cache.dependency_publish.release_compute_lease"),
+        CalculationRunContext(dependency_cache_publish_batch_size=0) as context,
+    ):
+        context.buffer_dependency_cache_publication(entry)
+
+        publish_batch.assert_called_once_with((entry,))
 
 
 def test_discard_prefix_removes_matching_tuple_keys_only() -> None:
@@ -395,6 +519,25 @@ def test_index_loads_once_and_groups_by_key() -> None:
     assert first is second
     assert first["2026-06-10"].value == 10
     assert first["2026-06-11"].value == 11
+
+
+def test_index_duplicate_keys_keep_last_row() -> None:
+    class Row:
+        def __init__(self, day: str, value: int) -> None:
+            self.day = day
+            self.value = value
+
+    def loader() -> list[Row]:
+        return [Row("2026-06-10", 10), Row("2026-06-10", 11)]
+
+    with CalculationRunContext() as ctx:
+        result = ctx.index(
+            key=("rows", "duplicates"),
+            loader=loader,
+            index_by=lambda row: row.day,
+        )
+
+    assert result["2026-06-10"].value == 11
 
 
 def test_group_by_loads_once_and_groups_rows() -> None:

@@ -5,13 +5,15 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, TypeGuard
+from typing import TypeGuard
 
 from django.core.cache import cache as coordination_cache
 
 from general_manager.cache.dependency_cache import (
     DependencyCacheBackend,
+    DependencyCacheHit,
     DependencyCacheSetManyBackend,
     make_dependency_cache_entry,
     read_dependency_cache_hit,
@@ -30,12 +32,24 @@ from general_manager.cache.dependency_shards import (
 
 
 class CachePublishAborted(RuntimeError):
-    """Raised when dependency-cache publishing is no longer safe."""
+    """Raised when dependency-cache publishing is no longer safe.
+
+    Single-entry publication aborts when a data-change barrier is active or when
+    the dependency generation differs from the generation observed before the
+    cached value was computed. Batch publication aborts on an active barrier or
+    a generation change during the batch publish, but stale entries already in
+    the batch are skipped rather than raising by themselves.
+    """
 
 
 @dataclass(frozen=True)
 class CacheComputeLease:
-    """Token proving ownership of a dependency-cache computation."""
+    """Token proving ownership of a dependency-cache computation.
+
+    Attributes:
+        key: Coordination-cache key that stores the lease token.
+        token: Random ownership token written to the coordination cache.
+    """
 
     key: str
     token: str
@@ -43,10 +57,16 @@ class CacheComputeLease:
 
 @dataclass(frozen=True)
 class PendingDependencyCachePublication:
-    """A dependency-cache miss waiting for guarded publication."""
+    """A dependency-cache miss waiting for guarded publication.
+
+    Buffered run-context misses use this value to publish dependency metadata and
+    versioned cache payloads after the computation is known to be current. The
+    lease is carried so the owner can release it after publish or discard; the
+    publish helpers do not validate or release lease ownership.
+    """
 
     cache_key: str
-    result: Any
+    result: object
     dependencies: frozenset[Dependency]
     cache_backend: DependencyCacheBackend
     timeout: int | None
@@ -72,7 +92,18 @@ def acquire_compute_lease(
     *,
     timeout: int = COMPUTE_LOCK_TIMEOUT,
 ) -> CacheComputeLease | None:
-    """Acquire a per-cache-key compute lease if no worker currently owns it."""
+    """Acquire a per-cache-key compute lease if no worker currently owns it.
+
+    Args:
+        cache_key: Dependency-cache key whose computation should be guarded.
+        timeout: Coordination-cache TTL for the lease token.
+
+    Returns:
+        A lease token when this worker acquired ownership, otherwise `None`.
+
+    Raises:
+        Exception: Errors from the coordination cache `add()` call propagate.
+    """
     lock_key = _compute_lock_key(cache_key)
     token = uuid.uuid4().hex
     if not coordination_cache.add(lock_key, token, timeout):
@@ -96,9 +127,25 @@ def wait_for_cached_dependency_hit(
     cache_backend: DependencyCacheBackend,
     cache_key: str,
     timeout_seconds: float = LOCK_TIMEOUT,
-    sentinel: Any = _WAIT_MISS,
-) -> Any:
-    """Poll for a dependency-cache hit until it appears or the wait expires."""
+    sentinel: object = _WAIT_MISS,
+) -> DependencyCacheHit | object:
+    """Poll for a dependency-cache hit until it appears or the wait expires.
+
+    Args:
+        cache_backend: Backend containing dependency-cache entries.
+        cache_key: Key to poll.
+        timeout_seconds: Maximum wall-clock seconds to wait.
+        sentinel: Object returned when no hit appears before timeout.
+
+    Returns:
+        A `DependencyCacheHit` when another worker publishes a compatible value,
+        otherwise `sentinel`. Falsey cached values are returned as hits through
+        `DependencyCacheHit`.
+
+    Raises:
+        Exception: Backend read errors, legacy dependency conversion errors, and
+            monotonic/sleep errors propagate.
+    """
     deadline = time.monotonic() + timeout_seconds
     delay = WAIT_INITIAL_DELAY
 
@@ -165,7 +212,26 @@ def _set_dependency_cache_entries(
 def publish_dependency_cache_entries(
     entries: Iterable[PendingDependencyCachePublication],
 ) -> None:
-    """Publish dependency metadata and values for current entries in one batch."""
+    """Publish dependency metadata and values for current entries in one batch.
+
+    The active data-change barrier is checked before stale entries are filtered;
+    if it is active, the whole batch aborts. Otherwise entries whose
+    `started_generation` no longer matches the current dependency generation are
+    skipped. If the generation changes or a barrier begins after dependency
+    metadata is recorded but before values are stored, `CachePublishAborted` is
+    raised and cache payloads are not written.
+    Dependency metadata for non-empty dependency sets is recorded before any
+    cache value becomes visible. Backends with `set_many()` are written in
+    groups by backend instance and timeout; failed keys returned by `set_many()`
+    are retried with individual `set()` calls. Entry leases are not inspected or
+    released by this helper; the caller that owns the lease remains responsible
+    for releasing it.
+
+    Raises:
+        CachePublishAborted: If publishing is unsafe because a data change is
+            active.
+        Exception: Lock, dependency-index, and cache backend errors propagate.
+    """
     pending_entries = tuple(entries)
     if not pending_entries:
         return
@@ -199,7 +265,7 @@ def publish_dependency_cache_entries(
 def publish_dependency_cache_entry(
     *,
     cache_key: str,
-    result: Any,
+    result: object,
     dependencies: Iterable[Dependency],
     cache_backend: DependencyCacheBackend,
     timeout: int | None,
@@ -213,6 +279,22 @@ def publish_dependency_cache_entry(
     not acquire that lock again or call helpers that do so. The cache decorator
     passes ``None`` for the default ``record_dependencies`` implementation so
     this function can use the non-reentrant locked helper directly.
+
+    Args:
+        cache_key: Dependency-cache key to publish.
+        result: Cached function result to persist.
+        dependencies: Dependencies captured during computation.
+        cache_backend: Backend that stores the versioned dependency-cache entry.
+        timeout: Backend timeout for the cached value.
+        started_generation: Dependency generation observed before computation.
+        record_many_fn: Optional dependency-recording callback. When omitted,
+            the built-in shard recorder is used.
+
+    Raises:
+        CachePublishAborted: If publishing is unsafe before metadata recording,
+            after a custom/built-in dependency record, or before the value write.
+        Exception: Lock, dependency-index, custom recorder, and cache backend
+            errors propagate.
     """
     dependency_set = set(dependencies)
 

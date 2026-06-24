@@ -549,6 +549,22 @@ class TestRecordDependencies(TestCase):
             json.dumps({"members": ["a", "b"]}, sort_keys=True),
         )
 
+    def test_dependency_identifier_helpers_are_public_from_cache_module(self):
+        from general_manager import cache as public_cache
+
+        identifier = public_cache.serialize_dependency_identifier(
+            {"members": {"b", "a"}}
+        )
+
+        self.assertEqual(
+            identifier,
+            json.dumps({"members": ["a", "b"]}, sort_keys=True),
+        )
+        self.assertEqual(
+            public_cache.parse_dependency_identifier(identifier),
+            {"members": ["a", "b"]},
+        )
+
     @patch("general_manager.cache.dependency_index.acquire_lock")
     def test_waits_until_lock_is_acquired(self, mock_acquire):
         mock_acquire.side_effect = [False, False, True]
