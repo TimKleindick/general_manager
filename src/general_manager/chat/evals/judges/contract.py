@@ -309,21 +309,13 @@ def _answer_contradicts_successful_path(
     ):
         return False
 
-    answer_affirms_path = _answer_affirms_successful_path(answer_text.casefold())
     return any(
-        _answer_sentence_denies_successful_path(
-            sentence.casefold(),
-            answer_affirms_path=answer_affirms_path,
-        )
+        _answer_sentence_denies_successful_path(sentence.casefold())
         for sentence in _answer_sentences(answer_text)
     )
 
 
-def _answer_sentence_denies_successful_path(
-    normalized_sentence: str,
-    *,
-    answer_affirms_path: bool,
-) -> bool:
+def _answer_sentence_denies_successful_path(normalized_sentence: str) -> bool:
     denial_markers = (
         "no path",
         "don't have a path",
@@ -336,18 +328,7 @@ def _answer_sentence_denies_successful_path(
         return True
     if "not connected" not in normalized_sentence:
         return False
-    return not (answer_affirms_path or "not connected directly" in normalized_sentence)
-
-
-def _answer_affirms_successful_path(normalized_sentence: str) -> bool:
-    return any(
-        marker in normalized_sentence
-        for marker in (
-            "path is",
-            "path exists",
-            "connected through",
-        )
-    )
+    return "not connected directly" not in normalized_sentence
 
 
 def _normalized_tool_call(call: dict[str, Any]) -> dict[str, Any]:
