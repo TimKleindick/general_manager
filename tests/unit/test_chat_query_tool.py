@@ -267,6 +267,89 @@ class ChatQueryToolTests(SimpleTestCase):
         with pytest.raises(ValueError, match="Unknown chat query filter: status"):
             query(manager="PartManager", filters={"status": "active"}, fields=["name"])
 
+    def test_query_rejects_malformed_nested_filter_before_execute(self) -> None:
+        class MaterialFilter(graphene.InputObjectType):
+            name = graphene.String()
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            material = graphene.InputField(MaterialFilter)
+
+        schema = _RecordingSchema(_Result(data={}))
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Unknown chat query filter"):
+            query(
+                manager="PartManager",
+                filters={"material": {"bad } injected {": "x"}},
+                fields=["name"],
+            )
+
+        assert schema.calls == []
+
+    def test_query_rejects_unknown_nested_filter_when_schema_filter_exists(
+        self,
+    ) -> None:
+        class MaterialFilter(graphene.InputObjectType):
+            name = graphene.String()
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            material = graphene.InputField(MaterialFilter)
+
+        schema = _RecordingSchema(_Result(data={}))
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Unknown chat query filter: status"):
+            query(
+                manager="PartManager",
+                filters={"material": {"status": "active"}},
+                fields=["name"],
+            )
+
+        assert schema.calls == []
+
+    def test_query_allows_valid_nested_relation_filter(self) -> None:
+        class MaterialFilter(graphene.InputObjectType):
+            name = graphene.String()
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartFilter(graphene.InputObjectType):
+            material = graphene.InputField(MaterialFilter)
+
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt"}],
+                        "pageInfo": {"totalCount": 1},
+                    }
+                }
+            )
+        )
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
+        GraphQL._schema = schema  # type: ignore[assignment]
+
+        result = query(
+            manager="PartManager",
+            filters={"material": {"name": "Steel"}},
+            fields=["name"],
+        )
+
+        assert result["data"] == [{"name": "Bolt"}]
+        assert 'filter: {material: {name: "Steel"}}' in str(schema.calls[0]["query"])
+
     def test_query_allows_valid_nested_relation_selection(self) -> None:
         class MaterialType(graphene.ObjectType):
             name = graphene.String()
