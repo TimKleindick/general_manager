@@ -81,7 +81,11 @@ class EqualityProject(GeneralManager):
                         "status": status,
                     },
                 ),
-                total_count=3 if status == "active" else None,
+                total_count=3
+                if status == "active"
+                else 0
+                if status == "empty"
+                else None,
             )
 
 
@@ -490,6 +494,11 @@ class RequestBucketHardeningTests(SimpleTestCase):
         bucket = EqualityProject.filter(status="active")
 
         self.assertEqual(bucket.count(), 3)
+
+    def test_request_bucket_count_uses_zero_total_count_when_available(self) -> None:
+        bucket = EqualityProject.filter(status="empty")
+
+        self.assertEqual(bucket.count(), 0)
 
     def test_request_bucket_count_falls_back_to_item_count(self) -> None:
         bucket = EqualityProject.filter(status="inactive")

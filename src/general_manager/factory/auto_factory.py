@@ -370,7 +370,10 @@ class AutoFactory(DjangoModelFactory[modelsModel]):
 
         created_objects: list[models.Model] = []
         if use_creation_method:
-            with transaction.atomic():
+            database_alias: str | None = None
+            if hasattr(cls.interface, "_get_database_alias"):
+                database_alias = cls.interface._get_database_alias()
+            with transaction.atomic(using=database_alias):
                 for record in records:
                     created_objects.append(cls._model_creation(model_cls, **record))
             return created_objects
