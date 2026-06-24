@@ -273,6 +273,48 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_receive_json_records_token_usage_without_double_counting_request(
+        self,
+    ) -> None:
+        consumer = ChatConsumer()
+        consumer.scope = {
+            "user": AnonymousUser(),
+            "session": _Session("existing-key"),
+        }
+        consumer.session_key = "existing-key"
+        consumer.provider = _Provider()
+        consumer.channel_name = "chat.rate-limit-tokens"
+
+        async def run() -> None:
+            with (
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch(
+                    "general_manager.chat.consumer.build_system_prompt",
+                    return_value="system prompt text",
+                ),
+                patch(
+                    "general_manager.chat.consumer.enforce_chat_rate_limit",
+                    return_value=None,
+                ) as limit,
+            ):
+                await consumer.receive_json({"type": "message", "text": "hello"})
+
+            assert limit.call_count == 2
+            assert limit.call_args_list[0].kwargs == {}
+            assert limit.call_args_list[1].kwargs == {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "count_request": False,
+            }
+            assert mock_send_json.await_args_list[-1].args[0] == {
+                "type": "done",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            }
+
+        asyncio.run(run())
+
     def test_receive_json_executes_tool_calls_and_resumes_provider(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {

@@ -406,6 +406,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                         self.scope,
                         input_tokens=event.usage.input_tokens,
                         output_tokens=event.usage.output_tokens,
+                        count_request=False,
                     )
                     await self.send_json(
                         {

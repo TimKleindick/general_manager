@@ -49,6 +49,7 @@ def enforce_chat_rate_limit(
     *,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    count_request: bool = True,
 ) -> dict[str, Any] | None:
     """Increment counters and return metadata when the caller exceeds a limit."""
     settings = get_chat_settings()
@@ -57,7 +58,7 @@ def enforce_chat_rate_limit(
     window_seconds = int(rate_limit.get("window_seconds") or 60)
     identifier = _scope_identifier(scope)
 
-    if isinstance(requests, int) and requests > 0:
+    if count_request and isinstance(requests, int) and requests > 0:
         request_total = _increment(identifier, "requests", 1, window_seconds)
         if request_total > requests:
             return {
