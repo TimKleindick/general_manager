@@ -320,7 +320,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
 
     @staticmethod
     def _copy_filter_definitions(
-        definitions: Mapping[str, LookupValue | list[LookupValue] | tuple[LookupValue, ...]]
+        definitions: Mapping[
+            str, LookupValue | list[LookupValue] | tuple[LookupValue, ...]
+        ]
         | None,
     ) -> FilterDefinitions:
         """
@@ -500,7 +502,9 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         return cast(tuple[models.Model, ...], cached)
 
     @staticmethod
-    def _snapshot_get_primary_key(kwargs: Mapping[str, LookupValue]) -> LookupValue | None:
+    def _snapshot_get_primary_key(
+        kwargs: Mapping[str, LookupValue],
+    ) -> LookupValue | None:
         """
         Extract the primary key from a snapshot-safe ``get()`` lookup.
 
@@ -620,10 +624,17 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             raise DatabaseBucketSearchDateMismatchError(
                 self._search_date, other._search_date
             )
+        filters = self._copy_filter_definitions(self.filters)
+        for key, values in other.filters.items():
+            filters.setdefault(key, []).extend(values)
+        excludes = self._copy_filter_definitions(self.excludes)
+        for key, values in other.excludes.items():
+            excludes.setdefault(key, []).extend(values)
         return self.__class__(
             self._data | other._data,
             self._manager_class,
-            {},
+            filters,
+            excludes,
             search_date=self._search_date,
             sort_keys=self._sort_keys,
             sort_reverse=self._sort_reverse,

@@ -28,8 +28,8 @@ RequestLocation = Literal["query", "headers", "path", "body"]
 
 type RequestSerializer = Callable[[Any], Any]
 type RequestValidator = Callable[[Any], None]
-type RequestPayload = Mapping[str, Any]
-type RequestResponse = Mapping[str, Any] | list[Mapping[str, Any]]
+type RequestPayload = Mapping[str, object]
+type RequestResponse = RequestPayload | list[RequestPayload]
 
 SUPPORTED_REQUEST_LOOKUPS = frozenset(
     {"exact", "in", "contains", "icontains", "gt", "gte", "lt", "lte", "isnull"}

@@ -105,9 +105,24 @@ def test_adapter_enriches_log_records(caplog: pytest.LogCaptureFixture) -> None:
 
 def test_adapter_validates_context_type() -> None:
     adapter = get_logger("apps")
+    previous_level = adapter.logger.level
+    adapter.logger.setLevel(logging.INFO)
 
-    with pytest.raises(TypeError):
-        adapter.info("context must be a mapping", context="user=1")  # type: ignore[arg-type]
+    try:
+        with pytest.raises(TypeError):
+            adapter.info("context must be a mapping", context="user=1")  # type: ignore[arg-type]
+    finally:
+        adapter.logger.setLevel(previous_level)
+
+
+def test_disabled_adapter_log_skips_context_validation() -> None:
+    adapter = get_logger("apps.disabled")
+    previous_level = adapter.logger.level
+    adapter.logger.setLevel(logging.INFO)
+    try:
+        adapter.debug("dropped debug", context="user=1")  # type: ignore[arg-type]
+    finally:
+        adapter.logger.setLevel(previous_level)
 
 
 def test_adapter_merges_existing_extra_context(

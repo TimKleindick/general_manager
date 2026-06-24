@@ -44,10 +44,11 @@ def pascal_to_snake(s: str) -> str:
     Convert a PascalCase string to snake_case.
 
     Every uppercase character is lower-cased and prefixed with an underscore,
-    then one leading underscore is stripped. Consecutive uppercase characters
-    are therefore split one character at a time (``"ABC"`` becomes
-    ``"a_b_c"``). Existing underscores, digits, lowercase characters, and other
-    punctuation are preserved.
+    then all leading underscores are stripped from the final result.
+    Consecutive uppercase characters are therefore split one character at a
+    time (``"ABC"`` becomes ``"a_b_c"``). Existing underscores that are not at
+    the front are preserved, as are digits, lowercase characters, and other
+    punctuation.
 
     Parameters:
         s: Input string to convert.

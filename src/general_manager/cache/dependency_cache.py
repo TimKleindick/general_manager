@@ -10,6 +10,9 @@ from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import Dependency
 
 DEPENDENCY_CACHE_ENTRY_VERSION = 1
+_VALID_DEPENDENCY_ACTIONS = frozenset(
+    {"filter", "exclude", "identification", "request_query", "all"}
+)
 
 
 class _MissingSentinel:
@@ -112,7 +115,7 @@ def read_dependency_cache_hit(
     entries store the cached value at `cache_key` and dependencies at
     `{cache_key}:deps`. A present legacy value with a missing dependency key is
     a hit with an empty dependency set. Legacy dependency payloads must be
-    iterable dependency tuples; falsey payloads become an empty dependency set.
+    iterable dependency tuples; malformed payloads are treated as misses.
     Unknown future combined-entry versions are treated as misses and return
     `sentinel`.
 
@@ -127,9 +130,7 @@ def read_dependency_cache_hit(
         version.
 
     Raises:
-        Exception: Backend `get()` errors and errors while converting legacy
-            dependency payloads to `frozenset[Dependency]` propagate unchanged,
-            such as a truthy non-iterable legacy dependency payload.
+        Exception: Backend `get()` errors propagate unchanged.
     """
     payload = cache_backend.get(cache_key, sentinel)
     if payload is sentinel:
@@ -140,9 +141,12 @@ def read_dependency_cache_hit(
     if combined_hit is not None:
         return combined_hit
     dependency_payload = cache_backend.get(_legacy_deps_key(cache_key), ())
+    dependencies = _legacy_dependency_set(dependency_payload)
+    if dependencies is None:
+        return sentinel
     return DependencyCacheHit(
         value=payload,
-        dependencies=_legacy_dependency_set(dependency_payload),
+        dependencies=dependencies,
     )
 
 
@@ -158,7 +162,8 @@ def read_many_dependency_cache_hits(
     payloads. A present legacy value whose dependency key is absent from that
     second bulk read is returned as a hit with an empty dependency set. Backends
     without `get_many()` fall back to single-key reads. Missing main keys and
-    unknown future combined-entry versions are omitted.
+    unknown future combined-entry versions are omitted. Legacy entries with
+    malformed dependency payloads are omitted.
 
     Args:
         cache_backend: Backend used for cache reads.
@@ -169,9 +174,7 @@ def read_many_dependency_cache_hits(
         `DependencyCacheHit` values.
 
     Raises:
-        Exception: Backend `get()`/`get_many()` errors and legacy dependency
-            payload conversion errors propagate unchanged, such as a truthy
-            non-iterable legacy dependency payload.
+        Exception: Backend `get()`/`get_many()` errors propagate unchanged.
     """
     keys = tuple(dict.fromkeys(cache_keys))
     if not keys:
@@ -197,9 +200,12 @@ def read_many_dependency_cache_hits(
         deps_keys = {_legacy_deps_key(key): key for key in legacy_keys}
         legacy_deps = cache_backend.get_many(deps_keys.keys())
         for deps_key, key in deps_keys.items():
+            dependencies = _legacy_dependency_set(legacy_deps.get(deps_key, ()))
+            if dependencies is None:
+                continue
             hits[key] = DependencyCacheHit(
                 value=payloads[key],
-                dependencies=_legacy_dependency_set(legacy_deps.get(deps_key, ())),
+                dependencies=dependencies,
             )
     return hits
 
@@ -224,8 +230,27 @@ def _legacy_deps_key(cache_key: str) -> str:
     return f"{cache_key}:deps"
 
 
-def _legacy_dependency_set(payload: object) -> frozenset[Dependency]:
-    return frozenset(cast(Iterable[Dependency], payload or ()))
+def _legacy_dependency_set(payload: object) -> frozenset[Dependency] | None:
+    if isinstance(payload, (str, bytes, Mapping)):
+        return None
+    try:
+        dependencies = tuple(cast(Iterable[object], payload))
+    except TypeError:
+        return None
+    if not all(_is_dependency_tuple(dependency) for dependency in dependencies):
+        return None
+    return frozenset(cast(tuple[Dependency, ...], dependencies))
+
+
+def _is_dependency_tuple(value: object) -> TypeGuard[Dependency]:
+    return (
+        isinstance(value, tuple)
+        and len(value) == 3
+        and isinstance(value[0], str)
+        and isinstance(value[1], str)
+        and value[1] in _VALID_DEPENDENCY_ACTIONS
+        and isinstance(value[2], str)
+    )
 
 
 def _combined_payload_to_hit(
@@ -235,9 +260,12 @@ def _combined_payload_to_hit(
         return None
     if payload.version != DEPENDENCY_CACHE_ENTRY_VERSION:
         return _MISSING
+    dependencies = _legacy_dependency_set(payload.dependencies)
+    if dependencies is None:
+        return _MISSING
     return DependencyCacheHit(
         value=payload.value,
-        dependencies=payload.dependencies,
+        dependencies=dependencies,
     )
 
 

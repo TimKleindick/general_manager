@@ -231,6 +231,11 @@ class DependencyShardKeyTests(TestCase):
 
         assert cache_set_members("empty-set-key") == set()
 
+    def test_cache_set_members_drops_invalid_members(self) -> None:
+        cache.set("mixed-set-key", ["cache-a", 12, ["unhashable"], "cache-b"], None)
+
+        assert cache_set_members("mixed-set-key") == {"cache-a", "cache-b"}
+
     def test_clear_legacy_dependency_index_removes_known_legacy_cache_keys(
         self,
     ) -> None:

@@ -220,9 +220,7 @@ def cache_set_members(key: str) -> set[str]:
         members inside an accepted collection are dropped member-by-member.
     """
     members = cache.get(key, set())
-    if members is None:
-        return set()
-    return set(members)
+    return _cache_member_set(members)
 
 
 def _cache_get_many(keys: Iterable[str]) -> dict[str, object]:

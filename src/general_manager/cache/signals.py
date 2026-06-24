@@ -61,9 +61,7 @@ def data_change(
             warm-up enqueue errors are logged and suppressed.
     """
     decorator_source = (
-        cast(Callable[P, R], func.__func__)
-        if isinstance(func, classmethod)
-        else func
+        cast(Callable[P, R], func.__func__) if isinstance(func, classmethod) else func
     )
 
     @wraps(decorator_source)
@@ -159,8 +157,17 @@ def data_change(
                     else:
                         raise
             finally:
-                if not is_dependency_data_change_active():
-                    cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
+                try:
+                    if not is_dependency_data_change_active():
+                        cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
+                except Exception:
+                    if primary_exc is not None:
+                        logger.exception(
+                            "Dependency data-change cleanup failed while handling "
+                            "another exception."
+                        )
+                    else:
+                        raise
             if completed and cache_keys:
                 try:
                     from general_manager.api.graphql_warmup import (
