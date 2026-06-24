@@ -5,7 +5,9 @@ from general_manager.chat.evals.diagnostics import (
     classify_result,
     summarize_diagnostics,
 )
+from general_manager.chat.evals.judges.answer_quality import AnswerQualityScore
 from general_manager.chat.evals.judges.contract import ProductContractScore
+from general_manager.chat.evals.judges.result_accuracy import ResultAccuracyScore
 from general_manager.chat.evals.runner import EvalCase, EvalResult
 
 
@@ -37,6 +39,7 @@ def test_missing_required_query_is_prompt_or_harness_failure() -> None:
         owner="prompt",
         category="missing_required_tool",
         severity="hard",
+        failure_class="tool_or_schema_retry",
         message="Required tool call missing: query",
         next_action=(
             "Tighten tool-decision prompt or add missing-tool recovery before "
@@ -61,6 +64,7 @@ def test_forbidden_mutation_is_runtime_safety_failure() -> None:
     assert diagnostic.owner == "runtime"
     assert diagnostic.category == "forbidden_tool"
     assert diagnostic.severity == "hard"
+    assert diagnostic.failure_class == "eval_or_harness"
     assert "mutation safety" in diagnostic.next_action.lower()
 
 
@@ -80,6 +84,7 @@ def test_strategy_deviation_is_soft_prompt_signal() -> None:
     assert diagnostic.owner == "prompt"
     assert diagnostic.category == "strategy_deviation"
     assert diagnostic.severity == "soft"
+    assert diagnostic.failure_class == "tool_or_schema_retry"
 
 
 def test_answer_contradiction_is_answer_contract_failure() -> None:
@@ -98,6 +103,73 @@ def test_answer_contradiction_is_answer_contract_failure() -> None:
     assert diagnostic.owner == "prompt"
     assert diagnostic.category == "answer_contract"
     assert diagnostic.severity == "hard"
+    assert diagnostic.failure_class == "answer_grounding"
+
+
+def test_raw_query_syntax_is_answer_contract_failure() -> None:
+    result = EvalResult(
+        case=_case("raw_query_syntax_case"),
+        contract_score=ProductContractScore(
+            passed=False,
+            category="relation_traversal",
+            violations=["Answer includes raw query syntax after a successful query"],
+        ),
+    )
+
+    diagnostic = classify_result(result)
+
+    assert diagnostic is not None
+    assert diagnostic.owner == "prompt"
+    assert diagnostic.category == "answer_contract"
+    assert diagnostic.severity == "hard"
+    assert diagnostic.failure_class == "answer_grounding"
+
+
+def test_missing_result_value_is_tool_or_schema_retry_failure() -> None:
+    result = EvalResult(
+        case=_case("result_case"),
+        contract_score=ProductContractScore(
+            passed=False,
+            category="relation_traversal",
+            violations=["Missing result value: Apollo"],
+        ),
+    )
+
+    diagnostic = classify_result(result)
+
+    assert diagnostic is not None
+    assert diagnostic.owner == "tool_schema"
+    assert diagnostic.category == "result_contract"
+    assert diagnostic.severity == "hard"
+    assert diagnostic.failure_class == "tool_or_schema_retry"
+
+
+def test_answer_omission_takes_precedence_when_results_pass() -> None:
+    result = EvalResult(
+        case=_case("answer_omission_case"),
+        contract_score=ProductContractScore(
+            passed=False,
+            category="relation_traversal",
+            violations=[
+                "Required tool call missing: get_manager_schema",
+                "Missing answer text: Gear",
+            ],
+        ),
+        result_score=ResultAccuracyScore(passed=True),
+        answer_score=AnswerQualityScore(
+            passed=False,
+            score=0.0,
+            missing=["Gear"],
+        ),
+    )
+
+    diagnostic = classify_result(result)
+
+    assert diagnostic is not None
+    assert diagnostic.owner == "prompt"
+    assert diagnostic.category == "answer_quality"
+    assert diagnostic.severity == "hard"
+    assert diagnostic.failure_class == "answer_grounding"
 
 
 def test_error_result_is_provider_or_harness_failure() -> None:
@@ -109,6 +181,7 @@ def test_error_result_is_provider_or_harness_failure() -> None:
     assert diagnostic.owner == "provider"
     assert diagnostic.category == "provider_error"
     assert diagnostic.severity == "hard"
+    assert diagnostic.failure_class == "eval_or_harness"
 
 
 def test_summarize_diagnostics_groups_by_owner_and_category() -> None:
@@ -118,6 +191,7 @@ def test_summarize_diagnostics_groups_by_owner_and_category() -> None:
             owner="prompt",
             category="missing_required_tool",
             severity="hard",
+            failure_class="tool_or_schema_retry",
             message="Required tool call missing: query",
             next_action="Fix prompt.",
         ),
@@ -126,6 +200,7 @@ def test_summarize_diagnostics_groups_by_owner_and_category() -> None:
             owner="prompt",
             category="missing_required_tool",
             severity="hard",
+            failure_class="tool_or_schema_retry",
             message="Required tool call missing: query",
             next_action="Fix prompt.",
         ),
@@ -134,6 +209,7 @@ def test_summarize_diagnostics_groups_by_owner_and_category() -> None:
             owner="runtime",
             category="forbidden_tool",
             severity="hard",
+            failure_class="eval_or_harness",
             message="Forbidden tool called: mutate",
             next_action="Fix runtime safety.",
         ),

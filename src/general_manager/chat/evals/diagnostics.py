@@ -14,6 +14,12 @@ DiagnosticOwner = Literal[
     "prompt", "tool_schema", "harness", "runtime", "provider", "dataset"
 ]
 DiagnosticSeverity = Literal["hard", "soft"]
+DiagnosticFailureClass = Literal[
+    "eval_or_harness",
+    "tool_or_schema_retry",
+    "answer_grounding",
+    "model_demo_reliability",
+]
 
 
 @dataclass(frozen=True)
@@ -24,6 +30,7 @@ class FailureDiagnostic:
     owner: DiagnosticOwner
     category: str
     severity: DiagnosticSeverity
+    failure_class: DiagnosticFailureClass
     message: str
     next_action: str
 
@@ -36,12 +43,20 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
             owner="provider",
             category="provider_error",
             severity="hard",
+            failure_class="eval_or_harness",
             message=result.error,
             next_action=(
                 "Verify the provider is reachable, the model is installed, and the "
                 "readiness command uses the intended base URL."
             ),
         )
+
+    if (
+        result.answer_score is not None
+        and not result.answer_score.passed
+        and (result.result_score is None or result.result_score.passed)
+    ):
+        return _answer_quality_diagnostic(result)
 
     contract = result.contract_score
     if contract is not None:
@@ -65,6 +80,7 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
             owner="prompt",
             category="tool_sequence_mismatch",
             severity="hard",
+            failure_class="eval_or_harness",
             message=message,
             next_action=(
                 "Check whether the product contract already captures this behavior. "
@@ -83,6 +99,7 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
             owner="tool_schema",
             category="wrong_query_result",
             severity="hard",
+            failure_class="tool_or_schema_retry",
             message=message,
             next_action=(
                 "Inspect the trace query arguments. Prefer tool-side normalization "
@@ -92,23 +109,31 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
         )
 
     if result.answer_score is not None and not result.answer_score.passed:
-        message = (
+        return _answer_quality_diagnostic(result)
+
+    return None
+
+
+def _answer_quality_diagnostic(result: EvalResult) -> FailureDiagnostic:
+    if result.answer_score is None:
+        msg = "answer score unavailable"
+    else:
+        msg = (
             f"missing={result.answer_score.missing}; "
             f"unexpected={result.answer_score.unexpected}"
         )
-        return FailureDiagnostic(
-            case=result.case.name,
-            owner="prompt",
-            category="answer_quality",
-            severity="hard",
-            message=message,
-            next_action=(
-                "Strengthen answer rules or examples while keeping the answer "
-                "grounded in tool JSON."
-            ),
-        )
-
-    return None
+    return FailureDiagnostic(
+        case=result.case.name,
+        owner="prompt",
+        category="answer_quality",
+        severity="hard",
+        failure_class="answer_grounding",
+        message=msg,
+        next_action=(
+            "Strengthen answer rules or examples while keeping the answer "
+            "grounded in tool JSON."
+        ),
+    )
 
 
 def _classify_contract_message(
@@ -124,6 +149,7 @@ def _classify_contract_message(
             owner="prompt",
             category="missing_required_tool" if hard else "strategy_deviation",
             severity=severity,
+            failure_class="tool_or_schema_retry",
             message=message,
             next_action=(
                 "Tighten tool-decision prompt or add missing-tool recovery before "
@@ -136,6 +162,7 @@ def _classify_contract_message(
             owner="runtime",
             category="forbidden_tool",
             severity=severity,
+            failure_class="eval_or_harness",
             message=message,
             next_action=(
                 "Add or verify mutation safety checks in the runtime harness and "
@@ -148,6 +175,7 @@ def _classify_contract_message(
             owner="tool_schema",
             category="result_contract",
             severity=severity,
+            failure_class="tool_or_schema_retry",
             message=message,
             next_action=(
                 "Inspect tool calls and GraphQL results. Fix tool argument "
@@ -158,6 +186,7 @@ def _classify_contract_message(
         (
             "Answer contradicts required result value:",
             "Answer defers after a successful query",
+            "Answer includes raw query syntax after a successful query",
             "Answer omits required result value:",
             "Missing answer text:",
             "Unexpected answer text:",
@@ -168,6 +197,7 @@ def _classify_contract_message(
             owner="prompt",
             category="answer_contract",
             severity=severity,
+            failure_class="answer_grounding",
             message=message,
             next_action=(
                 "Improve answer-grounding instructions or examples so returned "
@@ -179,6 +209,7 @@ def _classify_contract_message(
         owner="dataset",
         category="uncategorized_contract",
         severity=severity,
+        failure_class="eval_or_harness",
         message=message,
         next_action=(
             "Review the product contract wording and add a classifier branch for "
@@ -200,3 +231,29 @@ def summarize_diagnostics(
         owner: dict(categories)
         for owner, categories in sorted(grouped.items(), key=lambda item: item[0])
     }
+
+
+def summarize_failure_classes(
+    diagnostics: list[FailureDiagnostic],
+) -> dict[str, int]:
+    """Return hard failure counts grouped by production-readiness class."""
+    grouped: defaultdict[str, int] = defaultdict(int)
+    for diagnostic in diagnostics:
+        if diagnostic.severity != "hard":
+            continue
+        grouped[diagnostic.failure_class] += 1
+    return dict(sorted(grouped.items(), key=lambda item: item[0]))
+
+
+def summarize_failure_class_cases(
+    diagnostics: list[FailureDiagnostic],
+) -> dict[str, list[str]]:
+    """Return hard failure cases grouped by production-readiness class."""
+    grouped: defaultdict[str, list[str]] = defaultdict(list)
+    for diagnostic in diagnostics:
+        if diagnostic.severity != "hard":
+            continue
+        cases = grouped[diagnostic.failure_class]
+        if diagnostic.case not in cases:
+            cases.append(diagnostic.case)
+    return dict(sorted(grouped.items(), key=lambda item: item[0]))

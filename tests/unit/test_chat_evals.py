@@ -34,6 +34,7 @@ from general_manager.chat.evals.runner import (
     TurnRecord,
     _score_case,
     filter_cases,
+    is_forbidden_recovery_event,
     list_datasets,
     load_dataset,
     print_compare_report,
@@ -756,6 +757,24 @@ class _ScriptedProvider:
 
 
 class RunnerIntegrationTests(SimpleTestCase):
+    def test_recovery_policy_forbids_answer_rewrites_and_demo_injections(self) -> None:
+        assert is_forbidden_recovery_event("repair_contradictory_answer") is True
+        assert is_forbidden_recovery_event("repair_raw_query_syntax_answer") is True
+        assert (
+            is_forbidden_recovery_event("synthesize_answer_from_tool_results") is True
+        )
+        assert is_forbidden_recovery_event("inject_project_material_query") is True
+        assert is_forbidden_recovery_event("inject_target_project_query") is True
+        assert is_forbidden_recovery_event("inject_cross_manager_path") is True
+        assert is_forbidden_recovery_event("raw_query_syntax_answer") is True
+        assert is_forbidden_recovery_event("answer_defers_after_query") is True
+        assert is_forbidden_recovery_event("answer_contradicts_non_empty_query") is True
+        assert is_forbidden_recovery_event("answer_omits_filter_value") is True
+        assert is_forbidden_recovery_event("answer_omits_requested_row_type") is True
+        assert is_forbidden_recovery_event("missing_tool_call") is False
+        assert is_forbidden_recovery_event("inject_anchor_relation_query") is False
+        assert is_forbidden_recovery_event("inject_relation_query_fields") is False
+
     """Test the runner with a scripted provider and mocked tools."""
 
     def setUp(self) -> None:
@@ -984,6 +1003,11 @@ class RunnerIntegrationTests(SimpleTestCase):
                     DoneEvent(usage=TokenUsage()),
                 ],
                 [
+                    ToolCallEvent(
+                        id="0",
+                        name="search_managers",
+                        args={"query": "all managers"},
+                    ),
                     ToolCallEvent(
                         id="1",
                         name="query",
@@ -1275,11 +1299,7 @@ class RunnerIntegrationTests(SimpleTestCase):
             )
 
         assert result.passed is True
-        recovery_messages = provider.calls[2]["messages"]
-        assert any(
-            message.role == "system" and "previous query failed" in message.content
-            for message in recovery_messages
-        )
+        assert "inject_failed_query_fields_retry" in result.recovery_events
 
     def test_run_case_recovers_model_exploration_without_search(self) -> None:
         provider = _ScriptedProvider(
@@ -1394,6 +1414,25 @@ class RunnerIntegrationTests(SimpleTestCase):
                     ),
                     DoneEvent(usage=TokenUsage()),
                 ],
+                [
+                    TextChunkEvent(content="The VehicleManager is not available here."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "I do not have access to that requested manager "
+                            "(VehicleManager)."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="I do not have access to that requested manager."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
             ]
         )
         case = EvalCase(
@@ -1427,12 +1466,395 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
+        assert "answer_without_query" not in result.recovery_events
+        assert "unavailable_manager_echo_retry" in result.recovery_events
+        assert "unavailable_manager_echo_final_retry" in result.recovery_events
+        assert "unavailable_manager_echo_minimal_retry" in result.recovery_events
+        recovery_prompts = [
+            message.content
+            for call in provider.calls
+            for message in call["messages"]
+            if isinstance(message, Message)
+            and message.role == "system"
+            and "unavailable manager" in message.content
+        ]
+        assert any(
+            "user-provided token ending in Manager" in prompt
+            for prompt in recovery_prompts
+        )
+        assert all("VehicleManager" not in prompt for prompt in recovery_prompts)
         recovery_messages = provider.calls[3]["messages"]
         assert any(
             message.role == "system"
-            and "Do not repeat unavailable manager names" in message.content
+            and "Do not repeat, spell, quote, or copy unavailable manager names"
+            in message.content
             for message in recovery_messages
         )
+
+    def test_run_case_gets_model_final_answer_after_tool_budget(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"name": "Apollo"},
+                            "fields": ["name", {"parts": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="tool_budget_final_answer",
+            description="Successful rows should get a model answer at tool budget",
+            conversation=[{"user": "What parts are used in Apollo?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                }
+            },
+        )
+
+        with (
+            patch(
+                "general_manager.chat.evals.runner.MAX_TOOL_ITERATIONS",
+                1,
+            ),
+            patch(
+                "general_manager.chat.evals.runner.execute_chat_tool",
+                return_value={
+                    "data": [{"name": "Apollo", "parts": [{"name": "Gear"}]}]
+                },
+            ),
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["final_answer_after_tool_budget"]
+
+    def test_run_case_injects_schema_pruned_retry_after_failed_query_fields(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {
+                                "name": "Apollo",
+                                "parts__name": "existing",
+                            },
+                            "fields": [
+                                "name",
+                                {"parts": ["name", "cost", "supplier"]},
+                            ],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="No matching records were found for Apollo parts."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="schema_pruned_failed_query_retry",
+            description="Invalid query fields should be pruned and retried",
+            conversation=[{"user": "What parts are used in the Apollo project?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "ProjectManager",
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": ["name", "parts__name"],
+                }
+            if name == "query" and "cost" in str(args):
+                return {"error": "Cannot query field 'cost' on type 'PartType'."}
+            if name == "query":
+                assert args["filters"] == {"name": "Apollo"}
+                assert args["fields"] == ["name", {"parts": ["name"]}]
+                return {
+                    "data": [
+                        {
+                            "name": "Apollo",
+                            "parts": [{"name": "Gear"}],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_failed_query_fields_retry"]
+
+    def test_run_case_retries_stringified_field_selection_after_syntax_error(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"name": "Apollo"},
+                            "fields": (
+                                '["name", {"parts": ["name", {"material": ["name"]}]}]'
+                            ),
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="stringified_field_selection_retry",
+            description="Stringified relation fields should be parsed and retried",
+            conversation=[{"user": "What parts are used in the Apollo project?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                },
+                "results_contain": ["Gear"],
+                "answer_contains": ["Gear"],
+            },
+        )
+        queries: list[dict[str, Any]] = []
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "ProjectManager",
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": ["name", "parts__material__name", "parts__name"],
+                }
+            if name == "query":
+                queries.append(args)
+                if isinstance(args.get("fields"), str):
+                    return {"error": "Syntax Error: Expected Name, found '['."}
+                assert args["fields"] == ["name", {"parts": ["name"]}]
+                assert args["filters"] == {"name": "Apollo"}
+                return {
+                    "data": [
+                        {
+                            "name": "Apollo",
+                            "parts": [
+                                {
+                                    "name": "Gear",
+                                    "material": {"name": "Cobalt"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_failed_query_fields_retry"]
+        assert len(queries) == 2
+
+    def test_run_case_injects_unfiltered_target_query_for_inventory_list(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "PartManager"},
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="No matching parts were found."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="Inventory parts are Bolt, Gear, and Bearing."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="inventory_parts_unfiltered_query",
+            description="Inventory list questions should not invent filters",
+            conversation=[{"user": "What parts do we have in inventory?"}],
+            expectations={
+                "contract": {
+                    "category": "single_manager_query",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "PartManager"},
+                            }
+                        ],
+                        "results_contain": ["Bolt", "Gear", "Bearing"],
+                        "answer_contains": ["Bolt", "Gear", "Bearing"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "PartManager",
+                    "fields": ["name"],
+                    "relations": [{"name": "material", "target": "MaterialManager"}],
+                    "filters": ["name", "material__name", "material__name__icontains"],
+                }
+            if name == "query":
+                assert args["manager"] == "PartManager"
+                assert "filters" not in args
+                return {
+                    "data": [
+                        {"name": "Bolt"},
+                        {"name": "Gear"},
+                        {"name": "Bearing"},
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_target_manager_list_query"]
 
     def test_run_case_injects_discovery_search_after_ignored_recovery(
         self,
@@ -1604,7 +2026,9 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.contract_score is not None
         assert result.contract_score.passed is True
 
-    def test_run_case_injects_project_query_from_part_material_result(self) -> None:
+    def test_run_case_does_not_inject_project_query_from_part_material_result(
+        self,
+    ) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -1695,11 +2119,1030 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "inject_target_project_query" not in result.recovery_events
+
+    def test_run_case_injects_generic_target_manager_query_from_schema(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="search_managers",
+                        args={"query": "cobalt material"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="find_path",
+                        args={
+                            "from_manager": "MaterialManager",
+                            "to_manager": "ProjectManager",
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="3",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "filters": {"name": "Cobalt"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "Called tool query. The next message is the tool "
+                            "result; answer from it exactly."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo would be affected."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="generic_target_manager_query",
+            description="Retry the target manager when only constraint rows were queried",
+            conversation=[
+                {"user": "Which projects would be affected if cobalt parts changed?"}
+            ],
+            expectations={
+                "contract": {
+                    "category": "read_only_safety",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Apollo"],
+                        "answer_contains": ["Apollo"],
+                        "forbidden_tools": ["mutate"],
+                    },
+                },
+                "results_contain": ["Apollo"],
+                "answer_contains": ["Apollo"],
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "search_managers":
+                return [
+                    {
+                        "manager": "MaterialManager",
+                        "description": "Materials catalog",
+                        "fields": ["name"],
+                        "relations": [],
+                        "filters": ["name"],
+                    },
+                    {
+                        "manager": "PartManager",
+                        "description": "Parts catalog",
+                        "fields": ["name"],
+                        "relations": [
+                            {"name": "material", "target": "MaterialManager"}
+                        ],
+                        "filters": ["material__name", "name"],
+                    },
+                    {
+                        "manager": "ProjectManager",
+                        "description": "Projects catalog",
+                        "fields": ["name"],
+                        "relations": [{"name": "parts", "target": "PartManager"}],
+                        "filters": [
+                            "name",
+                            "parts__name",
+                            "parts__material__name",
+                            "parts__material__name__icontains",
+                        ],
+                    },
+                ]
+            if name == "find_path":
+                return ["material", "parts"]
+            if name == "query" and args["manager"] == "MaterialManager":
+                return {"data": [{"name": "Cobalt"}]}
+            if name == "query" and args["manager"] == "ProjectManager":
+                assert args["filters"] == {"parts__material__name__icontains": "Cobalt"}
+                assert args["fields"] == [
+                    "name",
+                    {"parts": ["name", {"material": ["name"]}]},
+                ]
+                return {"data": [{"name": "Apollo"}]}
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
+        assert "inject_target_manager_filter_query" in result.recovery_events
 
-    def test_run_case_injects_cross_manager_path_after_discovery(
+    def test_run_case_injects_target_schema_after_path_before_target_query(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="find_path",
+                        args={
+                            "from_manager": "PartManager",
+                            "to_manager": "ProjectManager",
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "PartManager",
+                            "filters": {"material__name": "cobalt"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="No matching records were found."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="No matching records were found."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo would be affected."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="target_schema_after_path",
+            description="Fetch requested target schema after a path-only discovery",
+            conversation=[
+                {"user": "Which projects would be affected if cobalt parts changed?"}
+            ],
+            expectations={
+                "contract": {
+                    "category": "read_only_safety",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Apollo"],
+                        "answer_contains": ["Apollo"],
+                        "forbidden_tools": ["mutate"],
+                    },
+                },
+                "results_contain": ["Apollo"],
+                "answer_contains": ["Apollo"],
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "find_path":
+                return ["parts"]
+            if name == "get_manager_schema":
+                assert args == {"manager": "ProjectManager"}
+                return {
+                    "manager": "ProjectManager",
+                    "description": "Projects catalog",
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": [
+                        "name",
+                        "parts__name",
+                        "parts__material__name",
+                        "parts__material__name__icontains",
+                    ],
+                }
+            if name == "query" and args["manager"] == "PartManager":
+                return {"data": [{"name": "Gear"}]}
+            if name == "query" and args["manager"] == "ProjectManager":
+                assert args["filters"] == {"parts__material__name__icontains": "cobalt"}
+                assert args["fields"] == [
+                    "name",
+                    {"parts": ["name", {"material": ["name"]}]},
+                ]
+                return {
+                    "data": [
+                        {
+                            "name": "Apollo",
+                            "parts": [
+                                {
+                                    "name": "Gear",
+                                    "material": {"name": "Cobalt"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == [
+            "inject_target_schema_after_path",
+            "inject_target_manager_filter_query",
+        ]
+
+    def test_run_case_blocks_target_query_with_anchor_value(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="find_path",
+                        args={
+                            "from_manager": "ProjectManager",
+                            "to_manager": "PartManager",
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="3",
+                        name="get_manager_schema",
+                        args={"manager": "PartManager"},
+                    ),
+                    ToolCallEvent(
+                        id="4",
+                        name="query",
+                        args={
+                            "manager": "PartManager",
+                            "filters": {"parts__material__name": "Apollo"},
+                            "fields": ["name", {"material": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="anchor_relation_query",
+            description="Anchor entity relation rows should query the anchor manager",
+            conversation=[{"user": "What parts are used in the Apollo project?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                }
+            },
+        )
+        query_managers: list[str] = []
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "find_path":
+                return ["parts"]
+            if name == "get_manager_schema" and args["manager"] == "ProjectManager":
+                return {
+                    "manager": "ProjectManager",
+                    "description": "Projects catalog",
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": [
+                        "name",
+                        "name__icontains",
+                        "parts__name",
+                        "parts__material__name",
+                    ],
+                }
+            if name == "get_manager_schema" and args["manager"] == "PartManager":
+                return {
+                    "manager": "PartManager",
+                    "description": "Parts catalog",
+                    "fields": ["name"],
+                    "relations": [{"name": "material", "target": "MaterialManager"}],
+                    "filters": ["name", "material__name", "material__name__icontains"],
+                }
+            if name == "query":
+                query_managers.append(str(args["manager"]))
+                if args["manager"] == "ProjectManager":
+                    assert args["filters"] == {"name": "Apollo"}
+                    assert args["fields"] == ["name", {"parts": ["name"]}]
+                    return {
+                        "data": [
+                            {
+                                "name": "Apollo",
+                                "parts": [{"name": "Gear"}],
+                            }
+                        ]
+                    }
+                return {"data": []}
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert query_managers == ["ProjectManager"]
+        assert result.recovery_events == ["inject_anchor_relation_query"]
+
+    def test_run_case_refines_unfiltered_target_manager_query(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="search_managers",
+                        args={"query": "project"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="3",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {},
+                            "fields": [
+                                "name",
+                                {"parts": ["name", {"material": ["name"]}]},
+                            ],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo would be affected."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo would be affected."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="refine_unfiltered_target_query",
+            description="Target query should be refined with grounded relation filter",
+            conversation=[
+                {"user": "Which projects would be affected if cobalt parts changed?"}
+            ],
+            expectations={
+                "contract": {
+                    "category": "read_only_safety",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Apollo"],
+                        "results_exclude": ["Mercury"],
+                        "answer_contains": ["Apollo"],
+                        "answer_excludes": ["Mercury"],
+                        "forbidden_tools": ["mutate"],
+                    },
+                },
+                "results_contain": ["Apollo"],
+                "results_exclude": ["Mercury"],
+                "answer_contains": ["Apollo"],
+                "answer_excludes": ["Mercury"],
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "search_managers":
+                return [
+                    {
+                        "manager": "ProjectManager",
+                        "description": "Projects catalog",
+                        "fields": ["name"],
+                        "relations": [{"name": "parts", "target": "PartManager"}],
+                        "filters": [
+                            "name",
+                            "parts__name",
+                            "parts__material__name",
+                            "parts__material__name__icontains",
+                        ],
+                    }
+                ]
+            if name == "get_manager_schema":
+                return {
+                    "manager": "ProjectManager",
+                    "description": "Projects catalog",
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": [
+                        "name",
+                        "parts__name",
+                        "parts__material__name",
+                        "parts__material__name__icontains",
+                    ],
+                }
+            if name == "query" and not args.get("filters"):
+                raise AssertionError
+            if name == "query":
+                assert args["filters"] == {"parts__material__name__icontains": "cobalt"}
+                return {
+                    "data": [
+                        {
+                            "name": "Apollo",
+                            "parts": [
+                                {
+                                    "name": "Gear",
+                                    "material": {"name": "Cobalt"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_target_manager_filter_query"]
+
+    def test_run_case_does_not_treat_scalar_lookup_filter_as_relation_filter(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "MaterialManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "filters": {"density__gt": "greater"},
+                            "fields": ["name", "density"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    ToolCallEvent(
+                        id="3",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "filters": {"density__gt": 5},
+                            "fields": ["name", "density"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Steel and Cobalt are above 5."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="scalar_lookup_not_target_filter",
+            description="Scalar lookup filters should not trigger relation recovery",
+            conversation=[{"user": "Which materials have density greater than 5?"}],
+            expectations={
+                "contract": {
+                    "category": "single_manager_query",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Steel", "Cobalt"],
+                        "results_exclude": ["Aluminum"],
+                        "answer_contains": ["Steel", "Cobalt"],
+                        "answer_excludes": ["Aluminum"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "MaterialManager",
+                    "fields": ["name", "density"],
+                    "filters": ["name", "density__gt"],
+                    "relations": [],
+                }
+            if args.get("filters") == {"density__gt": "greater"}:
+                return {"error": 'Float cannot represent non numeric value: "greater"'}
+            if args.get("filters") == {"density__gt": 5}:
+                return {
+                    "data": [
+                        {"name": "Steel", "density": 7.8},
+                        {"name": "Cobalt", "density": 8.9},
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert "inject_target_manager_filter_query" not in result.recovery_events
+
+    def test_run_case_does_not_invent_relation_filter_from_manager_word(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "PartManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "PartManager",
+                            "fields": ["name", {"material": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Bolt uses Steel. Gear uses Cobalt."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="manager_word_not_relation_filter",
+            description="Manager/schema wording should not become a relation filter",
+            conversation=[
+                {"user": "In PartManager, show each part with its material name."}
+            ],
+            expectations={
+                "contract": {
+                    "category": "schema_inspection",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Bolt", "Steel", "Gear", "Cobalt"],
+                        "answer_contains": ["Bolt", "Steel", "Gear", "Cobalt"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "PartManager",
+                    "fields": ["name"],
+                    "filters": ["name", "material__name", "material__name__icontains"],
+                    "relations": [{"name": "material", "target": "MaterialManager"}],
+                }
+            if name == "query":
+                assert "filters" not in args
+                return {
+                    "data": [
+                        {"name": "Bolt", "material": {"name": "Steel"}},
+                        {"name": "Gear", "material": {"name": "Cobalt"}},
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert "inject_target_manager_filter_query" not in result.recovery_events
+
+    def test_run_case_injects_generic_target_manager_query_after_discovery(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="search_managers",
+                        args={"query": "project"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="search_managers",
+                        args={"query": "part"},
+                    ),
+                    ToolCallEvent(
+                        id="3",
+                        name="search_managers",
+                        args={"query": "material"},
+                    ),
+                    ToolCallEvent(
+                        id="4",
+                        name="get_manager_schema",
+                        args={"manager": "PartManager"},
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "Called tool get_manager_schema. The next message is "
+                            "the tool result; answer from it exactly."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "ProjectManager reaches MaterialManager through parts. "
+                            "Mercury uses Bearing made from Aluminum."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="generic_target_query_after_discovery",
+            description="Discovery should retry target manager data query",
+            conversation=[
+                {
+                    "user": (
+                        "I need to find which projects use aluminum parts. "
+                        "Help me explore the data model first."
+                    )
+                }
+            ],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {"name": "search_managers"},
+                            {"name": "find_path"},
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            },
+                        ],
+                        "results_contain": ["Mercury", "Bearing", "Aluminum"],
+                        "answer_contains": [
+                            "Project",
+                            "Material",
+                            "Mercury",
+                            "Bearing",
+                            "Aluminum",
+                        ],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "search_managers":
+                return [
+                    {
+                        "manager": "ProjectManager",
+                        "description": "Projects catalog",
+                        "fields": ["name"],
+                        "relations": [{"name": "parts", "target": "PartManager"}],
+                        "filters": [
+                            "name",
+                            "parts__name",
+                            "parts__material__name",
+                            "parts__material__name__icontains",
+                        ],
+                    },
+                    {
+                        "manager": "PartManager",
+                        "description": "Parts catalog",
+                        "fields": ["name"],
+                        "relations": [
+                            {"name": "material", "target": "MaterialManager"}
+                        ],
+                        "filters": ["material__name", "name"],
+                    },
+                    {
+                        "manager": "MaterialManager",
+                        "description": "Materials catalog",
+                        "fields": ["name"],
+                        "relations": [],
+                        "filters": ["name"],
+                    },
+                ]
+            if name == "get_manager_schema":
+                return {
+                    "manager": args["manager"],
+                    "fields": ["name"],
+                    "relations": [{"name": "material", "target": "MaterialManager"}],
+                    "filters": ["material__name", "name"],
+                }
+            if name == "find_path":
+                assert args == {
+                    "from_manager": "ProjectManager",
+                    "to_manager": "MaterialManager",
+                }
+                return ["parts", "material"]
+            if name == "query":
+                assert args["manager"] == "ProjectManager"
+                assert args["filters"] == {
+                    "parts__material__name__icontains": "aluminum"
+                }
+                return {
+                    "data": [
+                        {
+                            "name": "Mercury",
+                            "parts": [
+                                {
+                                    "name": "Bearing",
+                                    "material": {"name": "Aluminum"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert "inject_target_manager_filter_query" in result.recovery_events
+
+    def test_run_case_injects_generic_path_for_relation_filter_query(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="search_managers",
+                        args={"query": "project material"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"parts__material__name": "Aluminum"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "Called tool query. The next message is the tool "
+                            "result; answer from it exactly."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "ProjectManager reaches MaterialManager through parts. "
+                            "Mercury uses Bearing made from Aluminum."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="generic_path_for_relation_filter_query",
+            description="Relation-filter query should still discover path",
+            conversation=[
+                {
+                    "user": (
+                        "I need to find which projects use aluminum parts. "
+                        "Help me explore the data model first."
+                    )
+                }
+            ],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {"name": "search_managers"},
+                            {"name": "find_path"},
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            },
+                        ],
+                        "results_contain": ["Mercury"],
+                        "answer_contains": ["Project", "Material", "Mercury"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "search_managers":
+                return [
+                    {
+                        "manager": "ProjectManager",
+                        "description": "Projects catalog",
+                        "fields": ["name"],
+                        "relations": [{"name": "parts", "target": "PartManager"}],
+                        "filters": [
+                            "name",
+                            "parts__name",
+                            "parts__material__name",
+                            "parts__material__name__icontains",
+                        ],
+                    },
+                    {
+                        "manager": "PartManager",
+                        "description": "Parts catalog",
+                        "fields": ["name"],
+                        "relations": [
+                            {"name": "material", "target": "MaterialManager"}
+                        ],
+                        "filters": ["material__name", "name"],
+                    },
+                    {
+                        "manager": "MaterialManager",
+                        "description": "Materials catalog",
+                        "fields": ["name"],
+                        "relations": [],
+                        "filters": ["name"],
+                    },
+                ]
+            if name == "find_path":
+                assert args == {
+                    "from_manager": "ProjectManager",
+                    "to_manager": "MaterialManager",
+                }
+                return ["parts", "material"]
+            if name == "query":
+                return {"data": [{"name": "Mercury"}]}
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert "inject_discovered_manager_path" in result.recovery_events
+
+    def test_run_case_does_not_inject_cross_manager_path_after_discovery(
         self,
     ) -> None:
         provider = _ScriptedProvider(
@@ -1782,9 +3225,10 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert "inject_cross_manager_path" not in result.recovery_events
 
     def test_run_case_recovers_empty_manager_discovery_search(self) -> None:
         provider = _ScriptedProvider(
@@ -1809,8 +3253,8 @@ class RunnerIntegrationTests(SimpleTestCase):
                 [
                     TextChunkEvent(
                         content=(
-                            "Called tool search_managers. The next message is "
-                            "the tool result; answer from it exactly."
+                            "MaterialManager, PartManager, and ProjectManager "
+                            "are available."
                         )
                     ),
                     DoneEvent(usage=TokenUsage()),
@@ -1861,7 +3305,9 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.contract_score is not None
         assert result.contract_score.passed is True
 
-    def test_run_case_synthesizes_bridge_answer_from_discovery_tools(self) -> None:
+    def test_run_case_does_not_synthesize_bridge_answer_from_discovery_tools(
+        self,
+    ) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -1958,9 +3404,13 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert result.recovery_events == ["tool_bridge_answer"]
+        assert not any(
+            is_forbidden_recovery_event(event) for event in result.recovery_events
+        )
 
     def test_run_case_injects_schema_after_relation_query_without_schema(self) -> None:
         provider = _ScriptedProvider(
@@ -2036,7 +3486,9 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.contract_score is not None
         assert result.contract_score.passed is True
 
-    def test_run_case_injects_cross_manager_path_for_traversal_answer(self) -> None:
+    def test_run_case_does_not_inject_cross_manager_path_for_traversal_answer(
+        self,
+    ) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -2125,9 +3577,10 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert "inject_cross_manager_path" not in result.recovery_events
 
     def test_run_case_retries_empty_exact_filter_with_icontains(self) -> None:
         provider = _ScriptedProvider(
@@ -2223,10 +3676,15 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.contract_score is not None
         assert result.contract_score.passed is True
 
-    def test_run_case_synthesizes_bridge_answer_from_query_rows(self) -> None:
+    def test_run_case_does_not_synthesize_bridge_answer_from_query_rows(self) -> None:
         provider = _ScriptedProvider(
             [
                 [
+                    ToolCallEvent(
+                        id="0",
+                        name="search_managers",
+                        args={"query": "all managers"},
+                    ),
                     ToolCallEvent(
                         id="1",
                         name="query",
@@ -2276,6 +3734,839 @@ class RunnerIntegrationTests(SimpleTestCase):
             "general_manager.chat.evals.runner.execute_chat_tool",
             return_value={"data": [{"name": "Apollo", "parts": [{"name": "Gear"}]}]},
         ):
+            stream = io.StringIO()
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    stream=stream,
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "synthesize_answer_from_tool_results" not in result.recovery_events
+        assert "assistant: Returned rows:" not in stream.getvalue()
+
+    def test_run_case_does_not_repair_contradictory_answer_from_query_rows(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"name": "Apollo"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="No matching project records were returned."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="contradictory_query_answer",
+            description="Contradictory answer must fail instead of being repaired",
+            conversation=[{"user": "Find the Apollo project."}],
+            expectations={
+                "contract": {
+                    "category": "data_grounding",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Apollo"],
+                        "answer_contains": ["Apollo"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"data": [{"name": "Apollo"}]},
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "repair_contradictory_answer" not in result.recovery_events
+
+    def test_run_case_does_not_repair_raw_tool_query_syntax(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "PartManager",
+                            "fields": ["name"],
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "PartManager",
+                            "filters": {"material__name": "Steel"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "All parts are Bolt, Bearing, Gear.\n"
+                            "Tool: query\n"
+                            "- manager: PartManager\n"
+                            '- filters: {"material__name": "Steel"}'
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="repair_raw_query_syntax",
+            description="Answer should not include tool syntax after query rows",
+            conversation=[
+                {"user": "Show me all parts, then just show the ones that use Steel"},
+            ],
+            expectations={
+                "contract": {
+                    "category": "follow_up",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "PartManager"},
+                            },
+                        ],
+                        "results_contain": ["Bolt"],
+                        "answer_contains": ["Bolt"],
+                        "answer_excludes": ["Tool: query", "Bearing", "Gear"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "query" and args.get("filters") == {"material__name": "Steel"}:
+                return {"data": [{"name": "Bolt"}]}
+            if name == "query":
+                return {
+                    "data": [
+                        {"name": "Bolt"},
+                        {"name": "Bearing"},
+                        {"name": "Gear"},
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "repair_raw_query_syntax_answer" not in result.recovery_events
+        assert any(
+            "raw query syntax" in violation
+            for violation in result.contract_score.violations
+        )
+
+    def test_run_case_fails_raw_query_syntax_without_retry(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "filters": {"density__gt": 7},
+                            "fields": ["name", "density"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "```graphql\n"
+                            "query { materialmanagerList { items { name } } }\n"
+                            "```\n"
+                            "Steel and Cobalt match."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Steel and Cobalt match."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="fail_raw_query_syntax",
+            description="Raw query syntax should fail instead of being retried",
+            conversation=[{"user": "List materials with density above 7"}],
+            expectations={
+                "contract": {
+                    "category": "data_grounding",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "MaterialManager"},
+                            }
+                        ],
+                        "results_contain": ["Steel", "Cobalt"],
+                        "answer_contains": ["Steel", "Cobalt"],
+                        "answer_excludes": ["```graphql"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={
+                "data": [
+                    {"name": "Steel", "density": 7.8},
+                    {"name": "Cobalt", "density": 8.9},
+                ]
+            },
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "raw_query_syntax_answer" not in result.recovery_events
+
+    def test_run_case_fails_example_query_answer_without_retry(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"parts__material__name": "Aluminum"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "Example query used: ProjectManager with filters. "
+                            "Mercury uses Aluminum."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Mercury uses Aluminum."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="fail_example_query_answer",
+            description="Query scaffolding in the final answer should fail",
+            conversation=[{"user": "Which projects use aluminum parts?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Mercury"],
+                        "answer_contains": ["Mercury", "Aluminum"],
+                        "answer_excludes": ["Example Query"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"data": [{"name": "Mercury"}]},
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "raw_query_syntax_answer" not in result.recovery_events
+
+    def test_run_case_fails_answer_omitting_filter_value(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "PartManager",
+                            "filters": {"material__name": "Steel"},
+                            "fields": [
+                                "name",
+                                {"material": ["name"]},
+                            ],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="- Bolt"),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Bolt is made from Steel."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="fail_answer_omits_filter_value",
+            description="Answer missing queried filter value should fail",
+            conversation=[{"user": "Which parts are made from Steel?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Bolt", "Steel"],
+                        "answer_contains": ["Bolt", "Steel"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={
+                "data": [
+                    {
+                        "name": "Bolt",
+                        "material": {"name": "Steel"},
+                    }
+                ]
+            },
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "answer_omits_filter_value" not in result.recovery_events
+
+    def test_run_case_fails_deferral_after_successful_query(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"parts__material__name": "Aluminum"},
+                            "fields": [
+                                "name",
+                                {
+                                    "parts": [
+                                        "name",
+                                        {"material": ["name"]},
+                                    ]
+                                },
+                            ],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "Mercury uses Bearing made from Aluminum. Would you "
+                            "like me to run another query?"
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Mercury uses Bearing made from Aluminum."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="fail_deferral_after_query",
+            description="Final answer should not defer after successful query",
+            conversation=[{"user": "Which projects use aluminum parts?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Mercury", "Bearing", "Aluminum"],
+                        "answer_contains": ["Mercury", "Bearing", "Aluminum"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={
+                "data": [
+                    {
+                        "name": "Mercury",
+                        "parts": [
+                            {
+                                "name": "Bearing",
+                                "material": {"name": "Aluminum"},
+                            }
+                        ],
+                    }
+                ]
+            },
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "answer_defers_after_query" not in result.recovery_events
+
+    def test_run_case_fails_answer_omitting_requested_row_type(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="0",
+                        name="search_managers",
+                        args={"query": "all managers"},
+                    ),
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"parts__material__name": "Aluminum"},
+                            "fields": [
+                                "name",
+                                {
+                                    "parts": [
+                                        "name",
+                                        {"material": ["name"]},
+                                    ]
+                                },
+                            ],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Mercury uses Bearing made from Aluminum."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=("The project Mercury uses Bearing made from Aluminum.")
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="fail_answer_omits_requested_row_type",
+            description="Answer missing requested row type should fail",
+            conversation=[
+                {
+                    "user": (
+                        "I need to find which projects use aluminum parts. "
+                        "Help me explore the data model first."
+                    )
+                }
+            ],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Mercury", "Bearing", "Aluminum"],
+                        "answer_contains": [
+                            "Project",
+                            "Mercury",
+                            "Bearing",
+                            "Aluminum",
+                        ],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=lambda name, _args, _context: (
+                [{"manager": "ProjectManager"}]
+                if name == "search_managers"
+                else {
+                    "data": [
+                        {
+                            "name": "Mercury",
+                            "parts": [
+                                {
+                                    "name": "Bearing",
+                                    "material": {"name": "Aluminum"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "answer_omits_requested_row_type" not in result.recovery_events
+
+    def test_run_case_fails_empty_claim_after_non_empty_query(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"name": "Apollo"},
+                            "fields": ["name", {"parts": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "No matching records were found for parts in the "
+                            "Apollo project."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="fail_empty_claim_after_query",
+            description="Non-empty query rows answered as empty should fail",
+            conversation=[{"user": "What parts are used in the Apollo project?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"data": [{"name": "Apollo", "parts": [{"name": "Gear"}]}]},
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "answer_contradicts_non_empty_query" not in result.recovery_events
+
+    def test_run_case_does_not_target_retry_when_existing_query_has_relation_rows(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="get_manager_schema",
+                        args={"manager": "PartManager"},
+                    ),
+                    ToolCallEvent(
+                        id="3",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"name": "Apollo"},
+                            "fields": ["name", {"parts": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "No matching records were found for parts in the "
+                            "Apollo project."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="no_target_retry_when_relation_rows_exist",
+            description="Existing relation rows should be enough answer evidence",
+            conversation=[{"user": "What parts are used in the Apollo project?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                }
+            },
+        )
+
+        query_managers: list[str] = []
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema" and args["manager"] == "ProjectManager":
+                return {
+                    "manager": "ProjectManager",
+                    "fields": ["name"],
+                    "filters": ["name", "parts__name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                }
+            if name == "get_manager_schema" and args["manager"] == "PartManager":
+                return {
+                    "manager": "PartManager",
+                    "fields": ["name"],
+                    "filters": ["name"],
+                    "relations": [],
+                }
+            if name == "query":
+                query_managers.append(str(args["manager"]))
+                assert args["manager"] == "ProjectManager"
+                return {"data": [{"name": "Apollo", "parts": [{"name": "Gear"}]}]}
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "answer_contradicts_non_empty_query" not in result.recovery_events
+        assert query_managers == ["ProjectManager"]
+
+    def test_run_case_retries_structured_filter_from_string_args(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "fields": "[name, density]",
+                            "filters": "[name: Steel]",
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "fields": ["name", "density"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Steel has density 7.8."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="retry_structured_filter_from_string_args",
+            description="Stringified filters should be retried as structured args",
+            conversation=[{"user": "Show me the material named Steel"}],
+            expectations={
+                "contract": {
+                    "category": "data_grounding",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {
+                                    "manager": "MaterialManager",
+                                    "filters": {"name": "Steel"},
+                                },
+                            }
+                        ],
+                        "results_contain": ["Steel"],
+                        "results_exclude": ["Aluminum", "Cobalt"],
+                        "answer_contains": ["Steel"],
+                        "answer_excludes": ["Aluminum", "Cobalt"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if isinstance(args.get("filters"), str):
+                return {"error": "'str' object has no attribute 'items'"}
+            if args.get("filters") == {"name": "Steel"}:
+                return {"data": [{"name": "Steel", "density": 7.8}]}
+            return {
+                "data": [
+                    {"name": "Steel", "density": 7.8},
+                    {"name": "Aluminum", "density": 2.7},
+                    {"name": "Cobalt", "density": 8.9},
+                ]
+            }
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
             result = asyncio.run(
                 run_case(
                     provider,
@@ -2288,8 +4579,172 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_structured_filter_retry"]
 
-    def test_run_case_synthesizes_bridge_answer_from_find_path(self) -> None:
+    def test_run_case_retries_empty_string_filter_by_removing_it(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "MaterialManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "filters": {"name": ""},
+                            "fields": ["name", "density"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="No materials were found."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="Steel, Aluminum, and Cobalt are available."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="retry_empty_string_filter",
+            description="Empty text filters should be removed before answering",
+            conversation=[{"user": "List all materials"}],
+            expectations={
+                "contract": {
+                    "category": "data_grounding",
+                    "hard": {
+                        "required_tool_calls": [{"name": "query"}],
+                        "results_contain": ["Steel", "Aluminum", "Cobalt"],
+                        "answer_contains": ["Steel", "Aluminum", "Cobalt"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "MaterialManager",
+                    "fields": ["name", "density"],
+                    "filters": ["name", "density__gt"],
+                    "relations": [],
+                }
+            if args.get("filters") == {"name": ""}:
+                return {"data": [], "total_count": 0, "has_more": False}
+            return {
+                "data": [
+                    {"name": "Steel", "density": 7.8},
+                    {"name": "Aluminum", "density": 2.7},
+                    {"name": "Cobalt", "density": 8.9},
+                ]
+            }
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_empty_text_filter_retry"]
+
+    def test_run_case_retries_tool_bridge_answer_without_synthesis(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"name": "Apollo"},
+                            "fields": ["name", {"parts": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content=(
+                            "Called tool query. The next message is the tool "
+                            "result; answer from it exactly."
+                        )
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Apollo uses Gear."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="retry_tool_bridge_answer",
+            description="Bridge text should get a prompt retry",
+            conversation=[{"user": "What parts are used in the Apollo project?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Gear"],
+                        "answer_contains": ["Gear"],
+                    },
+                }
+            },
+        )
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            return_value={"data": [{"name": "Apollo", "parts": [{"name": "Gear"}]}]},
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [{"name": "query", "description": "Query"}],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["tool_bridge_answer"]
+        recovery_messages = provider.calls[2]["messages"]
+        assert any(
+            message.role == "system"
+            and "Do not include code fences" in message.content
+            and "Do not propose another query" in message.content
+            for message in recovery_messages
+        )
+
+    def test_run_case_does_not_synthesize_bridge_answer_from_find_path(self) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -2342,9 +4797,82 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "synthesize_answer_from_tool_results" not in result.recovery_events
+
+    def test_run_case_blocks_query_for_relationship_only_question(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="find_path",
+                        args={
+                            "from_manager": "MaterialManager",
+                            "to_manager": "ProjectManager",
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "MaterialManager",
+                            "fields": ["name", "meltingPoint"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="Materials relate to projects through material and parts."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="relationship_query_block",
+            description="Relationship-only questions should answer from find_path",
+            conversation=[{"user": "How are materials related to projects?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [{"name": "find_path"}],
+                        "forbidden_tools": ["query"],
+                        "answer_contains": ["material", "part"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, _args: dict[str, Any], _context: Any) -> Any:
+            if name == "find_path":
+                return ["material", "parts"]
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
+        assert result.recovery_events == ["block_relationship_data_query"]
 
     def test_run_case_repairs_relation_filter_query_without_schema(self) -> None:
         provider = _ScriptedProvider(
@@ -2370,12 +4898,7 @@ class RunnerIntegrationTests(SimpleTestCase):
                     DoneEvent(usage=TokenUsage()),
                 ],
                 [
-                    TextChunkEvent(
-                        content=(
-                            "Called tool query. The next message is the tool "
-                            "result; answer from it exactly."
-                        )
-                    ),
+                    TextChunkEvent(content="Bolt uses Steel."),
                     DoneEvent(usage=TokenUsage()),
                 ],
             ]
@@ -2441,6 +4964,115 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
+
+    def test_run_case_expands_nested_relation_filter_fields(self) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {"parts__material__name__icontains": "aluminum"},
+                            "fields": ["name"],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Mercury uses Bearing made from Aluminum."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="expand_nested_relation_filter_fields",
+            description="Relation filter retries should include nested values",
+            conversation=[{"user": "Which projects use aluminum parts?"}],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            }
+                        ],
+                        "results_contain": ["Mercury", "Bearing", "Aluminum"],
+                        "answer_contains": ["Mercury", "Bearing", "Aluminum"],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "get_manager_schema":
+                return {
+                    "manager": "ProjectManager",
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": [
+                        "name",
+                        "parts__name",
+                        "parts__material__name",
+                        "parts__material__name__icontains",
+                    ],
+                }
+            if name == "query" and args["fields"] == [
+                "name",
+                {"parts": ["name", {"material": ["name"]}]},
+            ]:
+                return {
+                    "data": [
+                        {
+                            "name": "Mercury",
+                            "parts": [
+                                {
+                                    "name": "Bearing",
+                                    "material": {"name": "Aluminum"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            if name == "query":
+                return {
+                    "data": [
+                        {
+                            "name": "Mercury",
+                            "parts": [{"name": "Bearing"}],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
+        assert result.passed is True
+        assert result.contract_score is not None
+        assert result.contract_score.passed is True
+        assert result.recovery_events == ["inject_relation_query_fields"]
 
     def test_run_case_retries_zero_limit_query_with_positive_limit(self) -> None:
         provider = _ScriptedProvider(
@@ -2517,7 +5149,7 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.contract_score is not None
         assert result.contract_score.passed is True
 
-    def test_run_case_injects_project_query_from_part_filter(self) -> None:
+    def test_run_case_does_not_inject_project_query_from_part_filter(self) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -2590,11 +5222,12 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert "inject_target_project_query" not in result.recovery_events
 
-    def test_run_case_synthesizes_rows_after_max_iterations(self) -> None:
+    def test_run_case_does_not_synthesize_rows_after_max_iterations(self) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -2639,18 +5272,22 @@ class RunnerIntegrationTests(SimpleTestCase):
             ),
             patch("general_manager.chat.evals.runner.MAX_TOOL_ITERATIONS", 1),
         ):
+            stream = io.StringIO()
             result = asyncio.run(
                 run_case(
                     provider,
                     case,
                     [{"name": "query", "description": "Query"}],
+                    stream=stream,
                     recover_missing_tools=True,
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert "synthesize_answer_after_max_iterations" not in result.recovery_events
+        assert "assistant: Returned rows:" not in stream.getvalue()
 
     def test_run_case_blocks_data_query_for_broad_manager_discovery(self) -> None:
         provider = _ScriptedProvider(
@@ -2715,7 +5352,9 @@ class RunnerIntegrationTests(SimpleTestCase):
         assert result.contract_score is not None
         assert result.contract_score.passed is True
 
-    def test_run_case_synthesizes_incomplete_discovery_traversal_answer(self) -> None:
+    def test_run_case_does_not_repair_incomplete_discovery_traversal_answer(
+        self,
+    ) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -2802,11 +5441,12 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert "repair_incomplete_discovery_answer" not in result.recovery_events
 
-    def test_run_case_injects_project_material_query_after_discovery(
+    def test_run_case_does_not_inject_project_material_query_after_discovery(
         self,
     ) -> None:
         provider = _ScriptedProvider(
@@ -2922,16 +5562,168 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
+        assert result.passed is False
+        assert result.contract_score is not None
+        assert result.contract_score.passed is False
+        assert "inject_project_material_query" not in result.recovery_events
+        assert "repair_incomplete_discovery_answer" not in result.recovery_events
+
+    def test_run_case_retries_project_material_query_when_material_omitted(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [
+                [
+                    ToolCallEvent(
+                        id="1",
+                        name="search_managers",
+                        args={"query": "all managers"},
+                    ),
+                    ToolCallEvent(
+                        id="2",
+                        name="find_path",
+                        args={
+                            "from_manager": "ProjectManager",
+                            "to_manager": "MaterialManager",
+                        },
+                    ),
+                    ToolCallEvent(
+                        id="3",
+                        name="get_manager_schema",
+                        args={"manager": "ProjectManager"},
+                    ),
+                    ToolCallEvent(
+                        id="4",
+                        name="query",
+                        args={
+                            "manager": "ProjectManager",
+                            "filters": {
+                                "parts__material__name__icontains": "aluminum",
+                            },
+                            "fields": ["name", {"parts": ["name"]}],
+                        },
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(content="Returned rows: Mercury, Bearing."),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+                [
+                    TextChunkEvent(
+                        content="Mercury uses the Bearing part made from Aluminum."
+                    ),
+                    DoneEvent(usage=TokenUsage()),
+                ],
+            ]
+        )
+        case = EvalCase(
+            name="retry_project_material_query",
+            description="Retry project material query when material is omitted",
+            conversation=[
+                {
+                    "user": (
+                        "I need to find which projects use aluminum parts. "
+                        "Help me explore the data model first."
+                    )
+                }
+            ],
+            expectations={
+                "contract": {
+                    "category": "relation_traversal",
+                    "hard": {
+                        "required_tool_calls": [
+                            {"name": "search_managers"},
+                            {"name": "find_path"},
+                            {
+                                "name": "query",
+                                "args_contain": {"manager": "ProjectManager"},
+                            },
+                        ],
+                        "results_contain": ["Mercury", "Bearing", "Aluminum"],
+                        "answer_contains": [
+                            "Mercury",
+                            "Bearing",
+                            "Aluminum",
+                        ],
+                    },
+                }
+            },
+        )
+
+        def _fake_tool(name: str, args: dict[str, Any], _context: Any) -> Any:
+            if name == "search_managers":
+                return [{"manager": "ProjectManager"}, {"manager": "MaterialManager"}]
+            if name == "find_path":
+                return ["parts", "material"]
+            if name == "get_manager_schema":
+                return {
+                    "manager": args["manager"],
+                    "fields": ["name"],
+                    "relations": [{"name": "parts", "target": "PartManager"}],
+                    "filters": [
+                        "parts__material__name",
+                        "parts__material__name__icontains",
+                    ],
+                }
+            if name == "query" and any(
+                isinstance(field, dict)
+                and "parts" in field
+                and any(
+                    isinstance(part_field, dict) and "material" in part_field
+                    for part_field in field["parts"]
+                )
+                for field in args["fields"]
+            ):
+                return {
+                    "data": [
+                        {
+                            "name": "Mercury",
+                            "parts": [
+                                {
+                                    "name": "Bearing",
+                                    "material": {"name": "Aluminum"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            if name == "query":
+                return {
+                    "data": [
+                        {
+                            "name": "Mercury",
+                            "parts": [{"name": "Bearing"}],
+                        }
+                    ]
+                }
+            raise AssertionError
+
+        with patch(
+            "general_manager.chat.evals.runner.execute_chat_tool",
+            side_effect=_fake_tool,
+        ):
+            result = asyncio.run(
+                run_case(
+                    provider,
+                    case,
+                    [
+                        {"name": "search_managers", "description": "Search"},
+                        {"name": "find_path", "description": "Find path"},
+                        {"name": "get_manager_schema", "description": "Schema"},
+                        {"name": "query", "description": "Query"},
+                    ],
+                    recover_missing_tools=True,
+                )
+            )
+
         assert result.passed is True
         assert result.contract_score is not None
         assert result.contract_score.passed is True
-        assert result.recovery_events == [
-            "inject_project_material_query",
-            "inject_schema_after_relation_query",
-            "repair_incomplete_discovery_answer",
-        ]
+        assert "inject_relation_query_fields" in result.recovery_events
+        assert "inject_project_material_query" not in result.recovery_events
 
-    def test_run_case_synthesizes_deferred_discovery_result_answer(self) -> None:
+    def test_run_case_does_not_repair_deferred_discovery_result_answer(self) -> None:
         provider = _ScriptedProvider(
             [
                 [
@@ -3060,9 +5852,10 @@ class RunnerIntegrationTests(SimpleTestCase):
                 )
             )
 
-        assert result.passed is True
+        assert result.passed is False
         assert result.contract_score is not None
-        assert result.contract_score.passed is True
+        assert result.contract_score.passed is False
+        assert "repair_incomplete_discovery_answer" not in result.recovery_events
 
 
 # ---------------------------------------------------------------------------

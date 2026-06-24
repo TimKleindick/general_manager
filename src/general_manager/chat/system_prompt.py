@@ -67,6 +67,11 @@ def _tool_decision_section() -> list[str]:
             "requested rows."
         ),
         (
+            "   In other words, query the manager that returns the row type the "
+            "user asked for; use related managers only as filters or relation "
+            "fields."
+        ),
+        (
             "4. For data questions, call every needed tool before writing any "
             "answer text. Do not interleave text and tool calls."
         ),
@@ -118,27 +123,72 @@ def _answer_rules_section() -> list[str]:
             "Do not list examples from unrelated managers or previous turns."
         ),
         (
-            "4. If a tool returns an error, do not answer as if data was returned. "
+            "4. If query returns one or more rows, never say no matching records "
+            "were found. Answer from the returned rows."
+        ),
+        (
+            "5. Do not ask whether to run another query after a successful query. "
+            "Do not propose another query after data has already been returned. "
+            "Give the final answer from the returned rows."
+        ),
+        (
+            "6. For which/list/show/find questions, name the requested row type "
+            "when presenting returned values, such as project, part, or material."
+        ),
+        (
+            "7. For schema inspection questions, include the requested schema field "
+            "names from get_manager_schema, then include returned data rows if the "
+            "user also asked for data."
+        ),
+        (
+            "8. For discovery or cross-manager traversal answers, mention the "
+            "relevant manager names and path terms from search_managers or "
+            "find_path before the returned row values."
+        ),
+        (
+            "9. For relation traversal rows, label nested relation values with "
+            "the relation name from query.fields or the result JSON, such as "
+            "material: Aluminum or parts: Gear."
+        ),
+        (
+            "10. If a tool returns an error, do not answer as if data was returned. "
             "Fix the tool arguments using get_manager_schema or explain the error."
         ),
         (
-            "5. If search_managers returns multiple plausible managers and the "
+            "11. If an earlier query failed but a later query succeeded, ignore "
+            "the failed query result in the final answer. Answer from the latest "
+            "successful query rows and include the returned values."
+        ),
+        (
+            "12. If any successful query in this turn returned rows that answer "
+            "the question, include those rows even if a later query returned no rows. "
+            "An empty later query means only that later query did not match."
+        ),
+        (
+            "13. If search_managers returns multiple plausible managers and the "
             "user did not give enough detail, ask a concise clarifying question."
         ),
         (
-            "6. Do not write placeholders like [tool:query]. Do not expose raw "
-            "GraphQL unless the user asks for implementation details."
+            "14. If search_managers shows the requested manager is unavailable, "
+            "say that you do not have access to that requested manager. Do not "
+            "repeat unavailable manager names from the user. Do not write "
+            "user-provided tokens ending in Manager; use 'that requested manager'."
         ),
         (
-            "7. Mention manager or field names when that makes the answer easier "
+            "15. Do not write placeholders like [tool:query]. Do not include code "
+            "fences, raw GraphQL, JSON tool arguments, YAML, or query examples in "
+            "final answers after using tools."
+        ),
+        (
+            "16. Mention manager or field names when that makes the answer easier "
             "to verify."
         ),
         (
-            "8. If a user asks for application data and no query tool has run in "
+            "17. If a user asks for application data and no query tool has run in "
             "this turn, call tools instead of answering from memory."
         ),
         (
-            "9. The tool result JSON is the source of truth even when it conflicts "
+            "18. The tool result JSON is the source of truth even when it conflicts "
             "with general knowledge or previous assumptions."
         ),
     ]

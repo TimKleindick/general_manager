@@ -54,6 +54,140 @@ DATASETS_DIR = Path(__file__).parent / "datasets"
 
 MAX_TOOL_ITERATIONS = 10
 
+ALLOWED_RECOVERY_EVENTS = frozenset(
+    {
+        "answer_without_query",
+        "block_discovery_data_query",
+        "block_relationship_data_query",
+        "empty_after_tool",
+        "failed_query",
+        "final_answer_after_tool_budget",
+        "inject_anchor_relation_query",
+        "inject_empty_text_filter_retry",
+        "inject_failed_query_fields_retry",
+        "inject_manager_discovery_search",
+        "inject_missing_relation_query",
+        "inject_model_discovery_search",
+        "inject_discovered_manager_path",
+        "inject_relation_query_fields",
+        "inject_schema_after_relation_query",
+        "inject_structured_filter_retry",
+        "inject_target_manager_filter_query",
+        "inject_target_manager_list_query",
+        "inject_target_schema_after_path",
+        "inject_zero_limit_retry",
+        "missing_tool_call",
+        "model_discovery_without_search",
+        "relationship_without_path",
+        "tool_bridge_answer",
+        "unavailable_manager_echo",
+        "unavailable_manager_echo_final_retry",
+        "unavailable_manager_echo_minimal_retry",
+        "unavailable_manager_echo_retry",
+    }
+)
+FORBIDDEN_RECOVERY_EVENTS = frozenset(
+    {
+        "inject_cross_manager_path",
+        "inject_project_material_query",
+        "inject_target_project_query",
+        "repair_contradictory_answer",
+        "repair_incomplete_discovery_answer",
+        "sanitize_unavailable_manager_echo",
+        "synthesize_answer_after_max_iterations",
+        "synthesize_answer_from_tool_results",
+    }
+)
+FORBIDDEN_RECOVERY_PREFIXES = ("repair_", "synthesize_")
+_LOOKUP_SUFFIXES = frozenset(
+    {
+        "contains",
+        "endswith",
+        "exact",
+        "gt",
+        "gte",
+        "icontains",
+        "iendswith",
+        "iexact",
+        "in",
+        "isnull",
+        "istartswith",
+        "lt",
+        "lte",
+        "range",
+        "startswith",
+    }
+)
+_TARGET_VALUE_STOPWORDS = frozenset(
+    {
+        "about",
+        "access",
+        "affected",
+        "ask",
+        "all",
+        "changed",
+        "data",
+        "deleted",
+        "each",
+        "every",
+        "find",
+        "first",
+        "have",
+        "help",
+        "available",
+        "catalog",
+        "need",
+        "explore",
+        "inventory",
+        "into",
+        "its",
+        "from",
+        "with",
+        "using",
+        "and",
+        "for",
+        "can",
+        "there",
+        "their",
+        "they",
+        "them",
+        "then",
+        "this",
+        "that",
+        "your",
+        "you",
+        "me",
+        "i",
+        "are",
+        "field",
+        "fields",
+        "list",
+        "manager",
+        "to",
+        "if",
+        "model",
+        "named",
+        "records",
+        "show",
+        "the",
+        "updated",
+        "use",
+        "uses",
+        "what",
+        "which",
+        "would",
+    }
+)
+
+
+def is_forbidden_recovery_event(event: str) -> bool:
+    """Return whether a recovery event is forbidden in production gates."""
+    if event in FORBIDDEN_RECOVERY_EVENTS:
+        return True
+    if event.startswith(FORBIDDEN_RECOVERY_PREFIXES):
+        return True
+    return event not in ALLOWED_RECOVERY_EVENTS
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -288,41 +422,6 @@ async def _run_turn(
                         tool_args=tool_args,
                     )
                 continue
-            if recover_missing_tools and (
-                fallback_answer := _synthesize_answer_from_tool_results(
-                    user_text=last_user_text,
-                    assistant_text=answer_text,
-                    record=record,
-                )
-            ):
-                answer_text = fallback_answer
-                record.recovery_events.append("synthesize_answer_from_tool_results")
-            if recover_missing_tools and (
-                repaired_answer := _repair_contradictory_answer_from_tool_results(
-                    answer_text=answer_text,
-                    record=record,
-                )
-            ):
-                answer_text = repaired_answer
-                record.recovery_events.append("repair_contradictory_answer")
-            if recover_missing_tools and (
-                discovery_answer := _repair_incomplete_discovery_answer(
-                    user_text=last_user_text,
-                    answer_text=answer_text,
-                    record=record,
-                )
-            ):
-                answer_text = discovery_answer
-                record.recovery_events.append("repair_incomplete_discovery_answer")
-            if recover_missing_tools:
-                sanitized_answer = _sanitize_unavailable_manager_echo(
-                    user_text=last_user_text,
-                    assistant_text=answer_text,
-                    record=record,
-                )
-                if sanitized_answer != answer_text:
-                    record.recovery_events.append("sanitize_unavailable_manager_echo")
-                answer_text = sanitized_answer
             record.answer_chunks.append(answer_text)
             break
 
@@ -360,6 +459,27 @@ async def _run_turn(
             "",
         )
         for tc in tool_calls_this_round:
+            if recover_missing_tools and _should_block_relationship_data_query(
+                user_text=last_user_text,
+                tool_name=tc.name,
+                record=record,
+            ):
+                _stream_line(
+                    stream,
+                    f"blocked_tool_call {tc.name}: {_to_json(tc.args)}",
+                )
+                record.recovery_events.append("block_relationship_data_query")
+                messages.append(
+                    Message(
+                        role="system",
+                        content=(
+                            "This is a relationship/path question, not a data "
+                            "record query. Do not call query. Answer from the "
+                            "find_path result and include the path terms."
+                        ),
+                    )
+                )
+                continue
             if recover_missing_tools and _should_block_discovery_data_query(
                 user_text=last_user_text,
                 tool_name=tc.name,
@@ -379,6 +499,82 @@ async def _run_turn(
                         ),
                     )
                 )
+                continue
+            if (
+                recover_missing_tools
+                and tc.name == "query"
+                and "inject_structured_filter_retry" not in record.recovery_events
+                and (
+                    retry_query := _structured_filter_retry_args_for_candidate(
+                        record=record,
+                        candidate_args=tc.args,
+                    )
+                )
+            ):
+                _stream_line(
+                    stream,
+                    f"blocked_tool_call {tc.name}: {_to_json(tc.args)}",
+                )
+                record.recovery_events.append("inject_structured_filter_retry")
+                _execute_recovery_tool(
+                    record=record,
+                    messages=messages,
+                    stream=stream,
+                    tool_name="query",
+                    tool_args=retry_query,
+                )
+                continue
+            if (
+                recover_missing_tools
+                and tc.name == "query"
+                and "inject_anchor_relation_query" not in record.recovery_events
+                and (
+                    anchor_retry := _anchor_relation_recovery_tools_for_candidate(
+                        user_text=last_user_text,
+                        record=record,
+                        candidate_args=tc.args,
+                    )
+                )
+            ):
+                _stream_line(
+                    stream,
+                    f"blocked_tool_call {tc.name}: {_to_json(tc.args)}",
+                )
+                record.recovery_events.append("inject_anchor_relation_query")
+                for tool_name, tool_args in anchor_retry:
+                    _execute_recovery_tool(
+                        record=record,
+                        messages=messages,
+                        stream=stream,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                    )
+                continue
+            if (
+                recover_missing_tools
+                and tc.name == "query"
+                and "inject_target_manager_filter_query" not in record.recovery_events
+                and (
+                    target_retry := _target_manager_filter_recovery_tools_for_candidate(
+                        user_text=last_user_text,
+                        record=record,
+                        candidate_args=tc.args,
+                    )
+                )
+            ):
+                _stream_line(
+                    stream,
+                    f"blocked_tool_call {tc.name}: {_to_json(tc.args)}",
+                )
+                record.recovery_events.append("inject_target_manager_filter_query")
+                for tool_name, tool_args in target_retry:
+                    _execute_recovery_tool(
+                        record=record,
+                        messages=messages,
+                        stream=stream,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                    )
                 continue
             record.tool_calls.append({"name": tc.name, "args": tc.args})
             try:
@@ -407,20 +603,55 @@ async def _run_turn(
             ),
             "",
         )
-        if recover_missing_tools and (
-            fallback_answer := _synthesize_answer_from_record(
-                user_text=last_user_text,
-                record=record,
+        if recover_missing_tools and _has_successful_query(record):
+            record.recovery_events.append("final_answer_after_tool_budget")
+            messages.append(
+                Message(
+                    role="system",
+                    content=(
+                        "The tool-call budget is exhausted. Do not call any more "
+                        "tools. Write the final answer now using only the "
+                        "successful query results already returned. Include the "
+                        f"actual returned values. User question: {last_user_text}"
+                    ),
+                )
             )
-        ):
-            record.answer_chunks.append(fallback_answer)
-            record.recovery_events.append("synthesize_answer_after_max_iterations")
-            _stream_line(stream, f"assistant: {fallback_answer}")
-        else:
-            record.answer_chunks.append("[max tool iterations reached]")
-            _stream_line(stream, "assistant: [max tool iterations reached]")
+            if final_answer := await _collect_model_final_answer(
+                provider=provider,
+                messages=messages,
+                stream=stream,
+            ):
+                record.answer_chunks.append(final_answer)
+                return record
+        record.answer_chunks.append("[max tool iterations reached]")
+        _stream_line(stream, "assistant: [max tool iterations reached]")
 
     return record
+
+
+async def _collect_model_final_answer(
+    *,
+    provider: Any,
+    messages: list[Message],
+    stream: IO[str] | None,
+) -> str:
+    text_chunks: list[str] = []
+    assistant_line_open = False
+    async for event in provider.complete(messages, []):
+        if isinstance(event, TextChunkEvent):
+            text_chunks.append(event.content)
+            if stream is not None:
+                if not assistant_line_open:
+                    stream.write("assistant: ")
+                    assistant_line_open = True
+                stream.write(event.content)
+                stream.flush()
+        elif isinstance(event, DoneEvent):
+            pass
+    if stream is not None and assistant_line_open:
+        stream.write("\n")
+        stream.flush()
+    return "".join(text_chunks)
 
 
 def _execute_recovery_tool(
@@ -467,6 +698,21 @@ def _build_answer_recovery_message(
             _build_unavailable_manager_echo_recovery_message,
         ),
         (
+            "unavailable_manager_echo_retry",
+            _should_recover_unavailable_manager_echo,
+            _build_unavailable_manager_echo_recovery_message,
+        ),
+        (
+            "unavailable_manager_echo_final_retry",
+            _should_recover_unavailable_manager_echo,
+            _build_unavailable_manager_echo_final_recovery_message,
+        ),
+        (
+            "unavailable_manager_echo_minimal_retry",
+            _should_recover_unavailable_manager_echo,
+            _build_unavailable_manager_echo_minimal_recovery_message,
+        ),
+        (
             "failed_query",
             _should_recover_failed_query_answer,
             _build_failed_query_recovery_message,
@@ -480,6 +726,11 @@ def _build_answer_recovery_message(
             "model_discovery_without_search",
             _should_recover_model_discovery_without_search,
             _build_model_discovery_recovery_message,
+        ),
+        (
+            "tool_bridge_answer",
+            _should_recover_tool_bridge_answer,
+            _build_tool_bridge_answer_recovery_message,
         ),
         (
             "answer_without_query",
@@ -526,32 +777,75 @@ def _build_priority_harness_tool_recovery(
         return "inject_zero_limit_retry", [("query", retry_query)]
     if (
         "query" in available_tool_names
+        and "inject_structured_filter_retry" not in attempted
+        and (retry_query := _structured_filter_retry_args(record))
+    ):
+        return "inject_structured_filter_retry", [("query", retry_query)]
+    if (
+        "query" in available_tool_names
+        and "inject_failed_query_fields_retry" not in attempted
+        and (
+            retry_query := _failed_query_fields_retry_args(record, user_text=user_text)
+        )
+    ):
+        return "inject_failed_query_fields_retry", [("query", retry_query)]
+    if (
+        "query" in available_tool_names
         and "inject_empty_text_filter_retry" not in attempted
         and (retry_query := _empty_text_filter_retry_args(record))
     ):
         return "inject_empty_text_filter_retry", [("query", retry_query)]
     if (
-        "query" in available_tool_names
-        and "inject_target_project_query" not in attempted
+        "get_manager_schema" in available_tool_names
+        and "inject_target_schema_after_path" not in attempted
         and (
-            project_query := _project_query_from_part_material_result(
+            schema_args := _target_schema_after_path_args(
                 user_text=user_text,
                 record=record,
             )
         )
     ):
-        return "inject_target_project_query", [("query", project_query)]
+        return "inject_target_schema_after_path", [("get_manager_schema", schema_args)]
     if (
         "query" in available_tool_names
-        and "inject_project_material_query" not in attempted
+        and "inject_target_manager_list_query" not in attempted
         and (
-            project_query := _project_material_query_from_user_text(
+            target_recovery := _target_manager_list_recovery_tools(
                 user_text=user_text,
                 record=record,
             )
         )
     ):
-        return "inject_project_material_query", [("query", project_query)]
+        return "inject_target_manager_list_query", target_recovery
+    if (
+        "query" in available_tool_names
+        and "inject_anchor_relation_query" not in attempted
+        and (
+            anchor_recovery := _anchor_relation_recovery_tools(
+                user_text=user_text,
+                record=record,
+            )
+        )
+    ):
+        return "inject_anchor_relation_query", anchor_recovery
+    if (
+        "query" in available_tool_names
+        and "inject_target_manager_filter_query" not in attempted
+        and (
+            target_recovery := _target_manager_filter_recovery_tools(
+                user_text=user_text,
+                record=record,
+                available_tool_names=available_tool_names,
+            )
+        )
+    ):
+        return "inject_target_manager_filter_query", target_recovery
+    if (
+        "find_path" in available_tool_names
+        and "inject_discovered_manager_path" not in attempted
+        and (path_args := _discovered_manager_path_args(record))
+    ):
+        return "inject_discovered_manager_path", [("find_path", path_args)]
     if (
         "get_manager_schema" in available_tool_names
         and "inject_schema_after_relation_query" not in attempted
@@ -572,18 +866,6 @@ def _build_priority_harness_tool_recovery(
         )
     ):
         return "inject_relation_query_fields", [("query", relation_query)]
-    if (
-        "find_path" in available_tool_names
-        and "inject_cross_manager_path" not in attempted
-        and (
-            path_args := _cross_manager_path_args(
-                user_text=user_text,
-                assistant_text=assistant_text,
-                record=record,
-            )
-        )
-    ):
-        return "inject_cross_manager_path", [("find_path", path_args)]
     return None
 
 
@@ -642,6 +924,8 @@ def _should_recover_answer_without_successful_query(
 ) -> bool:
     if _is_manager_discovery_question(user_text):
         return False
+    if _has_unavailable_requested_manager_search(user_text, record):
+        return False
     if _has_successful_query(record):
         return False
     return should_recover_answer_without_query(
@@ -666,6 +950,16 @@ def _should_recover_failed_query_answer(
         bool(assistant_text.strip())
         and _has_failed_query(record)
         and not _has_successful_query(record)
+    )
+
+
+def _should_recover_tool_bridge_answer(
+    _user_text: str,
+    assistant_text: str,
+    record: TurnRecord,
+) -> bool:
+    return _is_tool_bridge_answer(assistant_text) and any(
+        _tool_result_has_successful_evidence(result) for result in record.tool_results
     )
 
 
@@ -714,26 +1008,19 @@ def _should_recover_unavailable_manager_echo(
         return False
     if not _has_tool_call(record, "search_managers"):
         return False
-    return not _search_results_include_manager(record, requested_manager)
+    return _has_unavailable_requested_manager_search(user_text, record)
 
 
-def _sanitize_unavailable_manager_echo(
-    *,
+def _has_unavailable_requested_manager_search(
     user_text: str,
-    assistant_text: str,
     record: TurnRecord,
-) -> str:
-    if not _should_recover_unavailable_manager_echo(user_text, assistant_text, record):
-        return assistant_text
+) -> bool:
     requested_manager = _requested_manager_name(user_text)
     if requested_manager is None:
-        return assistant_text
-    return re.sub(
-        re.escape(requested_manager),
-        "that requested manager",
-        assistant_text,
-        flags=re.IGNORECASE,
-    )
+        return False
+    if not _has_tool_call(record, "search_managers"):
+        return False
+    return not _search_results_include_manager(record, requested_manager)
 
 
 def _build_failed_query_recovery_message(user_text: str) -> str:
@@ -763,10 +1050,41 @@ def _build_model_discovery_recovery_message(user_text: str) -> str:
 
 def _build_unavailable_manager_echo_recovery_message(_user_text: str) -> str:
     return (
-        "Do not repeat unavailable manager names from the user. The requested "
-        "manager is not exposed. Write a corrected final answer that says you "
-        "do not have access to that requested manager, list exposed managers "
-        "from tool results when available, and do not call query or mutate."
+        "Do not repeat, spell, quote, or copy unavailable manager names from "
+        "the user. Your next answer must not contain any user-provided token "
+        "ending in Manager. The requested manager is not exposed. Write a "
+        "corrected final answer that uses the phrase 'that requested manager', "
+        "lists exposed managers from tool results when available, and does "
+        "not call query or mutate."
+    )
+
+
+def _build_unavailable_manager_echo_final_recovery_message(_user_text: str) -> str:
+    return (
+        "The previous answer still copied the unavailable manager name. Write "
+        "a corrected final answer in two short sentences. Use the exact phrase "
+        "'that requested manager' for the unavailable target. Do not write, "
+        "spell, quote, or copy any other manager name from the user. You may "
+        "list only exposed manager names from the search_managers tool result."
+    )
+
+
+def _build_unavailable_manager_echo_minimal_recovery_message(_user_text: str) -> str:
+    return (
+        "The previous answer still failed because it included the unavailable "
+        "manager name. Reply with exactly this sentence and nothing else: "
+        "I do not have access to that requested manager."
+    )
+
+
+def _build_tool_bridge_answer_recovery_message(user_text: str) -> str:
+    return (
+        "The previous response was an internal tool bridge, not a final answer. "
+        "Write a concise final answer from the previous tool result values. "
+        "Include the actual returned values that answer the user. Do not mention "
+        "tool calls or ask to run another query. Do not include code fences, raw "
+        "GraphQL, JSON tool arguments, YAML, or query examples. Do not propose "
+        f"another query after data has already been returned. User question: {user_text}"
     )
 
 
@@ -787,6 +1105,34 @@ def _has_successful_query(record: TurnRecord) -> bool:
         and "error" not in _as_dict(result)
         and isinstance(_as_dict(result).get("data"), list)
         for call, result in zip(record.tool_calls, record.tool_results, strict=False)
+    )
+
+
+def _has_non_empty_successful_query(record: TurnRecord) -> bool:
+    return any(
+        call.get("name") == "query"
+        and "error" not in _as_dict(result)
+        and isinstance(_as_dict(result).get("data"), list)
+        and bool(_as_dict(result).get("data"))
+        for call, result in zip(record.tool_calls, record.tool_results, strict=False)
+    )
+
+
+def _tool_result_has_successful_evidence(result: Any) -> bool:
+    if isinstance(result, list):
+        return bool(result)
+    result_dict = _as_dict(result)
+    if "error" in result_dict:
+        return False
+    if isinstance(result_dict.get("data"), list):
+        return True
+    return bool(result_dict)
+
+
+def _is_tool_bridge_answer(assistant_text: str) -> bool:
+    normalized = assistant_text.strip()
+    return normalized.startswith("Called tool ") and (
+        "next message is the tool result" in normalized
     )
 
 
@@ -822,6 +1168,46 @@ def _should_block_discovery_data_query(*, user_text: str, tool_name: str) -> boo
     return tool_name == "query" and _is_broad_manager_discovery_question(user_text)
 
 
+def _should_block_relationship_data_query(
+    *,
+    user_text: str,
+    tool_name: str,
+    record: TurnRecord,
+) -> bool:
+    return (
+        tool_name == "query"
+        and _is_relationship_only_question(user_text)
+        and _has_tool_call(record, "find_path")
+    )
+
+
+def _is_relationship_only_question(user_text: str) -> bool:
+    normalized = user_text.casefold()
+    has_relationship_marker = any(
+        marker in normalized
+        for marker in (
+            "how are",
+            "related",
+            "relationship",
+            "relationships",
+            "path between",
+        )
+    )
+    has_data_row_marker = any(
+        marker in normalized
+        for marker in (
+            "which ",
+            "list ",
+            "show ",
+            "find ",
+            "how many ",
+            "what parts",
+            "what projects",
+        )
+    )
+    return has_relationship_marker and not has_data_row_marker
+
+
 def _needs_manager_discovery_search(
     *,
     user_text: str,
@@ -843,206 +1229,6 @@ def _has_non_empty_search_result(record: TurnRecord) -> bool:
     return False
 
 
-def _synthesize_answer_from_tool_results(
-    *,
-    user_text: str,
-    assistant_text: str,
-    record: TurnRecord,
-) -> str | None:
-    if not _is_tool_bridge_answer(assistant_text):
-        return None
-    return _synthesize_answer_from_record(user_text=user_text, record=record)
-
-
-def _synthesize_answer_from_record(
-    *,
-    user_text: str,
-    record: TurnRecord,
-) -> str | None:
-    rows = _query_rows_from_record(record)
-    if not _is_manager_discovery_question(user_text):
-        if rows:
-            return "Returned rows: " + _summarize_rows(rows) + "."
-        if path := _last_path_result(record):
-            return "Relationship path: " + _format_path(path) + "."
-        return None
-
-    manager_names = _manager_names_from_record(record)
-    lines = ["Available managers: " + ", ".join(manager_names) + "."]
-    if path := _last_path_result(record):
-        lines.append("Relationship path: " + " -> ".join(path) + ".")
-    if rows:
-        lines.append("Returned rows: " + _summarize_rows(rows) + ".")
-    return "\n".join(lines)
-
-
-def _repair_contradictory_answer_from_tool_results(
-    *,
-    answer_text: str,
-    record: TurnRecord,
-) -> str | None:
-    if not _query_rows_from_record(record):
-        return None
-    normalized = answer_text.casefold()
-    contradiction_markers = (
-        "cannot confirm",
-        "no affected project",
-        "no matching",
-        "no project records",
-        "no projects",
-        "not affected",
-        "not flagged",
-        "returned no results",
-    )
-    if not any(marker in normalized for marker in contradiction_markers):
-        return None
-    return "Returned rows: " + _summarize_rows(_query_rows_from_record(record)) + "."
-
-
-def _repair_incomplete_discovery_answer(
-    *,
-    user_text: str,
-    answer_text: str,
-    record: TurnRecord,
-) -> str | None:
-    if not _is_manager_discovery_question(user_text):
-        return None
-    rows = _query_rows_from_record(record)
-    if rows and (
-        _answer_defers_after_query(answer_text)
-        or _answer_omits_query_evidence(
-            user_text=user_text,
-            answer_text=answer_text,
-            rows=rows,
-        )
-    ):
-        return _synthesize_answer_from_record(user_text=user_text, record=record)
-    required_terms = _discovered_domain_terms(record)
-    if not required_terms:
-        return None
-    answer_lower = answer_text.casefold()
-    if all(_answer_contains_term(answer_lower, term) for term in required_terms):
-        return None
-    return _synthesize_answer_from_record(user_text=user_text, record=record)
-
-
-def _answer_defers_after_query(answer_text: str) -> bool:
-    normalized = answer_text.casefold()
-    return any(
-        marker in normalized
-        for marker in (
-            "do you want me to run",
-            "i can run a query",
-            "i can run this query",
-            "if you want, i can run",
-            "let me know if you want me to run",
-            "should i run",
-            "would you like me to query",
-            "would you like me to run",
-        )
-    )
-
-
-def _answer_omits_query_evidence(
-    *,
-    user_text: str,
-    answer_text: str,
-    rows: list[dict[str, Any]],
-) -> bool:
-    user_lower = user_text.casefold()
-    answer_lower = answer_text.casefold()
-    informative_values = [
-        value
-        for value in _query_scalar_values(rows)
-        if value.casefold() not in user_lower
-    ]
-    return bool(informative_values) and not any(
-        value.casefold() in answer_lower for value in informative_values
-    )
-
-
-def _query_scalar_values(rows: list[dict[str, Any]]) -> list[str]:
-    values: list[str] = []
-    for row in rows:
-        _collect_scalar_values(row, values)
-    return list(dict.fromkeys(value for value in values if value))
-
-
-def _discovered_domain_terms(record: TurnRecord) -> set[str]:
-    terms: set[str] = set()
-    for manager_name in _manager_names_from_record(record):
-        if manager_name.endswith("Manager"):
-            terms.add(manager_name.removesuffix("Manager").casefold())
-    if path := _last_path_result(record):
-        for item in path:
-            term = item.casefold()
-            terms.add(term[:-1] if term.endswith("s") else term)
-    return {term for term in terms if term}
-
-
-def _answer_contains_term(answer_lower: str, term: str) -> bool:
-    plural = f"{term}s"
-    return term in answer_lower or plural in answer_lower
-
-
-def _format_path(path: list[str]) -> str:
-    return " -> ".join(path)
-
-
-def _manager_names_from_record(record: TurnRecord) -> list[str]:
-    names: list[str] = []
-    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
-        if call.get("name") == "search_managers" and isinstance(result, list):
-            for item in result:
-                manager = _as_dict(item).get("manager")
-                if isinstance(manager, str) and manager not in names:
-                    names.append(manager)
-        elif call.get("name") == "get_manager_schema":
-            manager = _as_dict(result).get("manager")
-            if isinstance(manager, str) and manager not in names:
-                names.append(manager)
-    return names
-
-
-def _last_path_result(record: TurnRecord) -> list[str] | None:
-    for call, result in reversed(
-        list(zip(record.tool_calls, record.tool_results, strict=False))
-    ):
-        if call.get("name") == "find_path" and isinstance(result, list):
-            return [str(item) for item in result]
-    return None
-
-
-def _query_rows_from_record(record: TurnRecord) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
-        result_dict = _as_dict(result)
-        if call.get("name") != "query" or not isinstance(result_dict.get("data"), list):
-            continue
-        rows.extend(row for row in result_dict["data"] if isinstance(row, dict))
-    return rows
-
-
-def _summarize_rows(rows: list[dict[str, Any]]) -> str:
-    values: list[str] = []
-    for row in rows:
-        _collect_scalar_values(row, values)
-    return ", ".join(dict.fromkeys(values))
-
-
-def _collect_scalar_values(value: Any, output: list[str]) -> None:
-    if isinstance(value, dict):
-        for child in value.values():
-            _collect_scalar_values(child, output)
-        return
-    if isinstance(value, list):
-        for child in value:
-            _collect_scalar_values(child, output)
-        return
-    if isinstance(value, str | int | float | bool):
-        output.append(str(value))
-
-
 def _empty_text_filter_retry_args(record: TurnRecord) -> dict[str, Any] | None:
     schemas = {
         str(schema.get("manager", "")): schema for schema in _manager_schemas(record)
@@ -1059,13 +1245,30 @@ def _empty_text_filter_retry_args(record: TurnRecord) -> dict[str, Any] | None:
         manager = args.get("manager")
         if not isinstance(manager, str):
             return None
+        filters = _as_dict(args.get("filters"))
+        empty_filter_keys = [
+            key
+            for key, value in filters.items()
+            if isinstance(key, str) and (value == "" or value is None)
+        ]
+        if empty_filter_keys:
+            retry_args = args.copy()
+            retry_filters = {
+                key: value
+                for key, value in filters.items()
+                if key not in empty_filter_keys
+            }
+            if retry_filters:
+                retry_args["filters"] = retry_filters
+            else:
+                retry_args.pop("filters", None)
+            return retry_args
         schema = schemas.get(manager)
         if schema is None:
             return None
         schema_filters = {
             str(item) for item in schema.get("filters", []) if isinstance(item, str)
         }
-        filters = _as_dict(args.get("filters"))
         for key, value in filters.items():
             retry_key = f"{key}__icontains"
             if retry_key not in schema_filters or not isinstance(value, str):
@@ -1078,6 +1281,388 @@ def _empty_text_filter_retry_args(record: TurnRecord) -> dict[str, Any] | None:
             return retry_args
         return None
     return None
+
+
+def _structured_filter_retry_args(record: TurnRecord) -> dict[str, Any] | None:
+    pairs = list(zip(record.tool_calls, record.tool_results, strict=False))
+    for index, (call, result) in enumerate(pairs):
+        if call.get("name") != "query":
+            continue
+        result_dict = _as_dict(result)
+        if "error" not in result_dict:
+            continue
+        args = _as_dict(call.get("args"))
+        manager = args.get("manager")
+        if not isinstance(manager, str) or not manager:
+            continue
+        parsed_filters = _parse_text_filter_mapping(args.get("filters"))
+        if not parsed_filters:
+            continue
+        if _has_later_successful_query_with_filters(
+            pairs=pairs,
+            start=index,
+            manager=manager,
+            expected_filters=parsed_filters,
+        ):
+            continue
+
+        retry_args = _latest_later_successful_query_args(
+            pairs=pairs,
+            start=index,
+            manager=manager,
+        )
+        if retry_args is None:
+            retry_args = args.copy()
+        else:
+            retry_args = retry_args.copy()
+        retry_args["manager"] = manager
+        retry_filters = _as_dict(retry_args.get("filters")).copy()
+        retry_filters.update(parsed_filters)
+        retry_args["filters"] = retry_filters
+
+        fields = retry_args.get("fields")
+        if not isinstance(fields, list | dict):
+            parsed_fields = _parse_text_fields(args.get("fields"))
+            if parsed_fields:
+                retry_args["fields"] = parsed_fields
+        return retry_args
+    return None
+
+
+def _structured_filter_retry_args_for_candidate(
+    *,
+    record: TurnRecord,
+    candidate_args: dict[str, Any],
+) -> dict[str, Any] | None:
+    manager = candidate_args.get("manager")
+    if not isinstance(manager, str) or not manager:
+        return None
+    candidate_filters = _as_dict(candidate_args.get("filters"))
+    for call, result in reversed(
+        list(zip(record.tool_calls, record.tool_results, strict=False))
+    ):
+        if call.get("name") != "query":
+            continue
+        result_dict = _as_dict(result)
+        if "error" not in result_dict:
+            continue
+        args = _as_dict(call.get("args"))
+        if args.get("manager") != manager:
+            continue
+        parsed_filters = _parse_text_filter_mapping(args.get("filters"))
+        if not parsed_filters:
+            continue
+        if all(
+            candidate_filters.get(key) == value for key, value in parsed_filters.items()
+        ):
+            return None
+
+        retry_args = candidate_args.copy()
+        retry_filters = candidate_filters.copy()
+        retry_filters.update(parsed_filters)
+        retry_args["filters"] = retry_filters
+        fields = retry_args.get("fields")
+        if not isinstance(fields, list | dict):
+            parsed_fields = _parse_text_fields(args.get("fields"))
+            if parsed_fields:
+                retry_args["fields"] = parsed_fields
+        return retry_args
+    return None
+
+
+def _has_later_successful_query_with_filters(
+    *,
+    pairs: list[tuple[dict[str, Any], Any]],
+    start: int,
+    manager: str,
+    expected_filters: dict[str, Any],
+) -> bool:
+    for call, result in pairs[start + 1 :]:
+        args = _as_dict(call.get("args"))
+        result_dict = _as_dict(result)
+        if (
+            call.get("name") != "query"
+            or args.get("manager") != manager
+            or "error" in result_dict
+            or not isinstance(result_dict.get("data"), list)
+        ):
+            continue
+        filters = _as_dict(args.get("filters"))
+        if all(filters.get(key) == value for key, value in expected_filters.items()):
+            return True
+    return False
+
+
+def _latest_later_successful_query_args(
+    *,
+    pairs: list[tuple[dict[str, Any], Any]],
+    start: int,
+    manager: str,
+) -> dict[str, Any] | None:
+    for call, result in reversed(pairs[start + 1 :]):
+        args = _as_dict(call.get("args"))
+        result_dict = _as_dict(result)
+        if (
+            call.get("name") == "query"
+            and args.get("manager") == manager
+            and "error" not in result_dict
+            and isinstance(result_dict.get("data"), list)
+        ):
+            return args
+    return None
+
+
+def _parse_text_filter_mapping(value: Any) -> dict[str, str]:
+    if not isinstance(value, str):
+        return {}
+    text = value.strip().strip("[]{}")
+    filters: dict[str, str] = {}
+    for part in text.split(","):
+        raw_part = part.strip()
+        if not raw_part:
+            continue
+        if ":" in raw_part:
+            raw_key, raw_value = raw_part.split(":", 1)
+        elif "=" in raw_part:
+            raw_key, raw_value = raw_part.split("=", 1)
+        else:
+            continue
+        key = re.sub(r"[^A-Za-z0-9_]+", "", raw_key)
+        parsed_value = raw_value.strip().strip("'\"")
+        if key and parsed_value:
+            filters[key] = parsed_value
+    return filters
+
+
+def _parse_text_field_selection(value: Any) -> list[Any]:
+    if not isinstance(value, str):
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return _parse_text_fields(value)
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, dict | str):
+        return [parsed]
+    return []
+
+
+def _parse_text_fields(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    text = value.strip().strip("[]{}")
+    fields = []
+    for part in text.split(","):
+        field = re.sub(r"[^A-Za-z0-9_]+", "", part)
+        if field:
+            fields.append(field)
+    return fields
+
+
+def _failed_query_fields_retry_args(
+    record: TurnRecord,
+    *,
+    user_text: str,
+) -> dict[str, Any] | None:
+    schemas_by_manager = {
+        str(schema.get("manager", "")): schema for schema in _manager_schemas(record)
+    }
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    pairs = list(zip(record.tool_calls, record.tool_results, strict=False))
+    for index, (call, result) in enumerate(pairs):
+        if call.get("name") != "query":
+            continue
+        result_dict = _as_dict(result)
+        args = _as_dict(call.get("args"))
+        if not _query_error_supports_field_retry(result_dict, args):
+            continue
+        manager = args.get("manager")
+        if not isinstance(manager, str):
+            continue
+        schema = schemas_by_manager.get(manager)
+        if schema is None:
+            continue
+        retry_fields = _sanitize_query_fields(
+            args.get("fields"),
+            schema=schema,
+            schemas_by_manager=schemas_by_manager,
+        )
+        if not retry_fields or retry_fields == args.get("fields"):
+            continue
+        if _has_later_query_with_fields(
+            pairs=pairs,
+            start=index,
+            manager=manager,
+            fields=retry_fields,
+        ):
+            continue
+        retry_args = args.copy()
+        retry_args["fields"] = retry_fields
+        retry_filters = _sanitize_query_filters(
+            args.get("filters"),
+            user_text=user_text,
+        )
+        if retry_filters:
+            retry_args["filters"] = retry_filters
+        else:
+            retry_args.pop("filters", None)
+        candidates.append((_field_selection_score(retry_fields), index, retry_args))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], -item[1]))
+    return candidates[0][2]
+
+
+def _sanitize_query_filters(
+    filters: Any,
+    *,
+    user_text: str,
+) -> dict[str, Any]:
+    if not isinstance(filters, dict):
+        return {}
+    normalized_user_text = user_text.casefold()
+    sanitized: dict[str, Any] = {}
+    for key, value in filters.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, str):
+            if value and value.casefold() in normalized_user_text:
+                sanitized[key] = value
+            continue
+        sanitized[key] = value
+    return sanitized
+
+
+def _query_error_mentions_invalid_field(result: dict[str, Any]) -> bool:
+    error = result.get("error")
+    if not isinstance(error, str):
+        return False
+    normalized = error.casefold()
+    return "cannot query field" in normalized or "is not defined by type" in normalized
+
+
+def _query_error_supports_field_retry(
+    result: dict[str, Any],
+    args: dict[str, Any],
+) -> bool:
+    if _query_error_mentions_invalid_field(result):
+        return True
+    if not isinstance(args.get("fields"), str):
+        return False
+    error = result.get("error")
+    if not isinstance(error, str):
+        return False
+    normalized = error.casefold()
+    return "syntax error" in normalized or "unexpected character" in normalized
+
+
+def _has_later_query_with_fields(
+    *,
+    pairs: list[tuple[dict[str, Any], Any]],
+    start: int,
+    manager: str,
+    fields: list[Any],
+) -> bool:
+    for call, _result in pairs[start + 1 :]:
+        args = _as_dict(call.get("args"))
+        if call.get("name") == "query" and args.get("manager") == manager:
+            if args.get("fields") == fields:
+                return True
+    return False
+
+
+def _sanitize_query_fields(
+    fields: Any,
+    *,
+    schema: dict[str, Any],
+    schemas_by_manager: dict[str, dict[str, Any]],
+) -> list[Any]:
+    scalar_fields = {
+        str(field) for field in schema.get("fields", []) if isinstance(field, str)
+    }
+    relation_targets = {
+        str(_as_dict(relation).get("name")): str(_as_dict(relation).get("target"))
+        for relation in schema.get("relations", [])
+        if isinstance(_as_dict(relation).get("name"), str)
+        and isinstance(_as_dict(relation).get("target"), str)
+    }
+    if isinstance(fields, str):
+        parsed_fields = _parse_text_field_selection(fields)
+        requested_fields = parsed_fields if parsed_fields else [fields]
+    else:
+        requested_fields = fields if isinstance(fields, list) else [fields]
+    sanitized: list[Any] = []
+    for requested_field in requested_fields:
+        if isinstance(requested_field, str):
+            if requested_field in scalar_fields:
+                sanitized.append(requested_field)
+            continue
+        if not isinstance(requested_field, dict):
+            continue
+        for relation_name, child_fields in requested_field.items():
+            if (
+                not isinstance(relation_name, str)
+                or relation_name not in relation_targets
+            ):
+                continue
+            child_schema = schemas_by_manager.get(relation_targets[relation_name])
+            if child_schema is None:
+                sanitized_child = _fallback_relation_query_fields(child_fields)
+            else:
+                sanitized_child = _sanitize_query_fields(
+                    child_fields,
+                    schema=child_schema,
+                    schemas_by_manager=schemas_by_manager,
+                )
+            sanitized.append({relation_name: sanitized_child or ["name"]})
+    if not any(isinstance(field, str) for field in sanitized):
+        if "name" in scalar_fields:
+            sanitized.insert(0, "name")
+        elif scalar_fields:
+            sanitized.insert(0, sorted(scalar_fields)[0])
+    return _dedupe_field_selection(sanitized)
+
+
+def _fallback_relation_query_fields(fields: Any) -> list[Any]:
+    requested_fields = fields if isinstance(fields, list) else [fields]
+    scalar_names = [field for field in requested_fields if isinstance(field, str)]
+    if "name" in scalar_names:
+        return ["name"]
+    if scalar_names:
+        return [scalar_names[0]]
+    return ["name"]
+
+
+def _dedupe_field_selection(fields: list[Any]) -> list[Any]:
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for selected_field in fields:
+        key = json.dumps(selected_field, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(selected_field)
+    return deduped
+
+
+def _field_selection_score(fields: list[Any]) -> int:
+    score = 0
+    for selected_field in fields:
+        if isinstance(selected_field, dict):
+            score += 3
+            score += _field_selection_score(
+                [
+                    child
+                    for child_fields in selected_field.values()
+                    for child in (
+                        child_fields if isinstance(child_fields, list) else []
+                    )
+                ]
+            )
+        elif isinstance(selected_field, str):
+            score += 1
+    return score
 
 
 def _zero_limit_retry_args(record: TurnRecord) -> dict[str, Any] | None:
@@ -1105,101 +1690,772 @@ def _zero_limit_retry_args(record: TurnRecord) -> dict[str, Any] | None:
     return None
 
 
-def _project_query_from_part_material_result(
+def _anchor_relation_recovery_tools_for_candidate(
     *,
     user_text: str,
     record: TurnRecord,
-) -> dict[str, Any] | None:
-    normalized = user_text.casefold()
-    if "project" not in normalized:
+    candidate_args: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]] | None:
+    target_manager = candidate_args.get("manager")
+    if not isinstance(target_manager, str) or not target_manager:
         return None
-    if _has_successful_query_for_manager(record, "ProjectManager"):
+    value = _candidate_user_filter_value(
+        candidate_args=candidate_args,
+        user_text=user_text,
+        record=record,
+    )
+    if value is None:
         return None
-    material_name = _material_name_from_successful_part_query(record)
-    if material_name is None:
-        return None
-    return {
-        "manager": "ProjectManager",
-        "filters": {"parts__material__name": material_name},
-        "fields": ["name"],
-    }
+    return _anchor_relation_recovery_tools(
+        user_text=user_text,
+        record=record,
+        target_manager=target_manager,
+        value=value,
+    )
 
 
-def _project_material_query_from_user_text(
+def _anchor_relation_recovery_tools(
     *,
     user_text: str,
     record: TurnRecord,
+    target_manager: str | None = None,
+    value: str | None = None,
+) -> list[tuple[str, dict[str, Any]]] | None:
+    target_summary = _requested_target_manager_summary(user_text, record)
+    if target_manager is None and target_summary is not None:
+        requested_manager = target_summary.get("manager")
+        if isinstance(requested_manager, str) and requested_manager:
+            target_manager = requested_manager
+    if not target_manager:
+        return None
+
+    value = value or _target_filter_value(user_text=user_text, record=record)
+    if value is None:
+        return None
+
+    anchor = _anchor_relation_query_args(
+        user_text=user_text,
+        record=record,
+        target_manager=target_manager,
+        value=value,
+    )
+    if anchor is None:
+        return None
+    return [("query", anchor)]
+
+
+def _anchor_relation_query_args(
+    *,
+    user_text: str,
+    record: TurnRecord,
+    target_manager: str,
+    value: str,
 ) -> dict[str, Any] | None:
     normalized = user_text.casefold()
-    if _is_broad_manager_discovery_question(user_text):
+    candidates: list[tuple[int, int, str, str, str, dict[str, Any]]] = []
+    for schema in _manager_schemas(record):
+        manager = str(schema.get("manager", ""))
+        if not manager or manager == target_manager:
+            continue
+        manager_tokens = _manager_name_tokens(manager)
+        manager_score = sum(
+            _text_contains_token(normalized, token) for token in manager_tokens
+        )
+        if not manager_score:
+            continue
+        relation_name = _requested_relation_name(schema, normalized)
+        if relation_name is None:
+            continue
+        relation_target = _relation_target_manager(schema, relation_name)
+        if relation_target != target_manager:
+            continue
+        filter_key = _anchor_scalar_filter_key(schema)
+        if filter_key is None:
+            continue
+        if _has_successful_anchor_relation_query(
+            record=record,
+            manager=manager,
+            value=value,
+            relation_name=relation_name,
+        ):
+            continue
+        relation_position = _token_position(normalized, relation_name)
+        candidates.append(
+            (
+                manager_score,
+                relation_position,
+                manager,
+                relation_name,
+                filter_key,
+                schema,
+            )
+        )
+    if not candidates:
         return None
-    if "project" not in normalized or "part" not in normalized:
-        return None
-    if not _has_tool_call(record, "find_path"):
-        return None
-    if _has_successful_query_for_manager(record, "ProjectManager"):
-        return None
-    material_name = _requested_material_name_from_text(normalized)
-    if material_name is None:
-        return None
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2], item[3], item[4]))
+    _, _, manager, relation_name, filter_key, schema = candidates[0]
     return {
-        "manager": "ProjectManager",
-        "filters": {"parts__material__name__icontains": material_name},
-        "fields": ["name", {"parts": ["name", {"material": ["name"]}]}],
+        "manager": manager,
+        "filters": {filter_key: value},
+        "fields": _relation_query_fields_for_query(
+            schema=schema,
+            relation_name=relation_name,
+            query_args={"filters": {filter_key: value}},
+        ),
     }
 
 
-def _requested_material_name_from_text(normalized_user_text: str) -> str | None:
-    for material_name in ("aluminum", "cobalt", "steel"):
-        if material_name in normalized_user_text:
-            return material_name
+def _candidate_user_filter_value(
+    *,
+    candidate_args: dict[str, Any],
+    user_text: str,
+    record: TurnRecord,
+) -> str | None:
+    normalized = user_text.casefold()
+    schema_tokens = _schema_tokens(record)
+    for value in _as_dict(candidate_args.get("filters")).values():
+        if not isinstance(value, str) or not value:
+            continue
+        if value.casefold() not in normalized:
+            continue
+        value_tokens = set(_tokenize_text(value))
+        if value_tokens and value_tokens.issubset(schema_tokens):
+            continue
+        return value
     return None
 
 
-def _cross_manager_path_args(
+def _relation_target_manager(
+    schema: dict[str, Any],
+    relation_name: str,
+) -> str | None:
+    for relation in schema.get("relations", []):
+        relation_dict = _as_dict(relation)
+        if relation_dict.get("name") != relation_name:
+            continue
+        target = relation_dict.get("target")
+        return target if isinstance(target, str) and target else None
+    return None
+
+
+def _anchor_scalar_filter_key(schema: dict[str, Any]) -> str | None:
+    filters = [
+        str(item)
+        for item in schema.get("filters", [])
+        if isinstance(item, str) and _relation_selection_from_filter_key(item) is None
+    ]
+    for preferred in (
+        "name",
+        "name__icontains",
+        "title",
+        "title__icontains",
+        "label",
+        "label__icontains",
+    ):
+        if preferred in filters:
+            return preferred
+    return None
+
+
+def _has_successful_anchor_relation_query(
+    *,
+    record: TurnRecord,
+    manager: str,
+    value: str,
+    relation_name: str,
+) -> bool:
+    normalized_value = value.casefold()
+    relation_selection = {relation_name: ["name"]}
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        args = _as_dict(call.get("args"))
+        result_dict = _as_dict(result)
+        if (
+            call.get("name") != "query"
+            or args.get("manager") != manager
+            or "error" in result_dict
+            or not isinstance(result_dict.get("data"), list)
+        ):
+            continue
+        if not any(
+            isinstance(filter_value, str)
+            and filter_value.casefold() == normalized_value
+            for filter_value in _as_dict(args.get("filters")).values()
+        ):
+            continue
+        if _rows_cover_relation_selection(result_dict["data"], relation_selection):
+            return True
+    return False
+
+
+def _target_manager_filter_recovery_tools(
     *,
     user_text: str,
-    assistant_text: str,
     record: TurnRecord,
-) -> dict[str, str] | None:
-    if _has_tool_call(record, "find_path"):
+    available_tool_names: set[str],
+) -> list[tuple[str, dict[str, Any]]] | None:
+    target_summary = _requested_target_manager_summary(user_text, record)
+    if target_summary is None:
         return None
-    normalized = user_text.casefold()
-    if not _has_tool_call(record, "search_managers"):
+    target_manager = str(target_summary.get("manager", ""))
+    if not target_manager:
         return None
-    if not _is_tool_bridge_answer(assistant_text) and not (
-        "which" in normalized and "project" in normalized and "use" in normalized
+    if _has_successful_query_evidence_for_target(record, target_summary):
+        return None
+
+    value = _target_filter_value(user_text=user_text, record=record)
+    if value is None:
+        return None
+    filter_key = _target_relation_filter_key(
+        user_text=user_text,
+        record=record,
+        target_summary=target_summary,
+    )
+    if filter_key is None:
+        return None
+    if _has_successful_query_for_manager_with_filter_value(
+        record=record,
+        manager=target_manager,
+        value=value,
     ):
         return None
-    mentions_project = "project" in normalized
-    mentions_part = "part" in normalized
-    mentions_material = any(
-        marker in normalized
-        for marker in ("material", "materials", "aluminum", "cobalt", "steel")
+
+    tools: list[tuple[str, dict[str, Any]]] = []
+    source_manager = _source_manager_for_filter(record, target_manager, filter_key)
+    if (
+        source_manager is not None
+        and "find_path" in available_tool_names
+        and not _has_tool_call(record, "find_path")
+    ):
+        tools.append(
+            (
+                "find_path",
+                {
+                    "from_manager": target_manager,
+                    "to_manager": source_manager,
+                },
+            )
+        )
+    tools.append(
+        (
+            "query",
+            {
+                "manager": target_manager,
+                "filters": {filter_key: value},
+                "fields": _target_query_fields(target_summary, filter_key),
+            },
+        )
     )
-    if mentions_project and mentions_material:
-        return {
-            "from_manager": "ProjectManager",
-            "to_manager": "MaterialManager",
-        }
-    if mentions_project and mentions_part:
-        return {
-            "from_manager": "ProjectManager",
-            "to_manager": "PartManager",
-        }
-    if mentions_part and mentions_material:
-        return {
-            "from_manager": "PartManager",
-            "to_manager": "MaterialManager",
-        }
+    return tools
+
+
+def _target_manager_filter_recovery_tools_for_candidate(
+    *,
+    user_text: str,
+    record: TurnRecord,
+    candidate_args: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]] | None:
+    target_summary = _requested_target_manager_summary(user_text, record)
+    if target_summary is None:
+        return None
+    target_manager = str(target_summary.get("manager", ""))
+    if not target_manager or candidate_args.get("manager") != target_manager:
+        return None
+    value = _target_filter_value(user_text=user_text, record=record)
+    if value is None:
+        return None
+    candidate_filters = _as_dict(candidate_args.get("filters"))
+    normalized_user_text = user_text.casefold()
+    if any(
+        isinstance(filter_value, str)
+        and filter_value
+        and filter_value.casefold() in normalized_user_text
+        for filter_value in candidate_filters.values()
+    ):
+        return None
+    if any(
+        isinstance(filter_value, str)
+        and filter_value
+        and filter_value.casefold() == value.casefold()
+        for filter_value in candidate_filters.values()
+    ):
+        return None
+    filter_key = _target_relation_filter_key(
+        user_text=user_text,
+        record=record,
+        target_summary=target_summary,
+    )
+    if filter_key is None:
+        return None
+    return [
+        (
+            "query",
+            {
+                "manager": target_manager,
+                "filters": {filter_key: value},
+                "fields": _target_query_fields(target_summary, filter_key),
+            },
+        )
+    ]
+
+
+def _target_schema_after_path_args(
+    *,
+    user_text: str,
+    record: TurnRecord,
+) -> dict[str, str] | None:
+    normalized = user_text.casefold()
+    candidates: list[tuple[int, int, str]] = []
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        if (
+            call.get("name") != "find_path"
+            or not isinstance(result, list)
+            or not result
+        ):
+            continue
+        args = _as_dict(call.get("args"))
+        for manager_key in ("from_manager", "to_manager"):
+            manager = args.get(manager_key)
+            if not isinstance(manager, str) or not manager:
+                continue
+            if _has_schema_for_manager(record, manager):
+                continue
+            if _has_successful_query_for_manager(record, manager):
+                continue
+            manager_tokens = _manager_name_tokens(manager)
+            score = sum(
+                _text_contains_token(normalized, token) for token in manager_tokens
+            )
+            if not score:
+                continue
+            position = min(
+                (_token_position(normalized, token) for token in manager_tokens),
+                default=len(normalized),
+            )
+            candidates.append((score, position, manager))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return {"manager": candidates[0][2]}
+
+
+def _target_manager_list_recovery_tools(
+    *,
+    user_text: str,
+    record: TurnRecord,
+) -> list[tuple[str, dict[str, Any]]] | None:
+    target_summary = _requested_target_manager_summary(user_text, record)
+    if target_summary is None:
+        return None
+    target_manager = str(target_summary.get("manager", ""))
+    if not target_manager or _has_successful_query_for_manager(record, target_manager):
+        return None
+    if _has_successful_query_evidence_for_target(record, target_summary):
+        return None
+    if _target_filter_value(user_text=user_text, record=record) is not None:
+        return None
+    if not _is_target_manager_list_question(user_text, target_manager):
+        return None
+    return [
+        (
+            "query",
+            {
+                "manager": target_manager,
+                "fields": _target_list_query_fields(
+                    user_text=user_text,
+                    target_summary=target_summary,
+                ),
+            },
+        )
+    ]
+
+
+def _discovered_manager_path_args(record: TurnRecord) -> dict[str, str] | None:
+    if _has_tool_call(record, "find_path"):
+        return None
+    for call, result in reversed(
+        list(zip(record.tool_calls, record.tool_results, strict=False))
+    ):
+        if call.get("name") != "query":
+            continue
+        result_dict = _as_dict(result)
+        if "error" in result_dict or not isinstance(result_dict.get("data"), list):
+            continue
+        args = _as_dict(call.get("args"))
+        target_manager = args.get("manager")
+        if not isinstance(target_manager, str) or not target_manager:
+            continue
+        filters = _as_dict(args.get("filters"))
+        for filter_key in filters:
+            if not isinstance(filter_key, str) or not _filter_selection_has_relation(
+                {filter_key: filters[filter_key]}
+            ):
+                continue
+            source_manager = _source_manager_for_filter(
+                record,
+                target_manager,
+                filter_key,
+            )
+            if source_manager is None:
+                continue
+            return {
+                "from_manager": target_manager,
+                "to_manager": source_manager,
+            }
     return None
 
 
-def _is_tool_bridge_answer(assistant_text: str) -> bool:
-    normalized = assistant_text.strip()
-    return normalized.startswith("Called tool ") and (
-        "next message is the tool result" in normalized
+def _has_successful_query_evidence_for_target(
+    record: TurnRecord,
+    target_summary: dict[str, Any],
+) -> bool:
+    manager = str(target_summary.get("manager", ""))
+    target_tokens = _manager_name_tokens(manager)
+    if not target_tokens:
+        return False
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        if call.get("name") != "query":
+            continue
+        result_dict = _as_dict(result)
+        rows = result_dict.get("data")
+        if "error" in result_dict or not isinstance(rows, list) or not rows:
+            continue
+        if _value_has_key_matching_tokens(rows, target_tokens):
+            return True
+    return False
+
+
+def _value_has_key_matching_tokens(value: Any, tokens: set[str]) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(key, str) and tokens.intersection(_tokenize_text(key)):
+                return True
+            if _value_has_key_matching_tokens(child, tokens):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_value_has_key_matching_tokens(item, tokens) for item in value)
+    return False
+
+
+def _requested_target_manager_summary(
+    user_text: str,
+    record: TurnRecord,
+) -> dict[str, Any] | None:
+    normalized = user_text.casefold()
+    candidates: list[tuple[int, int, str, dict[str, Any]]] = []
+    for summary in _discovered_manager_summaries(record):
+        manager = str(summary.get("manager", ""))
+        if not manager:
+            continue
+        manager_tokens = _manager_name_tokens(manager)
+        score = sum(_text_contains_token(normalized, token) for token in manager_tokens)
+        if score:
+            position = min(
+                (_token_position(normalized, token) for token in manager_tokens),
+                default=len(normalized),
+            )
+            candidates.append((score, position, manager, summary))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return candidates[0][3]
+
+
+def _is_target_manager_list_question(user_text: str, target_manager: str) -> bool:
+    normalized = user_text.casefold()
+    target_tokens = _manager_name_tokens(target_manager)
+    if not any(_text_contains_token(normalized, token) for token in target_tokens):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:what|which|list|show|find|give|display)\b",
+            normalized,
+        )
     )
+
+
+def _target_filter_value(
+    *,
+    user_text: str,
+    record: TurnRecord,
+) -> str | None:
+    normalized = user_text.casefold()
+    for call, result in reversed(
+        list(zip(record.tool_calls, record.tool_results, strict=False))
+    ):
+        if call.get("name") != "query":
+            continue
+        args = _as_dict(call.get("args"))
+        filters = _as_dict(args.get("filters"))
+        for value in filters.values():
+            if isinstance(value, str) and value and value.casefold() in normalized:
+                return value
+        result_dict = _as_dict(result)
+        rows = result_dict.get("data")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            value = _first_user_mentioned_scalar(row, normalized)
+            if value is not None:
+                return value
+
+    excluded_tokens = _schema_tokens(record)
+    for token in _tokenize_text(user_text):
+        if token in _TARGET_VALUE_STOPWORDS or token in excluded_tokens:
+            continue
+        if len(token) < 3:
+            continue
+        return token
+    return None
+
+
+def _target_relation_filter_key(
+    *,
+    user_text: str,
+    record: TurnRecord,
+    target_summary: dict[str, Any],
+) -> str | None:
+    filters = [
+        str(item)
+        for item in target_summary.get("filters", [])
+        if isinstance(item, str)
+        and _relation_selection_from_filter_key(item) is not None
+    ]
+    if not filters:
+        return None
+    user_tokens = set(_tokenize_text(user_text))
+    source_tokens = _queried_manager_tokens(record)
+    scored: list[tuple[int, str]] = []
+    for filter_key in filters:
+        filter_tokens = set(_filter_path_tokens(filter_key))
+        score = len(filter_tokens.intersection(user_tokens))
+        score += 2 * len(filter_tokens.intersection(source_tokens))
+        if filter_key.endswith("__icontains"):
+            score += 1
+        if score > 0:
+            scored.append((score, filter_key))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return scored[0][1]
+
+
+def _target_query_fields(
+    target_summary: dict[str, Any],
+    filter_key: str,
+) -> list[Any]:
+    scalar_fields = [
+        str(field)
+        for field in target_summary.get("fields", [])
+        if isinstance(field, str) and field
+    ]
+    if not scalar_fields:
+        scalar_fields = ["name"]
+    relation_selection = _relation_selection_from_filter_key(filter_key)
+    if relation_selection is None:
+        return scalar_fields
+    return [*scalar_fields, relation_selection]
+
+
+def _target_list_query_fields(
+    *,
+    user_text: str,
+    target_summary: dict[str, Any],
+) -> list[Any]:
+    scalar_fields = [
+        str(field)
+        for field in target_summary.get("fields", [])
+        if isinstance(field, str) and field
+    ]
+    if not scalar_fields:
+        scalar_fields = ["name"]
+    normalized = user_text.casefold()
+    relation_fields = [
+        {relation_name: ["name"]}
+        for relation in target_summary.get("relations", [])
+        if (relation_name := str(_as_dict(relation).get("name", "")))
+        and any(
+            _text_contains_token(normalized, token)
+            for token in _tokenize_text(relation_name)
+        )
+    ]
+    return _dedupe_field_selection([*scalar_fields, *relation_fields])
+
+
+def _relation_selection_from_filter_key(filter_key: str) -> dict[str, Any] | None:
+    parts = filter_key.split("__")
+    if parts and parts[-1] in _LOOKUP_SUFFIXES:
+        parts = parts[:-1]
+    if len(parts) < 2:
+        return None
+    scalar = parts[-1]
+    relations = parts[:-1]
+    nested: list[Any] = [scalar]
+    for relation in reversed(relations):
+        nested = ["name", {relation: nested}]
+    selection = nested[1]
+    return selection if isinstance(selection, dict) else None
+
+
+def _source_manager_for_filter(
+    record: TurnRecord,
+    target_manager: str,
+    filter_key: str,
+) -> str | None:
+    filter_tokens = _filter_path_tokens(filter_key)
+    token_positions = {token: index for index, token in enumerate(filter_tokens)}
+    candidates: list[tuple[int, str]] = []
+    for summary in _discovered_manager_summaries(record):
+        manager = str(summary.get("manager", ""))
+        if not manager or manager == target_manager:
+            continue
+        positions = [
+            token_positions[token]
+            for token in _manager_name_tokens(manager)
+            if token in token_positions
+        ]
+        if positions:
+            candidates.append((max(positions), manager))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][1]
+
+
+def _has_successful_query_for_manager(record: TurnRecord, manager: str) -> bool:
+    return _last_successful_query_for_manager(record, manager) != (None, None)
+
+
+def _has_successful_query_for_manager_with_filter_value(
+    *,
+    record: TurnRecord,
+    manager: str,
+    value: str,
+) -> bool:
+    normalized_value = value.casefold()
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        args = _as_dict(call.get("args"))
+        result_dict = _as_dict(result)
+        if (
+            call.get("name") != "query"
+            or args.get("manager") != manager
+            or "error" in result_dict
+            or not isinstance(result_dict.get("data"), list)
+        ):
+            continue
+        for filter_value in _as_dict(args.get("filters")).values():
+            if (
+                isinstance(filter_value, str)
+                and filter_value
+                and filter_value.casefold() == normalized_value
+            ):
+                return True
+    return False
+
+
+def _discovered_manager_summaries(record: TurnRecord) -> list[dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        if call.get("name") == "search_managers" and isinstance(result, list):
+            for item in result:
+                summary = _as_dict(item)
+                manager = summary.get("manager")
+                if isinstance(manager, str) and manager:
+                    summaries.setdefault(manager, summary)
+        elif call.get("name") == "get_manager_schema":
+            summary = _as_dict(result)
+            manager = summary.get("manager")
+            if isinstance(manager, str) and manager:
+                summaries.setdefault(manager, summary)
+    return list(summaries.values())
+
+
+def _tokenize_text(value: str) -> list[str]:
+    spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", value)
+    normalized = re.sub(r"[^a-zA-Z0-9]+", " ", spaced).casefold()
+    return [_singularize_token(token) for token in normalized.split() if token]
+
+
+def _singularize_token(token: str) -> str:
+    if len(token) > 3 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 3 and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
+def _manager_name_tokens(manager_name: str) -> set[str]:
+    base = manager_name.removesuffix("Manager")
+    return set(_tokenize_text(base))
+
+
+def _filter_path_tokens(filter_key: str) -> list[str]:
+    return [
+        token for token in _tokenize_text(filter_key) if token not in _LOOKUP_SUFFIXES
+    ]
+
+
+def _text_contains_token(normalized_text: str, token: str) -> bool:
+    plural = f"{token}s"
+    return bool(
+        re.search(rf"\b(?:{re.escape(token)}|{re.escape(plural)})\b", normalized_text)
+    )
+
+
+def _token_position(normalized_text: str, token: str) -> int:
+    plural = f"{token}s"
+    match = re.search(
+        rf"\b(?:{re.escape(token)}|{re.escape(plural)})\b", normalized_text
+    )
+    return match.start() if match else len(normalized_text)
+
+
+def _schema_tokens(record: TurnRecord) -> set[str]:
+    tokens: set[str] = set()
+    for summary in _discovered_manager_summaries(record):
+        manager = summary.get("manager")
+        if isinstance(manager, str):
+            tokens.update(_manager_name_tokens(manager))
+        for relation in summary.get("relations", []):
+            relation_name = _as_dict(relation).get("name")
+            if isinstance(relation_name, str):
+                tokens.update(_tokenize_text(relation_name))
+        for filter_key in summary.get("filters", []):
+            if isinstance(filter_key, str):
+                tokens.update(_filter_path_tokens(filter_key))
+    return tokens
+
+
+def _queried_manager_tokens(record: TurnRecord) -> set[str]:
+    tokens: set[str] = set()
+    for call, result in zip(record.tool_calls, record.tool_results, strict=False):
+        args = _as_dict(call.get("args"))
+        result_dict = _as_dict(result)
+        manager = args.get("manager")
+        if (
+            call.get("name") == "query"
+            and isinstance(manager, str)
+            and "error" not in result_dict
+            and isinstance(result_dict.get("data"), list)
+        ):
+            tokens.update(_manager_name_tokens(manager))
+    return tokens
+
+
+def _first_user_mentioned_scalar(value: Any, normalized_user_text: str) -> str | None:
+    if isinstance(value, dict):
+        for child in value.values():
+            if found := _first_user_mentioned_scalar(child, normalized_user_text):
+                return found
+        return None
+    if isinstance(value, list):
+        for child in value:
+            if found := _first_user_mentioned_scalar(child, normalized_user_text):
+                return found
+        return None
+    if isinstance(value, str) and value and value.casefold() in normalized_user_text:
+        return value
+    return None
 
 
 def _schema_after_relation_query_args(record: TurnRecord) -> dict[str, str] | None:
@@ -1238,65 +2494,15 @@ def _field_selection_has_relation(fields: Any) -> bool:
 def _filter_selection_has_relation(filters: Any) -> bool:
     if not isinstance(filters, dict):
         return False
-    lookup_suffixes = {
-        "contains",
-        "endswith",
-        "exact",
-        "gt",
-        "gte",
-        "icontains",
-        "iendswith",
-        "iexact",
-        "in",
-        "isnull",
-        "istartswith",
-        "lt",
-        "lte",
-        "range",
-        "startswith",
-    }
     for key in filters:
         if not isinstance(key, str) or "__" not in key:
             continue
         parts = key.split("__")
         if len(parts) > 2:
             return True
-        if parts[-1] not in lookup_suffixes:
+        if parts[-1] not in _LOOKUP_SUFFIXES:
             return True
     return False
-
-
-def _has_successful_query_for_manager(record: TurnRecord, manager: str) -> bool:
-    return _last_successful_query_for_manager(record, manager) != (None, None)
-
-
-def _material_name_from_successful_part_query(record: TurnRecord) -> str | None:
-    for call, result in reversed(
-        list(zip(record.tool_calls, record.tool_results, strict=False))
-    ):
-        args = _as_dict(call.get("args"))
-        result_dict = _as_dict(result)
-        if call.get("name") != "query" or args.get("manager") != "PartManager":
-            continue
-        if "error" in result_dict or not isinstance(result_dict.get("data"), list):
-            continue
-        if material_name := _material_name_from_part_query_args(args):
-            return material_name
-        for row in result_dict["data"]:
-            material = _as_dict(_as_dict(row).get("material"))
-            name = material.get("name")
-            if isinstance(name, str) and name:
-                return name
-    return None
-
-
-def _material_name_from_part_query_args(args: dict[str, Any]) -> str | None:
-    filters = _as_dict(args.get("filters"))
-    for key in ("material__name", "material__name__icontains"):
-        value = filters.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
 
 
 def _missing_relation_query_args(
@@ -1316,10 +2522,22 @@ def _missing_relation_query_args(
         rows = query_result.get("data")
         if not isinstance(rows, list):
             continue
-        if any(isinstance(row, dict) and relation in row for row in rows):
-            continue
         query_args = _as_dict(query_call.get("args")).copy()
-        query_args["fields"] = _relation_query_fields(schema, relation)
+        relation_fields = _relation_query_fields_for_query(
+            schema=schema,
+            relation_name=relation,
+            query_args=query_args,
+        )
+        relation_selection = next(
+            (field for field in relation_fields if isinstance(field, dict)),
+            None,
+        )
+        if relation_selection is not None and _rows_cover_relation_selection(
+            rows,
+            relation_selection,
+        ):
+            continue
+        query_args["fields"] = relation_fields
         return query_args
     return None
 
@@ -1371,6 +2589,19 @@ def _relation_query_fields(
     schema: dict[str, Any],
     relation_name: str,
 ) -> list[Any]:
+    return _relation_query_fields_for_query(
+        schema=schema,
+        relation_name=relation_name,
+        query_args={},
+    )
+
+
+def _relation_query_fields_for_query(
+    *,
+    schema: dict[str, Any],
+    relation_name: str,
+    query_args: dict[str, Any],
+) -> list[Any]:
     scalar_fields = [
         str(field)
         for field in schema.get("fields", [])
@@ -1378,7 +2609,56 @@ def _relation_query_fields(
     ]
     if not scalar_fields:
         scalar_fields = ["name"]
+    if (
+        filter_selection := _relation_selection_from_query_filters(
+            query_args.get("filters"),
+            relation_name,
+        )
+    ) is not None:
+        return [*scalar_fields, filter_selection]
     return [*scalar_fields, {relation_name: ["name"]}]
+
+
+def _relation_selection_from_query_filters(
+    filters: Any,
+    relation_name: str,
+) -> dict[str, Any] | None:
+    if not isinstance(filters, dict):
+        return None
+    for key in filters:
+        if not isinstance(key, str):
+            continue
+        selection = _relation_selection_from_filter_key(key)
+        if isinstance(selection, dict) and relation_name in selection:
+            return selection
+    return None
+
+
+def _rows_cover_relation_selection(
+    rows: list[Any],
+    selection: dict[str, Any],
+) -> bool:
+    return any(_value_covers_selection(row, selection) for row in rows)
+
+
+def _value_covers_selection(value: Any, selection: Any) -> bool:
+    if isinstance(selection, str):
+        return isinstance(value, dict) and selection in value
+    if isinstance(selection, dict):
+        if not isinstance(value, dict):
+            return False
+        return all(
+            key in value and _value_covers_selection(value[key], child_selection)
+            for key, child_selection in selection.items()
+            if isinstance(key, str)
+        )
+    if isinstance(selection, list):
+        if isinstance(value, list):
+            return any(_value_covers_selection(item, selection) for item in value)
+        if isinstance(value, dict):
+            return all(_value_covers_selection(value, item) for item in selection)
+        return False
+    return False
 
 
 def _requested_manager_name(user_text: str) -> str | None:
