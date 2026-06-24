@@ -218,6 +218,49 @@ class _AnthropicFragmentedClient:
         self.messages = _AnthropicFragmentedMessages()
 
 
+class _AnthropicSplitUsageMessages:
+    async def create(self, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        return _AsyncIterator(
+            [
+                SimpleNamespace(
+                    type="message_start",
+                    message=SimpleNamespace(
+                        usage=SimpleNamespace(input_tokens=13),
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_start",
+                    index=0,
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="tool-1",
+                        name="search_managers",
+                        input={},
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    index=0,
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json='{"query":"parts"}',
+                    ),
+                ),
+                SimpleNamespace(type="content_block_stop", index=0),
+                SimpleNamespace(
+                    type="message_delta",
+                    usage=SimpleNamespace(output_tokens=89),
+                ),
+            ]
+        )
+
+
+class _AnthropicSplitUsageClient:
+    def __init__(self) -> None:
+        self.messages = _AnthropicSplitUsageMessages()
+
+
 class _GeminiModels:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -376,6 +419,34 @@ class AdditionalProviderTests(unittest.TestCase):
             assert tool_events[0].id == "tool-1"
             assert tool_events[0].name == "search_managers"
             assert tool_events[0].args == {"query": "parts"}
+
+        asyncio.run(run())
+
+    def test_anthropic_provider_preserves_input_usage_from_message_start(
+        self,
+    ) -> None:
+        client = _AnthropicSplitUsageClient()
+
+        async def run() -> None:
+            with patch.object(
+                AnthropicProvider, "_build_async_client", return_value=client
+            ):
+                events = [
+                    event
+                    async for event in AnthropicProvider().complete(
+                        [Message(role="user", content="parts")], []
+                    )
+                ]
+            tool_events = [
+                event for event in events if isinstance(event, ToolCallEvent)
+            ]
+            assert len(tool_events) == 1
+            assert tool_events[0].id == "tool-1"
+            assert tool_events[0].name == "search_managers"
+            assert tool_events[0].args == {"query": "parts"}
+            assert isinstance(events[-1], DoneEvent)
+            assert events[-1].usage.input_tokens == 13
+            assert events[-1].usage.output_tokens == 89
 
         asyncio.run(run())
 

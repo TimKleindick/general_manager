@@ -20,6 +20,19 @@ from general_manager.chat.providers.base import BaseLLMProvider
 from general_manager.chat.settings import get_chat_settings
 
 
+def _merge_usage(current: TokenUsage, event_usage: Any) -> TokenUsage:
+    input_tokens = getattr(event_usage, "input_tokens", None)
+    output_tokens = getattr(event_usage, "output_tokens", None)
+    return TokenUsage(
+        input_tokens=current.input_tokens
+        if input_tokens is None
+        else int(input_tokens),
+        output_tokens=current.output_tokens
+        if output_tokens is None
+        else int(output_tokens),
+    )
+
+
 class AnthropicDependencyImportError(ImportError):
     """Raised when the optional Anthropic dependency is unavailable."""
 
@@ -127,13 +140,14 @@ class AnthropicProvider(BaseLLMProvider):
                     tool_event = builder.build()
                     if tool_event is not None:
                         yield tool_event
+            elif event_type == "message_start":
+                event_usage = get_attr(event, "message", "usage")
+                if event_usage is not None:
+                    usage = _merge_usage(usage, event_usage)
             elif event_type == "message_delta":
                 event_usage = getattr(event, "usage", None)
                 if event_usage is not None:
-                    usage = TokenUsage(
-                        input_tokens=int(getattr(event_usage, "input_tokens", 0)),
-                        output_tokens=int(getattr(event_usage, "output_tokens", 0)),
-                    )
+                    usage = _merge_usage(usage, event_usage)
         for block_index in sorted(tool_call_builders):
             event = tool_call_builders[block_index].build()
             if event is not None:
