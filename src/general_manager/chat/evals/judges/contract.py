@@ -301,7 +301,29 @@ def _answer_contradicts_successful_path(
     tool_results: list[Any],
     answer_text: str,
 ) -> bool:
-    normalized = answer_text.casefold()
+    if not any(
+        str(call.get("name", "")) == "find_path"
+        and isinstance(result, list)
+        and len(result) > 0
+        for call, result in zip(tool_calls, tool_results, strict=False)
+    ):
+        return False
+
+    answer_affirms_path = _answer_affirms_successful_path(answer_text.casefold())
+    return any(
+        _answer_sentence_denies_successful_path(
+            sentence.casefold(),
+            answer_affirms_path=answer_affirms_path,
+        )
+        for sentence in _answer_sentences(answer_text)
+    )
+
+
+def _answer_sentence_denies_successful_path(
+    normalized_sentence: str,
+    *,
+    answer_affirms_path: bool,
+) -> bool:
     denial_markers = (
         "no path",
         "don't have a path",
@@ -309,15 +331,22 @@ def _answer_contradicts_successful_path(
         "can't find a path",
         "cannot find a path",
         "no relationship",
-        "not connected",
     )
-    if not any(marker in normalized for marker in denial_markers):
+    if any(marker in normalized_sentence for marker in denial_markers):
+        return True
+    if "not connected" not in normalized_sentence:
         return False
+    return not (answer_affirms_path or "not connected directly" in normalized_sentence)
+
+
+def _answer_affirms_successful_path(normalized_sentence: str) -> bool:
     return any(
-        str(call.get("name", "")) == "find_path"
-        and isinstance(result, list)
-        and len(result) > 0
-        for call, result in zip(tool_calls, tool_results, strict=False)
+        marker in normalized_sentence
+        for marker in (
+            "path is",
+            "path exists",
+            "connected through",
+        )
     )
 
 
