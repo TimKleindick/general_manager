@@ -20,25 +20,11 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.12.1  # aktuelle stabile MyPy-Version
+  - repo: local
     hooks:
       - id: mypy
-        name: mypy (type checking)
+        name: mypy (strict type checking)
+        entry: mypy --strict
+        language: system
+        pass_filenames: false
         files: ^src/
-        additional_dependencies:
-          - celery-types
-          - channels
-          - django-stubs
-          - djangorestframework-stubs
-          - django-simple-history
-          - exrex
-          - factory-boy
-          - faker
-          - graphene
-          - graphene-stubs
-          - graphene-django
-          - graphql-core
-          - numpy
-          - pint
-          - typing-extensions

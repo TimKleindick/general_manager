@@ -42,7 +42,7 @@ jobs:
         run: ruff format --config pyproject.toml --check .
 
       - name: Mypy
-        run: mypy
+        run: mypy --strict
 
       - name: Run pre-commit (without Ruff)
         env:
