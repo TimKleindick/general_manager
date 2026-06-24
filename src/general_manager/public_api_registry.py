@@ -156,6 +156,10 @@ UTILS_EXPORTS: LazyExportMap = {
     "args_to_kwargs": ("general_manager.utils.args_to_kwargs", "args_to_kwargs"),
     "make_cache_key": ("general_manager.utils.make_cache_key", "make_cache_key"),
     "parse_filters": ("general_manager.utils.filter_parser", "parse_filters"),
+    "UnknownInputFieldError": (
+        "general_manager.utils.filter_parser",
+        "UnknownInputFieldError",
+    ),
     "create_filter_function": (
         "general_manager.utils.filter_parser",
         "create_filter_function",
@@ -359,6 +363,7 @@ CACHE_EXPORTS: LazyExportMap = {
     "cached": ("general_manager.cache.cache_decorator", "cached"),
     "CacheBackend": ("general_manager.cache.cache_decorator", "CacheBackend"),
     "DependencyTracker": ("general_manager.cache.cache_tracker", "DependencyTracker"),
+    "Dependency": ("general_manager.cache.dependency_index", "Dependency"),
     "CalculationRunContext": (
         "general_manager.cache.run_context",
         "CalculationRunContext",
@@ -374,6 +379,14 @@ CACHE_EXPORTS: LazyExportMap = {
     "record_dependencies": (
         "general_manager.cache.dependency_index",
         "record_dependencies",
+    ),
+    "parse_dependency_identifier": (
+        "general_manager.cache.dependency_index",
+        "parse_dependency_identifier",
+    ),
+    "serialize_dependency_identifier": (
+        "general_manager.cache.dependency_index",
+        "serialize_dependency_identifier",
     ),
     "remove_cache_key_from_index": (
         "general_manager.cache.dependency_index",
@@ -425,6 +438,14 @@ MANAGER_EXPORTS: LazyExportMap = {
     "InputDomain": ("general_manager.manager.input", "InputDomain"),
     "DateRangeDomain": ("general_manager.manager.input", "DateRangeDomain"),
     "NumericRangeDomain": ("general_manager.manager.input", "NumericRangeDomain"),
+    "TrustedOrmHydrationNotSupportedError": (
+        "general_manager.manager.general_manager",
+        "TrustedOrmHydrationNotSupportedError",
+    ),
+    "UnsupportedUnionOperandError": (
+        "general_manager.manager.general_manager",
+        "UnsupportedUnionOperandError",
+    ),
     "GroupManager": ("general_manager.manager.group_manager", "GroupManager"),
     "graph_ql_property": ("general_manager.api.property", "graph_ql_property"),
 }

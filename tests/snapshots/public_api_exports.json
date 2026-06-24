@@ -194,6 +194,10 @@
       "general_manager.cache.run_context",
       "CalculationRunContext"
     ],
+    "Dependency": [
+      "general_manager.cache.dependency_index",
+      "Dependency"
+    ],
     "DependencyTracker": [
       "general_manager.cache.cache_tracker",
       "DependencyTracker"
@@ -214,6 +218,10 @@
       "general_manager.cache.dependency_index",
       "invalidate_cache_key"
     ],
+    "parse_dependency_identifier": [
+      "general_manager.cache.dependency_index",
+      "parse_dependency_identifier"
+    ],
     "record_dependencies": [
       "general_manager.cache.dependency_index",
       "record_dependencies"
@@ -221,6 +229,10 @@
     "remove_cache_key_from_index": [
       "general_manager.cache.dependency_index",
       "remove_cache_key_from_index"
+    ],
+    "serialize_dependency_identifier": [
+      "general_manager.cache.dependency_index",
+      "serialize_dependency_identifier"
     ]
   },
   "general_manager.factory": {
@@ -488,6 +500,14 @@
       "general_manager.manager.input",
       "NumericRangeDomain"
     ],
+    "TrustedOrmHydrationNotSupportedError": [
+      "general_manager.manager.general_manager",
+      "TrustedOrmHydrationNotSupportedError"
+    ],
+    "UnsupportedUnionOperandError": [
+      "general_manager.manager.general_manager",
+      "UnsupportedUnionOperandError"
+    ],
     "graph_ql_property": [
       "general_manager.api.property",
       "graph_ql_property"
@@ -693,6 +713,10 @@
     "PathMap": [
       "general_manager.utils.path_mapping",
       "PathMap"
+    ],
+    "UnknownInputFieldError": [
+      "general_manager.utils.filter_parser",
+      "UnknownInputFieldError"
     ],
     "args_to_kwargs": [
       "general_manager.utils.args_to_kwargs",
