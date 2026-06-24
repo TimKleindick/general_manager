@@ -25,10 +25,15 @@ class ReadinessSummary:
     product_contract_total: int
     product_contract_passed: int
     diagnostics: dict[str, dict[str, int]]
+    failure_classes: dict[str, int] = field(default_factory=dict)
+    failure_class_cases: dict[str, list[str]] = field(default_factory=dict)
     native_passed: int = 0
     recovered_passed: int = 0
     recovery_total: int = 0
     recovered_cases: list[str] = field(default_factory=list)
+    forbidden_recovery_events: list[str] = field(default_factory=list)
+    forbidden_recovery_total: int = 0
+    forbidden_recovered_cases: list[str] = field(default_factory=list)
 
     @property
     def pass_rate(self) -> float:

@@ -135,9 +135,41 @@ class ChatSystemPromptTests(SimpleTestCase):
             "If query returns no rows, say that no matching records were found."
             in prompt
         )
+        assert (
+            "If query returns one or more rows, never say no matching records" in prompt
+        )
+        assert (
+            "Do not ask whether to run another query after a successful query" in prompt
+        )
+        assert "Do not include code fences" in prompt
+        assert (
+            "Do not propose another query after data has already been returned"
+            in prompt
+        )
+        assert "include the requested schema field names" in prompt
+        assert "mention the relevant manager names and path terms" in prompt
+        assert "label nested relation values with the relation name" in prompt
+        assert "If an earlier query failed but a later query succeeded" in prompt
+        assert (
+            "If any successful query in this turn returned rows that answer the "
+            "question, include those rows even if a later query returned no rows."
+            in prompt
+        )
+        assert "name the requested row type" in prompt
         assert 'Never use wildcard field selections like "*"' in prompt
         assert "Mutation safety" in prompt
         assert "Never call mutate unless the user clearly requests a write." in prompt
+
+    def test_build_system_prompt_includes_target_manager_and_unavailable_rules(
+        self,
+    ) -> None:
+        prompt = build_system_prompt()
+
+        assert (
+            "query the manager that returns the row type the user asked for" in prompt
+        )
+        assert "Do not repeat unavailable manager names" in prompt
+        assert "Do not write user-provided tokens ending in Manager" in prompt
 
     def test_build_system_prompt_includes_no_memory_answer_recovery_rule(self) -> None:
         prompt = build_system_prompt()
