@@ -175,28 +175,36 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         self._history_cache.append({"role": role, "content": content})
 
     async def connect(self) -> None:
-        permission = get_chat_permission()
-        if (
-            callable(permission)
-            and permission(self.scope.get("user"), self.scope) is False
-        ):
-            await self.close(code=4403)
-            return
-        session = self.scope.get("session")
-        session_key = getattr(session, "session_key", None)
-        if session is not None and not session_key:
-            session.save()
+        try:
+            permission = get_chat_permission()
+            if (
+                callable(permission)
+                and permission(self.scope.get("user"), self.scope) is False
+            ):
+                await self.close(code=4403)
+                return
+            session = self.scope.get("session")
             session_key = getattr(session, "session_key", None)
-        self.session_key = session_key
-        provider_cls = import_provider()
-        self.provider = provider_cls()
-        self._active_turn: asyncio.Future[None] | None = None
-        self._pending_confirmation = None
-        self._confirmation_waiter = None
-        self._confirmation_timeout_task = None
-        self._history_cache = []
-        self.conversation = await self._get_persistent_conversation()
-        await self.accept()
+            if session is not None and not session_key:
+                session.save()
+                session_key = getattr(session, "session_key", None)
+            self.session_key = session_key
+            provider_cls = import_provider()
+            self.provider = provider_cls()
+            self._active_turn: asyncio.Future[None] | None = None
+            self._pending_confirmation = None
+            self._confirmation_waiter = None
+            self._confirmation_timeout_task = None
+            self._history_cache = []
+            self.conversation = await self._get_persistent_conversation()
+            await self.accept()
+        except Exception as exc:  # noqa: BLE001
+            emit_chat_error(
+                user=self.scope.get("user"),
+                error=exc,
+                context={"transport": "websocket", "phase": "connect"},
+            )
+            await self.close(code=1011)
 
     async def disconnect(self, code: int) -> None:
         provider_task = getattr(self, "_provider_task", None)

@@ -161,6 +161,83 @@ class ChatConsumerConnectTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_connect_closes_and_emits_error_when_permission_raises(self) -> None:
+        consumer = ChatConsumer()
+        user = AnonymousUser()
+        consumer.scope = {
+            "user": user,
+            "session": _Session("existing-key"),
+        }
+        original_error = RuntimeError("secret permission detail")
+
+        def raise_permission(*_args: object, **_kwargs: object) -> bool:
+            raise original_error
+
+        async def run() -> None:
+            with (
+                patch(
+                    "general_manager.chat.consumer.get_chat_permission",
+                    return_value=raise_permission,
+                ),
+                patch.object(consumer, "close", new_callable=AsyncMock) as mock_close,
+                patch.object(consumer, "accept", new_callable=AsyncMock) as mock_accept,
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+            ):
+                await consumer.connect()
+
+            mock_close.assert_called_once_with(code=1011)
+            mock_accept.assert_not_called()
+            mock_send_json.assert_not_called()
+            chat_error.assert_called_once_with(
+                user=user,
+                error=original_error,
+                context={"transport": "websocket", "phase": "connect"},
+            )
+
+        asyncio.run(run())
+
+    def test_connect_closes_and_emits_error_when_provider_import_fails(self) -> None:
+        consumer = ChatConsumer()
+        user = AnonymousUser()
+        consumer.scope = {
+            "user": user,
+            "session": _Session("existing-key"),
+        }
+        original_error = RuntimeError("secret provider setup detail")
+
+        async def run() -> None:
+            with (
+                patch(
+                    "general_manager.chat.consumer.get_chat_permission",
+                    return_value=None,
+                ),
+                patch(
+                    "general_manager.chat.consumer.import_provider",
+                    side_effect=original_error,
+                ),
+                patch.object(consumer, "close", new_callable=AsyncMock) as mock_close,
+                patch.object(consumer, "accept", new_callable=AsyncMock) as mock_accept,
+                patch.object(
+                    consumer, "send_json", new_callable=AsyncMock
+                ) as mock_send_json,
+                patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+            ):
+                await consumer.connect()
+
+            mock_close.assert_called_once_with(code=1011)
+            mock_accept.assert_not_called()
+            mock_send_json.assert_not_called()
+            chat_error.assert_called_once_with(
+                user=user,
+                error=original_error,
+                context={"transport": "websocket", "phase": "connect"},
+            )
+
+        asyncio.run(run())
+
     def test_connect_creates_session_key_before_accepting(self) -> None:
         consumer = ChatConsumer()
         session = _Session()
