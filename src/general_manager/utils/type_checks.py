@@ -15,8 +15,10 @@ def safe_issubclass(
     This is a guard around ``issubclass()`` for dynamic metadata paths where the
     candidate may be an instance, ``None``, or another non-class object. A
     ``True`` result narrows ``candidate`` to ``type`` for static checkers. The
-    helper still relies on Python's ``issubclass()`` for the actual subclass
-    check, so invalid ``parent`` tuples propagate ``TypeError`` unchanged.
+    Non-class candidates return ``False`` before ``issubclass()`` is called.
+    Class candidates still rely on Python's ``issubclass()`` for the actual
+    subclass check, so invalid ``parent`` tuples propagate ``TypeError`` only
+    when ``candidate`` is itself a type.
 
     Parameters:
         candidate: Object to inspect.
@@ -27,7 +29,7 @@ def safe_issubclass(
         otherwise ``False``.
 
     Raises:
-        TypeError: Propagated from ``issubclass()`` when ``parent`` is not a
-            valid class or tuple of classes.
+        TypeError: Propagated from ``issubclass()`` when ``candidate`` is a
+            type and ``parent`` is not a valid class or tuple of classes.
     """
     return isinstance(candidate, type) and issubclass(candidate, parent)

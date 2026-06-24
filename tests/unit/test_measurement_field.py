@@ -213,6 +213,21 @@ class MeasurementFieldTests(TestCase):
         self.assertIs(cleaned, measurement)
         self.assertEqual(calls, [measurement])
 
+    def test_run_validators_aggregates_validation_errors(self):
+        def first_validator(value: Measurement) -> None:
+            raise ValidationError("first")
+
+        def second_validator(value: Measurement) -> None:
+            raise ValidationError("second")
+
+        field = MeasurementField(base_unit="kg", null=True, blank=True)
+        field.validators.extend([first_validator, second_validator])
+
+        with self.assertRaises(ValidationError) as context:
+            field.run_validators(Measurement(1, "kg"))
+
+        self.assertEqual(context.exception.messages, ["first", "second"])
+
     def test_clean_skips_validators_for_blank_value(self):
         calls: list[object] = []
 

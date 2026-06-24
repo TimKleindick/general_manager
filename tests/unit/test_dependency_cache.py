@@ -144,6 +144,17 @@ class DependencyCacheEntryTests(SimpleTestCase):
         self.assertEqual(hit.value, 0)
         self.assertEqual(hit.dependencies, frozenset())
 
+    def test_malformed_legacy_dependencies_are_treated_as_cache_miss(self) -> None:
+        cache_backend = PickleCache()
+        marker = object()
+        cache_backend.set("cache-a", "value", None)
+        cache_backend.set("cache-a:deps", "not dependency tuples", None)
+
+        self.assertIs(
+            read_dependency_cache_hit(cache_backend, "cache-a", sentinel=marker),
+            marker,
+        )
+
     def test_plain_dict_value_is_not_misclassified_as_combined_payload(self) -> None:
         cache_backend = PickleCache()
         value = {
@@ -225,6 +236,15 @@ class DependencyCacheEntryTests(SimpleTestCase):
             ],
         )
         self.assertEqual(cache_backend.get_calls, [])
+
+    def test_bulk_read_omits_malformed_legacy_dependencies(self) -> None:
+        cache_backend = PickleCache()
+        cache_backend.set("cache-a", "value", None)
+        cache_backend.set("cache-a:deps", {"not": "dependency tuples"}, None)
+
+        self.assertEqual(
+            read_many_dependency_cache_hits(cache_backend, ["cache-a"]), {}
+        )
 
     def test_bulk_read_falls_back_to_single_reads_without_get_many(self) -> None:
         cache_backend = PickleCacheWithoutGetMany()

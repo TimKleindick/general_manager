@@ -1,6 +1,7 @@
 """Utilities for tracing relationships between GeneralManager classes."""
 
 from __future__ import annotations
+from collections.abc import Mapping
 from typing import ClassVar, cast, get_args
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.property import GraphQLProperty
@@ -157,6 +158,8 @@ class PathMap:
         tracer = self.mapping.get((self.start_class_name, path_destination), None)
         if not tracer:
             return None
+        if not tracer.path:
+            return None
         if self.start_instance is None:
             raise MissingStartInstanceError()
         return tracer.traverse_path(self.start_instance)
@@ -231,7 +234,7 @@ class PathTracer:
             attr_name,
             attr_value,
         ) in current_manager.Interface.get_attribute_types().items():
-            if isinstance(attr_value, dict):
+            if isinstance(attr_value, Mapping):
                 current_connections[attr_name] = attr_value.get("type")
         for attr_name, attr_value in current_manager.__dict__.items():
             if not isinstance(attr_value, GraphQLProperty):

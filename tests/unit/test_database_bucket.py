@@ -996,6 +996,15 @@ class DatabaseBucketTestCase(TestCase):
         ids = sorted([mgr.identification["id"] for mgr in union])
         self.assertListEqual(ids, sorted([self.u1.id, self.u3.id]))
 
+    def test_or_union_preserves_dependency_filter_metadata(self):
+        b1 = self.bucket.filter(username="alice").exclude(is_staff=True)
+        b2 = self.bucket.filter(username="carol").exclude(is_staff=False)
+
+        union = b1 | b2
+
+        self.assertEqual(union.filters, {"username": ["alice", "carol"]})
+        self.assertEqual(union.excludes, {"is_staff": [True, False]})
+
     def test_or_with_manager(self):
         """
         Tests that the union of a DatabaseBucket and a manager instance returns a bucket containing both items.
