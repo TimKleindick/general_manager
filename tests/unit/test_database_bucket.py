@@ -1171,9 +1171,9 @@ class DatabaseBucketTestCase(TestCase):
 
     def test_filter_invalid_lookup_raises(self):
         """
-        Filtering by an unknown attribute/property should raise a ValueError to surface misuse early.
+        Filtering by an unknown attribute/property should use the queryset wrapper.
         """
-        with self.assertRaises(ValueError):
+        with self.assertRaises(QuerysetFilteringError):
             _ = self.bucket.filter(nonexistent_attr__gte=1)
 
     def test_exclude_invalid_lookup_raises_filtering_error(self):
