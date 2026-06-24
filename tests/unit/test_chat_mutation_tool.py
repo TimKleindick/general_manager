@@ -107,6 +107,98 @@ class ChatMutationToolTests(SimpleTestCase):
             }
         }
     )
+    def test_mutate_rejects_malformed_allowed_mutation_name(self) -> None:
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+        schema = GraphQL._schema
+
+        with pytest.raises(ValueError, match="Invalid chat mutation name"):
+            mutate(
+                mutation="createPart } mutation Dangerous { createPart",
+                input={"name": "Bolt"},
+                confirmed=True,
+                context=SimpleNamespace(user=_User()),
+            )
+
+        assert schema.calls == []
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "allowed_mutations": ["createPart"],
+            }
+        }
+    )
+    def test_mutate_rejects_malformed_input_key(self) -> None:
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+        schema = GraphQL._schema
+
+        with pytest.raises(ValueError, match="Invalid chat mutation input key"):
+            mutate(
+                mutation="createPart",
+                input={"name) { dangerous": "Bolt"},
+                confirmed=True,
+                context=SimpleNamespace(user=_User()),
+            )
+
+        assert schema.calls == []
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "allowed_mutations": ["createPart"],
+            }
+        }
+    )
+    def test_mutate_rejects_malformed_nested_input_key(self) -> None:
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+        schema = GraphQL._schema
+
+        with pytest.raises(ValueError, match="Invalid chat mutation input key"):
+            mutate(
+                mutation="createPart",
+                input={"metadata": {"bad } injected {": "x"}},
+                confirmed=True,
+                context=SimpleNamespace(user=_User()),
+            )
+
+        assert schema.calls == []
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "allowed_mutations": ["createPart"],
+            }
+        }
+    )
+    def test_mutate_rejects_malformed_input_key_inside_list(self) -> None:
+        GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
+        schema = GraphQL._schema
+
+        with pytest.raises(ValueError, match="Invalid chat mutation input key"):
+            mutate(
+                mutation="createPart",
+                input={"metadata": [{"bad } injected {": "x"}]},
+                confirmed=True,
+                context=SimpleNamespace(user=_User()),
+            )
+
+        assert schema.calls == []
+
+    @override_settings(
+        GENERAL_MANAGER={
+            "CHAT": {
+                "enabled": True,
+                "provider": "tests.unit.test_chat_bootstrap.NoopProvider",
+                "allowed_mutations": ["createPart"],
+            }
+        }
+    )
     def test_mutate_requires_authenticated_user(self) -> None:
         GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
 
