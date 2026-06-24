@@ -9,6 +9,11 @@ This recipe shows the recommended production-facing request-interface shape:
 - framework retry policy with `RequestRetryPolicy`
 - outbound mutation shaping with `FieldMappingSerializer`
 
+Application code usually declares fields, filters, query/mutation operations,
+transport config, auth, and retry policy. Integration code usually implements a
+custom `SharedRequestTransport.send()` method, a `RequestAuthProvider`, or
+metrics/tracing backends.
+
 ```python
 from __future__ import annotations
 
@@ -102,3 +107,15 @@ Notes:
 - `Project.create(...)` uses `FieldMappingSerializer` to shape the outbound JSON body.
 - request input values such as `id` are readable through the normal manager attribute path as well as `identification`
 - `ignore_permission=True` is only needed when your project enables mutation permission checks and you want a minimal standalone example.
+
+## Contracts to rely on
+
+- `RequestQueryOperation` is an alias of `RequestOperation` for read/query declarations. `RequestQueryPlan` is an alias of `RequestPlan` for readability and backward compatibility.
+- `RequestOperation` requires `name` and `path`. Optional fields are `method`, `collection`, `filters`, `metadata`, `static_query_params`, `static_headers`, `static_body`, and `timeout`. Mutation serializers such as `create_serializer` live on `Interface.Meta`; response normalizers live on `RequestTransportConfig`.
+- `RequestField(source=...)` accepts either a dotted string (`"owner.name"`) or a tuple path (`("owner", "name")`). Missing required payload values surface as request payload errors; optional fields can declare `default=...`.
+- `FieldMappingSerializer` maps `{remote_key: local_key}`. Missing local keys raise `KeyError`, and extra local keys are ignored.
+- Auth providers return a new `RequestTransportRequest`; they do not mutate the request passed to `apply()`.
+- `RequestRetryPolicy.compute_backoff_seconds(retry_count=...)` uses a 1-based retry count. By default only `GET`, `HEAD`, `OPTIONS`, and `DELETE` retry. To retry `POST` or `PATCH`, set `retry_non_idempotent_methods=True` and configure an idempotency key header/factory.
+- `RequestTransportResponse.payload` must be a decoded mapping or a list of mappings. The default normalizer turns a mapping into a one-item `RequestQueryResult` and preserves status code, retry count, response headers, and request id in result metadata.
+- HTTP status errors map to stable exceptions: `401` to `RequestAuthenticationError`, `403` to `RequestAuthorizationError`, `404` to `RequestNotFoundError`, `409` to `RequestConflictError`, `429` to `RequestRateLimitedError`, and `5xx` to `RequestServerError`.
+- `RequestSerializer` receives one resolved value and returns a serialized value. `RequestValidator` receives one lookup value and should raise when invalid. A `RequestResponseNormalizer` receives a raw response plus interface, operation, and plan, and must return `RequestQueryResult`.

@@ -58,6 +58,24 @@ def permission_belongs_to_org(instance, user, config):
 
 Use the permission by adding `"belongsToOrganisation:customer"` to `__read__`. The filter keeps queryset results inside the user's organisation without duplicating logic.
 
+Filters can also return `{"exclude": {...}}` or include both `filter` and
+`exclude` keys:
+
+```python
+@register_permission(
+    "visibleInvoice",
+    permission_filter=lambda user, _config: {
+        "filter": {"organisation_id": user.organisation_id},
+        "exclude": {"status": "archived"},
+    },
+)
+def permission_visible_invoice(instance, user, _config):
+    return (
+        instance.organisation_id == user.organisation_id
+        and instance.status != "archived"
+    )
+```
+
 ## Guarding GraphQL mutations
 
 Mutation classes can reuse permission checks for fine-grained control. The example below assumes an `Invoice` manager backed by a Django model:
@@ -91,6 +109,7 @@ resolver, so both receive an `Invoice` instance:
 from typing import Any
 
 from general_manager.api.mutation import graph_ql_mutation
+from general_manager.permission.base_permission import PermissionCheckError
 from general_manager.permission.mutation_permission import MutationPermission
 
 
@@ -99,9 +118,13 @@ class RejectInvoicePermission(MutationPermission):
     def check(cls, data: dict[str, Any], request_user: Any) -> None:
         invoice = data["invoice"]
         if invoice.status != "submitted":
-            cls.raise_error("Only submitted invoices can be rejected.")
+            raise PermissionCheckError(
+                request_user, ["Only submitted invoices can be rejected."]
+            )
         if not request_user.groups.filter(name="finance_lead").exists():
-            cls.raise_error("Only finance leads may reject invoices.")
+            raise PermissionCheckError(
+                request_user, ["Only finance leads may reject invoices."]
+            )
 
 
 @graph_ql_mutation(permission=RejectInvoicePermission)
@@ -116,7 +139,7 @@ def reject_invoice(info, invoice: Invoice, reason: str) -> Invoice:
 
 - `graph_ql_mutation` inspects the resolver signature and return annotation to build the GraphQL payload; no separate `base_type` configuration is required.
 - `MutationPermission.check` is a classmethod that receives normalized mutation data and `request_user`, so manager-typed arguments are available as manager instances before enforcing domain rules.
-- Use `raise_error()` to produce a structured GraphQL error with `success=False`.
+- Raise `PermissionCheckError(request_user, [...])` from custom checks when a domain-specific denial should be converted into a GraphQL permission error.
 - Call `GeneralManager.update` instead of writing to model fields directly; it re-runs permission checks and records history comments when provided.
 
 ## Testing shortcuts

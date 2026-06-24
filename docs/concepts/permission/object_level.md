@@ -18,7 +18,7 @@ When the permission class encounters `__based_on__`, it loads the referenced man
 
 ## Permission data manager
 
-Behind the scenes, `PermissionDataManager` builds a comparison context containing the payload, the current manager state, and the requesting user. It exposes helper methods for change tracking (for example, `for_update`) so that permission expressions can compare old and new values.
+Behind the scenes, `PermissionDataManager` gives permission checks one attribute-access surface for either payload dictionaries or manager instances. For update checks, `for_update` overlays the new payload on top of `dict(old_instance)` and exposes the merged final state to permission expressions; keep the original manager instance separately when a custom workflow needs an explicit before/after comparison. The requesting user lives on the permission class itself, not on the data manager.
 
 ## Filters and delegation
 

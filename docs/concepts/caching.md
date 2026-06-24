@@ -4,9 +4,37 @@ GeneralManager keeps cached data in sync by recording read dependencies and inva
 
 ## Dependency Tracker
 
-When a manager, bucket, or cached function resolves data, it records dependencies in `DependencyTracker`. The tracker stores tuples of `(manager_name, operation, identifier)`. Any code wrapped in a `with DependencyTracker()` context receives the set of dependencies touched during that read.
+When a manager, bucket, or cached function resolves data, it records dependencies
+in `DependencyTracker`. The tracker stores tuples of
+`(manager_name, operation, identifier)`. The public `Dependency` type is
+`tuple[str, Literal["filter", "exclude", "identification", "request_query",
+"all"], str]`. Any code wrapped in a `with DependencyTracker()` context receives
+the set of dependencies touched during that read. Calling
+`DependencyTracker.track(...)` outside an active tracker is a no-op after
+validating the supplied tuple values. `manager_name`, `operation`, and
+`identifier` must be strings; unsupported operations raise `ValueError`.
+Concrete invalid-input exception subclasses and messages are internal details;
+callers should catch `TypeError` for malformed tuple values and `ValueError` for
+unsupported operations.
+
+Nested tracker scopes get separate sets, and dependencies tracked in a nested
+scope are also recorded in every enclosing scope. Duplicate dependency tuples
+collapse because collectors are sets. Returned collector sets remain usable
+snapshots after the context exits; clearing thread-local tracking state does not
+mutate sets already returned from `with DependencyTracker() as dependencies`.
+`reset_thread_local_storage()` is safe with or without an active context. If it
+is called inside a context, later `track(...)` calls are ignored until a new
+context is entered and the eventual context exit is a no-op. Tracking state is
+thread-local only, not async task-local, so interleaved async work on the same
+thread shares the active tracker state.
 
 CRUD methods (`create`, `update`, `delete`) emit invalidation signals. The dependency index compares the recorded dependencies against the before/after state of the changed manager and removes only the affected cache keys.
+During each `@data_change` mutation, GeneralManager opens a dependency-cache
+publish barrier before the mutation and closes it afterwards. Nested mutations
+keep the barrier active until the outermost mutation exits. Invalidated GraphQL
+warm-up cache keys collected by signal handlers are drained and enqueued only
+after that outermost barrier is closed, so warm-up work never starts while a
+data change is still active.
 
 ## Bucket Dependency Semantics
 
@@ -92,6 +120,8 @@ def project_forecast(project_id: int) -> dict[str, float]:
 
 The default `cache="run"` stores values in `CalculationRunContext`. Values are
 discarded when the run ends and do not participate in dependency invalidation.
+`cache="none"` calls the wrapped function every time and does not read or write
+the configured cache backend.
 
 Use dependency caching when a value should be reused across runs and invalidated
 when tracked managers change:
@@ -142,6 +172,11 @@ def project_forecast(project_id: int) -> dict[str, float]:
 cache modes. The cache entry expires after the given duration and is not invalidated
 through the dependency index.
 
+Custom cache backends passed to `cached` only need the two methods used by the
+selected persistent scopes: `get(key, default)` returns a cached object or the
+exact default sentinel when absent, and `set(key, value, timeout=None)` stores a
+backend-serializable object. Run and none scopes do not call the backend.
+
 ## Run context storage
 
 `CalculationRunContext` exposes lightweight storage for one request,
@@ -161,6 +196,21 @@ context` to check storage, `index(key=..., loader=..., index_by=...)` for
 one-row-per-key lookups, and `group_by(...)` or `index_many(...)` when multiple
 rows share the same key. Use `discard_prefix(prefix)` when code that owns a
 structured key namespace needs to invalidate a group of run-scoped values.
+Loader exceptions from `get_or_set()` propagate and do not cache a value, so a
+later call can retry. `index()` keeps the last row for duplicate index keys in
+loader iteration order; `group_by()` and `index_many()` preserve loader
+iteration order for groups and rows. Loader and key-function exceptions from
+these indexing helpers propagate without storing a value.
+
+Entering `CalculationRunContext` activates it in a context variable. Clean exits
+flush buffered dependency-cache publications, exceptional exits discard them,
+and both paths clear run-local values, prefetched dependency hits, and pending
+publications, even when publication or lease release raises. Re-entering the
+same context instance is supported: inner exits keep the run-local state alive,
+and the outermost exit performs cleanup. Calling `__exit__()` on a context that
+was not entered is a no-op. `ensure_calculation_run_context()` reuses an
+existing active context and only creates/exits a temporary one when none is
+active.
 
 Callable `Input.possible_values` providers are also cached automatically inside
 an active `CalculationRunContext` when the caller can identify the owning manager
@@ -222,4 +272,16 @@ These helpers are intentionally lower level than `cached`. Use them when buildin
 - Regularly test cache invalidation by running workflows that update managers and verifying that cached results change accordingly.
 
 For low-latency APIs, combine run-scoped caching with bucket-level prefetching
-and GraphQL data loaders.
+and GraphQL data loaders. Generated GraphQL list resolvers also perform a
+targeted dependency-cache prefetch for ungrouped result pages: when the selected
+`items` fields include `@graph_ql_property(cache="dependency")` properties and
+the caller may read those fields, the resolver bulk-reads the dependency cache
+for the returned page and stores hits in the active calculation run context.
+Selection detection looks under the generated page's `items` field and is
+syntactic: it follows field names and fragment spreads, not aliases, and it does
+not evaluate GraphQL directives or fragment type conditions. If there is no
+active calculation run context, the resolver skips the bulk cache read and the
+normal property resolver path handles the selected fields.
+Grouped results are not materialized as item lists, so dependency-cache prefetch
+is skipped for grouped list responses. Missing cache entries are left for the
+normal property resolver path to compute.

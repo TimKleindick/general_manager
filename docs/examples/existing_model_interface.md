@@ -33,7 +33,7 @@ class User(GeneralManager):
         return self.username
 ```
 
-Import the wrapper with `from myapp.managers import User`; keep `myapp.models.User` for direct ORM usage only. GeneralManager auto-imports `myapp.managers` during startup so foreign keys pointing at `settings.AUTH_USER_MODEL` resolve to the wrapper once the app is loaded.
+Import the wrapper with `from myapp.managers import User`; keep `myapp.models.User` for direct ORM usage only. GeneralManager auto-imports `myapp.managers` during startup so foreign keys pointing at `settings.AUTH_USER_MODEL` resolve to the wrapper once the app is loaded. In Django shell sessions, GeneralManager's shell command prefers wrapper import paths over raw model import paths when a model is linked through `_general_manager_class`, then appends any registered manager classes Django did not already auto-import.
 
 `User.create` and `User.update` call through to the configured auth table, `User.filter(is_active=True)` returns manager instances, and `User.Factory.create()` seeds users for tests without duplicating schema.
 
@@ -78,4 +78,7 @@ class Project(GeneralManager):
             rules = [UniqueNameRule()]
 ```
 
-`Project.create(name="TBD")` now raises a validation error, while historical tracking and activation semantics continue to flow through to `LegacyProject`.
+`Project.create(name="TBD")` now raises a validation error, while historical
+tracking and activation semantics continue to flow through to `LegacyProject`.
+If Django's field validation also reports `name`, GeneralManager keeps both the
+Django message and the rule message in the final `ValidationError`.

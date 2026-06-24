@@ -20,12 +20,17 @@ def publish_project(info, project_id: int, note: str | None = None) -> Project:
     )
 ```
 
-The function name becomes the GraphQL field name using camel case. In this
-example, `publish_project` is exposed as `publishProject`.
+The function name becomes the GraphQL field name through `snake_to_camel`: the
+first underscore-delimited segment is kept unchanged and each later segment is
+title-cased. In this example, `publish_project` is exposed as `publishProject`.
 
 The decorated module must be imported before GeneralManager builds the GraphQL
 schema. Define mutations in an application module that Django imports during
 startup, or import that module from your application setup.
+Registration is first-writer-wins for the generated mutation class name: if
+another custom mutation has already registered the same camel-case name, the
+later decorator still returns the original function but leaves the existing
+GraphQL mutation in the registry.
 
 ## Resolver contract
 
@@ -41,12 +46,17 @@ The decorator builds the GraphQL arguments and payload from type annotations:
 
 Basic Python types such as `str`, `int`, `float`, and `bool` map to their
 corresponding GraphQL scalars. A parameter annotated with a `GeneralManager`
-subclass is exposed as a GraphQL `ID` when the manager uses the conventional
-single `id` input.
+subclass is exposed as a GraphQL `ID` when the manager declares no interface
+inputs or uses the conventional single `id` input.
 
 The resolver receives manager-typed arguments as manager instances. The
-decorator casts GraphQL input through the manager's `Interface.input_fields`
-before calling mutation permissions or the resolver.
+decorator normalizes GraphQL input before calling mutation permissions or the
+resolver: existing manager instances are preserved, `None` stays `None`,
+mapping inputs are passed to the manager constructor as `Manager(**value)`, and
+non-mapping inputs are passed as the single positional value `Manager(value)`.
+For `list[Manager]` and `List[Manager]` arguments, each list item follows the
+same normalization. Those constructor paths then cast values through the
+manager's `Interface.input_fields`.
 
 ```python
 @graph_ql_mutation
@@ -75,6 +85,12 @@ mutation {
   }
 }
 ```
+
+Generated manager input-object types are cached by the manager class module and
+qualified name, not just the short class name. Nested manager inputs use `ID`
+for single-id managers and nested input objects for multi-input managers. The
+input object name is derived from that full manager identifier with non
+alphanumeric characters replaced by underscores.
 
 ## Return payloads
 
@@ -117,7 +133,11 @@ def publish_project(info, project_id: int) -> tuple[PublishedProject, StatusMess
 ```
 
 Tuple output types must produce unique field names. Type aliases are useful when
-multiple values share the same underlying Python type.
+multiple values share the same underlying Python type. A type alias exposes the
+alias name but maps through the alias target when building the Graphene field.
+At runtime, tuple values are assigned to output fields in annotation order; the
+current implementation does not validate that the returned tuple length exactly
+matches the annotated tuple length.
 
 ## Protect a mutation
 
@@ -141,7 +161,19 @@ def publish_project(info, project_id: int) -> Project:
 
 The permission class receives the normalized mutation arguments and
 `info.context.user` before the resolver runs. Manager-typed arguments are
-manager instances there too. The positional form is equivalent:
+manager instances there too. Declare `__mutate__` for permissions that apply to
+the entire payload, and add field-specific `list[str]` class attributes when a
+single argument needs an extra gate. For that argument, both the global gate and
+the field-specific gate must pass. Arguments without a field-specific list use
+the global gate alone. Omitting `__mutate__` denies by default; use
+`__mutate__ = []` only when the global gate should allow all fields and any
+field-specific lists should provide the remaining restrictions. `__mutate__`
+follows normal class inheritance and must be a `list` containing only strings;
+tuples, mixed lists, and other sequences deny the global gate. An empty
+field-specific list allows that field gate. Field gates are collected only from
+non-dunder attributes declared directly on the concrete permission class whose
+value is a `list` containing only strings. Mixed lists, tuples, and other
+sequences are ignored. The positional form is equivalent:
 
 ```python
 @graph_ql_mutation(PublishProjectPermission)

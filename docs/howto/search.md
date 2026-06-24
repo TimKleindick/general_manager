@@ -29,6 +29,10 @@ docker run --rm -p 7700:7700 --name meilisearch \
 
 You can use other backends by swapping the backend class and options; ensure
 the backend is implemented and available in your environment.
+`GENERAL_MANAGER["SEARCH_BACKEND"]` takes precedence over a top-level
+`SEARCH_BACKEND` setting. The value may be a backend instance, class, factory,
+dotted import path, or the mapping form shown above. Leave it unset to use the
+in-memory `DevSearchBackend` fallback in local development.
 
 ## Step 2: Add SearchConfig to a manager
 
@@ -58,7 +62,16 @@ class Project(GeneralManager):
 ```bash
 python manage.py search_index
 python manage.py search_index --reindex
+python manage.py search_index --index global --reindex
+python manage.py search_index --manager Project --reindex
 ```
+
+Without `--index`, the command ensures every registered search index. Unknown
+index names are written to stderr and ignored; if none of the requested names are
+valid, the command exits without reindexing. `--manager` filters reindexing by
+manager class name and is only used with `--reindex`. Backend configuration,
+index setup, manager discovery, and reindexing errors propagate so CI or deploy
+scripts fail visibly.
 
 If you add or remove fields, filters, or sorts later, re-run with `--reindex`.
 
@@ -131,6 +144,33 @@ from general_manager.search.indexer import SearchIndexer
 
 SearchIndexer().reindex_manager(Project)
 ```
+
+`SearchIndexer(backend=None)` uses `get_search_backend()` when no backend is
+provided, with the same backend-registry reuse semantics as
+`get_search_backend()`. The backend must implement the `SearchBackend` protocol.
+`index_instance(instance)` writes one document per configured `IndexConfig` for
+the instance's manager; `delete_instance(instance)` deletes the same document id
+from every configured index. Both methods return without action when the manager
+has no search configuration, process indexes in configured order, and are not
+atomic across indexes.
+
+`reindex_manager(Project)` ensures all configured indexes, iterates
+`Project.all()`, and upserts grouped documents once per index that has current
+documents. It does not delete stale backend documents. Use
+`reindex_manager_index(Project, "global")` when a reconciler or maintenance job
+needs stale cleanup for one manager/index pair. That method returns `0` without
+action when the manager has no search configuration, raises
+`MissingIndexConfigurationError` when the manager is search-enabled but the
+requested index is unknown, upserts current documents first, then deletes stale
+ids returned by `backend.list_document_ids(..., types=[type_label])`.
+Duplicate `IndexConfig.name` entries are not a recommended configuration:
+single-instance indexing repeats work for duplicates, full manager reindexing
+collapses duplicates into one backend upsert per index name while still
+serializing one document per duplicate config, and single-index reindexing uses
+the first matching index config.
+
+Backend configuration, manager iteration, custom document id/mapping, field
+extraction, and backend write/list/delete errors propagate to the caller.
 
 ## Step 8: Production checklist
 

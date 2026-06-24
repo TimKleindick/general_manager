@@ -34,11 +34,73 @@ class User(GeneralManager):
 
 For wrappers that use the same class name as your Django model, keep the Django model in `models.py` and define the GeneralManager wrapper in `managers.py`. GeneralManager auto-imports `<app>.managers` for every installed app during startup before it initializes manager classes, which avoids import cycles and ensures the wrapper class is available for registration and `_general_manager_class` linking. Import the wrapper from `myapp.managers` in shells and app code so you do not confuse it with `myapp.models.User`; if the model is already imported, assign the wrapper class directly to `_general_manager_class` instead of relying on a string reference.
 
+GeneralManager also customizes Django's `shell` command auto-import list. When
+Django would auto-import a raw model that has a `_general_manager_class` type,
+the shell command replaces that model import path with the wrapper import path.
+Registered manager classes missing from the resolved import list are appended in
+reverse registration order so same-name wrappers win like normal shell
+auto-imports. If Django disables shell auto-imports, or if the underlying Django
+command exposes no auto-import provider, GeneralManager preserves that `None`
+result.
+
+During manager class creation, GeneralManager resolves the `model` reference,
+caches the resolved Django model on the concrete interface, and links the
+generated manager class back onto the model as `_general_manager_class`. Model
+references may be Django model classes or strings accepted by Django's app
+registry, including `settings.AUTH_USER_MODEL` and `"app_label.ModelName"`.
+Invalid or missing model references fail early with the existing-model
+configuration errors. The lifecycle also registers django-simple-history when
+history is not already present, includes local many-to-many fields in that
+registration, and leaves models that already expose the simple-history manager
+marker unchanged. The soft-delete capability is enabled when the resolved model
+exposes an `is_active` attribute; deletes then toggle that flag instead of
+removing the row. For soft-delete-aware models, the lifecycle sets up `objects`
+plus `all_objects` managers. If the legacy model already has an unfiltered
+`all_objects`, GeneralManager uses it. If it does not, GeneralManager falls back
+to the model's `_default_manager`; that fallback follows the legacy model's
+default manager behavior and is not guaranteed to include inactive rows when the
+default manager filters them.
+
+The simple-history marker checked by the lifecycle is
+`model._meta.simple_history_manager_attribute`. Interface rules are the optional
+`Meta.rules` sequence declared on the `ExistingModelInterface` subclass. The
+interface class itself selects the existing-model lifecycle; create, update,
+delete, query, history, and factory signatures remain the inherited
+GeneralManager and writable ORM capability APIs shown in the manager examples
+below.
+
+The inherited constructor accepts the wrapped row `id` through the default
+`Input(int)` field and optional `search_date: datetime | None`. Naive search
+dates are made timezone-aware with Django's current timezone, and historical
+lookup uses `OrmInterfaceBase.historical_lookup_buffer_seconds` to decide when
+to read from history tables instead of the current row.
+
+`ExistingModelInterface.get_field_type("field_name")` is available when you
+need the type GeneralManager exposes for a legacy field or generated helper.
+Calling it resolves the interface's own model first and then delegates to ORM
+read support. Stored model fields return the Django field class, managed
+relations return the related model's `_general_manager_class` when present, and
+generated relation/custom descriptors return their metadata `type`. Unknown
+names raise Django's `FieldDoesNotExist`. A managed relation is a Django
+relation whose related model has `_general_manager_class`; generated descriptors
+are ORM support descriptor-map entries for custom fields and generated relation
+helpers. The model cache is local to the concrete interface class: if you
+subclass one wrapper and declare a different `model`, the subclass resolves its
+own declaration instead of reusing the parent wrapper's cached model.
+
 ## Auditing and validation
 
 - `create` and `update` assign `changed_by_id` when the model exposes that column and record `history_comment` values using `django-simple-history`.
 - `delete` toggles `is_active` (when the column exists) and appends `" (deactivated)"` to the provided history comment; if your legacy model lacks that field the interface performs a hard delete instead. Use `filter(include_inactive=True)` when you need to surface soft-deleted rows explicitly.
-- Define `Meta.rules` on the interface to add GeneralManager validation alongside any rules already declared on the model. The interface merges both sets and replaces `full_clean()` so the rule set runs consistently everywhere.
+- Define `Meta.rules` on the interface to add GeneralManager validation
+  alongside any rules already declared on the model. The interface appends the
+  interface rules after existing model rules and replaces `full_clean()` so the
+  combined rule set runs consistently everywhere.
+- Rule validation runs after Django's normal `full_clean()` field, uniqueness,
+  and constraint checks. Rules that return `False` contribute their
+  `get_error_message()` mapping; rules that return `True` or `None` do not add
+  errors. When Django validation and rules report the same field, their messages
+  are merged instead of replacing each other.
 
 ## Writing data through the manager
 
@@ -66,6 +128,15 @@ No schema changes are generated by this interface—keep running your migrations
 ## Factory support
 
 An `AutoFactory` subclass is built automatically for each manager. It reuses any attributes you place on an inner `Factory` definition and populates missing fields using the legacy model metadata. Calling `User.Factory.create()` returns manager instances, so your tests keep existing fixtures while benefiting from the richer interface surface. Factory-created managers follow the same lifecycle contract as any other manager instance: updates mutate the current manager object in place, and deletes invalidate that object for later field reads.
+
+If both the manager class and interface class provide a nested `Factory`, the
+manager-level definition wins. Public attributes from the selected `Factory` and
+its nested `Meta` are copied into the generated factory, but `Meta.model` is
+always replaced with the resolved legacy model. Only directly declared non-dunder
+attributes are copied from the selected factory definition; inherited attributes
+are not copied from the prototype class dictionary. Re-running the lifecycle
+rebuilds the generated factory and re-applies interface rules, so interface rule
+lists are appended again rather than deduplicated.
 
 Because history tracking is still attached to the underlying legacy row, in-place updates do not change audit behavior. You still get the same `changed_by_id` and `history_comment` entries as before; only the in-memory manager identity contract changed.
 

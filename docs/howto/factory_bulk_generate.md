@@ -42,6 +42,11 @@ class Project(GeneralManager):
             total_capex = lazy_measurement(75_000, 1_000_000, "EUR")
 ```
 
+The generated `AutoFactory` is bound to the manager's ORM interface. That
+interface supplies `handle_custom_fields()`, `input_fields`,
+`format_identification()`, and `_parent_class`, which the factory uses to inspect
+custom fields and wrap saved models back into managers.
+
 ## Step 2: Create batches
 
 ```python
@@ -67,15 +72,35 @@ When a single factory call needs to fan out into multiple records, or when the f
 
 `_adjustmentMethod` receives the keyword arguments passed to the factory after relation values have been normalized. It must return either:
 
-- one `dict[str, Any]` for a single record
-- a `list[dict[str, Any]]` for multiple records
+- one `dict[str, object]` for a single record
+- a `list[dict[str, object]]` for multiple records
 
-`Factory.create(...)` validates and saves every returned record, then wraps the saved models back into their `GeneralManager` class. `Factory.build(...)` runs the same adjustment logic but returns unsaved model instances.
+The hook receives values after AutoFactory has filled generated or declared
+defaults, stripped many-to-many fields from constructor kwargs, and coerced
+foreign-key/one-to-one values. Caller-supplied keyword arguments still take
+precedence over generated defaults.
+
+`Factory.create(...)` validates and saves every returned record, then wraps the
+saved models back into their `GeneralManager` class using the interface's
+identification fields. If a generated object is not a Django model instance,
+`InvalidGeneratedObjectError` is raised. If the interface has no parent manager,
+wrapping raises `MissingManagerClassError`; if an identification field cannot be
+read from the generated model, wrapping raises `MissingIdentificationFieldError`.
+`Factory.build(...)` runs the same adjustment logic but returns unsaved model
+instances instead of manager wrappers.
+
+`_adjustmentMethod` return values are not schema-validated before the factory uses
+them. A single dictionary produces one record. A list of dictionaries produces
+one record per item; an empty list produces an empty result list. Other iterable
+shapes, non-dictionary list entries, or malformed record values are unsupported
+and fail later through normal Python unpacking, model assignment, validation, or
+save errors rather than through a custom AutoFactory exception. Lists are
+processed in order and AutoFactory does not add a transaction around the list,
+so a create-mode failure can leave earlier records saved.
 
 Example:
 
 ```python
-from typing import Any
 from django.db.models import CharField, PositiveIntegerField
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
@@ -95,9 +120,9 @@ class Fleet(GeneralManager):
                 label: str = "Fleet",
                 capacity: int = 0,
                 count: int = 1,
-                **extra: Any,
-            ) -> list[dict[str, Any]]:
-                records: list[dict[str, Any]] = []
+                **extra: object,
+            ) -> list[dict[str, object]]:
+                records: list[dict[str, object]] = []
                 for index in range(count):
                     record = {
                         "label": f"{label}-{index}",
@@ -139,10 +164,16 @@ Use the fixture in tests to create data on demand.
 Use `seed_manager_landscape` when you want a local or demo database to contain a minimum number of rows for one or more managers that already expose factories.
 
 The command is explicit by default. Select managers with `--manager`, or pass `--all` to target every manager discovered by GeneralManager that has `Factory.create_batch`.
+Omitting both `--manager` and `--all` raises `CommandError` before discovery or
+seeding.
 When `--count` is omitted, each selected manager targets 1 row by default,
 including when using `--all`. When `--batch-size` is omitted, batches default to
 100 rows per transaction; this only changes how larger missing counts are split
 into transactions.
+Manager names are class-name selection keys. If two seedable managers share the
+same class name, discovery fails with `SeedableManagerCollisionError` so the
+helper does not choose the wrong class; the management command reports that
+helper failure as `CommandError`.
 
 ```bash
 python manage.py seed_manager_landscape \
@@ -153,7 +184,13 @@ python manage.py seed_manager_landscape \
   --batch-size 25
 ```
 
-Targets are minimum totals. If `Project` already has 12 rows, `--count 10` creates no additional projects. If `InventoryItem` has 20 rows, `--target InventoryItem=50` creates 30 more.
+Targets are minimum totals. If `Project` already has 12 rows, `--count 10`
+creates no additional projects. If `InventoryItem` has 20 rows,
+`--target InventoryItem=50` creates 30 more. Target overrides use
+`ManagerName=COUNT`, require positive integer counts, and must refer to selected
+managers. Empty override input is treated as no overrides. Unknown override names
+are reported before known-but-unselected overrides, and repeated `--manager`
+values keep their first occurrence.
 
 Use `--dry-run` to inspect ordering and missing dependencies without writing data:
 
@@ -161,9 +198,37 @@ Use `--dry-run` to inspect ordering and missing dependencies without writing dat
 python manage.py seed_manager_landscape --manager Project --count 10 --dry-run
 ```
 
-The command orders selected managers so required database relations are seeded first when both sides are selected. It does not automatically add unselected dependencies; select those managers explicitly when your factories require existing related data.
+Use `--output-format json` with `--dry-run` when another script needs the plan.
+The JSON output contains `manager_name`, `target_count`, and
+`missing_dependencies` for each ordered target.
 
-By default, seeding stops at the first failure and reports the manager and batch size. Use `--continue-on-error` to continue with later managers and receive a summary at the end. Successful batches that already committed remain in place, and the summary includes partial progress for the failed manager.
+The command orders selected managers so required non-null database relations are
+seeded first when both sides are selected. It does not automatically add
+unselected dependencies; select those managers explicitly when your factories
+require existing related data. Dependency discovery follows non-null
+`ForeignKey` and `OneToOneField` model metadata to related GeneralManager
+classes and ignores nullable, self, and non-relation fields. Dry-run output
+lists missing dependencies.
+
+By default, seeding stops at the first failure and reports the manager, failed
+batch size, original error, created count, and remaining count. Use
+`--continue-on-error` to continue with later managers and receive a summary at
+the end. The failing manager stops after its first failed batch, but later
+managers continue. Each batch is committed in its own transaction, so successful
+batches that already committed remain in place, and the summary includes a
+created-count entry for every ordered target plus partial progress for the
+failed manager. A run with any collected failure still exits with `CommandError`
+after writing the failure summary. That summary includes the failed manager,
+original error, created count, remaining count, and failed batch size.
+
+When invoking the command from Python with `call_command()`, use the public
+keyword names `manager=` and `target=`; Django stores them internally as
+`managers` and `targets` after parsing. Pass those values as `None`, strings, or
+string sequences; `None` is treated as omitted. Pass `count` and `batch_size` as
+integers or strings accepted by Python's `int()` parser. Python booleans are
+rejected for those integer options, non-positive parsed values raise
+`CommandError`, and boolean switches must be actual booleans. Invalid
+programmatic option types raise `CommandError` before any data is written.
 
 ## Step 5: Tear down
 

@@ -223,6 +223,11 @@ Usage:
 
 ```python
 active_projects = RemoteProject.filter(status="active", page=1, page_size=50)
+search_results = RemoteProject.Interface.query_operation(
+    "list",
+    status="active",
+    page=1,
+)
 project = RemoteProject(id=42)
 
 for item in active_projects:
@@ -230,6 +235,172 @@ for item in active_projects:
 
 print(project.name)
 ```
+
+`RemoteProject.Interface.query_operation(name, **lookups)` is the public escape
+hatch for named collection operations declared in `Meta.query_operations`. It
+returns the same lazy `RequestBucket` shape as `filter()` and raises
+`UnknownRequestOperationError` for unknown operation names, `NotImplementedError`
+when the active query capability cannot execute named operations, and request
+configuration/schema errors when planning or normalization fails.
+`get_query_operation(None)` and `get_query_operation("")` resolve through
+`default_query_operation`. If that default is not declared, the interface creates
+a fallback query operation with `path=""` and the interface-level filters; unknown
+non-default operation names raise `UnknownRequestOperationError`. Declared
+operations inherit interface-level filters when their own `filters` value is
+`None`; operations with an explicit filter mapping use that mapping instead.
+`RequestField` attributes are collected across the interface inheritance chain,
+and declaring create, update, or delete operations adds the matching request
+mutation capability.
+
+During manager-class creation, request capabilities validate the declaration
+before the generated manager is published. A request interface must declare at
+least one `RequestField` and a `detail` query operation. Rules must be
+`Rule` instances and require at least one mutation operation. Configured
+serializers must be callable, `auth_provider.apply` must be callable when an
+auth provider is present, and `RequestRetryPolicy` values must be internally
+consistent: `max_attempts >= 1`, non-negative base backoff, positive multiplier,
+`max_backoff_seconds` no lower than base backoff when set, `0 <= jitter_ratio <=
+1`, and idempotency-key header/factory configured together. Filter keys are
+validated for both interface-level and operation-local filters; operation-local
+filters take precedence for that operation when present, and declared operations
+inherit interface filters only when `filters=None`. Every filter must produce a
+remote fragment, custom compiler fragment, or local fallback predicate.
+Operation-local filters cannot duplicate interface-level filter keys, operation
+references must exist, an `exclude_remote_name` requires
+`supports_exclude=True`, and exclude requests without remote exclude support
+require a local fallback.
+
+`filter()`, `exclude()`, and `all()` return a `RequestBucket`. While the bucket
+is still lazy, chained calls compile into a new request plan for the same query
+operation. Iterating a lazy bucket caches its fetched items but does not change
+that chaining behavior. Buckets built from concrete items, such as slices,
+unions, and `none()`, have no request plan; their follow-up `filter()` and
+`exclude()` calls validate the same lookup declarations before filtering the
+contained manager instances in memory. Concrete buckets still preserve the
+source `operation_name` as metadata. Materialized in-memory filtering uses the
+same request lookup operators as local fallback predicates. Missing attributes
+simply do not match. Materialized `filter()` combines lookup keys with AND
+semantics. Materialized `exclude()` removes an item when any supplied lookup
+matches, so a missing attribute leaves the item in the result. Bare or unknown
+lookup suffixes are exact matches; supported suffixes include comparisons,
+`contains`, `icontains`, `in`, and `isnull`; incompatible comparisons return
+`False`. `sort(key, reverse=False)` always materializes the bucket, accepts one
+attribute name or a tuple of attribute names, and raises
+`RequestBucketSortAttributeError` if an item lacks any requested sort attribute.
+Tuple keys sort lexicographically by resolved values, nested attribute paths are
+not parsed, and Python `TypeError` propagates for incomparable values.
+Lazy `filter()`, `exclude()`, and `all()` compile a new request plan and can
+raise the query capability's validation and planning errors, including unknown
+or unsupported filters, unsupported exclude lookups, required local fallbacks,
+fragment conflicts, and unsupported request locations. Any method that
+materializes a lazy bucket, including iteration, `len()`, `count()`, `first()`,
+`last()`, `get()`, indexing, slicing, membership, sorting, equality against a
+concrete bucket, and concrete follow-up filters, can propagate request
+execution, response-shape, permission, and validation errors from the underlying
+request interface.
+
+Every lazy request query compiles lookup maps into a `RequestQueryPlan`, records
+a `request_query` dependency keyed by operation plus compiled filters/excludes,
+and defers transport execution until the bucket materializes. Filter values are
+stored as tuples by wrapping scalar keyword values in a one-item tuple; tuple
+values are preserved as supplied so repeated lookups on the same key are
+preserved. Remote
+fragments merge into query params, headers, path params, or body; conflicting
+duplicate keys in the same request location raise `RequestPlanConflictError`.
+Custom filter compilers receive a `RequestFilterBinding` containing lookup key,
+value, action, operation name, and filter spec. Local fallback predicates are
+kept on the plan and applied after the response is fetched. A local-only filter
+without fallback raises `RequestLocalFallbackRequiredError`; an unsupported
+exclude raises `RequestExcludeNotSupportedError`; unsupported fragment locations
+raise `UnsupportedRequestLocationError`.
+
+Unioning request buckets or adding one compatible manager instance produces a
+concrete item bucket. `bucket | other` keeps left items followed by right items
+and does not deduplicate. Combining incompatible bucket types raises
+`RequestBucketTypeMismatchError`; combining request buckets for different
+manager classes raises `RequestBucketManagerMismatchError`. Bucket equality
+compares manager class and operation name first. If both buckets have request
+plans, it compares the plan plus compiled filters/excludes; otherwise it
+materializes both sides and compares the ordered sequence of item identification
+mappings.
+
+Pickle-restored buckets keep operation and request-plan metadata but do not
+execute a request during unpickling. Iteration after unpickling uses serialized
+items; follow-up query methods on a restored bucket with a request plan compile a
+new lazy request bucket. `get()` applies any extra filters and then requires
+exactly one item, raising `RequestSingleItemRequiredError` otherwise. `count()`
+always materializes first. After materialization the current count override
+wins; lazy materialization installs the upstream `total_count` when available,
+installs the local fallback item count when local predicates are applied, and
+otherwise falls back to the number of materialized items. A constructor
+`count_override` on a still-lazy bucket can therefore be replaced by the count
+observed during request execution. Local fallback predicates reject partial
+remote pages with `RequestLocalPaginationUnsupportedError` when the upstream
+`total_count` does not match the number of returned items. Raw
+response mappings stored on a bucket are restored into new manager instances
+during construction or unpickling, so field reads use the cached payload instead
+of immediately issuing a detail request. If a restored bucket has request-plan
+metadata but no serialized items or raw payloads, iteration uses the empty
+serialized item set; follow-up query methods can still compile a new lazy
+request bucket. Python pickle errors for unserializable manager instances
+propagate unchanged. Slices, unions, and `none()` set their count override to
+their concrete item count, and `all()` returns a new bucket rather than `self`.
+Membership checks use normal tuple containment over materialized manager
+objects, not request lookup semantics.
+
+Request-backed manager instances cache the raw response payload used for field
+reads. `set_request_payload_cache(payload)` installs that mapping, and passing
+`None` clears it. `resolve_payload_value(payload, field_name)` reads a declared
+`RequestField` through its source path, returns a configured default for optional
+missing values, applies the field normalizer when present, and raises
+`MissingRequestPayloadFieldError` for required missing values. Undeclared names
+resolve directly from the payload key. `extract_identification(payload)` applies
+the same resolution rules for every name in `identification_fields`.
+
+When a request-backed attribute is first read without a cached payload, the
+`detail` operation is executed with the manager identification as path params.
+The detail response must contain exactly one item; otherwise
+`RequestSingleResponseRequiredError` is raised. The returned mapping is cached on
+the interface instance and reused for subsequent field reads until the cache is
+cleared or replaced. The uncached detail fetch emits observability operation
+`request.read.detail` with service, operation, method, path, and identification
+key metadata.
+
+Request lifecycle hooks clone the declared interface for the generated manager.
+When `input_fields` is empty, `Input` descriptors are collected by walking the
+interface MRO from base classes to subclasses. The clone copies request fields,
+filters, operations, transport/auth/retry configuration, serializers, and rules;
+syncs configured capabilities; stores `attrs["_interface_type"]`; installs the
+clone as `attrs["Interface"]`; and later assigns `_parent_class` during
+post-create. These lifecycle hooks emit `request.pre_create` and
+`request.post_create` observability events.
+
+`execute_request_plan(plan)` is the shared execution hook used by request-backed
+query and mutation capabilities. Plans whose action is `create`, `update`, or
+`delete` dispatch through the corresponding mutation operation; other actions
+use the query operation named on the plan. The hook forwards `plan.path_params`
+to the transport as request identification, normalizes raw transport payloads
+into `RequestQueryResult`, and applies `response_serializer` to each result item
+when one is configured. Serializer outputs must be mappings; otherwise
+`RequestSchemaError` is raised.
+
+The query capability's direct `execute_plan()` wrapper emits observability
+operation `request.query.execute` with service, operation, method, path, sorted
+query/path/header/body key lists, and local predicate lookup keys before calling
+`execute_request_plan(plan)`.
+
+Create and update manager methods validate configured request `Rule` objects
+before sending the request. Create rules see the submitted kwargs. Update rules
+see existing payload values, the manager identification, and submitted kwargs
+merged together; only the submitted kwargs are serialized into the update body.
+`create_serializer` and `update_serializer` customize those request bodies. Both
+create and update require exactly one response item and return the identification
+extracted from that item; otherwise `RequestSingleResponseRequiredError` is
+raised. Update also refreshes the instance payload cache with the merged response
+payload. Delete sends only the identification-derived path parameters and returns
+`None`. Request-backed create/update/delete accept `creator_id` and
+`history_comment` for compatibility with the common manager API, but the request
+capabilities ignore those values.
 
 ## Practical examples
 
