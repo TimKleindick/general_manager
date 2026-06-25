@@ -350,7 +350,7 @@ def _arg_matches(args: dict[str, Any], key: str, expected: Any) -> bool:
     actual = args.get(key)
     if key == "manager" and isinstance(actual, str) and isinstance(expected, str):
         return actual.casefold() == expected.casefold()
-    return actual == expected
+    return bool(actual == expected)
 
 
 def _answer_defers_after_query(answer_text: str) -> bool:

@@ -8,7 +8,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from asgiref.sync import sync_to_async
-from channels.generic.websocket import AsyncJsonWebsocketConsumer  # type: ignore[import-untyped]
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.utils import timezone
 
 from general_manager.chat.audit import emit_chat_audit_event
@@ -48,6 +48,23 @@ from general_manager.chat.tools import (
 
 if TYPE_CHECKING:
     from general_manager.chat.models import ChatConversation
+
+    class _ChatConsumerBase:
+        scope: dict[str, Any]
+
+        @classmethod
+        def as_asgi(cls, **initkwargs: Any) -> Any: ...
+
+        async def accept(self, subprotocol: str | None = None) -> None: ...
+
+        async def close(self, code: int | None = None) -> None: ...
+
+        async def send_json(self, content: Any, close: bool = False) -> None: ...
+
+        async def disconnect(self, code: int) -> None: ...
+
+else:
+    _ChatConsumerBase = AsyncJsonWebsocketConsumer
 
 
 async def _iter_provider_events(
@@ -89,7 +106,7 @@ def _has_tool_after_last_user(messages: list[Message]) -> bool:
     return False
 
 
-class ChatConsumer(AsyncJsonWebsocketConsumer):
+class ChatConsumer(_ChatConsumerBase):
     """Minimal streaming chat consumer for Phase 1 foundation work."""
 
     _active_turn: asyncio.Future[None] | None = None

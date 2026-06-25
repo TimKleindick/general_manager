@@ -84,7 +84,7 @@ class OllamaProvider(BaseLLMProvider):
         base_url = str(config["base_url"]).rstrip("/")
         if not (base_url.startswith("http://") or base_url.startswith("https://")):
             raise OllamaBaseUrlError(base_url)
-        from ollama import AsyncClient  # type: ignore[import-not-found]
+        from ollama import AsyncClient
 
         return AsyncClient(host=base_url, timeout=float(config["timeout_seconds"]))
 
