@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 from typing import Any
+from typing import Protocol
 
 import yaml
 
@@ -53,6 +55,12 @@ from general_manager.chat.evals.traces import EvalTraceWriter
 DATASETS_DIR = Path(__file__).parent / "datasets"
 
 MAX_TOOL_ITERATIONS = 10
+
+
+class _PassScore(Protocol):
+    @property
+    def passed(self) -> bool: ...
+
 
 ALLOWED_RECOVERY_EVENTS = frozenset(
     {
@@ -3066,7 +3074,9 @@ def print_compare_report(
     lines.append(header)
     lines.append("-" * len(header))
 
-    for dimension, extractor in [
+    score_extractors: list[
+        tuple[str, Callable[[EvalResult], _PassScore | None] | None]
+    ] = [
         ("Tool selection", lambda r: r.tool_score),
         ("Query correctness", lambda r: r.result_score),
         ("Answer quality", lambda r: r.answer_score),
@@ -3077,7 +3087,8 @@ def print_compare_report(
             ),
         ),
         ("Overall", None),
-    ]:
+    ]
+    for dimension, extractor in score_extractors:
         row = f"{dimension:<20}"
         for p in providers:
             results = results_by_provider[p]
@@ -3085,7 +3096,7 @@ def print_compare_report(
                 n_pass = sum(1 for r in results if r.passed)
                 n_total = len(results)
             else:
-                scored = [extractor(r) for r in results if extractor(r) is not None]
+                scored = [score for r in results if (score := extractor(r)) is not None]
                 n_pass = sum(1 for s in scored if s.passed)
                 n_total = len(scored)
             row += f" {_pct(n_pass, n_total):>14}"

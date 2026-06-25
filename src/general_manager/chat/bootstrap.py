@@ -5,10 +5,10 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
+from channels.routing import ProtocolTypeRouter
 from django.conf import settings
 from django.core.checks import register
 from django.urls import path
-from channels.routing import ProtocolTypeRouter  # type: ignore[import-untyped]
 
 from general_manager.chat.checks import check_chat_configuration
 from general_manager.chat.routing import (

@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> None:
     django.setup()
 
     from general_manager.chat.evals.runner import (
+        EvalResult,
         print_compare_report,
         print_report,
         run_eval_suite_sync,
@@ -96,7 +97,7 @@ def main(argv: list[str] | None = None) -> None:
         from django.utils.module_loading import import_string
 
         provider_paths = [p.strip() for p in args.compare.split(",")]
-        results_by_provider: dict[str, list] = {}
+        results_by_provider: dict[str, list[EvalResult]] = {}
         for path in provider_paths:
             provider_cls = import_string(path)
             provider = _instantiate_provider(provider_cls, args.model)

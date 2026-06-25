@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
-from channels.routing import URLRouter  # type: ignore[import-untyped]
-from channels.security.websocket import (  # type: ignore[import-untyped]
+from channels.auth import AuthMiddlewareStack
+from channels.routing import URLRouter
+from channels.security.websocket import (
     AllowedHostsOriginValidator,
     OriginValidator,
 )
@@ -22,7 +22,7 @@ def build_chat_ws_route(chat_url: str) -> Any:
     normalized = chat_url.strip("/")
     escaped = re.escape(normalized)
     pattern = rf"^{escaped}/?$" if normalized else r"^$"
-    route = re_path(pattern, ChatConsumer.as_asgi())  # type: ignore[arg-type]
+    route = re_path(pattern, ChatConsumer.as_asgi())
     route._general_manager_chat_ws = True
     return route
 

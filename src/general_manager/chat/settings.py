@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from difflib import get_close_matches
 from importlib import import_module
-from typing import Any
+from typing import Any, cast
 
 from django.utils.module_loading import import_string
 
@@ -177,7 +177,7 @@ def import_provider() -> type[Any]:
                     str(required_extra),
                 ) from exc
             raise
-    return provider_cls
+    return cast(type[Any], provider_cls)
 
 
 def get_permission_callable() -> Any:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import graphene
 
@@ -11,6 +11,18 @@ from general_manager.api.graphql import GraphQL
 from general_manager.chat.schema_index import clear_schema_index_cache
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.path_mapping import PathMap
+
+if TYPE_CHECKING:
+
+    class _GrapheneObjectType:
+        pass
+
+    class _GrapheneInputObjectType:
+        pass
+
+else:
+    _GrapheneObjectType = graphene.ObjectType
+    _GrapheneInputObjectType = graphene.InputObjectType
 
 
 def _reset_eval_schema() -> None:
@@ -53,51 +65,51 @@ def setup_toy_schema() -> None:
         {"id": 2, "name": "Mercury", "parts": [parts_by_name["Bearing"]]},
     ]
 
-    class MaterialType(graphene.ObjectType):
+    class MaterialType(_GrapheneObjectType):
         """Materials used in manufacturing."""
 
         name = graphene.String()
         density = graphene.Float()
 
-    class PartType(graphene.ObjectType):
+    class PartType(_GrapheneObjectType):
         """Inventory parts catalog."""
 
         name = graphene.String()
         material = graphene.Field(MaterialType)
 
-    class ProjectType(graphene.ObjectType):
+    class ProjectType(_GrapheneObjectType):
         """Engineering projects."""
 
         name = graphene.String()
         parts = graphene.List(PartType)
 
-    class MaterialFilter(graphene.InputObjectType):
+    class MaterialFilter(_GrapheneInputObjectType):
         name = graphene.String()
         density__gt = graphene.Float()
 
-    class PartFilter(graphene.InputObjectType):
+    class PartFilter(_GrapheneInputObjectType):
         name = graphene.String()
         material__name = graphene.String()
         material__name__icontains = graphene.String()
 
-    class ProjectFilter(graphene.InputObjectType):
+    class ProjectFilter(_GrapheneInputObjectType):
         name = graphene.String()
         parts__name = graphene.String()
         parts__material__name = graphene.String()
         parts__material__name__icontains = graphene.String()
 
-    class PageInfoType(graphene.ObjectType):
+    class PageInfoType(_GrapheneObjectType):
         total_count = graphene.Int(required=True)
 
-    class MaterialPageType(graphene.ObjectType):
+    class MaterialPageType(_GrapheneObjectType):
         items = graphene.List(MaterialType, required=True)
         page_info = graphene.Field(PageInfoType, required=True)
 
-    class PartPageType(graphene.ObjectType):
+    class PartPageType(_GrapheneObjectType):
         items = graphene.List(PartType, required=True)
         page_info = graphene.Field(PageInfoType, required=True)
 
-    class ProjectPageType(graphene.ObjectType):
+    class ProjectPageType(_GrapheneObjectType):
         items = graphene.List(ProjectType, required=True)
         page_info = graphene.Field(PageInfoType, required=True)
 
@@ -149,7 +161,7 @@ def setup_toy_schema() -> None:
             "page_info": {"total_count": len(records)},
         }
 
-    class Query(graphene.ObjectType):
+    class Query(_GrapheneObjectType):
         materialmanager_list = graphene.Field(
             MaterialPageType,
             filter=graphene.Argument(MaterialFilter),
@@ -247,7 +259,7 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
             record["next_item"] = records_by_manager[manager_names[index]][0]
         records_by_manager[name] = [record]
 
-    graphene_types: dict[str, type[graphene.ObjectType]] = {}
+    graphene_types: dict[str, type[Any]] = {}
     for index, name in reversed(list(enumerate(manager_names, start=1))):
         attrs: dict[str, Any] = {
             "__doc__": (
@@ -259,12 +271,12 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
         }
         if index < chain_length:
             attrs["next_item"] = graphene.Field(graphene_types[manager_names[index]])
-        graphene_types[name] = type(f"{name}Type", (graphene.ObjectType,), attrs)
+        graphene_types[name] = type(f"{name}Type", (_GrapheneObjectType,), attrs)
 
     filter_types = {
         name: type(
             f"{name}Filter",
-            (graphene.InputObjectType,),
+            (_GrapheneInputObjectType,),
             {
                 "name": graphene.String(),
                 "code": graphene.String(),
@@ -274,13 +286,13 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
         for name in manager_names
     }
 
-    class PageInfoType(graphene.ObjectType):
+    class PageInfoType(_GrapheneObjectType):
         total_count = graphene.Int(required=True)
 
     page_types = {
         name: type(
             f"{name}PageType",
-            (graphene.ObjectType,),
+            (_GrapheneObjectType,),
             {
                 "items": graphene.List(graphene_types[name], required=True),
                 "page_info": graphene.Field(PageInfoType, required=True),
@@ -309,7 +321,7 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
             page_size=graphene.Int(),
         )
 
-        def _make_resolver(manager_name: str):
+        def _make_resolver(manager_name: str) -> Any:
             def _resolver(self, info, filter=None, page_size=None):  # type: ignore[no-untyped-def]
                 del self, info
                 rows = [
@@ -323,7 +335,7 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
 
         query_attrs[f"resolve_{field_name}"] = _make_resolver(name)
 
-    Query = type("SyntheticQuery", (graphene.ObjectType,), query_attrs)
+    Query = type("SyntheticQuery", (_GrapheneObjectType,), query_attrs)
 
     GraphQL.graphql_type_registry = graphene_types
     GraphQL.graphql_filter_type_registry = filter_types
