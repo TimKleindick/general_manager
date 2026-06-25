@@ -250,59 +250,60 @@ class AppsUtilitiesTests(SimpleTestCase):
                             with (
                                 patch(
                                     "general_manager.apps.handle_remote_api",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append("remote_api"),
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("remote_api")
+                                    ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_audit_logger_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append("configure_audit"),
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("configure_audit")
+                                    ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_search_backend_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append("configure_search"),
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("configure_search")
+                                    ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_workflow_engine_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append(
-                                        "configure_workflow_engine"
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("configure_workflow_engine")
                                     ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_event_registry_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append(
-                                        "configure_event_registry"
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("configure_event_registry")
                                     ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_workflow_signal_bridge_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append(
-                                        "configure_signal_bridge"
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("configure_signal_bridge")
                                     ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_workflow_beat_schedule_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append(
-                                        "configure_beat_schedule"
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append("configure_beat_schedule")
                                     ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_search_reconcile_beat_schedule_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append(
-                                        "configure_search_reconcile_beat_schedule"
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append(
+                                            "configure_search_reconcile_beat_schedule"
+                                        )
                                     ),
                                 ),
                                 patch(
                                     "general_manager.apps.configure_graphql_warmup_beat_schedule_from_settings",
-                                    side_effect=lambda *_args,
-                                    **_kwargs: call_order.append(
-                                        "configure_graphql_warmup_beat_schedule"
+                                    side_effect=lambda *_args, **_kwargs: (
+                                        call_order.append(
+                                            "configure_graphql_warmup_beat_schedule"
+                                        )
                                     ),
                                 ),
                                 patch(

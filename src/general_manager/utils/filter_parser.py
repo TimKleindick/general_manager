@@ -298,12 +298,15 @@ def _compare(
     method_name: Literal["__lt__", "__le__", "__gt__", "__ge__"],
     filter_value: object,
 ) -> bool:
-    comparison = {
-        "__lt__": lt,
-        "__le__": le,
-        "__gt__": gt,
-        "__ge__": ge,
-    }[method_name]
+    comparison = cast(
+        Callable[[object, object], object],
+        {
+            "__lt__": lt,
+            "__le__": le,
+            "__gt__": gt,
+            "__ge__": ge,
+        }[method_name],
+    )
     try:
         result = comparison(value_to_check, filter_value)
     except TypeError:
