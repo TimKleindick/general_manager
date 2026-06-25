@@ -5,6 +5,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import Client, TestCase
 from django.test.utils import override_settings
 
@@ -22,12 +23,15 @@ GENERIC_CHAT_ERROR_EVENT = {
 
 
 class HttpIntegrationProvider:
+    messages: ClassVar[list[str]] = []
+
     def __init__(self) -> None:
         self.calls = 0
 
     def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         del tools
         self.calls += 1
+        type(self).messages.append(messages[-1].content)
 
         async def _stream():
             last_message = messages[-1]
@@ -543,6 +547,73 @@ class ChatHttpTransportTests(TestCase):
             "output_tokens": 1,
             "count_request": False,
         }
+
+    def test_http_post_rejects_next_request_after_token_budget_reached(self) -> None:
+        try:
+            cases = [("tokens", 2), ("input_tokens", 1), ("output_tokens", 1)]
+            for budget_name, budget in cases:
+                with self.subTest(budget_name=budget_name):
+                    cache.clear()
+                    ChatMessage.objects.all().delete()
+                    HttpIntegrationProvider.messages = []
+
+                    with (
+                        override_settings(
+                            GENERAL_MANAGER={
+                                "CHAT": {
+                                    "enabled": True,
+                                    "provider": (
+                                        "tests.unit.test_chat_bootstrap.NoopProvider"
+                                    ),
+                                    "url": "/chat/",
+                                    "allowed_mutations": ["createPart"],
+                                    "confirm_mutations": ["createPart"],
+                                    "rate_limit": {
+                                        "requests": 100,
+                                        budget_name: budget,
+                                        "window_seconds": 30,
+                                    },
+                                }
+                            }
+                        ),
+                        patch(
+                            "general_manager.chat.views.import_provider",
+                            return_value=HttpIntegrationProvider,
+                        ),
+                    ):
+                        first_response = self.client.post(
+                            "/chat/",
+                            data=json.dumps({"text": "hello"}),
+                            content_type="application/json",
+                        )
+                        second_response = self.client.post(
+                            "/chat/",
+                            data=json.dumps({"text": "again"}),
+                            content_type="application/json",
+                        )
+
+                    assert first_response.status_code == 200
+                    assert first_response.json()["events"][-1] == {
+                        "type": "done",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    }
+                    assert second_response.status_code == 200
+                    assert second_response.json()["events"] == [
+                        {
+                            "type": "error",
+                            "message": "Chat rate limit exceeded. Try again later.",
+                            "code": "rate_limited",
+                            "retry_after_seconds": 30,
+                        }
+                    ]
+                    assert HttpIntegrationProvider.messages == ["hello"]
+                    assert list(
+                        ChatMessage.objects.filter(role="user").values_list(
+                            "content", flat=True
+                        )
+                    ) == ["hello"]
+        finally:
+            cache.clear()
 
     def test_sse_and_confirm_round_trip_resume_pending_mutation(self) -> None:
         with patch(

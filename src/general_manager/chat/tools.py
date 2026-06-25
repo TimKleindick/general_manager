@@ -324,7 +324,9 @@ def _validate_chat_query_field_identifier(field: Any) -> str:
     return field
 
 
-def _validate_chat_query_fields(manager: str | None, fields: Sequence[Any]) -> None:
+def _validate_chat_query_fields(
+    manager: str | None, fields: Sequence[Any], *, allow_wildcard: bool = True
+) -> None:
     summary = get_manager_schema_summary(manager) if manager is not None else None
     scalar_fields = set(summary.get("fields", [])) if summary is not None else set()
     relation_targets = _relation_targets_by_name(summary) if summary is not None else {}
@@ -332,7 +334,9 @@ def _validate_chat_query_fields(manager: str | None, fields: Sequence[Any]) -> N
     for field in fields:
         if isinstance(field, str):
             if field == "*":
-                continue
+                if allow_wildcard:
+                    continue
+                raise InvalidChatQueryFieldError(field)
             field_name = _validate_chat_query_field_identifier(field)
             if summary is not None and field_name not in scalar_fields:
                 raise UnknownChatQueryFieldError(field_name)
@@ -345,7 +349,9 @@ def _validate_chat_query_fields(manager: str | None, fields: Sequence[Any]) -> N
                     raise UnknownChatQueryFieldError(relation_name)
                 if not isinstance(nested, Sequence):
                     raise InvalidNestedFieldSelectionError()
-                _validate_chat_query_fields(target_manager, list(nested))
+                _validate_chat_query_fields(
+                    target_manager, list(nested), allow_wildcard=False
+                )
             continue
         raise InvalidFieldSelectionError()
 

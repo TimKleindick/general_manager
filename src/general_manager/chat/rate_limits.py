@@ -31,6 +31,14 @@ def _counter_key(identifier: str, counter: str) -> str:
     return f"general_manager:chat_rate_limit:{identifier}:{counter}"
 
 
+def _counter_total(identifier: str, counter: str) -> int:
+    value = cache.get(_counter_key(identifier, counter), 0)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _increment(identifier: str, counter: str, amount: int, window_seconds: int) -> int:
     key = _counter_key(identifier, counter)
     added = cache.add(key, amount, timeout=window_seconds)
@@ -66,10 +74,21 @@ def enforce_chat_rate_limit(
                 "retry_after_seconds": window_seconds,
             }
 
+    has_token_usage = input_tokens > 0 or output_tokens > 0
+    check_existing_token_usage = count_request and not has_token_usage
     input_budget = rate_limit.get("input_tokens")
-    if isinstance(input_budget, int) and input_budget > 0 and input_tokens > 0:
-        total = _increment(identifier, "input_tokens", input_tokens, window_seconds)
-        if total > input_budget:
+    if isinstance(input_budget, int) and input_budget > 0:
+        if input_tokens > 0:
+            total = _increment(identifier, "input_tokens", input_tokens, window_seconds)
+            if total > input_budget:
+                return {
+                    "scope": identifier,
+                    "retry_after_seconds": window_seconds,
+                }
+        elif (
+            check_existing_token_usage
+            and _counter_total(identifier, "input_tokens") >= input_budget
+        ):
             return {
                 "scope": identifier,
                 "retry_after_seconds": window_seconds,
@@ -77,18 +96,38 @@ def enforce_chat_rate_limit(
 
     token_budget = rate_limit.get("tokens")
     total_tokens = input_tokens + output_tokens
-    if isinstance(token_budget, int) and token_budget > 0 and total_tokens > 0:
-        total = _increment(identifier, "tokens", total_tokens, window_seconds)
-        if total > token_budget:
+    if isinstance(token_budget, int) and token_budget > 0:
+        if total_tokens > 0:
+            total = _increment(identifier, "tokens", total_tokens, window_seconds)
+            if total > token_budget:
+                return {
+                    "scope": identifier,
+                    "retry_after_seconds": window_seconds,
+                }
+        elif (
+            check_existing_token_usage
+            and _counter_total(identifier, "tokens") >= token_budget
+        ):
             return {
                 "scope": identifier,
                 "retry_after_seconds": window_seconds,
             }
 
     output_budget = rate_limit.get("output_tokens")
-    if isinstance(output_budget, int) and output_budget > 0 and output_tokens > 0:
-        total = _increment(identifier, "output_tokens", output_tokens, window_seconds)
-        if total > output_budget:
+    if isinstance(output_budget, int) and output_budget > 0:
+        if output_tokens > 0:
+            total = _increment(
+                identifier, "output_tokens", output_tokens, window_seconds
+            )
+            if total > output_budget:
+                return {
+                    "scope": identifier,
+                    "retry_after_seconds": window_seconds,
+                }
+        elif (
+            check_existing_token_usage
+            and _counter_total(identifier, "output_tokens") >= output_budget
+        ):
             return {
                 "scope": identifier,
                 "retry_after_seconds": window_seconds,
